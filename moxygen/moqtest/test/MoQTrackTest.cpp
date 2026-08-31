@@ -191,6 +191,215 @@ TEST_F(
   EXPECT_TRUE(track.hasError());
 }
 
+// FETCH Window Tests.  The default parameters describe groups 0-10, each
+// carrying objects 0 and 1.
+TEST_F(MoQTrackTest, testFetchWindowWithoutARequestCoversTheWholeTrack) {
+  CreateDefaultMoQTestParameters();
+  auto window = moxygen::resolveFetchWindow(params_);
+  ASSERT_FALSE(window.empty());
+  EXPECT_EQ(window.first, moxygen::kLocationMin);
+  EXPECT_EQ(window.last, (moxygen::AbsoluteLocation{10, 1}));
+  EXPECT_TRUE(window.endOfTrack);
+}
+
+TEST_F(MoQTrackTest, testDefaultFetchWindowIsEmpty) {
+  // The generators bound their loops on the window, so the default must not
+  // select object {0, 0}.
+  moxygen::MoQTestFetchWindow window;
+  EXPECT_TRUE(window.empty());
+}
+
+TEST_F(MoQTrackTest, testFetchWindowNarrowsToTheRequestedRange) {
+  CreateDefaultMoQTestParameters();
+  // End object 1 is exclusive, so the window stops at object 0 of group 5.
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({2, 1}, {5, 1}));
+  ASSERT_FALSE(window.empty());
+  EXPECT_EQ(window.first, (moxygen::AbsoluteLocation{2, 1}));
+  EXPECT_EQ(window.last, (moxygen::AbsoluteLocation{5, 0}));
+  EXPECT_FALSE(window.endOfTrack);
+  // Groups between the boundaries still carry the track's full object range.
+  EXPECT_EQ(window.firstObjectIn(3), 0);
+  EXPECT_EQ(window.lastObjectIn(3), 1);
+}
+
+TEST_F(MoQTrackTest, testFetchWindowInsideASingleGroup) {
+  CreateDefaultMoQTestParameters();
+  params_.objectsPerGroup = 5;
+  params_.lastObjectInTrack = 5;
+  // Both boundaries land in group 2, so firstObjectIn and lastObjectIn have to
+  // narrow the same group from opposite ends.
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({2, 1}, {2, 4}));
+  ASSERT_FALSE(window.empty());
+  EXPECT_EQ(window.first, (moxygen::AbsoluteLocation{2, 1}));
+  EXPECT_EQ(window.last, (moxygen::AbsoluteLocation{2, 3}));
+  EXPECT_EQ(window.firstObjectIn(2), 1);
+  EXPECT_EQ(window.lastObjectIn(2), 3);
+}
+
+TEST_F(MoQTrackTest, testFetchWindowWithEndObjectZeroTakesTheWholeEndGroup) {
+  CreateDefaultMoQTestParameters();
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({1, 0}, {3, 0}));
+  ASSERT_FALSE(window.empty());
+  EXPECT_EQ(window.first, (moxygen::AbsoluteLocation{1, 0}));
+  EXPECT_EQ(window.last, (moxygen::AbsoluteLocation{3, 1}));
+}
+
+TEST_F(MoQTrackTest, testFetchWindowIsEmptyPastTheEndOfTheTrack) {
+  CreateDefaultMoQTestParameters();
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({20, 0}, {30, 0}));
+  EXPECT_TRUE(window.empty());
+}
+
+TEST_F(MoQTrackTest, testFetchWindowIsEmptyBeforeTheStartOfTheTrack) {
+  CreateDefaultMoQTestParameters();
+  params_.startGroup = 5;
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({0, 0}, {3, 0}));
+  EXPECT_TRUE(window.empty());
+}
+
+TEST_F(MoQTrackTest, testFetchWindowStartRollsForwardPastAGroupsLastObject) {
+  CreateDefaultMoQTestParameters();
+  // Group 2 has no object 5, so the window opens on the whole of group 3.
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({2, 5}, {6, 0}));
+  ASSERT_FALSE(window.empty());
+  EXPECT_EQ(window.first, (moxygen::AbsoluteLocation{3, 0}));
+  EXPECT_EQ(window.last, (moxygen::AbsoluteLocation{6, 1}));
+}
+
+TEST_F(MoQTrackTest, testFetchWindowEndRollsBackBeforeAGroupsFirstObject) {
+  CreateDefaultMoQTestParameters();
+  // Objects start at 2, so an end of {4, 2} is exclusive of every object group
+  // 4 carries and the window closes on the whole of group 3.
+  params_.startObject = 2;
+  params_.objectsPerGroup = 2;
+  params_.lastObjectInTrack = 4;
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({1, 2}, {4, 2}));
+  ASSERT_FALSE(window.empty());
+  EXPECT_EQ(window.first, (moxygen::AbsoluteLocation{1, 2}));
+  EXPECT_EQ(window.last, (moxygen::AbsoluteLocation{3, 4}));
+}
+
+TEST_F(MoQTrackTest, testFetchWindowSnapsOntoTheObjectIncrementGrid) {
+  CreateDefaultMoQTestParameters();
+  // Objects 0, 2, 4 and 6 of each group.
+  params_.objectsPerGroup = 3;
+  params_.objectIncrement = 2;
+  params_.lastObjectInTrack = 6;
+  params_.lastGroupInTrack = 4;
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({1, 1}, {2, 4}));
+  ASSERT_FALSE(window.empty());
+  EXPECT_EQ(window.first, (moxygen::AbsoluteLocation{1, 2}));
+  EXPECT_EQ(window.last, (moxygen::AbsoluteLocation{2, 2}));
+}
+
+TEST_F(MoQTrackTest, testFetchWindowSnapsOntoTheGroupIncrementGrid) {
+  CreateDefaultMoQTestParameters();
+  // Groups 0, 2, 4, 6, 8 and 10, each carrying objects 0, 2, 4 and 6.
+  params_.objectsPerGroup = 3;
+  params_.objectIncrement = 2;
+  params_.lastObjectInTrack = 6;
+  params_.groupIncrement = 2;
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({3, 1}, {7, 4}));
+  ASSERT_FALSE(window.empty());
+  // Groups 3 and 7 aren't generated, so the window covers 4 through 6 whole.
+  EXPECT_EQ(window.first, (moxygen::AbsoluteLocation{4, 0}));
+  EXPECT_EQ(window.last, (moxygen::AbsoluteLocation{6, 6}));
+  EXPECT_FALSE(window.endOfTrack);
+}
+
+TEST_F(MoQTrackTest, testWholeTrackFetchResolvesToEveryObject) {
+  CreateDefaultMoQTestParameters();
+  params_.groupIncrement = 3;
+  auto window =
+      moxygen::resolveFetchWindow(params_, moxygen::wholeTrackFetch(params_));
+  ASSERT_FALSE(window.empty());
+  EXPECT_EQ(window.first, moxygen::kLocationMin);
+  // Group 10 isn't generated, so the track really ends on group 9.
+  EXPECT_EQ(window.last, (moxygen::AbsoluteLocation{9, 1}));
+  EXPECT_TRUE(window.endOfTrack);
+}
+
+TEST_F(MoQTrackTest, testExpectedObjectsCoverTheWindowInclusive) {
+  CreateDefaultMoQTestParameters();
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({2, 1}, {4, 1}));
+  const std::set<std::pair<uint64_t, uint64_t>> expected{
+      {2, 1}, {3, 0}, {3, 1}, {4, 0}};
+  EXPECT_EQ(moxygen::expectedObjectsIn(params_, window), expected);
+}
+
+TEST_F(MoQTrackTest, testExpectedObjectsAreEmptyForAnEmptyWindow) {
+  CreateDefaultMoQTestParameters();
+  EXPECT_TRUE(
+      moxygen::expectedObjectsIn(params_, moxygen::MoQTestFetchWindow{})
+          .empty());
+}
+
+TEST_F(MoQTrackTest, testFetchEndLocationEchoesARequestInsideTheTrack) {
+  CreateDefaultMoQTestParameters();
+  EXPECT_EQ(
+      moxygen::fetchEndLocation(
+          params_, moxygen::StandaloneFetch({1, 0}, {4, 1})),
+      (moxygen::AbsoluteLocation{4, 1}));
+}
+
+TEST_F(MoQTrackTest, testFetchEndLocationClampsToTheEndOfTheTrack) {
+  CreateDefaultMoQTestParameters();
+  // Groups 0-10 carrying objects 0 and 1, so the track stops at {10, 2}.
+  EXPECT_EQ(
+      moxygen::fetchEndLocation(
+          params_, moxygen::StandaloneFetch({1, 0}, {30, 0})),
+      (moxygen::AbsoluteLocation{10, 2}));
+  // An end object of 0 asks for the whole of group 10, which also overshoots.
+  EXPECT_EQ(
+      moxygen::fetchEndLocation(
+          params_, moxygen::StandaloneFetch({1, 0}, {10, 0})),
+      (moxygen::AbsoluteLocation{10, 2}));
+}
+
+TEST_F(MoQTrackTest, testFetchEndLocationNeverPrecedesTheRequestedStart) {
+  CreateDefaultMoQTestParameters();
+  // A receiver must close the session over an End Location below the start, so
+  // a request wholly past the track reports a zero-length range instead.
+  EXPECT_EQ(
+      moxygen::fetchEndLocation(
+          params_, moxygen::StandaloneFetch({50, 0}, {60, 0})),
+      (moxygen::AbsoluteLocation{50, 0}));
+}
+
+TEST_F(MoQTrackTest, testFetchEndLocationIsEmptyBeforeTheStartOfTheTrack) {
+  CreateDefaultMoQTestParameters();
+  params_.startGroup = 5;
+  const moxygen::StandaloneFetch fetch({0, 0}, {3, 0});
+  // Nothing is delivered, so the End Location has to say so rather than report
+  // an end the track never reaches.
+  EXPECT_TRUE(moxygen::resolveFetchWindow(params_, fetch).empty());
+  EXPECT_EQ(
+      moxygen::fetchEndLocation(params_, fetch),
+      (moxygen::AbsoluteLocation{0, 0}));
+}
+
+TEST_F(MoQTrackTest, testParseLocation) {
+  auto parsed = moxygen::parseLocation("4,7");
+  ASSERT_TRUE(parsed.hasValue());
+  EXPECT_EQ(parsed.value(), (moxygen::AbsoluteLocation{4, 7}));
+
+  EXPECT_TRUE(moxygen::parseLocation("4").hasError());
+  EXPECT_TRUE(moxygen::parseLocation("4,7,9").hasError());
+  EXPECT_TRUE(moxygen::parseLocation("four,7").hasError());
+  EXPECT_TRUE(moxygen::parseLocation("-1,7").hasError());
+  EXPECT_TRUE(moxygen::parseLocation("").hasError());
+}
+
 TEST_F(MoQTrackTest, testFetchForwardingPreferenceOnlyRemapsDatagram) {
   using moxygen::ForwardingPreference;
   // A datagram object carries no subgroup, so over a fetch stream the track is

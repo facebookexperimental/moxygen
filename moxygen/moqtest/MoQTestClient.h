@@ -15,6 +15,7 @@
 #include "moxygen/mlog/MLogger.h"
 #include "moxygen/moqtest/MoQTestPublisher.h"
 #include "moxygen/moqtest/Types.h"
+#include "moxygen/moqtest/Utils.h"
 #include "moxygen/samples/util/Utils.h"
 
 namespace moxygen {
@@ -86,7 +87,10 @@ class MoQTestClient : public Subscriber,
   folly::coro::Task<moxygen::TrackNamespace> subscribe(
       MoQTestParameters params);
 
-  folly::coro::Task<moxygen::TrackNamespace> fetch(MoQTestParameters params);
+  // `range` defaults to the whole track the namespace describes.
+  folly::coro::Task<moxygen::TrackNamespace> fetch(
+      MoQTestParameters params,
+      std::optional<StandaloneFetch> range = std::nullopt);
 
   // Asks the relay for the track via SUBSCRIBE_TRACKS, then opens a second
   // session to the same endpoint and PUBLISHes it. The relay matches the two
@@ -236,6 +240,9 @@ class MoQTestClient : public Subscriber,
   MoQTestParameters params_;
   RequestID requestID_{};
 
+  // The slice of the track the current request covers
+  MoQTestFetchWindow window_;
+
   // Holds Current Request Group, SubGroup, and objectId (updated based on
   // expected data)
   uint64_t expectedGroup_{};
@@ -283,8 +290,18 @@ class MoQTestClient : public Subscriber,
   // this is a no-op if a failure is detected that early.
   void cancelRequest();
 
-  // Subscription Data Validation functions
-  void initializeExpecteds(MoQTestParameters& params);
+  // Checks FETCH_OK against the range the client asked for.  Must run after
+  // initializeExpecteds, which sets the window this compares against.
+  void validateFetchOk(
+      const FetchOk& ok,
+      const MoQTestParameters& params,
+      const StandaloneFetch& range);
+
+  // Subscription Data Validation functions.  Expectations follow `window`,
+  // which is the whole track except for a ranged FETCH.
+  void initializeExpecteds(
+      MoQTestParameters& params,
+      MoQTestFetchWindow window);
   bool validateSubscribedData(
       const ObjectHeader& header,
       const std::string& payload);
@@ -294,12 +311,12 @@ class MoQTestClient : public Subscriber,
 
   AdjustedExpectedResult adjustExpected(
       MoQTestParameters& params,
-      const ObjectHeader* header);
+      const ObjectHeader& header);
   AdjustedExpectedResult adjustExpectedForOneSubgroupPerGroup(
       MoQTestParameters& params);
   AdjustedExpectedResult adjustExpectedForOneSubgroupPerObject();
   AdjustedExpectedResult adjustExpectedForTwoSubgroupsPerGroup(
-      const ObjectHeader* header,
+      const ObjectHeader& header,
       MoQTestParameters& params);
   AdjustedExpectedResult adjustExpectedForDatagram(MoQTestParameters& params);
   bool validateDatagramObjects(const ObjectHeader& header);

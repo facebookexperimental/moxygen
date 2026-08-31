@@ -11,6 +11,7 @@
 #include <folly/futures/ThreadWheelTimekeeper.h>
 #include "moxygen/Publisher.h"
 #include "moxygen/moqtest/Types.h"
+#include "moxygen/moqtest/Utils.h"
 #include "moxygen/relay/MoQForwarder.h"
 
 namespace moxygen {
@@ -124,20 +125,26 @@ class MoQTestPublisher : public Publisher,
       std::shared_ptr<FetchConsumer> fetchCallback) override;
 
   folly::coro::Task<void> onFetch(
-      Fetch fetch,
+      MoQTestParameters params,
+      MoQTestFetchWindow window,
       std::shared_ptr<FetchConsumer> callback);
 
+  // The fetch generators emit every object the window covers and then end the
+  // fetch.  An empty window emits nothing.
   folly::coro::Task<void> fetchOneSubgroupPerGroup(
       MoQTestParameters params,
-      std::shared_ptr<FetchConsumer> callback);
+      std::shared_ptr<FetchConsumer> callback,
+      MoQTestFetchWindow window);
 
   folly::coro::Task<void> fetchOneSubgroupPerObject(
       MoQTestParameters params,
-      std::shared_ptr<FetchConsumer> callback);
+      std::shared_ptr<FetchConsumer> callback,
+      MoQTestFetchWindow window);
 
   folly::coro::Task<void> fetchTwoSubgroupsPerGroup(
       MoQTestParameters params,
-      std::shared_ptr<FetchConsumer> callback);
+      std::shared_ptr<FetchConsumer> callback,
+      MoQTestFetchWindow window);
 
  private:
   // Tracks one publishTrack that is paused waiting for the peer to ask for
@@ -175,7 +182,8 @@ class MoQTestPublisher : public Publisher,
   // activeFetches_ however it ends.
   folly::coro::Task<void> runFetch(
       std::shared_ptr<folly::CancellationSource> cancelSource,
-      Fetch fetch,
+      MoQTestParameters params,
+      MoQTestFetchWindow window,
       std::shared_ptr<FetchConsumer> callback);
 
   // Inter-object delay using the publisher-owned timekeeper.

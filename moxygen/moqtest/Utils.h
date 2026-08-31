@@ -7,6 +7,9 @@
 #pragma once
 
 #include <folly/Expected.h>
+#include <set>
+#include <string>
+#include <utility>
 #include "moxygen/MoQConsumers.h"
 #include "moxygen/MoQFramer.h"
 #include "moxygen/moqtest/Types.h"
@@ -65,6 +68,29 @@ BeginSubgroupOptions subgroupOptionsFor(
     uint64_t subgroupID,
     bool includeTimestampExtension = false);
 
+// An inclusive slice of a generated track, snapped onto the group and object
+// grid the track parameters describe.  Only the boundary groups are partially
+// covered.  A default-constructed window is empty.
+struct MoQTestFetchWindow {
+  AbsoluteLocation first{kLocationMax};
+  AbsoluteLocation last{kLocationMin};
+  uint64_t firstObjectPerGroup{0};
+  uint64_t lastObjectPerGroup{0};
+  bool endOfTrack{false};
+
+  bool empty() const {
+    return last < first;
+  }
+
+  uint64_t firstObjectIn(uint64_t group) const {
+    return group == first.group ? first.object : firstObjectPerGroup;
+  }
+
+  uint64_t lastObjectIn(uint64_t group) const {
+    return group == last.group ? last.object : lastObjectPerGroup;
+  }
+};
+
 // How the objects of a track with `preference` are grouped into subgroups when
 // they are delivered over a FETCH.  A datagram object carries no subgroup: from
 // draft 16 the FETCH object sets the datagram flag and omits the subgroup
@@ -72,6 +98,37 @@ BeginSubgroupOptions subgroupOptionsFor(
 // subgroup per group.  Publisher and subscriber must agree on this or the
 // subscriber will reject a conformant response.
 ForwardingPreference fetchForwardingPreference(ForwardingPreference preference);
+
+// A FETCH for everything the track will ever produce.
+StandaloneFetch wholeTrackFetch(const MoQTestParameters& params);
+
+// The End Location a FETCH_OK for `fetch` must carry: the request's own end,
+// clamped to where the track stops.  Never below the request's start, because
+// a receiver must close the session over an End Location it sits behind.  The
+// draft defines it from the request, so it is deliberately not snapped onto the
+// grid the generator walks and may sit above the last object delivered.
+AbsoluteLocation fetchEndLocation(
+    const MoQTestParameters& params,
+    const StandaloneFetch& fetch);
+
+// The part of the track `fetch` asks for.  FETCH end objects are exclusive,
+// except that an end object of 0 selects the whole end group.  The result is
+// empty when the requested range and the track don't overlap.
+MoQTestFetchWindow resolveFetchWindow(
+    const MoQTestParameters& params,
+    const StandaloneFetch& fetch);
+
+// The window covering the whole track, which is what SUBSCRIBE delivers.
+MoQTestFetchWindow resolveFetchWindow(const MoQTestParameters& params);
+
+// Every (group, object) pair `window` covers.
+std::set<std::pair<uint64_t, uint64_t>> expectedObjectsIn(
+    const MoQTestParameters& params,
+    const MoQTestFetchWindow& window);
+
+// Parses a `"group,object"` FETCH location.
+folly::Expected<AbsoluteLocation, std::runtime_error> parseLocation(
+    const std::string& value);
 
 bool validatePayload(int objectSize, std::string payload);
 

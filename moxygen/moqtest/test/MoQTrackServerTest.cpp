@@ -6,6 +6,7 @@
 
 #include <folly/portability/GTest.h>
 #include "folly/Expected.h"
+#include "folly/coro/Baton.h"
 #include "folly/coro/BlockingWait.h"
 #include "folly/coro/GtestHelpers.h"
 #include "folly/coro/Sleep.h"
@@ -558,7 +559,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceZero) {
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer);
+  auto task = publisher_->fetchOneSubgroupPerGroup(
+      params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -638,7 +640,8 @@ TEST_F(
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer);
+  auto task = publisher_->fetchOneSubgroupPerGroup(
+      params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -695,7 +698,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = publisher_->fetchOneSubgroupPerObject(params_, mockConsumer);
+  auto task = publisher_->fetchOneSubgroupPerObject(
+      params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -748,7 +752,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = publisher_->fetchOneSubgroupPerObject(params_, mockConsumer);
+  auto task = publisher_->fetchOneSubgroupPerObject(
+      params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -816,7 +821,8 @@ TEST_F(
                   folly::unit)));
 
   // Call the onSubscribe method
-  auto task = publisher_->fetchTwoSubgroupsPerGroup(params_, mockConsumer);
+  auto task = publisher_->fetchTwoSubgroupsPerGroup(
+      params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -883,7 +889,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
                   folly::unit)));
 
   // Datagram tracks fetch back through the one-subgroup-per-group generator
-  auto task = publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer);
+  auto task = publisher_->fetchOneSubgroupPerGroup(
+      params_, mockConsumer, moxygen::resolveFetchWindow(params_));
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
@@ -920,8 +927,364 @@ TEST_F(MoQTrackServerTest, FetchOfADatagramTrackSkipsEndOfGroupMarkers) {
               folly::Expected<folly::Unit, moxygen::MoQPublishError>(
                   folly::unit)));
 
+  folly::coro::blockingWait(publisher_->fetchOneSubgroupPerGroup(
+      params_, mockConsumer, moxygen::resolveFetchWindow(params_)));
+}
+
+// Standalone FETCH range Testing
+TEST_F(MoQTrackServerTest, FetchGeneratorOnlyEmitsObjectsInsideTheWindow) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  // Distinct sizes so the payload pins that object sizing keys off the track's
+  // startObject, not wherever the window happens to open.
+  params_.sizeOfObjectZero = 8;
+  params_.sizeOfObjectGreaterThanZero = 3;
+
+  auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
+  // group, objectID, payload length
+  std::vector<std::tuple<uint64_t, uint64_t, size_t>> received;
+  EXPECT_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .WillRepeatedly([&received](
+                          uint64_t group,
+                          uint64_t,
+                          uint64_t objectId,
+                          std::unique_ptr<folly::IOBuf> payload,
+                          const auto&,
+                          auto,
+                          auto) {
+        received.emplace_back(group, objectId, payload->length());
+        return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+            folly::unit);
+      });
+  EXPECT_CALL(*mockConsumer, endOfFetch())
+      .WillOnce(
+          ::testing::Return(
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
+
+  // The track carries objects 0 and 1 of groups 0 through 10.  End object 1 is
+  // exclusive, so the range stops after object 0 of group 4.
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({2, 1}, {4, 1}));
   folly::coro::blockingWait(
-      publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer));
+      publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer, window));
+
+  // Object 0 keeps sizeOfObjectZero even though the window opens on object 1.
+  const std::vector<std::tuple<uint64_t, uint64_t, size_t>> expected{
+      {2, 1, 3}, {3, 0, 8}, {3, 1, 3}, {4, 0, 8}};
+  EXPECT_EQ(received, expected);
+}
+
+TEST_F(MoQTrackServerTest, FetchGeneratorEmitsNothingForAnEmptyWindow) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+
+  auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
+  EXPECT_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .Times(0);
+  EXPECT_CALL(*mockConsumer, endOfFetch())
+      .WillOnce(
+          ::testing::Return(
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
+
+  // A default window selects nothing, so the loop bounds must exclude {0, 0}.
+  folly::coro::blockingWait(publisher_->fetchOneSubgroupPerGroup(
+      params_, mockConsumer, moxygen::MoQTestFetchWindow{}));
+}
+
+TEST_F(MoQTrackServerTest, FetchTwoSubgroupsWindowKeepsObjectParity) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::TWO_SUBGROUPS_PER_GROUP;
+  params_.objectsPerGroup = 4;
+  params_.lastObjectInTrack = 4;
+
+  auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
+  // group, subgroup, objectID
+  std::vector<std::tuple<uint64_t, uint64_t, uint64_t>> received;
+  EXPECT_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .WillRepeatedly([&received](
+                          uint64_t group,
+                          uint64_t subgroup,
+                          uint64_t objectId,
+                          std::unique_ptr<folly::IOBuf>,
+                          const auto&,
+                          auto,
+                          auto) {
+        received.emplace_back(group, subgroup, objectId);
+        return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+            folly::unit);
+      });
+  EXPECT_CALL(*mockConsumer, endOfFetch())
+      .WillOnce(
+          ::testing::Return(
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
+
+  // Opens on object 3, which is odd, so the first object of the window lands
+  // in subgroup 1 rather than subgroup 0.
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({1, 3}, {2, 2}));
+  folly::coro::blockingWait(
+      publisher_->fetchTwoSubgroupsPerGroup(params_, mockConsumer, window));
+
+  const std::vector<std::tuple<uint64_t, uint64_t, uint64_t>> expected{
+      {1, 1, 3}, {1, 0, 4}, {2, 0, 0}, {2, 1, 1}};
+  EXPECT_EQ(received, expected);
+}
+
+TEST_F(MoQTrackServerTest, FetchWindowTruncatingAGroupSkipsItsEndOfGroup) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  params_.sendEndOfGroupMarkers = true;
+  params_.objectsPerGroup = 3;
+  params_.lastObjectInTrack = 4;
+
+  auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
+  std::vector<std::pair<uint64_t, uint64_t>> objects;
+  std::vector<std::pair<uint64_t, uint64_t>> endOfGroups;
+  EXPECT_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .WillRepeatedly([&objects](
+                          uint64_t group,
+                          uint64_t,
+                          uint64_t objectId,
+                          std::unique_ptr<folly::IOBuf>,
+                          const auto&,
+                          auto,
+                          auto) {
+        objects.emplace_back(group, objectId);
+        return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+            folly::unit);
+      });
+  EXPECT_CALL(
+      *mockConsumer, endOfGroup(testing::_, testing::_, testing::_, testing::_))
+      .WillRepeatedly(
+          [&endOfGroups](uint64_t group, uint64_t, uint64_t objectId, auto) {
+            endOfGroups.emplace_back(group, objectId);
+            return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                folly::unit);
+          });
+  EXPECT_CALL(*mockConsumer, endOfFetch())
+      .WillOnce(
+          ::testing::Return(
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
+
+  // Group 1 runs to completion and gets its marker at object 4; group 2 is cut
+  // off at object 2, so it gets none.
+  auto window = moxygen::resolveFetchWindow(
+      params_, moxygen::StandaloneFetch({1, 0}, {2, 3}));
+  folly::coro::blockingWait(
+      publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer, window));
+
+  const std::vector<std::pair<uint64_t, uint64_t>> expectedObjects{
+      {1, 0}, {1, 1}, {1, 2}, {1, 3}, {2, 0}, {2, 1}, {2, 2}};
+  const std::vector<std::pair<uint64_t, uint64_t>> expectedEndOfGroups{{1, 4}};
+  EXPECT_EQ(objects, expectedObjects);
+  EXPECT_EQ(endOfGroups, expectedEndOfGroups);
+}
+
+CO_TEST_F(MoQTrackServerTest, FetchOkReportsTheEndOfTheRequestedRange) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  moxygen::Fetch req;
+  req.requestID = 0;
+  req.fullTrackName.trackNamespace = track_;
+  req.args = moxygen::StandaloneFetch({2, 0}, {4, 1});
+
+  auto mockConsumer =
+      std::make_shared<testing::NiceMock<moxygen::MockFetchConsumer>>();
+  ON_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .WillByDefault(
+          ::testing::Return(
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
+  folly::coro::Baton done;
+  EXPECT_CALL(*mockConsumer, endOfFetch()).WillOnce([&done] {
+    done.post();
+    return folly::Expected<folly::Unit, moxygen::MoQPublishError>(folly::unit);
+  });
+
+  auto result = co_await publisher_->fetch(req, mockConsumer);
+  CO_ASSERT_TRUE(result.hasValue());
+  const auto& ok = result.value()->fetchOk();
+  // End Location is the request's own end, which the track doesn't cut short.
+  EXPECT_EQ(ok.endLocation, (moxygen::AbsoluteLocation{4, 1}));
+  EXPECT_EQ(ok.endOfTrack, 0);
+  EXPECT_EQ(ok.groupOrder, moxygen::GroupOrder::OldestFirst);
+
+  co_await done;
+}
+
+CO_TEST_F(MoQTrackServerTest, FetchOkReportsEndOfTrackWhenTheRangeCoversIt) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  moxygen::Fetch req;
+  req.requestID = 0;
+  req.fullTrackName.trackNamespace = track_;
+  req.args = moxygen::StandaloneFetch({0, 0}, {10, 0});
+
+  auto mockConsumer =
+      std::make_shared<testing::NiceMock<moxygen::MockFetchConsumer>>();
+  ON_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .WillByDefault(
+          ::testing::Return(
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
+  folly::coro::Baton done;
+  EXPECT_CALL(*mockConsumer, endOfFetch()).WillOnce([&done] {
+    done.post();
+    return folly::Expected<folly::Unit, moxygen::MoQPublishError>(folly::unit);
+  });
+
+  auto result = co_await publisher_->fetch(req, mockConsumer);
+  CO_ASSERT_TRUE(result.hasValue());
+  const auto& ok = result.value()->fetchOk();
+  // The request asked for all of group 10; the track stops after object 1, so
+  // End Location is clamped to one past it rather than the requested {11, 0}.
+  EXPECT_EQ(ok.endLocation, (moxygen::AbsoluteLocation{10, 2}));
+  EXPECT_EQ(ok.endOfTrack, 1);
+
+  co_await done;
+}
+
+CO_TEST_F(MoQTrackServerTest, FetchOutsideTheTrackSendsNoObjects) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  moxygen::Fetch req;
+  req.requestID = 0;
+  req.fullTrackName.trackNamespace = track_;
+  req.args = moxygen::StandaloneFetch({50, 0}, {60, 0});
+
+  auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
+  EXPECT_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .Times(0);
+  folly::coro::Baton done;
+  EXPECT_CALL(*mockConsumer, endOfFetch()).WillOnce([&done] {
+    done.post();
+    return folly::Expected<folly::Unit, moxygen::MoQPublishError>(folly::unit);
+  });
+
+  auto result = co_await publisher_->fetch(req, mockConsumer);
+  CO_ASSERT_TRUE(result.hasValue());
+  // The track ends long before the request starts.  Reporting the track's end
+  // would put End Location below Start Location, which a receiver must treat
+  // as a protocol violation, so the response covers a zero-length range.
+  EXPECT_EQ(
+      result.value()->fetchOk().endLocation,
+      (moxygen::AbsoluteLocation{50, 0}));
+  EXPECT_EQ(result.value()->fetchOk().endOfTrack, 0);
+
+  co_await done;
+}
+
+CO_TEST_F(MoQTrackServerTest, FetchOfADatagramTrackFlagsEachObject) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  track_.trackNamespace[1] =
+      std::to_string(static_cast<int>(moxygen::ForwardingPreference::DATAGRAM));
+  moxygen::Fetch req;
+  req.requestID = 0;
+  req.fullTrackName.trackNamespace = track_;
+  req.args = moxygen::StandaloneFetch({0, 0}, {1, 0});
+
+  auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
+  // group, subgroup, objectID, forwardingPreferenceIsDatagram
+  std::vector<std::tuple<uint64_t, uint64_t, uint64_t, bool>> received;
+  EXPECT_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .WillRepeatedly([&received](
+                          uint64_t group,
+                          uint64_t subgroup,
+                          uint64_t objectId,
+                          std::unique_ptr<folly::IOBuf>,
+                          const auto&,
+                          auto,
+                          bool isDatagram) {
+        received.emplace_back(group, subgroup, objectId, isDatagram);
+        return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+            folly::unit);
+      });
+  folly::coro::Baton done;
+  EXPECT_CALL(*mockConsumer, endOfFetch()).WillOnce([&done] {
+    done.post();
+    return folly::Expected<folly::Unit, moxygen::MoQPublishError>(folly::unit);
+  });
+
+  auto result = co_await publisher_->fetch(req, mockConsumer);
+  CO_ASSERT_TRUE(result.hasValue());
+  co_await done;
+
+  // A datagram object carries no subgroup, so every object is flagged and sits
+  // in subgroup 0 -- the framer omits the field entirely from draft 16.
+  const std::vector<std::tuple<uint64_t, uint64_t, uint64_t, bool>> expected{
+      {0, 0, 0, true}, {0, 0, 1, true}, {1, 0, 0, true}, {1, 0, 1, true}};
+  EXPECT_EQ(received, expected);
 }
 
 CO_TEST_F(MoQTrackServerTest, CancelAllStopsAnInFlightFetch) {

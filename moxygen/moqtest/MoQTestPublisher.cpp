@@ -550,8 +550,6 @@ folly::coro::Task<void> MoQTestPublisher::sendDatagram(
 folly::coro::Task<MoQSession::FetchResult> MoQTestPublisher::fetch(
     Fetch fetch,
     std::shared_ptr<FetchConsumer> fetchCallback) {
-  XLOG(INFO) << "Recieved Fetch Request";
-
   // Ensure Params are valid according to spec, if not return FetchError
   auto res = moxygen::convertTrackNamespaceToMoqTestParam(
       &fetch.fullTrackName.trackNamespace);
@@ -580,6 +578,15 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestPublisher::fetch(
             "Descending group order not supported"});
   }
 
+  const auto params = res.value();
+  const auto window = resolveFetchWindow(params, *standalone);
+  XLOG(INFO) << "FETCH " << standalone->start << ".." << standalone->end;
+  if (window.empty()) {
+    XLOG(INFO) << "Requested range misses the track, sending no objects";
+  } else {
+    XLOG(INFO) << "Serving " << window.first << ".." << window.last;
+  }
+
   auto cancelSource = std::make_shared<folly::CancellationSource>();
   activeFetches_.push_back(cancelSource);
 
@@ -588,19 +595,22 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestPublisher::fetch(
       cancelSource->getToken(),
       co_withExecutor(
           co_await folly::coro::co_current_executor,
-          runFetch(cancelSource, fetch, std::move(fetchCallback))))
+          runFetch(cancelSource, params, window, std::move(fetchCallback))))
       .start();
 
   FetchOk ok;
   ok.requestID = fetch.requestID;
   ok.groupOrder = GroupOrder::OldestFirst;
+  ok.endOfTrack = window.endOfTrack ? 1 : 0;
+  ok.endLocation = fetchEndLocation(params, *standalone);
 
   co_return std::make_shared<MoQTestFetchHandle>(ok, std::move(cancelSource));
 }
 
 folly::coro::Task<void> MoQTestPublisher::runFetch(
     std::shared_ptr<folly::CancellationSource> cancelSource,
-    Fetch fetch,
+    MoQTestParameters params,
+    MoQTestFetchWindow window,
     std::shared_ptr<FetchConsumer> callback) {
   // Drop the registration however the fetch ends, so a long-lived publisher
   // doesn't accumulate one entry per completed fetch.  The self-reference keeps
@@ -609,19 +619,18 @@ folly::coro::Task<void> MoQTestPublisher::runFetch(
   auto unregister = folly::makeGuard([self = shared_from_this(), cancelSource] {
     std::erase(self->activeFetches_, cancelSource);
   });
-  co_await onFetch(std::move(fetch), std::move(callback));
+  co_await onFetch(params, window, std::move(callback));
 }
 
 folly::coro::Task<void> MoQTestPublisher::onFetch(
-    Fetch fetch,
+    MoQTestParameters params,
+    MoQTestFetchWindow window,
     std::shared_ptr<FetchConsumer> fetchCallback) {
-  // Make a MoQTestParams (Only valid params are passed through from fetch
-  // function)
-  auto res = moxygen::convertTrackNamespaceToMoqTestParam(
-      &fetch.fullTrackName.trackNamespace);
-  XCHECK(res.hasValue())
-      << "Only valid params must be passed into this function";
-  MoQTestParameters params = res.value();
+  if (window.empty()) {
+    // FETCH_OK has already gone out, so close the fetch without any objects.
+    fetchCallback->endOfFetch();
+    co_return;
+  }
 
   // Publish Objects in Accordance to params
 
@@ -632,17 +641,17 @@ folly::coro::Task<void> MoQTestPublisher::onFetch(
     // fetchForwardingPreference() remaps DATAGRAM to one subgroup per group.
     case (ForwardingPreference::DATAGRAM):
     case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
-      co_await fetchOneSubgroupPerGroup(params, fetchCallback);
+      co_await fetchOneSubgroupPerGroup(params, fetchCallback, window);
       break;
     }
 
     case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT): {
-      co_await fetchOneSubgroupPerObject(params, fetchCallback);
+      co_await fetchOneSubgroupPerObject(params, fetchCallback, window);
       break;
     }
 
     case (ForwardingPreference::TWO_SUBGROUPS_PER_GROUP): {
-      co_await fetchTwoSubgroupsPerGroup(params, fetchCallback);
+      co_await fetchTwoSubgroupsPerGroup(params, fetchCallback, window);
       break;
     }
 
@@ -656,7 +665,8 @@ folly::coro::Task<void> MoQTestPublisher::onFetch(
 
 folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerGroup(
     MoQTestParameters params,
-    std::shared_ptr<FetchConsumer> callback) {
+    std::shared_ptr<FetchConsumer> callback,
+    MoQTestFetchWindow window) {
   // Iterate through Groups
   auto token = co_await folly::coro::co_current_cancellation_token;
   // A datagram track fetches back through here because its objects have no
@@ -669,12 +679,12 @@ folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerGroup(
   // subscribe path marks the group on a status datagram instead.
   const bool sendEndOfGroupMarkers =
       params.sendEndOfGroupMarkers && !isDatagram;
-  for (uint64_t groupNum = params.startGroup;
-       groupNum <= params.lastGroupInTrack;
+  for (uint64_t groupNum = window.first.group; groupNum <= window.last.group;
        groupNum += params.groupIncrement) {
     // Iterate Through Objects in SubGroup
-    for (uint64_t objectId = params.startObject;
-         objectId <= params.lastObjectInTrack;
+    const uint64_t lastObject = window.lastObjectIn(groupNum);
+    for (uint64_t objectId = window.firstObjectIn(groupNum);
+         objectId <= lastObject;
          objectId += params.objectIncrement) {
       if (token.isCancellationRequested()) {
         co_return;
@@ -717,15 +727,16 @@ folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerGroup(
 
 folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerObject(
     MoQTestParameters params,
-    std::shared_ptr<FetchConsumer> callback) {
+    std::shared_ptr<FetchConsumer> callback,
+    MoQTestFetchWindow window) {
   // Iterate through Groups
   auto token = co_await folly::coro::co_current_cancellation_token;
-  for (uint64_t groupNum = params.startGroup;
-       groupNum <= params.lastGroupInTrack;
+  for (uint64_t groupNum = window.first.group; groupNum <= window.last.group;
        groupNum += params.groupIncrement) {
     // Iterate Through Objects
-    for (uint64_t objectId = params.startObject;
-         objectId <= params.lastObjectInTrack;
+    const uint64_t lastObject = window.lastObjectIn(groupNum);
+    for (uint64_t objectId = window.firstObjectIn(groupNum);
+         objectId <= lastObject;
          objectId += params.objectIncrement) {
       if (token.isCancellationRequested()) {
         co_return;
@@ -768,15 +779,16 @@ folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerObject(
 
 folly::coro::Task<void> MoQTestPublisher::fetchTwoSubgroupsPerGroup(
     MoQTestParameters params,
-    std::shared_ptr<FetchConsumer> callback) {
+    std::shared_ptr<FetchConsumer> callback,
+    MoQTestFetchWindow window) {
   // Iterate through Groups
   auto token = co_await folly::coro::co_current_cancellation_token;
-  for (uint64_t groupNum = params.startGroup;
-       groupNum <= params.lastGroupInTrack;
+  for (uint64_t groupNum = window.first.group; groupNum <= window.last.group;
        groupNum += params.groupIncrement) {
     // Iterate Through Objects in SubGroup
-    for (uint64_t objectId = params.startObject;
-         objectId <= params.lastObjectInTrack;
+    const uint64_t lastObject = window.lastObjectIn(groupNum);
+    for (uint64_t objectId = window.firstObjectIn(groupNum);
+         objectId <= lastObject;
          objectId += params.objectIncrement) {
       if (token.isCancellationRequested()) {
         co_return;
@@ -790,12 +802,8 @@ folly::coro::Task<void> MoQTestPublisher::fetchTwoSubgroupsPerGroup(
           params.testVariableExtension,
           includeTimestampExtension_);
 
-      int subgroupId;
-      if (params.objectsPerGroup > 1) {
-        subgroupId = (objectId - params.startObject) % 2;
-      } else {
-        subgroupId = 0;
-      }
+      // The same split the subscribe path uses.
+      const uint64_t subgroupId = objectId % 2;
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
       if (objectId < lastObjectInGroup(params) ||

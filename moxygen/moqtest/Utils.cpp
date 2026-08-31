@@ -6,7 +6,11 @@
 
 #include "moxygen/moqtest/Utils.h"
 
+#include <folly/Conv.h>
+#include <folly/String.h>
+#include <algorithm>
 #include <chrono>
+#include <optional>
 
 namespace moxygen {
 
@@ -264,11 +268,190 @@ BeginSubgroupOptions subgroupOptionsFor(
   return options;
 }
 
+namespace {
+
+// Smallest value on the grid `base + k * increment` that is >= `value`.
+uint64_t snapUp(uint64_t value, uint64_t base, uint64_t increment) {
+  if (value <= base) {
+    return base;
+  }
+  return base + ((value - base + increment - 1) / increment) * increment;
+}
+
+// Largest value on the grid `base + k * increment` that is <= `value`.
+// `value` must be >= `base`.
+uint64_t snapDown(uint64_t value, uint64_t base, uint64_t increment) {
+  return base + ((value - base) / increment) * increment;
+}
+
+// The (group, object) lattice a set of track parameters generates.
+struct TrackGrid {
+  uint64_t firstGroup;
+  uint64_t lastGroup;
+  uint64_t groupIncrement;
+  uint64_t firstObject;
+  uint64_t lastObject;
+  uint64_t objectIncrement;
+};
+
+TrackGrid trackGrid(const MoQTestParameters& params) {
+  return TrackGrid{
+      params.startGroup,
+      snapDown(
+          params.lastGroupInTrack, params.startGroup, params.groupIncrement),
+      params.groupIncrement,
+      params.startObject,
+      lastObjectInGroup(params),
+      params.objectIncrement};
+}
+
+// First location the grid generates at or after `loc`, or nullopt if `loc` is
+// past the end of the track.
+std::optional<AbsoluteLocation> snapLocationUp(
+    const TrackGrid& grid,
+    AbsoluteLocation loc) {
+  auto group = snapUp(loc.group, grid.firstGroup, grid.groupIncrement);
+  uint64_t object = grid.firstObject;
+  if (group == loc.group) {
+    object = snapUp(loc.object, grid.firstObject, grid.objectIncrement);
+    if (object > grid.lastObject) {
+      group += grid.groupIncrement;
+      object = grid.firstObject;
+    }
+  }
+  if (group > grid.lastGroup) {
+    return std::nullopt;
+  }
+  return AbsoluteLocation{group, object};
+}
+
+// On the wire an end object of 0 asks for all of the end group; every other
+// value is already one past the last object.
+AbsoluteLocation toExclusiveEnd(AbsoluteLocation wireEnd) {
+  if (wireEnd.object != 0) {
+    return wireEnd;
+  }
+  return wireEnd.nextGroup().value_or(kLocationMax);
+}
+
+// Last location the grid generates at or before `loc`, or nullopt if `loc` is
+// before the start of the track.
+std::optional<AbsoluteLocation> snapLocationDown(
+    const TrackGrid& grid,
+    AbsoluteLocation loc) {
+  if (loc.group < grid.firstGroup) {
+    return std::nullopt;
+  }
+  if (loc.group > grid.lastGroup) {
+    return AbsoluteLocation{grid.lastGroup, grid.lastObject};
+  }
+  auto group = snapDown(loc.group, grid.firstGroup, grid.groupIncrement);
+  if (group == loc.group) {
+    if (loc.object >= grid.firstObject) {
+      return AbsoluteLocation{
+          group,
+          std::min(
+              snapDown(loc.object, grid.firstObject, grid.objectIncrement),
+              grid.lastObject)};
+    }
+    if (group == grid.firstGroup) {
+      return std::nullopt;
+    }
+    group -= grid.groupIncrement;
+  }
+  return AbsoluteLocation{group, grid.lastObject};
+}
+
+} // namespace
+
 ForwardingPreference fetchForwardingPreference(
     ForwardingPreference preference) {
   return preference == ForwardingPreference::DATAGRAM
       ? ForwardingPreference::ONE_SUBGROUP_PER_GROUP
       : preference;
+}
+
+StandaloneFetch wholeTrackFetch(const MoQTestParameters& params) {
+  return StandaloneFetch(
+      AbsoluteLocation{params.startGroup, params.startObject},
+      AbsoluteLocation{params.lastGroupInTrack, 0});
+}
+
+AbsoluteLocation fetchEndLocation(
+    const MoQTestParameters& params,
+    const StandaloneFetch& fetch) {
+  const auto grid = trackGrid(params);
+  const AbsoluteLocation trackStart{grid.firstGroup, grid.firstObject};
+  const AbsoluteLocation trackEnd{grid.lastGroup, grid.lastObject + 1};
+  const auto end = std::min(toExclusiveEnd(fetch.end), trackEnd);
+  // A range that ends before the track begins delivers nothing, the mirror of
+  // one that begins after the track ends.
+  if (end <= trackStart) {
+    return fetch.start;
+  }
+  return std::max(end, fetch.start);
+}
+
+MoQTestFetchWindow resolveFetchWindow(
+    const MoQTestParameters& params,
+    const StandaloneFetch& fetch) {
+  const auto grid = trackGrid(params);
+  MoQTestFetchWindow window;
+  window.firstObjectPerGroup = grid.firstObject;
+  window.lastObjectPerGroup = grid.lastObject;
+
+  // toExclusiveEnd folds in "an end object of 0 selects the whole end group";
+  // the location before that end is the last one requested.
+  const auto requestedLast = toExclusiveEnd(fetch.end).prev();
+
+  const auto first = snapLocationUp(grid, fetch.start);
+  const auto last =
+      requestedLast ? snapLocationDown(grid, *requestedLast) : std::nullopt;
+  if (!first || !last || *last < *first) {
+    return window;
+  }
+
+  window.first = *first;
+  window.last = *last;
+  window.endOfTrack =
+      *last == AbsoluteLocation{grid.lastGroup, grid.lastObject};
+  return window;
+}
+
+MoQTestFetchWindow resolveFetchWindow(const MoQTestParameters& params) {
+  return resolveFetchWindow(params, wholeTrackFetch(params));
+}
+
+std::set<std::pair<uint64_t, uint64_t>> expectedObjectsIn(
+    const MoQTestParameters& params,
+    const MoQTestFetchWindow& window) {
+  std::set<std::pair<uint64_t, uint64_t>> objects;
+  for (uint64_t group = window.first.group; group <= window.last.group;
+       group += params.groupIncrement) {
+    const uint64_t lastObject = window.lastObjectIn(group);
+    for (uint64_t object = window.firstObjectIn(group); object <= lastObject;
+         object += params.objectIncrement) {
+      objects.insert({group, object});
+    }
+  }
+  return objects;
+}
+
+folly::Expected<AbsoluteLocation, std::runtime_error> parseLocation(
+    const std::string& value) {
+  std::vector<folly::StringPiece> parts;
+  folly::split(',', value, parts);
+  if (parts.size() == 2) {
+    auto group = folly::tryTo<uint64_t>(parts[0]);
+    auto object = folly::tryTo<uint64_t>(parts[1]);
+    if (group.hasValue() && object.hasValue()) {
+      return AbsoluteLocation{group.value(), object.value()};
+    }
+  }
+  return folly::makeUnexpected(
+      std::runtime_error(
+          folly::to<std::string>(
+              "expected \"group,object\", got \"", value, "\"")));
 }
 
 // Extension Validation Helper Functions

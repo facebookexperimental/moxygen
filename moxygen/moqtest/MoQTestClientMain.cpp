@@ -13,9 +13,29 @@
 #include "moxygen/moqtest/MoQTestClient.h"
 #include "moxygen/samples/util/Utils.h"
 
-namespace moxygen {
+namespace {
 
-} // namespace moxygen
+using moxygen::AbsoluteLocation;
+
+// Fills `out` from a "group,object" flag, leaving it unset for an empty flag.
+bool parseLocationFlag(
+    const std::string& flag,
+    const std::string& value,
+    std::optional<AbsoluteLocation>& out) {
+  if (value.empty()) {
+    return true;
+  }
+  auto parsed = moxygen::parseLocation(value);
+  if (parsed.hasError()) {
+    XLOG(ERR) << "Invalid --" << flag << "=" << value << ": "
+              << parsed.error().what();
+    return false;
+  }
+  out = parsed.value();
+  return true;
+}
+
+} // namespace
 
 DEFINE_string(url, "http://localhost:9999", "URL to connect to");
 DEFINE_int64(forwarding_preference, 0, "Forwarding preference");
@@ -61,6 +81,17 @@ DEFINE_uint64(
     delivery_timeout,
     0,
     "Delivery timeout in milliseconds (0 = disabled)");
+DEFINE_string(
+    start_location,
+    "",
+    "With --request=fetch, the start location as \"group,object\". "
+    "Empty means the start of the track.");
+DEFINE_string(
+    end_location,
+    "",
+    "With --request=fetch, the end location as \"group,object\".  The object "
+    "is exclusive, and an object of 0 selects all of the end group.  Empty "
+    "means the end of the track.");
 DEFINE_string(
     request,
     "subscribe",
@@ -117,6 +148,19 @@ int main(int argc, char** argv) {
       ? moxygen::PublishOrder::PublishFirst
       : moxygen::PublishOrder::SubscribeFirst;
 
+  std::optional<moxygen::AbsoluteLocation> startLocation;
+  std::optional<moxygen::AbsoluteLocation> endLocation;
+  if (!parseLocationFlag(
+          "start_location", FLAGS_start_location, startLocation) ||
+      !parseLocationFlag("end_location", FLAGS_end_location, endLocation)) {
+    return 1;
+  }
+  if ((startLocation || endLocation) && FLAGS_request != "fetch") {
+    XLOG(ERR) << "--start_location/--end_location only apply with "
+                 "--request=fetch";
+    return 1;
+  }
+
   folly::EventBase evb;
   XLOG(INFO) << "Starting MoQTestClient";
 
@@ -146,6 +190,19 @@ int main(int argc, char** argv) {
       ? FLAGS_object_increment *
           (FLAGS_objects_per_group + (int)FLAGS_send_end_of_group_markers)
       : FLAGS_last_object_in_track;
+
+  std::optional<moxygen::StandaloneFetch> fetchRange;
+  if (startLocation || endLocation) {
+    // Whichever end the flags left out stays at the track's own boundary.
+    auto range = moxygen::wholeTrackFetch(defaultMoqParams);
+    if (startLocation) {
+      range.start = *startLocation;
+    }
+    if (endLocation) {
+      range.end = *endLocation;
+    }
+    fetchRange = range;
+  }
 
   auto url = proxygen::URL(FLAGS_url);
   std::shared_ptr<moxygen::MoQTestClient> client =
@@ -201,7 +258,8 @@ int main(int argc, char** argv) {
           .thenTry(onComplete);
     } else if (FLAGS_request == "fetch") {
       XLOG(INFO) << "Fetching from " << url.getHostAndPort();
-      folly::coro::co_withExecutor(&evb, client->fetch(defaultMoqParams))
+      folly::coro::co_withExecutor(
+          &evb, client->fetch(defaultMoqParams, fetchRange))
           .start()
           .via(&evb)
           .thenTry(onComplete);

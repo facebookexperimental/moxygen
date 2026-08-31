@@ -178,7 +178,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
 
   // Set Current Request
   receivingType_ = ReceivingType::SUBSCRIBE;
-  initializeExpecteds(params);
+  initializeExpecteds(params, resolveFetchWindow(params));
 
   // Subscribe to the receiver
   auto res = co_await moqClient_->moqSession_->subscribe(sub, subReceiver_);
@@ -271,7 +271,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::publishTrack(
 
   receivingType_ = ReceivingType::SUBSCRIBE;
   requestID_ = kDefaultRequestId;
-  initializeExpecteds(params);
+  initializeExpecteds(params, resolveFetchWindow(params));
 
   auto onFailure = [this](const std::exception& ex) {
     XLOG(ERR) << "MoQTest verification result: FAILURE! Reason: " << ex.what();
@@ -337,7 +337,8 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::publishTrack(
 }
 
 folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
-    MoQTestParameters params) {
+    MoQTestParameters params,
+    std::optional<StandaloneFetch> range) {
   auto trackNamespace = convertMoqTestParamToTrackNamespace(params);
   if (trackNamespace.hasError()) {
     XLOG(ERR)
@@ -358,16 +359,19 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
   ftn.trackName = kDefaultTrackName;
   fetch.fullTrackName = ftn;
   fetch.groupOrder = kDefaultGroupOrder;
+  const auto fetchRange = range.value_or(wholeTrackFetch(params));
+  fetch.args = fetchRange;
 
   // Set Current Request
   receivingType_ = ReceivingType::FETCH;
-  initializeExpecteds(params);
+  initializeExpecteds(params, resolveFetchWindow(params, fetchRange));
 
   // Fetch to the receiver
   auto res = co_await moqClient_->moqSession_->fetch(fetch, fetchReceiver_);
   moqClient_->moqSession_->drain();
   if (!res.hasError()) {
     fetchHandle_ = res.value();
+    validateFetchOk(fetchHandle_->fetchOk(), params, fetchRange);
   } else {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! Reason: Error Fetching to receiver. "
@@ -403,7 +407,7 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
   }
 
   // Adjust the expected data (If Still receiving data, leave unblocked)
-  adjustExpected(params_, &objHeader);
+  adjustExpected(params_, objHeader);
   return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
 }
 
@@ -440,7 +444,7 @@ void MoQTestClient::onObjectStatus(
   expectedObjects_.erase(std::make_pair(header.group, header.id));
 
   // Adjust the expected data
-  if (adjustExpected(params_, &objHeader) ==
+  if (adjustExpected(params_, objHeader) ==
       AdjustedExpectedResult::RECEIVED_ALL_DATA) {
     XLOG(DBG1)
         << "MoQTest DEBUGGING: onObjectStatus: No more data to be expected";
@@ -472,12 +476,7 @@ void MoQTestClient::onAllDataReceived() {
 
   if (deliveredForwardingPreference() == ForwardingPreference::DATAGRAM) {
     // For datagrams, some drops are allowed based on datagramDropPercentage
-    uint64_t totalExpected = (((params_.lastGroupInTrack - params_.startGroup) /
-                               params_.groupIncrement) +
-                              1) *
-        (((params_.lastObjectInTrack - params_.startObject) /
-          params_.objectIncrement) +
-         1);
+    uint64_t totalExpected = expectedObjectsIn(params_, window_).size();
     // Allow configured percentage of drops, with minimum of 1
     uint64_t dropsAllowed = std::max(
         uint64_t{1}, totalExpected * params_.datagramDropPercentage / 100);
@@ -784,11 +783,12 @@ bool MoQTestClient::validateSubscribedData(
 AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerGroup(
     MoQTestParameters& params) {
   // Adjust Expected Group and ObjectId
-  if (expectedGroup_ < params.lastGroupInTrack &&
-      subgroupToExpectedObjId_[0] == params.lastObjectInTrack) {
+  const uint64_t lastObject = window_.lastObjectIn(expectedGroup_);
+  if (expectedGroup_ < window_.last.group &&
+      subgroupToExpectedObjId_[0] >= lastObject) {
     expectedGroup_ += params.groupIncrement;
-    subgroupToExpectedObjId_[0] = params.startObject;
-  } else if (subgroupToExpectedObjId_[0] < params.lastObjectInTrack) {
+    subgroupToExpectedObjId_[0] = window_.firstObjectIn(expectedGroup_);
+  } else if (subgroupToExpectedObjId_[0] < lastObject) {
     subgroupToExpectedObjId_[0] += params.objectIncrement;
   } else {
     return AdjustedExpectedResult::RECEIVED_ALL_DATA;
@@ -806,19 +806,20 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerObject() {
 }
 
 AdjustedExpectedResult MoQTestClient::adjustExpectedForTwoSubgroupsPerGroup(
-    const ObjectHeader* header,
+    const ObjectHeader& header,
     MoQTestParameters& params) {
-  auto subgroup =
-      header ? header->subgroup : ((params.lastObjectInTrack & 1) ? 1 : 0);
+  const uint64_t lastObject = window_.lastObjectIn(expectedGroup_);
+  auto subgroup = header.subgroup;
   // Adjust Expected Group, ObjectId and Subgroup
-  if (expectedGroup_ < params.lastGroupInTrack &&
-      subgroupToExpectedObjId_[subgroup] >= params.lastObjectInTrack) {
+  if (expectedGroup_ < window_.last.group &&
+      subgroupToExpectedObjId_[subgroup] >= lastObject) {
     // Increment Group, Reset ObjectId and Subgroup
     expectedGroup_ += params.groupIncrement;
-    subgroupToExpectedObjId_[params.startObject & 1] = params.startObject;
-    subgroupToExpectedObjId_[!(params.startObject & 1)] =
-        params.startObject + params.objectIncrement;
-  } else if (subgroupToExpectedObjId_[subgroup] < params.lastObjectInTrack) {
+    const uint64_t firstObject = window_.firstObjectIn(expectedGroup_);
+    subgroupToExpectedObjId_[firstObject % 2] = firstObject;
+    subgroupToExpectedObjId_[1 - (firstObject % 2)] =
+        firstObject + params.objectIncrement;
+  } else if (subgroupToExpectedObjId_[subgroup] < lastObject) {
     // Increment ObjectId for this subgroup.  If increment is odd, increment
     // twice
     subgroupToExpectedObjId_[subgroup] += params.objectIncrement;
@@ -901,16 +902,44 @@ folly::Expected<folly::Unit, ExtensionError> MoQTestClient::validateExtensions(
   return folly::Unit({});
 }
 
-void MoQTestClient::initializeExpecteds(MoQTestParameters& params) {
+void MoQTestClient::validateFetchOk(
+    const FetchOk& ok,
+    const MoQTestParameters& params,
+    const StandaloneFetch& range) {
+  auto expectedEnd = fetchEndLocation(params, range);
+  if (ok.endLocation != expectedEnd) {
+    XLOG(ERR)
+        << "MoQTest verification result: FAILURE! reason: FETCH_OK End Location Mismatch: Actual="
+        << ok.endLocation << "  Expected=" << expectedEnd;
+    semanticsFailed_ = true;
+  }
+  uint8_t expectedEndOfTrack = window_.endOfTrack ? 1 : 0;
+  if (ok.endOfTrack != expectedEndOfTrack) {
+    XLOG(ERR)
+        << "MoQTest verification result: FAILURE! reason: FETCH_OK End Of Track Mismatch: Actual="
+        << static_cast<int>(ok.endOfTrack)
+        << "  Expected=" << static_cast<int>(expectedEndOfTrack);
+    semanticsFailed_ = true;
+  }
+}
+
+void MoQTestClient::initializeExpecteds(
+    MoQTestParameters& params,
+    MoQTestFetchWindow window) {
   params_ = params;
-  expectedGroup_ = params.startGroup;
+  window_ = window;
+  // An empty window carries the kLocationMax sentinel, and seeding the cursor
+  // from it is what makes a stray object on such a fetch fail to match.
+  const uint64_t firstObject = window.first.object;
+
+  expectedGroup_ = window.first.group;
   if (params.forwardingPreference ==
       ForwardingPreference::TWO_SUBGROUPS_PER_GROUP) {
-    subgroupToExpectedObjId_[params.startObject & 1] = params.startObject;
-    subgroupToExpectedObjId_[!(params.startObject & 1)] =
-        params.startObject + params.objectIncrement;
+    subgroupToExpectedObjId_[firstObject % 2] = firstObject;
+    subgroupToExpectedObjId_[1 - (firstObject % 2)] =
+        firstObject + params.objectIncrement;
   } else {
-    subgroupToExpectedObjId_[0] = params.startObject;
+    subgroupToExpectedObjId_[0] = firstObject;
   }
   expectedSubgroup_ = 0;
   // A fetched datagram track is the one combination the server cannot mark:
@@ -921,15 +950,7 @@ void MoQTestClient::initializeExpecteds(MoQTestParameters& params) {
         params.forwardingPreference == ForwardingPreference::DATAGRAM);
   semanticsFailed_ = false;
 
-  // Initialize scoreboard with all expected (group, objectId) pairs
-  expectedObjects_.clear();
-  for (uint64_t group = params.startGroup; group <= params.lastGroupInTrack;
-       group += params.groupIncrement) {
-    for (uint64_t obj = params.startObject; obj <= params.lastObjectInTrack;
-         obj += params.objectIncrement) {
-      expectedObjects_.insert({group, obj});
-    }
-  }
+  expectedObjects_ = expectedObjectsIn(params, window);
 
   // Only relevant for Datagram Forwarding Preference
   datagramObjects_ = 0;
@@ -937,7 +958,7 @@ void MoQTestClient::initializeExpecteds(MoQTestParameters& params) {
 
 AdjustedExpectedResult MoQTestClient::adjustExpected(
     MoQTestParameters& params,
-    const ObjectHeader* header) {
+    const ObjectHeader& header) {
   switch (deliveredForwardingPreference()) {
     case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
       return adjustExpectedForOneSubgroupPerGroup(params);
