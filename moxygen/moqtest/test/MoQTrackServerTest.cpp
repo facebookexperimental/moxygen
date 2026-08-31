@@ -842,16 +842,18 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
 
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
 
+      // Datagram objects carry no subgroup: the object is flagged and sits in
+      // subgroup 0, which the framer omits from draft 16 onwards.
       EXPECT_CALL(
           *mockConsumer,
           object(
               expectedHeader.group,
+              0 /* subgroupId */,
               expectedHeader.id,
-              expectedHeader.id,
               testing::_,
               testing::_,
               testing::_,
-              testing::_))
+              true /* forwardingPreferenceIsDatagram */))
           .WillOnce([expectedHeader, objectSize](
                         auto,
                         auto,
@@ -878,11 +880,46 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
               folly::Expected<folly::Unit, moxygen::MoQPublishError>(
                   folly::unit)));
 
-  // Call the fetchDatagram method
-  auto task = publisher_->fetchDatagram(params_, mockConsumer);
+  // Datagram tracks fetch back through the one-subgroup-per-group generator
+  auto task = publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer);
 
   // Wait for the coroutine to complete
   folly::coro::blockingWait(std::move(task));
+}
+
+TEST_F(MoQTrackServerTest, FetchOfADatagramTrackSkipsEndOfGroupMarkers) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  params_.forwardingPreference = moxygen::ForwardingPreference::DATAGRAM;
+  params_.sendEndOfGroupMarkers = true;
+
+  auto mockConsumer = std::make_shared<moxygen::MockFetchConsumer>();
+  EXPECT_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          true /* forwardingPreferenceIsDatagram */))
+      .WillRepeatedly(
+          ::testing::Return(
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
+  // END_OF_GROUP is a status object with nowhere to carry the datagram flag, so
+  // a datagram track must not emit one even when the track asks for markers.
+  EXPECT_CALL(
+      *mockConsumer, endOfGroup(testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*mockConsumer, endOfFetch())
+      .WillOnce(
+          ::testing::Return(
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
+
+  folly::coro::blockingWait(
+      publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer));
 }
 
 // requestUpdate Testing
@@ -1159,4 +1196,47 @@ TEST_F(MoQTrackServerTest, DatagramSignalsEndOfGroupOnLastObject) {
   const std::vector<std::pair<uint64_t, bool>> expected{
       {0, false}, {1, false}, {2, true}, {0, false}, {1, false}, {2, true}};
   EXPECT_EQ(endOfGroupByObject, expected);
+}
+
+TEST_F(MoQTrackServerTest, DatagramEndOfGroupMarkerIsAnEmptyStatusObject) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  params_.forwardingPreference = moxygen::ForwardingPreference::DATAGRAM;
+  params_.lastGroupInTrack = 0;
+  params_.objectsPerGroup = 2;
+  params_.objectIncrement = 2;
+  // lastObjectInTrack is off the increment grid, so the group stops at object
+  // 2 and never reaches 3.
+  params_.lastObjectInTrack = 3;
+  params_.sendEndOfGroupMarkers = true;
+
+  auto mockConsumer =
+      std::make_shared<testing::NiceMock<moxygen::MockTrackConsumer>>();
+  ON_CALL(*mockConsumer, setTrackAlias(testing::_))
+      .WillByDefault(
+          testing::Return(
+              folly::makeExpected<moxygen::MoQPublishError>(folly::unit)));
+
+  // (object, status, end-of-group bit, carries extensions)
+  std::vector<std::tuple<uint64_t, moxygen::ObjectStatus, bool, bool>> sent;
+  ON_CALL(*mockConsumer, datagram(testing::_, testing::_, testing::_))
+      .WillByDefault([&sent](
+                         const moxygen::ObjectHeader& header,
+                         moxygen::Payload,
+                         bool endOfGroup) {
+        sent.emplace_back(
+            header.id, header.status, endOfGroup, !header.extensions.empty());
+        return folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
+      });
+
+  folly::coro::blockingWait(
+      publisher_->sendDatagram(moxygen::RequestID(0), params_, mockConsumer));
+
+  // The marker lands on object 2, drops the extensions that draft 15+ rejects
+  // on a non-NORMAL status object, and leaves the end-of-group bit clear
+  // because the type byte cannot carry it alongside a status.
+  const std::vector<std::tuple<uint64_t, moxygen::ObjectStatus, bool, bool>>
+      expected{
+          {0, moxygen::ObjectStatus::NORMAL, false, true},
+          {2, moxygen::ObjectStatus::END_OF_GROUP, false, false}};
+  EXPECT_EQ(sent, expected);
 }

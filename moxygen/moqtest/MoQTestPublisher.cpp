@@ -490,27 +490,39 @@ folly::coro::Task<void> MoQTestPublisher::sendDatagram(
         callback->publishDone(std::move(done));
         co_return;
       }
-      // Add Integer/Variable Extensions if needed
-      std::vector<Extension> extensions = getExtensions(
-          params.testIntegerExtension,
-          params.testVariableExtension,
-          includeTimestampExtension_);
-
-      // Find Object Size
-      int objectSize = getObjectSize(objectId, &params);
-
-      std::string p = std::string(objectSize, 't');
-      auto objectPayload = folly::IOBuf::copyBuffer(p);
-
       // Build object header
       ObjectHeader header;
       header.group = groupNum;
       header.id = objectId;
       header.priority = publisherPriorityForGroup(groupNum);
-      header.extensions = Extensions(extensions, {});
+
+      // The datagram type byte carries either the end-of-group bit or an object
+      // status, never both.  When the track asks for markers the group's last
+      // object is sent as an END_OF_GROUP status datagram instead of a payload
+      // object, which is what the subgroup path emits.
+      const bool endOfGroupMarker =
+          params.sendEndOfGroupMarkers && objectId == lastObject;
+      Payload objectPayload;
+      if (endOfGroupMarker) {
+        // Draft 15+ rejects extensions on a non-NORMAL status object.
+        header.status = ObjectStatus::END_OF_GROUP;
+        header.length = 0;
+      } else {
+        int objectSize = getObjectSize(objectId, &params);
+        objectPayload = folly::IOBuf::copyBuffer(std::string(objectSize, 't'));
+        // Add Integer/Variable Extensions if needed
+        header.extensions = Extensions(
+            getExtensions(
+                params.testIntegerExtension,
+                params.testVariableExtension,
+                includeTimestampExtension_),
+            {});
+      }
 
       auto res = callback->datagram(
-          header, std::move(objectPayload), objectId == lastObject);
+          header,
+          std::move(objectPayload),
+          !endOfGroupMarker && objectId == lastObject);
       if (res.hasError()) {
         // If sending datagram fails, callback->publishDone with error
         PublishDone done;
@@ -580,14 +592,15 @@ folly::coro::Task<void> MoQTestPublisher::onFetch(
   // Publisher Delivery Timeout (To be implemented later)
 
   // Switch based on forwarding preference
-  switch (params.forwardingPreference) {
+  switch (fetchForwardingPreference(params.forwardingPreference)) {
+    // fetchForwardingPreference() remaps DATAGRAM to one subgroup per group.
+    case (ForwardingPreference::DATAGRAM):
     case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
       co_await fetchOneSubgroupPerGroup(params, fetchCallback);
       break;
     }
 
-    case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT):
-    case (ForwardingPreference::DATAGRAM): {
+    case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT): {
       co_await fetchOneSubgroupPerObject(params, fetchCallback);
       break;
     }
@@ -610,6 +623,16 @@ folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerGroup(
     std::shared_ptr<FetchConsumer> callback) {
   // Iterate through Groups
   auto token = co_await folly::coro::co_current_cancellation_token;
+  // A datagram track fetches back through here because its objects have no
+  // subgroup.  From draft 16 the flag tells the framer to omit the subgroup
+  // field entirely; on draft 15 there is no flag and the 0 below is written.
+  const bool isDatagram =
+      params.forwardingPreference == ForwardingPreference::DATAGRAM;
+  // FetchConsumer::endOfGroup() has no datagram flag to set, so a marker here
+  // would advertise a second forwarding preference inside the group.  The
+  // subscribe path marks the group on a status datagram instead.
+  const bool sendEndOfGroupMarkers =
+      params.sendEndOfGroupMarkers && !isDatagram;
   for (uint64_t groupNum = params.startGroup;
        groupNum <= params.lastGroupInTrack;
        groupNum += params.groupIncrement) {
@@ -631,8 +654,7 @@ folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerGroup(
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
-      if (objectId < params.lastObjectInTrack ||
-          !params.sendEndOfGroupMarkers) {
+      if (objectId < params.lastObjectInTrack || !sendEndOfGroupMarkers) {
         // Begin Delivering Object With Payload
         std::string p = std::string(objectSize, 't');
         auto objectPayload = folly::IOBuf::copyBuffer(p);
@@ -642,7 +664,8 @@ folly::coro::Task<void> MoQTestPublisher::fetchOneSubgroupPerGroup(
             objectId,
             std::move(objectPayload),
             Extensions(extensions, {}),
-            false);
+            false,
+            isDatagram);
       } else {
         callback->endOfGroup(groupNum, 0 /* subgroupId */, objectId, false);
       }

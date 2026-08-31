@@ -439,7 +439,7 @@ run_test "Large increments (group=10, object=5)" \
     --object_increment=5
 
 # ============================================================================
-# SECTION 5: End of Group Markers (Tests 31-36)
+# SECTION 5: End of Group Markers (Tests 31-37)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 5: End of Group Markers ===${NC}"
 set_section "5" "End of Group Markers"
@@ -500,8 +500,21 @@ run_test "End of group markers with single object" \
     --objects_per_group=1 \
     --send_end_of_group_markers=true
 
+# Test 37: End of group markers with DATAGRAM.  A datagram type byte carries
+# the end-of-group bit or an object status, so the marker arrives as a status
+# datagram with the bit clear -- and carries no extensions, unlike the payload
+# datagrams around it, which is what puts it on the wire differently.
+run_test "End of group markers with DATAGRAM and extensions" \
+    "subscribe" \
+    --forwarding_preference=3 \
+    --last_group=2 \
+    --objects_per_group=4 \
+    --test_integer_extension=1 \
+    --test_variable_extension=1 \
+    --send_end_of_group_markers=true
+
 # ============================================================================
-# SECTION 6: Extensions (Tests 37-42)
+# SECTION 6: Extensions (Tests 38-43)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 6: Extensions ===${NC}"
 set_section "6" "Extensions"
@@ -567,7 +580,7 @@ run_test "Extensions with end of group markers" \
     --send_end_of_group_markers=true
 
 # ============================================================================
-# SECTION 7: Complex Scenarios (Tests 43-50)
+# SECTION 7: Complex Scenarios (Tests 44-51)
 # ============================================================================
 echo -e "\n${YELLOW}=== SECTION 7: Complex Scenarios ===${NC}"
 set_section "7" "Complex Scenarios"
@@ -663,7 +676,7 @@ run_test "Stress: DATAGRAM rapid delivery" \
     --test_variable_extension=1
 
 # ============================================================================
-# SECTION 8: PUBLISH (Tests 51-56)
+# SECTION 8: PUBLISH (Tests 52-57)
 # ============================================================================
 # These ask the relay for the track with SUBSCRIBE_TRACKS and PUBLISH it on a
 # second session, so they exercise the relay's PUBLISH forwarding rather than

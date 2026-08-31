@@ -264,6 +264,13 @@ BeginSubgroupOptions subgroupOptionsFor(
   return options;
 }
 
+ForwardingPreference fetchForwardingPreference(
+    ForwardingPreference preference) {
+  return preference == ForwardingPreference::DATAGRAM
+      ? ForwardingPreference::ONE_SUBGROUP_PER_GROUP
+      : preference;
+}
+
 // Extension Validation Helper Functions
 bool validateExtensionSize(
     std::vector<Extension> extensions,

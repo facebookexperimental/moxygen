@@ -425,26 +425,23 @@ void MoQTestClient::onObjectStatus(
     return;
   }
 
-  if (!params_.sendEndOfGroupMarkers) {
+  if (!expectEndOfGroup_) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: End of Group Marker Received When Not Expected";
     return;
   }
 
-  if (header.id != params_.lastObjectInTrack) {
+  if (header.id != lastObjectInGroup(params_)) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Object Id Mismatch For End of Group Marker: Actual="
-        << header.id << "  Expected=" << params_.lastObjectInTrack;
+        << header.id << "  Expected=" << lastObjectInGroup(params_);
     return;
   }
 
-  // Remove the end-of-group marker from the scoreboard
-  // End-of-group markers don't go through validateSubscribedData(), so we need
-  // to erase them here to avoid false "objects still expected" errors
-  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM) {
-    auto key = std::make_pair(header.group, header.id);
-    expectedObjects_.erase(key);
-  }
+  // Remove the end-of-group marker from the scoreboard.  End-of-group markers
+  // don't go through validateSubscribedData(), so nothing else erases them and
+  // they would show up as "objects still expected".
+  expectedObjects_.erase(std::make_pair(header.group, header.id));
 
   // Adjust the expected data
   if (adjustExpected(params_, &objHeader) ==
@@ -477,7 +474,7 @@ void MoQTestClient::onAllDataReceived() {
     return;
   }
 
-  if (params_.forwardingPreference == ForwardingPreference::DATAGRAM) {
+  if (deliveredForwardingPreference() == ForwardingPreference::DATAGRAM) {
     // For datagrams, some drops are allowed based on datagramDropPercentage
     uint64_t totalExpected = (((params_.lastGroupInTrack - params_.startGroup) /
                                params_.groupIncrement) +
@@ -586,7 +583,11 @@ void MoQTestClient::validateSubgroupHeader(
 void MoQTestClient::validateDatagramHeader(
     const ObjectHeader& header,
     bool endOfGroup) {
-  auto expectEndOfGroup = header.id == lastObjectInGroup(params_);
+  // The type byte carries the end-of-group bit or a status datagram, never
+  // both, so when the track sends markers the bit stays clear and the
+  // END_OF_GROUP status datagram is the signal instead.
+  auto expectEndOfGroup =
+      !expectEndOfGroup_ && header.id == lastObjectInGroup(params_);
   if (endOfGroup != expectEndOfGroup) {
     recordSemanticsFailure(
         folly::to<std::string>(
@@ -615,9 +616,16 @@ void MoQTestClient::validateDatagramHeader(
   }
 }
 
+ForwardingPreference MoQTestClient::deliveredForwardingPreference() const {
+  return receivingType_ == ReceivingType::FETCH
+      ? fetchForwardingPreference(params_.forwardingPreference)
+      : params_.forwardingPreference;
+}
+
 bool MoQTestClient::validateSubscribedData(
     const ObjectHeader& header,
     const std::string& payload) {
+  const auto preference = deliveredForwardingPreference();
   // Validate Group, Object Id, SubGroup (and End of Group Markers if
   // applicable)
   XLOG(DBG1) << "MoQTest DEBUGGING: Expected Group=" << expectedGroup_
@@ -626,9 +634,8 @@ bool MoQTestClient::validateSubscribedData(
   XLOG(DBG1) << "MoQTest DEBUGGING: Object Group=" << header.group
              << " end of group markers=" << params_.sendEndOfGroupMarkers
              << " expected end of group markers=" << expectEndOfGroup_;
-  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM) {
-    if (params_.forwardingPreference ==
-        ForwardingPreference::ONE_SUBGROUP_PER_OBJECT) {
+  if (preference != ForwardingPreference::DATAGRAM) {
+    if (preference == ForwardingPreference::ONE_SUBGROUP_PER_OBJECT) {
       // Allow out-of-order groups, just validate range
       if (header.group < params_.startGroup ||
           header.group > params_.lastGroupInTrack) {
@@ -657,8 +664,7 @@ bool MoQTestClient::validateSubscribedData(
     }
   }
 
-  if (params_.forwardingPreference ==
-          ForwardingPreference::ONE_SUBGROUP_PER_GROUP &&
+  if (preference == ForwardingPreference::ONE_SUBGROUP_PER_GROUP &&
       header.subgroup != expectedSubgroup_) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: SubGroup Mismatch: Actual="
@@ -667,35 +673,30 @@ bool MoQTestClient::validateSubscribedData(
   }
 
   // Validate function for Datagram Objects
-  if (params_.forwardingPreference == ForwardingPreference::DATAGRAM) {
+  if (preference == ForwardingPreference::DATAGRAM) {
     if (!validateDatagramObjects(header)) {
       return false;
     }
   }
 
   // Validate subgroup ID according to forwarding preference
-  if ((params_.forwardingPreference ==
-           ForwardingPreference::ONE_SUBGROUP_PER_GROUP &&
+  if ((preference == ForwardingPreference::ONE_SUBGROUP_PER_GROUP &&
        header.subgroup != 0) ||
-      (params_.forwardingPreference ==
-           ForwardingPreference::TWO_SUBGROUPS_PER_GROUP &&
+      (preference == ForwardingPreference::TWO_SUBGROUPS_PER_GROUP &&
        header.subgroup > 1)) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: SubGroup Mismatch: Actual="
         << header.subgroup << "  Expected="
-        << (params_.forwardingPreference ==
-                    ForwardingPreference::ONE_SUBGROUP_PER_GROUP
+        << (preference == ForwardingPreference::ONE_SUBGROUP_PER_GROUP
                 ? "0"
-                : (params_.forwardingPreference ==
-                           ForwardingPreference::TWO_SUBGROUPS_PER_GROUP
+                : (preference == ForwardingPreference::TWO_SUBGROUPS_PER_GROUP
                        ? "0 or 1"
                        : "N/A"));
     return false;
   }
 
   // Validate ONE_SUBGROUP_PER_OBJECT constraints
-  if (params_.forwardingPreference ==
-      ForwardingPreference::ONE_SUBGROUP_PER_OBJECT) {
+  if (preference == ForwardingPreference::ONE_SUBGROUP_PER_OBJECT) {
     // Subgroup must equal object ID
     if (header.subgroup != header.id) {
       XLOG(ERR)
@@ -717,7 +718,7 @@ bool MoQTestClient::validateSubscribedData(
 
   // Scoreboard-based duplicate detection for non-DATAGRAM forwarding
   // preferences
-  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM) {
+  if (preference != ForwardingPreference::DATAGRAM) {
     auto key = std::make_pair(header.group, header.id);
     auto it = expectedObjects_.find(key);
     if (it == expectedObjects_.end()) {
@@ -730,9 +731,8 @@ bool MoQTestClient::validateSubscribedData(
     expectedObjects_.erase(it);
   }
 
-  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM &&
-      params_.forwardingPreference !=
-          ForwardingPreference::ONE_SUBGROUP_PER_OBJECT &&
+  if (preference != ForwardingPreference::DATAGRAM &&
+      preference != ForwardingPreference::ONE_SUBGROUP_PER_OBJECT &&
       header.id != subgroupToExpectedObjId_[header.subgroup]) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Object Id Mismatch: Actual="
@@ -907,7 +907,12 @@ void MoQTestClient::initializeExpecteds(MoQTestParameters& params) {
     subgroupToExpectedObjId_[0] = params.startObject;
   }
   expectedSubgroup_ = 0;
-  expectEndOfGroup_ = params.sendEndOfGroupMarkers;
+  // A fetched datagram track is the one combination the server cannot mark:
+  // FetchConsumer::endOfGroup() has no way to flag its status object as a
+  // datagram.  Every other combination honors the parameter.
+  expectEndOfGroup_ = params.sendEndOfGroupMarkers &&
+      !(receivingType_ == ReceivingType::FETCH &&
+        params.forwardingPreference == ForwardingPreference::DATAGRAM);
   semanticsFailed_ = false;
 
   // Initialize scoreboard with all expected (group, objectId) pairs
@@ -927,7 +932,7 @@ void MoQTestClient::initializeExpecteds(MoQTestParameters& params) {
 AdjustedExpectedResult MoQTestClient::adjustExpected(
     MoQTestParameters& params,
     const ObjectHeader* header) {
-  switch (params_.forwardingPreference) {
+  switch (deliveredForwardingPreference()) {
     case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
       return adjustExpectedForOneSubgroupPerGroup(params);
     }
@@ -938,11 +943,6 @@ AdjustedExpectedResult MoQTestClient::adjustExpected(
       return adjustExpectedForTwoSubgroupsPerGroup(header, params);
     }
     case (ForwardingPreference::DATAGRAM): {
-      if (receivingType_ == ReceivingType::FETCH) {
-        XLOG(ERR)
-            << "MoQTest verification result: FAILURE! reason: Datagram Forwarding Preference Not Supported For Fetch";
-        return AdjustedExpectedResult::ERROR_RECEIVING_DATA;
-      }
       return adjustExpectedForDatagram(params);
     }
     default: {

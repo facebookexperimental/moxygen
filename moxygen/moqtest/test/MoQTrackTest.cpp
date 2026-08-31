@@ -190,3 +190,18 @@ TEST_F(
   auto track = moxygen::convertMoqTestParamToTrackNamespace(params_);
   EXPECT_TRUE(track.hasError());
 }
+
+TEST_F(MoQTrackTest, testFetchForwardingPreferenceOnlyRemapsDatagram) {
+  using moxygen::ForwardingPreference;
+  // A datagram object carries no subgroup, so over a fetch stream the track is
+  // shaped like one subgroup per group.  Everything else is unchanged.
+  EXPECT_EQ(
+      moxygen::fetchForwardingPreference(ForwardingPreference::DATAGRAM),
+      ForwardingPreference::ONE_SUBGROUP_PER_GROUP);
+  for (auto preference :
+       {ForwardingPreference::ONE_SUBGROUP_PER_GROUP,
+        ForwardingPreference::ONE_SUBGROUP_PER_OBJECT,
+        ForwardingPreference::TWO_SUBGROUPS_PER_GROUP}) {
+    EXPECT_EQ(moxygen::fetchForwardingPreference(preference), preference);
+  }
+}

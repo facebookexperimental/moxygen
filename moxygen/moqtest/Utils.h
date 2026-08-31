@@ -4,6 +4,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#pragma once
+
 #include <folly/Expected.h>
 #include "moxygen/MoQConsumers.h"
 #include "moxygen/MoQFramer.h"
@@ -62,6 +64,14 @@ BeginSubgroupOptions subgroupOptionsFor(
     const MoQTestParameters& params,
     uint64_t subgroupID,
     bool includeTimestampExtension = false);
+
+// How the objects of a track with `preference` are grouped into subgroups when
+// they are delivered over a FETCH.  A datagram object carries no subgroup: from
+// draft 16 the FETCH object sets the datagram flag and omits the subgroup
+// field, and the receiver reports 0, so the track arrives shaped like one
+// subgroup per group.  Publisher and subscriber must agree on this or the
+// subscriber will reject a conformant response.
+ForwardingPreference fetchForwardingPreference(ForwardingPreference preference);
 
 bool validatePayload(int objectSize, std::string payload);
 

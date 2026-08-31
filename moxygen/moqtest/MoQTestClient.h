@@ -274,6 +274,10 @@ class MoQTestClient : public Subscriber,
   void recordSemanticsFailure(const std::string& reason);
   uint64_t draftMajorVersion() const;
 
+  // The shape the objects actually arrive in, which is not always the track's
+  // forwarding preference -- see fetchForwardingPreference().
+  ForwardingPreference deliveredForwardingPreference() const;
+
   // Subscription Data Validation functions
   void initializeExpecteds(MoQTestParameters& params);
   bool validateSubscribedData(

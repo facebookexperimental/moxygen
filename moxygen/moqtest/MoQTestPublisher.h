@@ -139,12 +139,6 @@ class MoQTestPublisher : public Publisher,
       MoQTestParameters params,
       std::shared_ptr<FetchConsumer> callback);
 
-  folly::coro::Task<void> fetchDatagram(
-      MoQTestParameters params,
-      std::shared_ptr<FetchConsumer> callback) {
-    co_return co_await fetchOneSubgroupPerObject(params, std::move(callback));
-  }
-
  private:
   // Tracks one publishTrack that is paused waiting for the peer to ask for
   // data. Registered so cancelAll() can release it during shutdown, where it
