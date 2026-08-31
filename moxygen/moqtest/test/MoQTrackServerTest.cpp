@@ -1076,6 +1076,96 @@ TEST_F(MoQTrackServerTest, FetchGeneratorEmitsNothingForAnEmptyWindow) {
       params_, mockConsumer, moxygen::MoQTestFetchWindow{}));
 }
 
+TEST_F(MoQTrackServerTest, FetchWaitsWhenTheConsumerReportsBlocked) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  auto mockConsumer =
+      std::make_shared<testing::NiceMock<moxygen::MockFetchConsumer>>();
+
+  std::vector<uint64_t> delivered;
+  bool blockedOnce = false;
+  ON_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .WillByDefault(
+          [&delivered, &blockedOnce](
+              uint64_t,
+              uint64_t,
+              uint64_t objectId,
+              std::unique_ptr<folly::IOBuf>,
+              const auto&,
+              auto,
+              auto) -> folly::Expected<folly::Unit, moxygen::MoQPublishError> {
+            delivered.push_back(objectId);
+            if (!blockedOnce) {
+              blockedOnce = true;
+              return folly::makeUnexpected(
+                  moxygen::MoQPublishError(moxygen::MoQPublishError::BLOCKED));
+            }
+            return folly::unit;
+          });
+  int awaits = 0;
+  ON_CALL(*mockConsumer, awaitReadyToConsume()).WillByDefault([&awaits] {
+    ++awaits;
+    return folly::makeSemiFuture<uint64_t>(0);
+  });
+  ON_CALL(*mockConsumer, endOfFetch())
+      .WillByDefault(
+          testing::Return(
+              folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+                  folly::unit)));
+
+  folly::coro::blockingWait(publisher_->fetchObjects(
+      params_, mockConsumer, moxygen::resolveFetchWindow(params_)));
+
+  // BLOCKED means the consumer took the object, so it is neither resent nor
+  // skipped -- the generator just waits once before carrying on.
+  EXPECT_EQ(awaits, 1);
+  EXPECT_EQ(
+      delivered.size(),
+      moxygen::expectedObjectsIn(params_, moxygen::resolveFetchWindow(params_))
+          .size());
+}
+
+TEST_F(MoQTrackServerTest, FetchStopsWhenTheConsumerErrors) {
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  auto mockConsumer =
+      std::make_shared<testing::NiceMock<moxygen::MockFetchConsumer>>();
+
+  int objects = 0;
+  ON_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .WillByDefault(
+          [&objects](auto, auto, auto, auto, const auto&, auto, auto)
+              -> folly::Expected<folly::Unit, moxygen::MoQPublishError> {
+            ++objects;
+            return folly::makeUnexpected(
+                moxygen::MoQPublishError(moxygen::MoQPublishError::CANCELLED));
+          });
+  // A fetch that gave up partway never reports completion.
+  EXPECT_CALL(*mockConsumer, endOfFetch()).Times(0);
+  EXPECT_CALL(*mockConsumer, awaitReadyToConsume()).Times(0);
+
+  folly::coro::blockingWait(publisher_->fetchObjects(
+      params_, mockConsumer, moxygen::resolveFetchWindow(params_)));
+
+  EXPECT_EQ(objects, 1);
+}
+
 TEST_F(MoQTrackServerTest, FetchTwoSubgroupsWindowKeepsObjectParity) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
   params_.forwardingPreference =

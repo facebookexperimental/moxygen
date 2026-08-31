@@ -730,11 +730,12 @@ folly::coro::Task<void> MoQTestPublisher::fetchObjects(
 
       // If there are send end of group markers and j == lastObjectID, send
       // the end of group
+      auto res = folly::makeExpected<MoQPublishError>(folly::unit);
       if (objectId < lastObjectInGroup(params) || !sendEndOfGroupMarkers) {
         int objectSize = getObjectSize(objectId, &params);
         auto objectPayload =
             folly::IOBuf::copyBuffer(std::string(objectSize, 't'));
-        callback->object(
+        res = callback->object(
             groupNum,
             subgroupId,
             objectId,
@@ -743,7 +744,22 @@ folly::coro::Task<void> MoQTestPublisher::fetchObjects(
             false,
             isDatagram);
       } else {
-        callback->endOfGroup(groupNum, subgroupId, objectId, false);
+        res = callback->endOfGroup(groupNum, subgroupId, objectId, false);
+      }
+      if (res.hasError()) {
+        if (res.error().code != MoQPublishError::BLOCKED) {
+          XLOG(ERR) << "Fetch consumer error: " << res.error().describe();
+          co_return;
+        }
+        // BLOCKED means the consumer took this object but has no room for the
+        // next one, so wait for it to drain rather than resending.
+        auto ready = callback->awaitReadyToConsume();
+        if (ready.hasError()) {
+          XLOG(ERR) << "Fetch consumer will not drain: "
+                    << ready.error().describe();
+          co_return;
+        }
+        co_await std::move(ready.value());
       }
 
       // Set Delay Based on Object Frequency
