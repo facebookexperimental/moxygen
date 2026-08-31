@@ -34,15 +34,17 @@ MoQTestClient::MoQTestClient(
               ObjectReceiver::SUBSCRIBE,
               std::shared_ptr<ObjectReceiverCallback>(
                   std::shared_ptr<void>(),
-                  &objectReceiverCallback_),
-              *this)),
+                  &subCallback_),
+              *this,
+              subState_)),
       fetchReceiver_(
           std::make_shared<VerifyingObjectReceiver>(
               ObjectReceiver::FETCH,
               std::shared_ptr<ObjectReceiverCallback>(
                   std::shared_ptr<void>(),
-                  &objectReceiverCallback_),
-              *this)) {}
+                  &fetchCallback_),
+              *this,
+              fetchState_)) {}
 
 void MoQTestClient::setLogger(const std::shared_ptr<MLogger>& logger) {
   logger_ = logger;
@@ -52,6 +54,7 @@ void MoQTestClient::setLogger(const std::shared_ptr<MLogger>& logger) {
 }
 
 void MoQTestClient::shutdown() {
+  tearingDown_ = true;
   // Cancel the active request first: drain() only closes once there are no
   // active subscriptions, otherwise it waits for the whole track.
   if (subHandle_) {
@@ -94,7 +97,7 @@ folly::coro::Task<void> MoQTestClient::doSubscribeUpdate(
 
 void MoQTestClient::subscribeUpdate(SubscribeUpdate update) {
   XLOG(DBG1) << "MoQTest DEBUGGING: calling subscribeUpdate";
-  if (receivingType_ == ReceivingType::SUBSCRIBE && subHandle_) {
+  if (subState_.active && subHandle_) {
     folly::coro::co_withExecutor(
         moqExecutor_->getBackingEventBase(),
         doSubscribeUpdate(subHandle_, std::move(update)))
@@ -177,8 +180,8 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
   }
 
   // Set Current Request
-  receivingType_ = ReceivingType::SUBSCRIBE;
   initializeExpecteds(params, resolveFetchWindow(params));
+  startReceiving(subState_, ReceivingType::SUBSCRIBE);
 
   // Subscribe to the receiver
   auto res = co_await moqClient_->moqSession_->subscribe(sub, subReceiver_);
@@ -269,9 +272,9 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::publishTrack(
     co_yield folly::coro::co_error(trackNamespace.error());
   }
 
-  receivingType_ = ReceivingType::SUBSCRIBE;
   requestID_ = kDefaultRequestId;
   initializeExpecteds(params, resolveFetchWindow(params));
+  startReceiving(subState_, ReceivingType::SUBSCRIBE);
 
   auto onFailure = [this](const std::exception& ex) {
     XLOG(ERR) << "MoQTest verification result: FAILURE! Reason: " << ex.what();
@@ -363,8 +366,8 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
   fetch.args = fetchRange;
 
   // Set Current Request
-  receivingType_ = ReceivingType::FETCH;
   initializeExpecteds(params, resolveFetchWindow(params, fetchRange));
+  startReceiving(fetchState_, ReceivingType::FETCH);
 
   // Fetch to the receiver
   auto res = co_await moqClient_->moqSession_->fetch(fetch, fetchReceiver_);
@@ -391,13 +394,14 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
 }
 
 ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
+    ReceiveState& state,
     const std::optional<TrackAlias>& /* trackAlias */,
     const ObjectHeader& objHeader,
     Payload payload) {
   XLOG(DBG1) << "MoQTest DEBUGGING: Calling onObject";
 
   // Validate the received data
-  if (!validateSubscribedData(objHeader, payload->toString())) {
+  if (!validateSubscribedData(state, objHeader, payload->toString())) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Data Validation Failed";
     cancelRequest();
@@ -407,11 +411,12 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
   }
 
   // Adjust the expected data (If Still receiving data, leave unblocked)
-  adjustExpected(params_, objHeader);
+  adjustExpected(state, params_, objHeader);
   return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
 }
 
 void MoQTestClient::onObjectStatus(
+    ReceiveState& state,
     const std::optional<TrackAlias>& /* trackAlias */,
     const ObjectHeader& objHeader) {
   XLOG(DBG1) << "MoQTest DEBUGGING: calling onObjectStatus";
@@ -425,7 +430,7 @@ void MoQTestClient::onObjectStatus(
     return;
   }
 
-  if (!expectEndOfGroup_) {
+  if (!state.expectEndOfGroup) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: End of Group Marker Received When Not Expected";
     return;
@@ -444,7 +449,7 @@ void MoQTestClient::onObjectStatus(
   expectedObjects_.erase(std::make_pair(header.group, header.id));
 
   // Adjust the expected data
-  if (adjustExpected(params_, objHeader) ==
+  if (adjustExpected(state, params_, objHeader) ==
       AdjustedExpectedResult::RECEIVED_ALL_DATA) {
     XLOG(DBG1)
         << "MoQTest DEBUGGING: onObjectStatus: No more data to be expected";
@@ -455,17 +460,43 @@ void MoQTestClient::onEndOfStream() {
   XLOG(DBG1) << "MoQTest DEBUGGING: calling onEndOfStream";
 }
 
-void MoQTestClient::onError(ResetStreamErrorCode) {
+void MoQTestClient::onError(ReceiveState& state, ResetStreamErrorCode error) {
   XLOG(DBG1) << "MoQTest DEBUGGING: calling onError";
+  if (tearingDown_) {
+    return;
+  }
+  // Otherwise the datagram drop budget would swallow the reset.
+  if (!state.done) {
+    recordSemanticsFailure(
+        folly::to<std::string>(
+            "Stream reset with error code ", folly::to_underlying(error)));
+  }
+  // An unfinished half gates the other half's verdict forever.
+  onAllDataReceived(state);
 }
-void MoQTestClient::onAllDataReceived() {
+void MoQTestClient::onAllDataReceived(ReceiveState& state) {
   XLOG(DBG1) << "MoQTest DEBUGGING: onAllDataReceived";
-  // Ensure subHandle_ is reset at the end of this function, even if an early
-  // return occurs
-  auto subHandleResetGuard = folly::makeGuard([this] {
+  // A natural completion and a reset both land here; the verdict runs once.
+  if (state.done) {
+    return;
+  }
+  state.done = true;
+  // The peer retired this half's request, so a later failure must not cancel
+  // it.
+  if (state.type == ReceivingType::FETCH) {
+    fetchHandle_.reset();
+  } else {
     subHandle_.reset();
-    doneBaton_.post();
-  });
+  }
+  // A request with more than one half only reaches a verdict once every half
+  // has finished, since they tick off one shared scoreboard.
+  if ((subState_.active && !subState_.done) ||
+      (fetchState_.active && !fetchState_.done)) {
+    return;
+  }
+
+  // Whatever verdict the checks below reach, the request is over.
+  auto doneGuard = folly::makeGuard([this] { doneBaton_.post(); });
 
   if (semanticsFailed_) {
     // The individual mismatches were already logged as they were detected
@@ -474,7 +505,11 @@ void MoQTestClient::onAllDataReceived() {
     return;
   }
 
-  if (deliveredForwardingPreference() == ForwardingPreference::DATAGRAM) {
+  // Only a subscription delivers datagrams; a FETCH of the same track arrives
+  // reliably.  Drops are tolerable exactly when a subscription is in play.
+  const bool datagramsInFlight = subState_.active &&
+      params_.forwardingPreference == ForwardingPreference::DATAGRAM;
+  if (datagramsInFlight) {
     // For datagrams, some drops are allowed based on datagramDropPercentage
     uint64_t totalExpected = expectedObjectsIn(params_, window_).size();
     // Allow configured percentage of drops, with minimum of 1
@@ -524,11 +559,12 @@ void MoQTestClient::recordSemanticsFailure(const std::string& reason) {
 }
 
 void MoQTestClient::validateSubgroupHeader(
+    const ReceiveState& state,
     uint64_t groupID,
     uint64_t subgroupID,
     Priority priority,
     const TrackConsumer::BeginSubgroupOptions& options) {
-  if (receivingType_ != ReceivingType::SUBSCRIBE) {
+  if (state.type != ReceivingType::SUBSCRIBE) {
     // FETCH responses arrive on a fetch stream, which has no subgroup header
     return;
   }
@@ -576,13 +612,14 @@ void MoQTestClient::validateSubgroupHeader(
 }
 
 void MoQTestClient::validateDatagramHeader(
+    const ReceiveState& state,
     const ObjectHeader& header,
     bool endOfGroup) {
   // The type byte carries the end-of-group bit or a status datagram, never
   // both, so when the track sends markers the bit stays clear and the
   // END_OF_GROUP status datagram is the signal instead.
   auto expectEndOfGroup =
-      !expectEndOfGroup_ && header.id == lastObjectInGroup(params_);
+      !state.expectEndOfGroup && header.id == lastObjectInGroup(params_);
   if (endOfGroup != expectEndOfGroup) {
     recordSemanticsFailure(
         folly::to<std::string>(
@@ -611,34 +648,36 @@ void MoQTestClient::validateDatagramHeader(
   }
 }
 
-ForwardingPreference MoQTestClient::deliveredForwardingPreference() const {
-  return receivingType_ == ReceivingType::FETCH
+ForwardingPreference MoQTestClient::deliveredForwardingPreference(
+    const ReceiveState& state) const {
+  return state.type == ReceivingType::FETCH
       ? fetchForwardingPreference(params_.forwardingPreference)
       : params_.forwardingPreference;
 }
 
 void MoQTestClient::cancelRequest() {
-  if (receivingType_ == ReceivingType::FETCH) {
-    if (fetchHandle_) {
-      fetchHandle_->fetchCancel();
-    }
-  } else if (subHandle_) {
+  tearingDown_ = true;
+  if (fetchHandle_) {
+    fetchHandle_->fetchCancel();
+  }
+  if (subHandle_) {
     subHandle_->unsubscribe();
   }
 }
 
 bool MoQTestClient::validateSubscribedData(
+    ReceiveState& state,
     const ObjectHeader& header,
     const std::string& payload) {
-  const auto preference = deliveredForwardingPreference();
+  const auto preference = deliveredForwardingPreference(state);
   // Validate Group, Object Id, SubGroup (and End of Group Markers if
   // applicable)
-  XLOG(DBG1) << "MoQTest DEBUGGING: Expected Group=" << expectedGroup_
+  XLOG(DBG1) << "MoQTest DEBUGGING: Expected Group=" << state.expectedGroup
              << " Expected ObjectId="
-             << subgroupToExpectedObjId_[header.subgroup];
+             << state.subgroupToExpectedObjId[header.subgroup];
   XLOG(DBG1) << "MoQTest DEBUGGING: Object Group=" << header.group
              << " end of group markers=" << params_.sendEndOfGroupMarkers
-             << " expected end of group markers=" << expectEndOfGroup_;
+             << " expected end of group markers=" << state.expectEndOfGroup;
   if (preference != ForwardingPreference::DATAGRAM) {
     if (preference == ForwardingPreference::ONE_SUBGROUP_PER_OBJECT) {
       // Allow out-of-order groups, just validate range
@@ -658,22 +697,22 @@ bool MoQTestClient::validateSubscribedData(
             << " and groupIncrement=" << params_.groupIncrement;
         return false;
       }
-    } else if (header.group != expectedGroup_) {
+    } else if (header.group != state.expectedGroup) {
       // Can spuriously fail; groups are separate streams and may reorder.  The
       // server publishes even and odd groups one priority apart, so every even
       // group outranks every odd one and the halves can interleave.
       XLOG(ERR)
           << "MoQTest verification result: FAILURE! reason: Group Mismatch: Actual="
-          << header.group << "  Expected=" << expectedGroup_;
+          << header.group << "  Expected=" << state.expectedGroup;
       return false;
     }
   }
 
   if (preference == ForwardingPreference::ONE_SUBGROUP_PER_GROUP &&
-      header.subgroup != expectedSubgroup_) {
+      header.subgroup != state.expectedSubgroup) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: SubGroup Mismatch: Actual="
-        << header.subgroup << "  Expected=" << expectedSubgroup_;
+        << header.subgroup << "  Expected=" << state.expectedSubgroup;
     return false;
   }
 
@@ -738,17 +777,17 @@ bool MoQTestClient::validateSubscribedData(
 
   if (preference != ForwardingPreference::DATAGRAM &&
       preference != ForwardingPreference::ONE_SUBGROUP_PER_OBJECT &&
-      header.id != subgroupToExpectedObjId_[header.subgroup]) {
+      header.id != state.subgroupToExpectedObjId[header.subgroup]) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Object Id Mismatch: Actual="
         << header.id
-        << "  Expected=" << subgroupToExpectedObjId_[header.subgroup]
+        << "  Expected=" << state.subgroupToExpectedObjId[header.subgroup]
         << " (Subgroup=" << header.subgroup << ")";
     return false;
   }
 
   // Validate End of Group
-  if (header.id == lastObjectInGroup(params_) && expectEndOfGroup_) {
+  if (header.id == lastObjectInGroup(params_) && state.expectEndOfGroup) {
     if (header.status != ObjectStatus::END_OF_GROUP) {
       XLOG(ERR)
           << "MoQTest verification result: FAILURE! reason: End of Group Mismatch: Actual="
@@ -781,15 +820,17 @@ bool MoQTestClient::validateSubscribedData(
 }
 
 AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerGroup(
+    ReceiveState& state,
     MoQTestParameters& params) {
   // Adjust Expected Group and ObjectId
-  const uint64_t lastObject = window_.lastObjectIn(expectedGroup_);
-  if (expectedGroup_ < window_.last.group &&
-      subgroupToExpectedObjId_[0] >= lastObject) {
-    expectedGroup_ += params.groupIncrement;
-    subgroupToExpectedObjId_[0] = window_.firstObjectIn(expectedGroup_);
-  } else if (subgroupToExpectedObjId_[0] < lastObject) {
-    subgroupToExpectedObjId_[0] += params.objectIncrement;
+  const uint64_t lastObject = window_.lastObjectIn(state.expectedGroup);
+  if (state.expectedGroup < window_.last.group &&
+      state.subgroupToExpectedObjId[0] >= lastObject) {
+    state.expectedGroup += params.groupIncrement;
+    state.subgroupToExpectedObjId[0] =
+        window_.firstObjectIn(state.expectedGroup);
+  } else if (state.subgroupToExpectedObjId[0] < lastObject) {
+    state.subgroupToExpectedObjId[0] += params.objectIncrement;
   } else {
     return AdjustedExpectedResult::RECEIVED_ALL_DATA;
   }
@@ -806,25 +847,26 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerObject() {
 }
 
 AdjustedExpectedResult MoQTestClient::adjustExpectedForTwoSubgroupsPerGroup(
+    ReceiveState& state,
     const ObjectHeader& header,
     MoQTestParameters& params) {
-  const uint64_t lastObject = window_.lastObjectIn(expectedGroup_);
+  const uint64_t lastObject = window_.lastObjectIn(state.expectedGroup);
   auto subgroup = header.subgroup;
   // Adjust Expected Group, ObjectId and Subgroup
-  if (expectedGroup_ < window_.last.group &&
-      subgroupToExpectedObjId_[subgroup] >= lastObject) {
+  if (state.expectedGroup < window_.last.group &&
+      state.subgroupToExpectedObjId[subgroup] >= lastObject) {
     // Increment Group, Reset ObjectId and Subgroup
-    expectedGroup_ += params.groupIncrement;
-    const uint64_t firstObject = window_.firstObjectIn(expectedGroup_);
-    subgroupToExpectedObjId_[firstObject % 2] = firstObject;
-    subgroupToExpectedObjId_[1 - (firstObject % 2)] =
+    state.expectedGroup += params.groupIncrement;
+    const uint64_t firstObject = window_.firstObjectIn(state.expectedGroup);
+    state.subgroupToExpectedObjId[firstObject % 2] = firstObject;
+    state.subgroupToExpectedObjId[1 - (firstObject % 2)] =
         firstObject + params.objectIncrement;
-  } else if (subgroupToExpectedObjId_[subgroup] < lastObject) {
+  } else if (state.subgroupToExpectedObjId[subgroup] < lastObject) {
     // Increment ObjectId for this subgroup.  If increment is odd, increment
     // twice
-    subgroupToExpectedObjId_[subgroup] += params.objectIncrement;
+    state.subgroupToExpectedObjId[subgroup] += params.objectIncrement;
     if (params.objectIncrement % 2 == 1) {
-      subgroupToExpectedObjId_[subgroup] += params.objectIncrement;
+      state.subgroupToExpectedObjId[subgroup] += params.objectIncrement;
     }
   } else {
     return AdjustedExpectedResult::RECEIVED_ALL_DATA;
@@ -833,12 +875,12 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForTwoSubgroupsPerGroup(
 }
 
 AdjustedExpectedResult MoQTestClient::adjustExpectedForDatagram(
+    const ReceiveState& state,
     MoQTestParameters& params) {
   // Adjust Object Count
   datagramObjects_++;
-  // Only Complete if expectedGroup_ and subgroupToExpectedObjId_ are at the end
-  if (expectedGroup_ == params_.lastGroupInTrack &&
-      subgroupToExpectedObjId_[0] == params_.lastObjectInTrack) {
+  if (state.expectedGroup == params.lastGroupInTrack &&
+      state.subgroupToExpectedObjId[0] == params.lastObjectInTrack) {
     return AdjustedExpectedResult::RECEIVED_ALL_DATA;
   }
   return AdjustedExpectedResult::STILL_RECEIVING_DATA;
@@ -928,27 +970,9 @@ void MoQTestClient::initializeExpecteds(
     MoQTestFetchWindow window) {
   params_ = params;
   window_ = window;
-  // An empty window carries the kLocationMax sentinel, and seeding the cursor
-  // from it is what makes a stray object on such a fetch fail to match.
-  const uint64_t firstObject = window.first.object;
-
-  expectedGroup_ = window.first.group;
-  if (params.forwardingPreference ==
-      ForwardingPreference::TWO_SUBGROUPS_PER_GROUP) {
-    subgroupToExpectedObjId_[firstObject % 2] = firstObject;
-    subgroupToExpectedObjId_[1 - (firstObject % 2)] =
-        firstObject + params.objectIncrement;
-  } else {
-    subgroupToExpectedObjId_[0] = firstObject;
-  }
-  expectedSubgroup_ = 0;
-  // A fetched datagram track is the one combination the server cannot mark:
-  // FetchConsumer::endOfGroup() has no way to flag its status object as a
-  // datagram.  Every other combination honors the parameter.
-  expectEndOfGroup_ = params.sendEndOfGroupMarkers &&
-      !(receivingType_ == ReceivingType::FETCH &&
-        params.forwardingPreference == ForwardingPreference::DATAGRAM);
   semanticsFailed_ = false;
+  subState_ = ReceiveState{};
+  fetchState_ = ReceiveState{};
 
   expectedObjects_ = expectedObjectsIn(params, window);
 
@@ -956,21 +980,46 @@ void MoQTestClient::initializeExpecteds(
   datagramObjects_ = 0;
 }
 
+void MoQTestClient::startReceiving(ReceiveState& state, ReceivingType type) {
+  // An empty window carries the kLocationMax sentinel, and seeding the cursor
+  // from it is what makes a stray object on such a fetch fail to match.
+  const uint64_t firstObject = window_.first.object;
+  state = ReceiveState{};
+  state.type = type;
+  state.active = true;
+  state.expectedGroup = window_.first.group;
+  if (params_.forwardingPreference ==
+      ForwardingPreference::TWO_SUBGROUPS_PER_GROUP) {
+    state.subgroupToExpectedObjId[firstObject % 2] = firstObject;
+    state.subgroupToExpectedObjId[1 - (firstObject % 2)] =
+        firstObject + params_.objectIncrement;
+  } else {
+    state.subgroupToExpectedObjId[0] = firstObject;
+  }
+  // A fetched datagram track is the one combination the server cannot mark:
+  // FetchConsumer::endOfGroup() has no way to flag its status object as a
+  // datagram.  Every other combination honors the parameter.
+  state.expectEndOfGroup = params_.sendEndOfGroupMarkers &&
+      !(type == ReceivingType::FETCH &&
+        params_.forwardingPreference == ForwardingPreference::DATAGRAM);
+}
+
 AdjustedExpectedResult MoQTestClient::adjustExpected(
+    ReceiveState& state,
     MoQTestParameters& params,
     const ObjectHeader& header) {
-  switch (deliveredForwardingPreference()) {
+  switch (deliveredForwardingPreference(state)) {
     case (ForwardingPreference::ONE_SUBGROUP_PER_GROUP): {
-      return adjustExpectedForOneSubgroupPerGroup(params);
+      return adjustExpectedForOneSubgroupPerGroup(state, params);
     }
     case (ForwardingPreference::ONE_SUBGROUP_PER_OBJECT): {
       return adjustExpectedForOneSubgroupPerObject();
     }
     case (ForwardingPreference::TWO_SUBGROUPS_PER_GROUP): {
-      return adjustExpectedForTwoSubgroupsPerGroup(header, params);
+      return adjustExpectedForTwoSubgroupsPerGroup(state, header, params);
     }
     case (ForwardingPreference::DATAGRAM): {
-      return adjustExpectedForDatagram(params);
+      return adjustExpectedForDatagram(state, params);
     }
     default: {
       break;
