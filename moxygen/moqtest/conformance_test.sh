@@ -14,7 +14,7 @@
 
 set -e
 
-SKIP_FETCH=1
+SKIP_FETCH=${SKIP_FETCH:-0}
 
 # Colors for output
 RED='\033[0;31m'
@@ -751,6 +751,55 @@ run_test "PUBLISH before SUBSCRIBE_TRACKS with DATAGRAM" \
     --objects_per_group=5 \
     --size_of_object_zero=100 \
     --size_of_object_greater_than_zero=50
+
+# ============================================================================
+echo -e "\n${YELLOW}=== SECTION 9: FETCH Ranges ===${NC}"
+set_section "9" "FETCH Ranges"
+# ============================================================================
+# The range is carried in the FETCH, not the track namespace, so every test in
+# a group below addresses the same track.  A relay that caches will serve the
+# overlapping part of each later fetch out of cache, and the objects delivered
+# have to be identical either way.  Groups A-E are 0-4; the fetches walk
+# C, then B-C, then C-D, then A-E so each one overlaps what the last cached.
+
+# Every test here is a FETCH, so the whole section goes behind the guard.
+if [ "$SKIP_FETCH" -ne 1 ]; then
+
+# Objects 0-9 per group, so group N is [N,0 - N,10).
+FETCH_TRACK=(--forwarding_preference=0 --last_group=4 --objects_per_group=10 \
+    --last_object_in_track=9)
+
+run_test "FETCH range C" "fetch" \
+    "${FETCH_TRACK[@]}" --start_location=2,0 --end_location=2,10
+
+run_test "FETCH range B-C, C cached" "fetch" \
+    "${FETCH_TRACK[@]}" --start_location=1,0 --end_location=2,10
+
+run_test "FETCH range C-D, C cached" "fetch" \
+    "${FETCH_TRACK[@]}" --start_location=2,0 --end_location=3,10
+
+run_test "FETCH range A-E, B-D cached" "fetch" \
+    "${FETCH_TRACK[@]}" --start_location=0,0 --end_location=4,10
+
+# Same walk against a track that ends each group with a marker, so group N is
+# [N,0 - N,11) with the marker at object 10.
+FETCH_TRACK_EOG=(--forwarding_preference=0 --last_group=4 \
+    --objects_per_group=10 --last_object_in_track=10 \
+    --send_end_of_group_markers=true)
+
+run_test "FETCH range C, end of group markers" "fetch" \
+    "${FETCH_TRACK_EOG[@]}" --start_location=2,0 --end_location=2,11
+
+run_test "FETCH range B-C cached, end of group markers" "fetch" \
+    "${FETCH_TRACK_EOG[@]}" --start_location=1,0 --end_location=2,11
+
+run_test "FETCH range C-D cached, end of group markers" "fetch" \
+    "${FETCH_TRACK_EOG[@]}" --start_location=2,0 --end_location=3,11
+
+run_test "FETCH range A-E cached, end of group markers" "fetch" \
+    "${FETCH_TRACK_EOG[@]}" --start_location=0,0 --end_location=4,11
+
+fi
 
 # ============================================================================
 # Generate Report
