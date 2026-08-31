@@ -26,7 +26,7 @@ MoQTestFetchHandle::requestUpdate(RequestUpdate update) {
 }
 
 void MoQTestFetchHandle::fetchCancel() {
-  cancelSource_.requestCancellation();
+  cancelSource_->requestCancellation();
 }
 
 folly::coro::Task<void> MoQTestPublisher::delay(uint64_t ms) {
@@ -43,6 +43,11 @@ void MoQTestPublisher::cancelAll() {
   pendingUnpauses_.clear();
   for (auto& p : pending) {
     p->cancel();
+  }
+  auto fetches = std::move(activeFetches_);
+  activeFetches_.clear();
+  for (auto& f : fetches) {
+    f->requestCancellation();
   }
 }
 
@@ -558,22 +563,53 @@ folly::coro::Task<MoQSession::FetchResult> MoQTestPublisher::fetch(
     co_return folly::makeUnexpected(error);
   }
 
-  // Declare cancellation source
-  folly::CancellationSource cancelSource;
+  auto [standalone, joining] = fetchType(fetch);
+  if (!standalone) {
+    co_return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::NOT_SUPPORTED,
+            "Joining FETCH not supported"});
+  }
+  // The generators only walk the track forwards.
+  if (fetch.groupOrder == GroupOrder::NewestFirst) {
+    co_return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::NOT_SUPPORTED,
+            "Descending group order not supported"});
+  }
+
+  auto cancelSource = std::make_shared<folly::CancellationSource>();
+  activeFetches_.push_back(cancelSource);
 
   // Start a Co-routine with cancellation support
   co_withCancellation(
-      cancelSource.getToken(),
+      cancelSource->getToken(),
       co_withExecutor(
           co_await folly::coro::co_current_executor,
-          onFetch(fetch, fetchCallback)))
+          runFetch(cancelSource, fetch, std::move(fetchCallback))))
       .start();
 
   FetchOk ok;
   ok.requestID = fetch.requestID;
-  ok.groupOrder = fetch.groupOrder;
+  ok.groupOrder = GroupOrder::OldestFirst;
 
   co_return std::make_shared<MoQTestFetchHandle>(ok, std::move(cancelSource));
+}
+
+folly::coro::Task<void> MoQTestPublisher::runFetch(
+    std::shared_ptr<folly::CancellationSource> cancelSource,
+    Fetch fetch,
+    std::shared_ptr<FetchConsumer> callback) {
+  // Drop the registration however the fetch ends, so a long-lived publisher
+  // doesn't accumulate one entry per completed fetch.  The self-reference keeps
+  // the publisher alive for the detached coroutine.  This erase and cancelAll()
+  // both run on the publisher's EventBase, so they never interleave.
+  auto unregister = folly::makeGuard([self = shared_from_this(), cancelSource] {
+    std::erase(self->activeFetches_, cancelSource);
+  });
+  co_await onFetch(std::move(fetch), std::move(callback));
 }
 
 folly::coro::Task<void> MoQTestPublisher::onFetch(

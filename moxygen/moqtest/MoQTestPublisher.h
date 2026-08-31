@@ -19,7 +19,7 @@ class MoQTestFetchHandle : public Publisher::FetchHandle {
  public:
   MoQTestFetchHandle(
       const FetchOk& ok,
-      folly::CancellationSource cancellationSource)
+      std::shared_ptr<folly::CancellationSource> cancellationSource)
       : Publisher::FetchHandle(ok),
         fetchOk_(ok),
         cancelSource_(std::move(cancellationSource)) {}
@@ -31,7 +31,7 @@ class MoQTestFetchHandle : public Publisher::FetchHandle {
 
  private:
   FetchOk fetchOk_;
-  folly::CancellationSource cancelSource_;
+  std::shared_ptr<folly::CancellationSource> cancelSource_;
 };
 
 // Generates moq-test track data for SUBSCRIBE and FETCH. Transport-agnostic:
@@ -58,10 +58,10 @@ class MoQTestPublisher : public Publisher,
     includeTimestampExtension_ = include;
   }
 
-  // Cancels in-flight send coroutines so they stop co_await'ing on the
-  // timekeeper, which would otherwise crash if recreated during teardown, and
-  // releases any publishTrack that is still paused waiting for the peer to ask
-  // for data -- otherwise it would hold the session open forever.
+  // Cancels in-flight send and fetch coroutines so they stop co_await'ing on
+  // the timekeeper, which would otherwise crash if recreated during teardown,
+  // and releases any publishTrack that is still paused waiting for the peer to
+  // ask for data -- otherwise it would hold the session open forever.
   void cancelAll();
 
   void removeSubscription(SubKey key);
@@ -171,6 +171,13 @@ class MoQTestPublisher : public Publisher,
       MoQTestParameters params,
       RequestID requestID);
 
+  // Runs onFetch and drops the fetch's cancellation source from
+  // activeFetches_ however it ends.
+  folly::coro::Task<void> runFetch(
+      std::shared_ptr<folly::CancellationSource> cancelSource,
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> callback);
+
   // Inter-object delay using the publisher-owned timekeeper.
   folly::coro::Task<void> delay(uint64_t ms);
 
@@ -182,6 +189,9 @@ class MoQTestPublisher : public Publisher,
   folly::F14FastMap<SubKey, SubscriptionState, SubKey::Hash>
       activeSubscriptions_;
   std::vector<std::shared_ptr<PendingUnpause>> pendingUnpauses_;
+  // Cancellation sources for fetches that are still generating objects, so
+  // cancelAll() reaches them the way it reaches subscriptions.
+  std::vector<std::shared_ptr<folly::CancellationSource>> activeFetches_;
   // Owned timekeeper for inter-object delays. Avoids the global Timekeeper
   // singleton, which can crash if used during process teardown.
   folly::ThreadWheelTimekeeper timekeeper_;

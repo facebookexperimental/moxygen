@@ -7,6 +7,8 @@
 #include <folly/portability/GTest.h>
 #include "folly/Expected.h"
 #include "folly/coro/BlockingWait.h"
+#include "folly/coro/GtestHelpers.h"
+#include "folly/coro/Sleep.h"
 #include "moxygen/moqtest/MoQTestPublisher.h"
 #include "moxygen/moqtest/Utils.h"
 #include "moxygen/test/MockMoQSession.h"
@@ -920,6 +922,82 @@ TEST_F(MoQTrackServerTest, FetchOfADatagramTrackSkipsEndOfGroupMarkers) {
 
   folly::coro::blockingWait(
       publisher_->fetchOneSubgroupPerGroup(params_, mockConsumer));
+}
+
+CO_TEST_F(MoQTrackServerTest, CancelAllStopsAnInFlightFetch) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  // Groups 0-2 of two objects at 50ms each, so the whole track is ~300ms and
+  // the wait below is comfortably longer than the tail we expect not to get.
+  track_.trackNamespace[4] = "2";
+  track_.trackNamespace[9] = "50";
+  moxygen::Fetch req;
+  req.requestID = 0;
+  req.fullTrackName.trackNamespace = track_;
+  req.args = moxygen::StandaloneFetch({0, 0}, {2, 0});
+
+  auto mockConsumer =
+      std::make_shared<testing::NiceMock<moxygen::MockFetchConsumer>>();
+  // Posted on the second object so the cancel lands mid-track rather than at a
+  // point the clock happens to pick.
+  auto midTrack = std::make_shared<folly::coro::Baton>();
+  constexpr int kObjectsBeforeCancel = 2;
+  int objects = 0;
+  ON_CALL(
+      *mockConsumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .WillByDefault([&objects, midTrack] {
+        if (++objects == kObjectsBeforeCancel) {
+          midTrack->post();
+        }
+        return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
+            folly::unit);
+      });
+  // A cancelled fetch unwinds without completing, so endOfFetch never fires.
+  EXPECT_CALL(*mockConsumer, endOfFetch()).Times(0);
+
+  auto result = co_await publisher_->fetch(req, mockConsumer);
+  CO_ASSERT_TRUE(result.hasValue());
+  co_await *midTrack;
+  publisher_->cancelAll();
+
+  // The rest of the track would have landed inside this wait, so a count that
+  // has not moved is the generator having stopped, not the clock being slow.
+  co_await folly::coro::sleep(std::chrono::milliseconds(300));
+  EXPECT_EQ(objects, kObjectsBeforeCancel);
+}
+
+TEST_F(MoQTrackServerTest, FetchRejectsAJoiningRequest) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  moxygen::Fetch req;
+  req.requestID = 0;
+  req.fullTrackName.trackNamespace = track_;
+  req.args = moxygen::JoiningFetch(
+      moxygen::RequestID(1), 0, moxygen::FetchType::RELATIVE_JOINING);
+
+  auto result = folly::coro::blockingWait(publisher_->fetch(req, nullptr));
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().errorCode, moxygen::FetchErrorCode::NOT_SUPPORTED);
+}
+
+TEST_F(MoQTrackServerTest, FetchRejectsDescendingGroupOrder) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  moxygen::Fetch req;
+  req.requestID = 0;
+  req.fullTrackName.trackNamespace = track_;
+  req.groupOrder = moxygen::GroupOrder::NewestFirst;
+
+  auto result = folly::coro::blockingWait(publisher_->fetch(req, nullptr));
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().errorCode, moxygen::FetchErrorCode::NOT_SUPPORTED);
 }
 
 // requestUpdate Testing

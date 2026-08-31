@@ -278,6 +278,11 @@ class MoQTestClient : public Subscriber,
   // forwarding preference -- see fetchForwardingPreference().
   ForwardingPreference deliveredForwardingPreference() const;
 
+  // Cancels whichever request is in flight.  Both handles are assigned only
+  // after the peer replies, and fetch objects can be parsed before that, so
+  // this is a no-op if a failure is detected that early.
+  void cancelRequest();
+
   // Subscription Data Validation functions
   void initializeExpecteds(MoQTestParameters& params);
   bool validateSubscribedData(

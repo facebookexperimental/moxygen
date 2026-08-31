@@ -396,11 +396,7 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
   if (!validateSubscribedData(objHeader, payload->toString())) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Data Validation Failed";
-    if (receivingType_ == ReceivingType::SUBSCRIBE) {
-      subHandle_->unsubscribe();
-    } else if (receivingType_ == ReceivingType::FETCH) {
-      fetchHandle_->fetchCancel();
-    }
+    cancelRequest();
     moqClient_->moqSession_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     doneBaton_.post();
     return ObjectReceiverCallback::FlowControlState::UNBLOCKED;
@@ -488,13 +484,13 @@ void MoQTestClient::onAllDataReceived() {
     if (datagramObjects_ == 0) {
       XLOG(ERR)
           << "MoQTest verification result: FAILURE! reason: Datagram Failed - 0 Objects Received";
-      subHandle_->unsubscribe();
+      cancelRequest();
       return;
     } else if (expectedObjects_.size() > dropsAllowed) {
       XLOG(ERR)
           << "MoQTest verification result: FAILURE! reason: Datagram had too many drops: "
           << expectedObjects_.size() << " missing, allowed " << dropsAllowed;
-      subHandle_->unsubscribe();
+      cancelRequest();
       return;
     } else {
       XLOG(INFO) << "MoQTest verification result: SUCCESS! Datagram Received "
@@ -511,7 +507,7 @@ void MoQTestClient::onAllDataReceived() {
     for (const auto& [group, objId] : expectedObjects_) {
       XLOG(ERR) << "  Missing object: group=" << group << " id=" << objId;
     }
-    subHandle_->unsubscribe();
+    cancelRequest();
     return;
   }
 
@@ -620,6 +616,16 @@ ForwardingPreference MoQTestClient::deliveredForwardingPreference() const {
   return receivingType_ == ReceivingType::FETCH
       ? fetchForwardingPreference(params_.forwardingPreference)
       : params_.forwardingPreference;
+}
+
+void MoQTestClient::cancelRequest() {
+  if (receivingType_ == ReceivingType::FETCH) {
+    if (fetchHandle_) {
+      fetchHandle_->fetchCancel();
+    }
+  } else if (subHandle_) {
+    subHandle_->unsubscribe();
+  }
 }
 
 bool MoQTestClient::validateSubscribedData(
