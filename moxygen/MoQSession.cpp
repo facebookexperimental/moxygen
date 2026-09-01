@@ -4122,10 +4122,12 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
   codec.setCallback(&dcb);
   codec.setStreamId(id);
 
+  bool codecBlocked = false;
   while (readHandle && !token.isCancellationRequested()) {
-    // First iteration may use initialBufferedData; subsequent iterations
-    // read from the stream
-    if (!(streamData.data || streamData.fin)) {
+    // First iteration may use initialBufferedData; subsequent iterations read
+    // from the stream.  While the codec holds buffered ingress from a BLOCKED
+    // parse, skip the read so the next onIngress drains it instead.
+    if (!codecBlocked && !streamData.data && !streamData.fin) {
       auto streamDataTry = co_await co_awaitTry(
           folly::coro::co_withCancellation(
               token, readHandle->readStreamData().via(exec_.get())));
@@ -4158,59 +4160,64 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
       }
       streamData = std::move(*streamDataTry);
     }
-    if (streamData.data || streamData.fin) {
-      MoQCodec::ParseResult result = MoQCodec::ParseResult::ERROR_TERMINATE;
-      try {
-        result = codec.onIngress(std::move(streamData.data), streamData.fin);
 
-        // Handle BLOCKED state
-        if (result == MoQCodec::ParseResult::BLOCKED) {
-          XLOG(DBG4) << "Parser returned BLOCKED, waiting for signal id=" << id;
-          // Merged token for baton waits (session + readHandle)
-          auto batonWaitToken = folly::cancellation_token_merge(
-              cancellationSource_.getToken(), rhToken);
-          auto waitRes = co_await co_awaitTry(co_withCancellation(
-              batonWaitToken,
-              aliasBaton.wait(moqSettings_.unknownAliasTimeout)));
-          if (waitRes.hasException()) {
-            XLOG(ERR) << "Timed out waiting for subscription state id=" << id
-                      << " sess=" << this;
-            removeBufferedSubgroupBaton(deferredAlias, &aliasBaton);
-            break;
-          }
-          result = dcb.onSubgroup(
-              deferredAlias,
-              deferredGroup,
-              deferredSubgroup,
-              deferredPriority,
-              deferredOptions);
+    // An empty read has nothing to parse.  Only re-enter the codec with no
+    // bytes when it still holds ingress buffered by a BLOCKED parse.
+    const bool drainBuffered = std::exchange(codecBlocked, false);
+    if (!streamData.data && !streamData.fin && !drainBuffered) {
+      continue;
+    }
 
-          if (result == MoQCodec::ParseResult::CONTINUE) {
-            // codec may have buffered excess ingress while blocked
-            result = codec.onIngress(nullptr, streamData.fin);
-          }
-          if (result == MoQCodec::ParseResult::BLOCKED) {
-            // state was deleted (unsubscribe)
-            result = MoQCodec::ParseResult::ERROR_TERMINATE;
-          }
+    MoQCodec::ParseResult result = MoQCodec::ParseResult::ERROR_TERMINATE;
+    try {
+      result = codec.onIngress(std::move(streamData.data), streamData.fin);
+
+      // Handle BLOCKED state (subgroup alias not yet known)
+      if (result == MoQCodec::ParseResult::BLOCKED) {
+        XLOG(DBG4) << "Parser returned BLOCKED, waiting for signal id=" << id;
+        // Merged token for baton waits (session + readHandle)
+        auto batonWaitToken = folly::cancellation_token_merge(
+            cancellationSource_.getToken(), rhToken);
+        auto waitRes = co_await co_awaitTry(co_withCancellation(
+            batonWaitToken, aliasBaton.wait(moqSettings_.unknownAliasTimeout)));
+        if (waitRes.hasException()) {
+          XLOG(ERR) << "Timed out waiting for subscription state id=" << id
+                    << " sess=" << this;
+          removeBufferedSubgroupBaton(deferredAlias, &aliasBaton);
+          break;
         }
-      } catch (const std::exception& ex) {
-        XLOG(ERR) << "Exception in stream processing: "
-                  << folly::exceptionStr(ex) << " id=" << id
-                  << " sess=" << this;
-        result = MoQCodec::ParseResult::ERROR_TERMINATE;
-      }
+        result = dcb.onSubgroup(
+            deferredAlias,
+            deferredGroup,
+            deferredSubgroup,
+            deferredPriority,
+            deferredOptions);
 
-      if (streamData.fin) {
-        XLOG(DBG3) << "End of stream id=" << id << " sess=" << this;
-        readHandle = nullptr;
-      } else if (result == MoQCodec::ParseResult::ERROR_TERMINATE) {
-        XLOG(ERR) << "Error parsing/consuming stream id=" << id
-                  << " sess=" << this;
-        dcb.reset(ResetStreamErrorCode::INTERNAL_ERROR);
-        break;
+        if (result == MoQCodec::ParseResult::CONTINUE) {
+          // codec may have buffered excess ingress — next iteration drains it
+          codecBlocked = true;
+          continue;
+        }
+        if (result == MoQCodec::ParseResult::BLOCKED) {
+          // state was deleted (unsubscribe)
+          result = MoQCodec::ParseResult::ERROR_TERMINATE;
+        }
       }
-    } // else empty read
+    } catch (const std::exception& ex) {
+      XLOG(ERR) << "Exception in stream processing: " << folly::exceptionStr(ex)
+                << " id=" << id << " sess=" << this;
+      result = MoQCodec::ParseResult::ERROR_TERMINATE;
+    }
+
+    if (streamData.fin) {
+      XLOG(DBG3) << "End of stream id=" << id << " sess=" << this;
+      readHandle = nullptr;
+    } else if (result == MoQCodec::ParseResult::ERROR_TERMINATE) {
+      XLOG(ERR) << "Error parsing/consuming stream id=" << id
+                << " sess=" << this;
+      dcb.reset(ResetStreamErrorCode::INTERNAL_ERROR);
+      break;
+    }
   }
   // stopSendingGuard will handle stopSending if needed
 }
