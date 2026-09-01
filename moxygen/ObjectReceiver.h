@@ -106,11 +106,14 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
 
   folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
       Payload payload,
-      bool /*finSubgroup*/) override {
+      bool finSubgroup) override {
     // TODO: add common component for state verification
     payload_.append(std::move(payload));
     if (payload_.chainLength() == header_.length) {
       auto fcState = callback_->onObject(trackAlias_, header_, payload_.move());
+      if (finSubgroup) {
+        notifyParentFinished();
+      }
       if (fcState == ObjectReceiverCallback::FlowControlState::BLOCKED) {
         // Is it bad that we can't return DONE here?
         if (streamType_ == StreamType::FETCH_HEADER) {
@@ -166,7 +169,8 @@ class ObjectReceiver : public TrackConsumer,
   std::shared_ptr<ObjectReceiverCallback> callback_{nullptr};
   std::optional<ObjectSubgroupReceiver> fetchPublisher_;
   std::optional<TrackAlias> trackAlias_;
-  // Tracking for onAllDataReceived callback (subscription mode only)
+  // Tracking for onAllDataReceived.  Only allDataCallbackSent_ applies to
+  // fetches.
   size_t openSubgroups_{0};
   bool publishDoneDelivered_{false};
   bool allDataCallbackSent_{false};
@@ -213,7 +217,14 @@ class ObjectReceiver : public TrackConsumer,
   // 1. PUBLISH_DONE has been received
   // 2. All subgroup streams have closed
   void maybeFireAllDataReceived() {
-    if (!allDataCallbackSent_ && publishDoneDelivered_ && openSubgroups_ == 0) {
+    if (publishDoneDelivered_ && openSubgroups_ == 0) {
+      fireAllDataReceived();
+    }
+  }
+
+  // Fires at most once, however many terminals the publisher delivers.
+  void fireAllDataReceived() {
+    if (!allDataCallbackSent_) {
       allDataCallbackSent_ = true;
       callback_->onAllDataReceived();
     }
@@ -244,7 +255,13 @@ class ObjectReceiver : public TrackConsumer,
       const ObjectHeader& header,
       Payload payload,
       bool /*lastInGroup*/ = false) override {
-    (void)callback_->onObject(trackAlias_, header, std::move(payload));
+    // A status datagram carries no payload, and the subgroup path reports
+    // status through onObjectStatus too.
+    if (header.status != ObjectStatus::NORMAL) {
+      callback_->onObjectStatus(trackAlias_, header);
+    } else {
+      (void)callback_->onObject(trackAlias_, header, std::move(payload));
+    }
     return folly::unit;
   }
 
@@ -265,8 +282,13 @@ class ObjectReceiver : public TrackConsumer,
       bool finFetch,
       bool /*forwardingPreferenceIsDatagram*/ = false) override {
     fetchPublisher_->setFetchGroupAndSubgroup(groupID, subgroupID);
-    return fetchPublisher_->object(
+    auto res = fetchPublisher_->object(
         objectID, std::move(payload), std::move(extensions), finFetch);
+    if (finFetch) {
+      // fetchPublisher_ has no parent to notify.
+      fireAllDataReceived();
+    }
+    return res;
   }
 
   folly::Expected<folly::Unit, MoQPublishError> beginObject(
@@ -284,16 +306,29 @@ class ObjectReceiver : public TrackConsumer,
   folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
       Payload payload,
       bool finSubgroup) override {
-    return fetchPublisher_->objectPayload(std::move(payload), finSubgroup);
+    auto res = fetchPublisher_->objectPayload(std::move(payload), finSubgroup);
+    // BLOCKED means the callback took the object and wants the publisher to
+    // pause, so IN_PROGRESS is the only result with payload still to come.
+    const bool objectComplete = res.hasValue()
+        ? res.value() == ObjectPublishStatus::DONE
+        : res.error().code == MoQPublishError::BLOCKED;
+    if (finSubgroup && objectComplete) {
+      fireAllDataReceived();
+    }
+    return res;
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
       uint64_t groupID,
       uint64_t subgroupID,
       uint64_t objectID,
-      bool /*finFetch*/) override {
+      bool finFetch) override {
     fetchPublisher_->setFetchGroupAndSubgroup(groupID, subgroupID);
-    return fetchPublisher_->endOfGroup(objectID);
+    auto res = fetchPublisher_->endOfGroup(objectID);
+    if (finFetch) {
+      fireAllDataReceived();
+    }
+    return res;
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
@@ -301,13 +336,26 @@ class ObjectReceiver : public TrackConsumer,
       uint64_t subgroupID,
       uint64_t objectID) override {
     fetchPublisher_->setFetchGroupAndSubgroup(groupID, subgroupID);
-    return fetchPublisher_->endOfTrackAndGroup(objectID);
+    auto res = fetchPublisher_->endOfTrackAndGroup(objectID);
+    // Implies endOfFetch.
+    fireAllDataReceived();
+    return res;
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {
     auto endOfSubgroupResult = fetchPublisher_->endOfSubgroup();
-    callback_->onAllDataReceived();
+    fireAllDataReceived();
     return endOfSubgroupResult;
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfUnknownRange(
+      uint64_t /*groupID*/,
+      uint64_t /*objectID*/,
+      bool finFetch) override {
+    if (finFetch) {
+      fireAllDataReceived();
+    }
+    return folly::unit;
   }
 
   void reset(ResetStreamErrorCode error) override {
