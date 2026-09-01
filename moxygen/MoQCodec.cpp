@@ -169,6 +169,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
             static_cast<uint64_t>(std::numeric_limits<size_t>::max()))));
   };
 
+  bool objectBlocked = false;
   while (!connError_ && ingress_.chainLength() > totalBytesConsumed) {
     switch (parseState_) {
       case ParseState::STREAM_HEADER_TYPE: {
@@ -337,10 +338,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
                 endOfStream && ingress_.chainLength() == 0,
                 curObjectHeader_.forwardingPreferenceIsDatagram);
             if (result == ParseResult::BLOCKED) {
-              XLOG(ERR)
-                  << "onObjectBegin returned BLOCKED, converting to ERROR";
-              connError_ = ErrorCode::INTERNAL_ERROR;
-              break;
+              objectBlocked = true;
             } else if (result == ParseResult::ERROR_TERMINATE) {
               XLOG(DBG) << "onObjectBegin callback returned ERROR_TERMINATE";
               return result;
@@ -366,10 +364,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
                 curObjectHeader_.priority,
                 curObjectHeader_.status);
             if (result == ParseResult::BLOCKED) {
-              XLOG(ERR)
-                  << "onObjectStatus returned BLOCKED, converting to ERROR";
-              connError_ = ErrorCode::INTERNAL_ERROR;
-              break;
+              objectBlocked = true;
             } else if (result == ParseResult::ERROR_TERMINATE) {
               XLOG(DBG) << "onObjectStatus callback returned ERROR_TERMINATE";
               return result;
@@ -407,10 +402,7 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
           auto result =
               callback_->onObjectPayload(std::move(payload), endOfObject);
           if (result == ParseResult::BLOCKED) {
-            XLOG(ERR)
-                << "onObjectPayload returned BLOCKED, converting to ERROR";
-            connError_ = ErrorCode::INTERNAL_ERROR;
-            break;
+            objectBlocked = true;
           } else if (result == ParseResult::ERROR_TERMINATE) {
             XLOG(DBG) << "onObjectPayload callback returned ERROR_TERMINATE";
             return result;
@@ -428,6 +420,13 @@ MoQCodec::ParseResult MoQObjectStreamCodec::onIngress(
         break;
       }
     }
+    if (objectBlocked) {
+      break;
+    }
+  }
+  if (objectBlocked) {
+    trimStart();
+    return ParseResult::BLOCKED;
   }
   trimStart();
   size_t remainingLength = ingress_.chainLength();

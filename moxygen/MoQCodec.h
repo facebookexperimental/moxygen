@@ -405,6 +405,10 @@ class MoQObjectStreamCodec : public MoQCodec {
 
   ParseResult onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
 
+  bool hasBufferedIngress() const {
+    return ingress_.chainLength() > 0;
+  }
+
  private:
   enum class ParseState {
     STREAM_HEADER_TYPE,

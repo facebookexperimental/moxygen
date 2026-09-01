@@ -1637,6 +1637,153 @@ TEST(MoQCodecTest, BidiCodecPostTerminalOkV18) {
   }
 }
 
+// Test that onObjectBegin returning BLOCKED propagates through the codec
+// and that re-entry via onIngress(nullptr) delivers remaining objects.
+TEST_P(MoQCodecTest, ObjectBeginBlockedPropagation) {
+  // Use a fresh codec so state from other tests doesn't interfere
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+  codec.initializeVersion(GetParam());
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = moqFrameWriter_.writeSubgroupHeader(
+      writeBuf,
+      TrackAlias(1),
+      ObjectHeader(2, 3, 4, 5),
+      SubgroupOptions{.hasExtensions = true});
+  // First object — callback will return BLOCKED
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf,
+      StreamType::SUBGROUP_HEADER_SG_EXT,
+      ObjectHeader(2, 3, 4, 5, 5),
+      folly::IOBuf::copyBuffer("hello"));
+  // Second object — should be delivered on re-entry
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf,
+      StreamType::SUBGROUP_HEADER_SG_EXT,
+      ObjectHeader(2, 3, 5, 5, 5),
+      folly::IOBuf::copyBuffer("world"));
+
+  EXPECT_CALL(
+      callback,
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  // First object returns BLOCKED
+  EXPECT_CALL(
+      callback,
+      onObjectBegin(
+          2, 3, 4, testing::_, 5, testing::_, true, false, testing::_))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::BLOCKED));
+
+  auto result = codec.onIngress(writeBuf.move(), false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::BLOCKED);
+  EXPECT_TRUE(codec.hasBufferedIngress());
+
+  // Re-entry: second object should be delivered
+  EXPECT_CALL(
+      callback,
+      onObjectBegin(
+          2, 3, 5, testing::_, 5, testing::_, true, false, testing::_))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  result = codec.onIngress(nullptr, false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
+}
+
+// Test that onObjectPayload returning BLOCKED propagates through the codec
+TEST_P(MoQCodecTest, ObjectPayloadBlockedPropagation) {
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+  codec.initializeVersion(GetParam());
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto res = moqFrameWriter_.writeSubgroupHeader(
+      writeBuf,
+      TrackAlias(1),
+      ObjectHeader(2, 3, 0, 5),
+      SubgroupOptions{.hasExtensions = true});
+  // Object with length larger than initial payload, forcing OBJECT_PAYLOAD
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf,
+      StreamType::SUBGROUP_HEADER_SG_EXT,
+      ObjectHeader(2, 3, 4, 5, 20),
+      nullptr);
+
+  EXPECT_CALL(
+      callback,
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+  EXPECT_CALL(
+      callback,
+      onObjectBegin(
+          2, 3, 4, testing::_, testing::_, _, false, false, testing::_))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  codec.onIngress(writeBuf.move(), false);
+
+  // Send a partial payload chunk, callback returns BLOCKED
+  EXPECT_CALL(callback, onObjectPayload(testing::_, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::BLOCKED));
+
+  auto result = codec.onIngress(folly::IOBuf::copyBuffer("hello"), false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::BLOCKED);
+
+  // Re-entry with remaining payload (20 - 5 = 15 bytes)
+  EXPECT_CALL(callback, onObjectPayload(testing::_, true))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  result = codec.onIngress(folly::IOBuf::copyBuffer("world0123456789"), false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
+}
+
+// Test that onObjectStatus returning BLOCKED propagates on a fetch stream
+TEST_P(MoQCodecTest, FetchObjectStatusBlockedPropagation) {
+  testing::NiceMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+  codec.initializeVersion(GetParam());
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  RequestID requestID(1);
+  StreamType streamType = StreamType::FETCH_HEADER;
+  auto res = moqFrameWriter_.writeFetchHeader(writeBuf, requestID);
+
+  // First object: END_OF_GROUP status — callback returns BLOCKED
+  ObjectHeader statusObj(2, 3, 4, 5);
+  statusObj.status = ObjectStatus::END_OF_GROUP;
+  statusObj.length = 0;
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf, streamType, statusObj, nullptr);
+
+  // Second object: normal — should be delivered on re-entry
+  ObjectHeader normalObj(3, 3, 0, 5, 5);
+  res = moqFrameWriter_.writeStreamObject(
+      writeBuf, streamType, normalObj, folly::IOBuf::copyBuffer("hello"));
+
+  EXPECT_CALL(callback, onFetchHeader(testing::_))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  // First: status object returns BLOCKED
+  EXPECT_CALL(
+      callback,
+      onObjectStatus(
+          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::END_OF_GROUP))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::BLOCKED));
+
+  auto result = codec.onIngress(writeBuf.move(), false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::BLOCKED);
+  EXPECT_TRUE(codec.hasBufferedIngress());
+
+  // Re-entry: second object should be delivered
+  EXPECT_CALL(
+      callback,
+      onObjectBegin(3, 3, 0, testing::_, 5, testing::_, true, false, false))
+      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+
+  result = codec.onIngress(nullptr, false);
+  EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
