@@ -8,6 +8,7 @@
 
 #include <folly/CancellationToken.h>
 #include <folly/io/IOBufQueue.h>
+#include <proxygen/lib/http/webtransport/WebTransport.h>
 #include <moxygen/MoQTypes.h>
 
 namespace moxygen {
@@ -24,11 +25,15 @@ class ReplyContext {
   virtual folly::IOBufQueue& writeBuf() = 0;
 
   // Flush serialized data to the transport, optionally with FIN
-  virtual void flush(bool fin = false) = 0;
+  virtual void flush(
+      bool fin = false,
+      proxygen::WebTransport::ByteEventCallback* deliveryCallback =
+          nullptr) = 0;
 
   // FIN the bidi reply stream; no-op for control-stream contexts.
-  void flushFinal() {
-    flush(/*fin=*/true);
+  void flushFinal(
+      proxygen::WebTransport::ByteEventCallback* deliveryCallback = nullptr) {
+    flush(/*fin=*/true, deliveryCallback);
   }
 
   // STOP_SENDING + RESET the bidi reply stream; no-op for control-stream

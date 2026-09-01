@@ -25,9 +25,15 @@ class CapturingReplyContext : public ReplyContext {
     return writeBuf_;
   }
 
-  void flush(bool fin = false) override {
+  void flush(
+      bool fin = false,
+      proxygen::WebTransport::ByteEventCallback* deliveryCallback =
+          nullptr) override {
     flushedBuf_.append(writeBuf_.move());
     fin_ = fin;
+    if (deliveryCallback) {
+      deliveryCallback->onByteEvent(0, flushedBuf_.chainLength());
+    }
   }
 
   bool empty() const {
