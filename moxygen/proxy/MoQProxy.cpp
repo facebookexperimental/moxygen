@@ -33,12 +33,22 @@ MoQProxy::MoQProxy(
   }
 }
 
-MoQProxy::~MoQProxy() = default;
+MoQProxy::~MoQProxy() {
+  close();
+}
 
 folly::coro::Task<Publisher::SubscribeResult> MoQProxy::subscribe(
     SubscribeRequest subscribeRequest,
     std::shared_ptr<TrackConsumer> consumer) {
   auto self = shared_from_this();
+  if (closed_) {
+    co_return folly::makeUnexpected(
+        SubscribeError{
+            subscribeRequest.requestID,
+            SubscribeErrorCode::GOING_AWAY,
+            "proxy is closed"});
+  }
+
   auto downstreamSession = MoQSession::getRequestSession();
   auto track = getOrCreateTrack(subscribeRequest.fullTrackName);
   co_return co_await track->subscribe(
@@ -55,8 +65,29 @@ std::shared_ptr<MoQProxyTrack> MoQProxy::getOrCreateTrack(
   }
 
   auto track = MoQProxyTrack::create(fullTrackName, upstreamProviders_);
+  track->setCallback(shared_from_this());
   tracks_.emplace(fullTrackName, track);
   return track;
+}
+
+void MoQProxy::onNoSubscribers(MoQProxyTrack* track) {
+  auto it = tracks_.find(track->fullTrackName());
+  if (it != tracks_.end() && it->second.get() == track) {
+    tracks_.erase(it);
+  }
+}
+
+void MoQProxy::close() {
+  if (closed_) {
+    return;
+  }
+  closed_ = true;
+
+  auto tracks = std::move(tracks_);
+  for (auto& [_, track] : tracks) {
+    track->setCallback({});
+    track->close();
+  }
 }
 
 } // namespace moxygen

@@ -109,10 +109,15 @@ class MoQProxyTest : public Test {
 
   Publisher::SubscribeResult subscribe(
       std::shared_ptr<MoQSession> session,
-      SubscribeRequest request) {
+      SubscribeRequest request,
+      std::shared_ptr<TrackConsumer> consumer = nullptr) {
+    if (!consumer) {
+      consumer = makeConsumer();
+    }
     return withSessionContext(std::move(session), [&]() {
       return folly::coro::blockingWait(
-          proxy_->subscribe(std::move(request), makeConsumer()), &eventBase_);
+          proxy_->subscribe(std::move(request), std::move(consumer)),
+          &eventBase_);
     });
   }
 
@@ -231,6 +236,64 @@ TEST_F(MoQProxyTest, CreatesSeparateTracksForDifferentNames) {
   EXPECT_EQ(provider_->calls, 2);
   video.value()->unsubscribe();
   audio.value()->unsubscribe();
+}
+
+TEST_F(MoQProxyTest, RecreatesTrackAfterLastSubscriberLeaves) {
+  auto firstUpstreamHandle = makeUpstreamHandle(RequestID(100));
+  auto secondUpstreamHandle = makeUpstreamHandle(RequestID(101));
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [firstUpstreamHandle](
+              SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return Publisher::SubscribeResult(firstUpstreamHandle);
+          }))
+      .WillOnce(Invoke(
+          [secondUpstreamHandle](
+              SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return Publisher::SubscribeResult(secondUpstreamHandle);
+          }));
+
+  auto first =
+      subscribe(makeDownstreamSession(), makeSubscribeRequest(RequestID(1)));
+  ASSERT_TRUE(first.hasValue());
+  EXPECT_CALL(*firstUpstreamHandle, unsubscribe());
+  first.value()->unsubscribe();
+
+  auto second =
+      subscribe(makeDownstreamSession(), makeSubscribeRequest(RequestID(2)));
+  ASSERT_TRUE(second.hasValue());
+  EXPECT_EQ(provider_->calls, 2);
+  EXPECT_CALL(*secondUpstreamHandle, unsubscribe());
+  second.value()->unsubscribe();
+}
+
+TEST_F(MoQProxyTest, CloseStopsTracksAndRejectsNewSubscriptions) {
+  auto upstreamHandle = makeUpstreamHandle(RequestID(100));
+  auto downstreamConsumer = makeConsumer();
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [upstreamHandle](SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+  auto result = subscribe(
+      makeDownstreamSession(),
+      makeSubscribeRequest(RequestID(1)),
+      downstreamConsumer);
+  ASSERT_TRUE(result.hasValue());
+
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*downstreamConsumer, publishDone(_));
+  proxy_->close();
+
+  auto rejected =
+      subscribe(makeDownstreamSession(), makeSubscribeRequest(RequestID(2)));
+  ASSERT_TRUE(rejected.hasError());
+  EXPECT_EQ(rejected.error().requestID, RequestID(2));
+  EXPECT_EQ(rejected.error().errorCode, SubscribeErrorCode::GOING_AWAY);
+  EXPECT_EQ(provider_->calls, 1);
 }
 
 }} // namespace moxygen

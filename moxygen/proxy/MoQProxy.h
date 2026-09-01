@@ -11,14 +11,14 @@
 #include <vector>
 
 #include "moxygen/Publisher.h"
+#include "moxygen/proxy/MoQProxyTrack.h"
 #include "moxygen/proxy/MoQUpstreamProvider.h"
 
 namespace moxygen {
 
-class MoQProxyTrack;
-
 class MoQProxy : public Publisher,
-                 public std::enable_shared_from_this<MoQProxy> {
+                 public std::enable_shared_from_this<MoQProxy>,
+                 public MoQProxyTrack::Callback {
  public:
   static std::shared_ptr<MoQProxy> create(
       std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders);
@@ -32,6 +32,8 @@ class MoQProxy : public Publisher,
       SubscribeRequest subscribeRequest,
       std::shared_ptr<TrackConsumer> consumer) override;
 
+  void close();
+
  private:
   explicit MoQProxy(
       std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders);
@@ -39,12 +41,15 @@ class MoQProxy : public Publisher,
   std::shared_ptr<MoQProxyTrack> getOrCreateTrack(
       const FullTrackName& fullTrackName);
 
+  void onNoSubscribers(MoQProxyTrack* track) override;
+
   std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders_;
   folly::F14FastMap<
       FullTrackName,
       std::shared_ptr<MoQProxyTrack>,
       FullTrackName::hash>
       tracks_;
+  bool closed_{false};
 };
 
 } // namespace moxygen
