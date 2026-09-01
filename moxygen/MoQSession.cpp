@@ -6,6 +6,7 @@
 
 #include "moxygen/MoQSession.h"
 #include <folly/Chrono.h>
+#include <folly/coro/Baton.h>
 #include <folly/coro/Collect.h>
 #include <folly/coro/FutureUtil.h>
 #include <quic/common/CircularDeque.h>
@@ -1624,6 +1625,20 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
   void setLogger(std::shared_ptr<MLogger> logger) {
     logger_ = logger;
   }
+
+  void trackLatestRequestUpdate(const RequestUpdate& requestUpdate) {
+    // Only tracked for draft 18+, where onRequestUpdate consumes/resets it;
+    // pre-18 there is no coalescing, so avoid growing state that is never read.
+    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) < 18) {
+      return;
+    }
+    if (latestRequest_.has_value()) {
+      mergeRequestUpdate(latestRequest_.value(), requestUpdate);
+    } else {
+      latestRequest_ = requestUpdate;
+    }
+  }
+
   folly::coro::Task<void> onRequestUpdate(RequestUpdate requestUpdate) {
     if (!handle_) {
       XLOG(ERR) << "Received RequestUpdate before sending FETCH_OK id="
@@ -1642,10 +1657,41 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
     auto existingRequestID = requestID_;
     auto updateRequestID = requestUpdate.requestID;
 
+    // Newer update supersedes this one
+    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18 &&
+        latestRequest_.has_value() &&
+        updateRequestID != latestRequest_.value().requestID) {
+      requestOks_.push_back(RequestOk{.requestID = updateRequestID});
+      co_return;
+    }
+
+    std::vector<RequestOk> currentOks;
+    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18 &&
+        latestRequest_.has_value()) {
+      requestUpdate = std::move(latestRequest_.value());
+      currentOks = std::move(requestOks_);
+      latestRequest_.reset();
+      requestOks_.clear();
+    }
+
+    // Claim this burst's place in the response order before the handler can
+    // suspend. Draft-18 responses carry no requestID, so the peer matches them
+    // to its outstanding updates in arrival order.
+    auto myTurn = std::make_shared<folly::coro::Baton>();
+    auto priorTurn = std::exchange(responseTurn_, myTurn);
+    SCOPE_EXIT {
+      myTurn->post();
+    };
+
     // Call the handle's requestUpdate
     auto updateResult = co_await co_awaitTry(co_withCancellation(
         session_->cancellationSource_.getToken(),
         handle_->requestUpdate(std::move(requestUpdate))));
+
+    // Bursts can finish out of order, so wait for every earlier one to respond.
+    if (priorTurn) {
+      co_await *priorTurn;
+    }
 
     if (!session_) {
       co_return;
@@ -1667,8 +1713,13 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
         updateErr.requestID = updateRequestID; // In case app got it wrong
         session_->requestUpdateError(updateErr, existingRequestID);
       } else {
-        RequestOk requestOk{.requestID = updateRequestID};
-        session_->requestUpdateOk(requestOk, existingRequestID);
+        // Newest succeeded: flush the held acks for the whole coalesced burst.
+        // On error/exception currentOks is dropped, so nothing is acked after a
+        // failed coalesced update.
+        currentOks.push_back(RequestOk{.requestID = updateRequestID});
+        for (const RequestOk& reqOk : currentOks) {
+          session_->requestUpdateOk(reqOk, existingRequestID);
+        }
       }
     }
   }
@@ -1678,6 +1729,14 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
   std::shared_ptr<Publisher::FetchHandle> handle_;
   std::shared_ptr<StreamPublisherImpl> streamPublisher_;
   bool cancelled_{false};
+  // Cumulative newest REQUEST_UPDATE; older queued handlers coalesce into it.
+  folly::Optional<RequestUpdate> latestRequest_;
+  // Held REQUEST_OKs for coalesced updates: flushed together once the newest
+  // update succeeds, or dropped if it fails, so none is acked prematurely.
+  std::vector<RequestOk> requestOks_;
+  // Posted by the most recent burst once it has responded; the next burst
+  // waits on it so responses stay in arrival order.
+  std::shared_ptr<folly::coro::Baton> responseTurn_;
 };
 
 // TrackPublisherImpl
@@ -4458,6 +4517,8 @@ void MoQSession::handleFetchRequestUpdate(
     XLOG(DBG1) << __func__ << " No publisher callback set";
     return;
   }
+
+  fetchPublisher->trackLatestRequestUpdate(requestUpdate);
 
   // Simple passthrough - just deliver to application and relay response
   co_withExecutor(

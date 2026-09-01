@@ -542,16 +542,15 @@ CO_TEST_P_X(Draft18Test, SubscribeRequestUpdatePriorityTransitions) {
 // not required to process intermediate states individually."
 // =============================================================================
 
-// Fire kNumUpdates REQUEST_UPDATEs back-to-back on the same subscription
-// without awaiting each, so all of them reach the server before the first
-// queued handler runs. results[i]/updateDone[i] capture each update's
-// REQUEST_OK/REQUEST_ERROR.
+// Fire kNumCoalescedUpdates REQUEST_UPDATEs back-to-back (without awaiting
+// each) so they all reach the server before the first queued handler runs.
 namespace {
 constexpr int kNumCoalescedUpdates = 3;
 
+template <typename HandleT>
 folly::coro::Task<void> fireCoalescedUpdates(
     folly::Executor* executor,
-    const std::shared_ptr<Publisher::SubscriptionHandle>& handle,
+    const std::shared_ptr<HandleT>& handle,
     uint64_t majorVersion,
     std::array<folly::coro::Baton, kNumCoalescedUpdates>& updateDone,
     std::array<
@@ -561,9 +560,8 @@ folly::coro::Task<void> fireCoalescedUpdates(
     folly::coro::co_withExecutor(
         executor, folly::coro::co_invoke([&, i]() -> folly::coro::Task<void> {
           RequestUpdate update;
-          // A distinct, increasing priority per update lets the test identify
-          // which one was applied. The last fired gets the highest requestID,
-          // so it is the newest.
+          // Distinct priority per update; the last fired has the highest
+          // requestID, so it is the newest.
           update.priority = static_cast<uint8_t>(kDefaultPriority + i);
           update.forward = true;
           update.params.setMajorVersion(majorVersion);
@@ -1273,7 +1271,143 @@ CO_TEST_P_X(Draft18Test, SubscribeRequestUpdateInFlightDoesNotFlushLaterBurst) {
 
 // =============================================================================
 // FETCH REQUEST_UPDATE tests
+//
+// ReceiverFetchHandle::requestUpdate answers NOT_SUPPORTED locally, so a client
+// fetch handle never puts a REQUEST_UPDATE on the wire. These tests inject the
+// updates into the server's control callback instead, which leaves the client
+// with no outstanding update to correlate the responder's REQUEST_UPDATE
+// responses against — it rejects them as a PROTOCOL_VIOLATION and tears the
+// session down. Any test that lets a response be written therefore holds it on
+// the fetch bidi (first client-initiated bidi = id 0) so the real client never
+// consumes it. The fetch is also still open when these tests close the session,
+// which resets the fetch consumer.
 // =============================================================================
+
+// FETCH REQUEST_UPDATE coalescing (draft 18+). The client fetch handle does not
+// send updates, so inject them server-side: several queued updates collapse to
+// a single application call for the newest.
+CO_TEST_P_X(Draft18Test, FetchRequestUpdateCoalescesToNewest) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockFetchHandle> mockFetchHandle = nullptr;
+  std::shared_ptr<FetchConsumer> heldFetchConsumer = nullptr;
+
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce(
+          [&](Fetch fetch,
+              std::shared_ptr<FetchConsumer> consumer) -> TaskFetchResult {
+            heldFetchConsumer = std::move(consumer);
+            mockFetchHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 10});
+            co_return mockFetchHandle;
+          });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+
+  auto fetchRes =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 10}), fetchCallback_);
+  EXPECT_FALSE(fetchRes.hasError());
+  if (fetchRes.hasError()) {
+    co_return;
+  }
+  auto fetchRequestID = fetchRes.value()->fetchOk().requestID;
+
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate())
+      .Times(kNumCoalescedUpdates);
+  int observedPriority = -1;
+  EXPECT_CALL(*mockFetchHandle, requestUpdateCalled)
+      .WillOnce([&observedPriority](const RequestUpdate& u) {
+        observedPriority = u.priority.value_or(-1);
+      });
+  EXPECT_CALL(*mockFetchHandle, requestUpdateResult)
+      .WillOnce(testing::Return(RequestOk{.requestID = fetchRequestID}));
+
+  serverWt_->writeHandles.at(0)->setImmediateDelivery(false);
+
+  auto* cb =
+      static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get());
+  for (int i = 0; i < kNumCoalescedUpdates; ++i) {
+    RequestUpdate update;
+    update.existingRequestID = fetchRequestID;
+    update.requestID = RequestID(getRequestIDMultiplier() * (i + 1));
+    update.priority = static_cast<uint8_t>(kDefaultPriority + i);
+    cb->onRequestUpdate(std::move(update));
+  }
+  co_await rescheduleN(5);
+
+  // Only the newest update is applied to the application handler.
+  EXPECT_EQ(observedPriority, kDefaultPriority + kNumCoalescedUpdates - 1);
+
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// FETCH coalescing applies the CUMULATIVE result: a field set by an earlier
+// (superseded) update survives when the newest update is silent about it. The
+// first update sets a new start; the newest changes only priority (draft 18+).
+CO_TEST_P_X(Draft18Test, FetchRequestUpdateCoalescesCumulatively) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockFetchHandle> mockFetchHandle = nullptr;
+  std::shared_ptr<FetchConsumer> heldFetchConsumer = nullptr;
+
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce(
+          [&](Fetch fetch,
+              std::shared_ptr<FetchConsumer> consumer) -> TaskFetchResult {
+            heldFetchConsumer = std::move(consumer);
+            mockFetchHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 10});
+            co_return mockFetchHandle;
+          });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+
+  auto fetchRes =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 10}), fetchCallback_);
+  EXPECT_FALSE(fetchRes.hasError());
+  if (fetchRes.hasError()) {
+    co_return;
+  }
+  auto fetchRequestID = fetchRes.value()->fetchOk().requestID;
+
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate()).Times(2);
+
+  // Only the newest update is applied; it must carry the start from the first
+  // update and the priority from the second.
+  std::optional<AbsoluteLocation> observedStart;
+  int observedPriority = -1;
+  EXPECT_CALL(*mockFetchHandle, requestUpdateCalled)
+      .WillOnce([&observedStart, &observedPriority](const RequestUpdate& u) {
+        observedStart = u.start;
+        observedPriority = u.priority.value_or(-1);
+      });
+  EXPECT_CALL(*mockFetchHandle, requestUpdateResult)
+      .WillOnce(testing::Return(RequestOk{.requestID = fetchRequestID}));
+
+  serverWt_->writeHandles.at(0)->setImmediateDelivery(false);
+
+  auto* cb =
+      static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get());
+  // Update 0 sets a new start; update 1 (newest) changes only priority.
+  RequestUpdate first;
+  first.existingRequestID = fetchRequestID;
+  first.requestID = RequestID(getRequestIDMultiplier());
+  first.priority = kDefaultPriority + 1;
+  first.start = AbsoluteLocation{5, 0};
+  cb->onRequestUpdate(std::move(first));
+
+  RequestUpdate second;
+  second.existingRequestID = fetchRequestID;
+  second.requestID = RequestID(getRequestIDMultiplier() * 2);
+  second.priority = kDefaultPriority + 7;
+  cb->onRequestUpdate(std::move(second));
+
+  co_await rescheduleN(5);
+
+  // Cumulative: start from update 0, priority from the newest update 1.
+  EXPECT_EQ(observedStart, (AbsoluteLocation{5, 0}));
+  EXPECT_EQ(observedPriority, kDefaultPriority + 7);
+
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 
 CO_TEST_P_X(MoQSessionTest, FetchRequestUpdateNotSupported) {
   co_await setupMoQSession();
@@ -1466,6 +1600,56 @@ class SuspendingFetchHandle : public MockFetchHandle {
   folly::coro::Baton baton_;
 };
 
+// A FetchHandle whose requestUpdate blocks on a per-invocation baton, so a test
+// can hold the application handler mid-flight and control exactly when it
+// completes. Invocations are numbered in call order (A is 0, the merged B+C
+// burst is 1; a superseded update never reaches the handler).
+class BlockingFetchRequestUpdateHandle : public MockFetchHandle {
+ public:
+  using MockFetchHandle::MockFetchHandle;
+
+  folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
+      RequestUpdate update) override {
+    const int index = nextInvocation_++;
+    requestUpdateCalled(update);
+    invoked[index].post();
+    co_await release[index];
+    co_return requestUpdateResult();
+  }
+
+  std::array<folly::coro::Baton, 2> invoked;
+  std::array<folly::coro::Baton, 2> release;
+
+ private:
+  int nextInvocation_{0};
+};
+
+// Like BlockingFetchRequestUpdateHandle, but each invocation returns its own
+// result, so a test can complete the invocations out of order and give each a
+// distinct outcome. Invocations are numbered in call order (A is 0, the merged
+// B+C burst is 1).
+class OutOfOrderFetchRequestUpdateHandle : public MockFetchHandle {
+ public:
+  using MockFetchHandle::MockFetchHandle;
+
+  folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
+      RequestUpdate update) override {
+    const int index = nextInvocation_++;
+    requestUpdateCalled(update);
+    invoked[index].post();
+    co_await release[index];
+    co_return results[index].value();
+  }
+
+  std::array<folly::coro::Baton, 2> invoked;
+  std::array<folly::coro::Baton, 2> release;
+  std::array<std::optional<folly::Expected<RequestOk, RequestError>>, 2>
+      results;
+
+ private:
+  int nextInvocation_{0};
+};
+
 // Regression test: FetchPublisherImpl::onRequestUpdate dereferences session_
 // after co_await without a null check.  If terminatePublish (via cleanup)
 // runs while requestUpdate is suspended, session_ is nulled but handle_ is
@@ -1542,6 +1726,276 @@ CO_TEST_P_X(MoQSessionTest, FetchRequestUpdateNullSessionAfterAwait) {
   co_await folly::coro::co_reschedule_on_current_executor;
 
   heldFetchConsumer.reset();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// FETCH counterpart to SubscribeRequestUpdateInFlightDoesNotFlushLaterBurst.
+// While update A's application handler is in flight, updates B and C arrive and
+// coalesce (C newest; B superseded, so B's REQUEST_OK is held in requestOks_).
+// A's completion must flush ONLY A's REQUEST_OK — B's held ack belongs to the
+// still-processing B+C burst and must not go out with A. FetchPublisherImpl
+// snapshots the held acks before awaiting, so A's completion sees only its own.
+CO_TEST_P_X(Draft18Test, FetchRequestUpdateInFlightDoesNotFlushLaterBurst) {
+  co_await setupMoQSession();
+  std::shared_ptr<BlockingFetchRequestUpdateHandle> handle;
+  std::shared_ptr<FetchConsumer> heldFetchConsumer = nullptr;
+
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce(
+          [&](Fetch fetch,
+              std::shared_ptr<FetchConsumer> consumer) -> TaskFetchResult {
+            heldFetchConsumer = std::move(consumer);
+            handle = std::make_shared<BlockingFetchRequestUpdateHandle>(FetchOk{
+                fetch.requestID,
+                GroupOrder::OldestFirst,
+                /*endOfTrack=*/false,
+                AbsoluteLocation{0, 10}});
+            co_return handle;
+          });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+
+  auto fetchRes =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 10}), fetchCallback_);
+  EXPECT_FALSE(fetchRes.hasError());
+  if (fetchRes.hasError()) {
+    co_return;
+  }
+  auto fetchRequestID = fetchRes.value()->fetchOk().requestID;
+
+  // A, B, C are all received (stat fires 3x); B is superseded, so only A and
+  // the merged B+C burst reach the application handler.
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate()).Times(3);
+  EXPECT_CALL(*handle, requestUpdateCalled).Times(2);
+  EXPECT_CALL(*handle, requestUpdateResult)
+      .WillRepeatedly(testing::Return(RequestOk{.requestID = fetchRequestID}));
+
+  // Hold the server->client acks on the fetch bidi (first client-initiated bidi
+  // = id 0) so the real client never consumes them. FETCH_OK was already
+  // delivered above, so subsequent bytes on this handle are REQUEST_OK acks.
+  auto fetchBidi = serverWt_->writeHandles.at(0);
+  fetchBidi->setImmediateDelivery(false);
+  const uint32_t bytesAfterFetchOk = fetchBidi->dataWritten_;
+
+  auto* cb =
+      static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get());
+  auto inject = [&](uint64_t reqIdMultiple, uint8_t priority) {
+    RequestUpdate update;
+    update.existingRequestID = fetchRequestID;
+    update.requestID = RequestID(getRequestIDMultiplier() * reqIdMultiple);
+    update.priority = priority;
+    cb->onRequestUpdate(std::move(update));
+  };
+
+  // A is its own burst; wait until its handler is running (accumulator reset
+  // and held acks snapshotted, now suspended before it can flush).
+  inject(1, kDefaultPriority + 1);
+  co_await handle->invoked[0];
+
+  // B then C arrive while A is in flight and coalesce; B's REQUEST_OK is held.
+  // Wait until the merged burst's handler is running (and suspended).
+  inject(2, kDefaultPriority + 2);
+  inject(3, kDefaultPriority + 3);
+  co_await handle->invoked[1];
+
+  // Release A. It must flush only its own REQUEST_OK, not B's held ack.
+  handle->release[0].post();
+  co_await rescheduleN(4);
+  const uint32_t bytesFromA = fetchBidi->dataWritten_ - bytesAfterFetchOk;
+  EXPECT_GT(bytesFromA, 0u);
+
+  // Release the B+C burst; it flushes B's held ack plus C's own — two acks.
+  handle->release[1].post();
+  co_await rescheduleN(4);
+  const uint32_t bytesFromBurst =
+      fetchBidi->dataWritten_ - bytesAfterFetchOk - bytesFromA;
+  EXPECT_EQ(bytesFromBurst, 2 * bytesFromA)
+      << "A's completion flushed B's held REQUEST_OK early (expected A to flush "
+         "one ack and the B+C burst to flush two)";
+
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A arrives and its handler suspends. B and C then arrive and coalesce (C
+// newest, B superseded). The B+C burst succeeds *before* A, and A then fails.
+// If the burst's REQUEST_OKs go out as soon as they are ready, the wire carries
+// REQUEST_OK, REQUEST_OK, REQUEST_ERROR — and the peer FIFO-maps them to A=OK,
+// B=OK, C=ERROR, concluding that the failed update A succeeded. A's response
+// must go out first.
+CO_TEST_P_X(Draft18Test, FetchRequestUpdateResponsesFollowArrivalOrder) {
+  co_await setupMoQSession();
+  std::shared_ptr<OutOfOrderFetchRequestUpdateHandle> handle;
+  std::shared_ptr<FetchConsumer> heldFetchConsumer = nullptr;
+
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce(
+          [&](Fetch fetch,
+              std::shared_ptr<FetchConsumer> consumer) -> TaskFetchResult {
+            heldFetchConsumer = std::move(consumer);
+            handle =
+                std::make_shared<OutOfOrderFetchRequestUpdateHandle>(FetchOk{
+                    fetch.requestID,
+                    GroupOrder::OldestFirst,
+                    /*endOfTrack=*/false,
+                    AbsoluteLocation{0, 10}});
+            co_return handle;
+          });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+
+  auto fetchRes =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 10}), fetchCallback_);
+  EXPECT_FALSE(fetchRes.hasError());
+  if (fetchRes.hasError()) {
+    co_return;
+  }
+  auto fetchRequestID = fetchRes.value()->fetchOk().requestID;
+
+  // A, B, C are all received (stat fires 3x); B is superseded, so only A and
+  // the merged B+C burst reach the application handler.
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate()).Times(3);
+  EXPECT_CALL(*handle, requestUpdateCalled).Times(2);
+
+  // A fails; the merged B+C burst succeeds.
+  handle->results[0] = folly::makeUnexpected(
+      RequestError{
+          RequestID(getRequestIDMultiplier()),
+          RequestErrorCode::INTERNAL_ERROR,
+          "A failed"});
+  handle->results[1] = RequestOk{.requestID = fetchRequestID};
+
+  // Hold the server->client responses on the fetch bidi (first client-initiated
+  // bidi = id 0) so the real client never consumes them. FETCH_OK was already
+  // delivered above, so subsequent bytes on this handle are REQUEST_UPDATE
+  // responses.
+  auto fetchBidi = serverWt_->writeHandles.at(0);
+  fetchBidi->setImmediateDelivery(false);
+  const uint32_t bytesAfterFetchOk = fetchBidi->dataWritten_;
+
+  auto* cb =
+      static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get());
+  auto inject = [&](uint64_t reqIdMultiple, uint8_t priority) {
+    RequestUpdate update;
+    update.existingRequestID = fetchRequestID;
+    update.requestID = RequestID(getRequestIDMultiplier() * reqIdMultiple);
+    update.priority = priority;
+    cb->onRequestUpdate(std::move(update));
+  };
+
+  // A is its own burst; wait until its handler is running (and suspended).
+  inject(1, kDefaultPriority + 1);
+  co_await handle->invoked[0];
+
+  // B then C arrive while A is in flight and coalesce. Wait until the merged
+  // burst's handler is running (and suspended).
+  inject(2, kDefaultPriority + 2);
+  inject(3, kDefaultPriority + 3);
+  co_await handle->invoked[1];
+
+  // The B+C burst finishes first, but A arrived first and has not responded
+  // yet, so the burst's REQUEST_OKs must be held: nothing may go out ahead of
+  // A's response.
+  handle->release[1].post();
+  co_await rescheduleN(4);
+  EXPECT_EQ(fetchBidi->dataWritten_, bytesAfterFetchOk)
+      << "B/C were acked before A responded; the peer correlates responses in "
+         "arrival order and would read B's REQUEST_OK as A's response";
+
+  // Now let A fail. Its REQUEST_ERROR must be the first response on the wire.
+  handle->release[0].post();
+  co_await rescheduleN(4);
+  EXPECT_GT(fetchBidi->dataWritten_, bytesAfterFetchOk);
+  const auto* responses = fetchBidi->inflightBuf_.front();
+  EXPECT_NE(responses, nullptr);
+  if (responses != nullptr && responses->computeChainDataLength() > 0) {
+    EXPECT_EQ(
+        responses->cloneCoalesced()->data()[0],
+        static_cast<uint8_t>(FrameType::REQUEST_ERROR))
+        << "the first REQUEST_UPDATE response on the wire must be A's "
+           "REQUEST_ERROR";
+  }
+
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Ordering responses makes each burst wait on the one before it, so a burst
+// that bails out early must still release its place in that order.
+//
+// A and B are separate bursts, so B waits on A. The session closes while both
+// application handlers are suspended, which nulls session_ and sends both
+// coroutines down the early return after their await — A responds to nobody.
+// If A leaves without releasing its turn, B waits forever, and because B's
+// coroutine holds a shared_ptr to the FetchPublisherImpl, the publisher (and
+// the fetch handle it owns) leaks along with the stranded coroutine. The
+// symptom is a leak rather than a bad byte on the wire, so assert on
+// teardown: once both coroutines finish, nothing holds the handle.
+CO_TEST_P_X(Draft18Test, FetchRequestUpdateEarlyReturnReleasesResponseOrder) {
+  co_await setupMoQSession();
+  std::shared_ptr<BlockingFetchRequestUpdateHandle> handle;
+  std::shared_ptr<FetchConsumer> heldFetchConsumer = nullptr;
+
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce(
+          [&](Fetch fetch,
+              std::shared_ptr<FetchConsumer> consumer) -> TaskFetchResult {
+            heldFetchConsumer = std::move(consumer);
+            handle = std::make_shared<BlockingFetchRequestUpdateHandle>(FetchOk{
+                fetch.requestID,
+                GroupOrder::OldestFirst,
+                /*endOfTrack=*/false,
+                AbsoluteLocation{0, 10}});
+            co_return handle;
+          });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+
+  auto fetchRes =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 10}), fetchCallback_);
+  EXPECT_FALSE(fetchRes.hasError());
+  if (fetchRes.hasError()) {
+    co_return;
+  }
+  auto fetchRequestID = fetchRes.value()->fetchOk().requestID;
+
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate()).Times(2);
+  EXPECT_CALL(*handle, requestUpdateCalled).Times(2);
+  EXPECT_CALL(*handle, requestUpdateResult)
+      .WillRepeatedly(testing::Return(RequestOk{.requestID = fetchRequestID}));
+
+  auto* cb =
+      static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get());
+  auto inject = [&](uint64_t reqIdMultiple, uint8_t priority) {
+    RequestUpdate update;
+    update.existingRequestID = fetchRequestID;
+    update.requestID = RequestID(getRequestIDMultiplier() * reqIdMultiple);
+    update.priority = priority;
+    cb->onRequestUpdate(std::move(update));
+  };
+
+  // Two separate bursts: A claims and resets the accumulator before B arrives,
+  // so B queues behind A rather than coalescing with it.
+  inject(1, kDefaultPriority + 1);
+  co_await handle->invoked[0];
+  inject(2, kDefaultPriority + 2);
+  co_await handle->invoked[1];
+
+  // Close while both handlers are suspended, so both coroutines take the
+  // early return once they resume.
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED));
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  handle->release[0].post();
+  handle->release[1].post();
+  co_await rescheduleN(6);
+
+  std::weak_ptr<BlockingFetchRequestUpdateHandle> weakHandle = handle;
+  handle.reset();
+  heldFetchConsumer.reset();
+  EXPECT_TRUE(weakHandle.expired())
+      << "a burst is still suspended waiting on a turn that was never "
+         "released, keeping the FetchPublisherImpl alive";
+
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
