@@ -27,6 +27,7 @@ const uint64_t kDefaultStart = 0;
 const uint64_t kDefaultIncrement = 1;
 const uint64_t kDefaultPublisherDeliveryTimeout = 0;
 const uint64_t kDefaultDatagramDropPercentage = 1; // Allow up to 1% drops
+const uint64_t kMaxObjectFrequencyMs = 60 * 1000;
 
 struct MoQTestParameters {
   ForwardingPreference forwardingPreference =

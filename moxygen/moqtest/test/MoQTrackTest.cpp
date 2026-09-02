@@ -50,9 +50,31 @@ class MoQTrackTest : public testing::Test {
     params_.publisherDeliveryTimeout = 0;
   }
 
+  // Groups 4, 6 and 8, each holding objects 3, 6 and 9, so the track skips IDs
+  // at the start of the grid and between every step.
+  void CreateGappyMoQTestParameters() {
+    CreateDefaultMoQTestParameters();
+    params_.startGroup = 4;
+    params_.lastGroupInTrack = 8;
+    params_.groupIncrement = 2;
+    params_.startObject = 3;
+    params_.lastObjectInTrack = 9;
+    params_.objectsPerGroup = 3;
+    params_.objectIncrement = 3;
+    params_.testIntegerExtension = 1;
+  }
+
   moxygen::MoQTestParameters params_;
   moxygen::TrackNamespace track_;
 };
+
+moxygen::Extension GroupGap(uint64_t gap) {
+  return moxygen::Extension(moxygen::kPriorGroupIdGapExtensionType, gap);
+}
+
+moxygen::Extension ObjectGap(uint64_t gap) {
+  return moxygen::Extension(moxygen::kPriorObjectIdGapExtensionType, gap);
+}
 
 } // namespace
 
@@ -398,6 +420,89 @@ TEST_F(MoQTrackTest, testParseLocation) {
   EXPECT_TRUE(moxygen::parseLocation("four,7").hasError());
   EXPECT_TRUE(moxygen::parseLocation("-1,7").hasError());
   EXPECT_TRUE(moxygen::parseLocation("").hasError());
+}
+
+// Gap extension tests
+TEST_F(MoQTrackTest, testADenseTrackHasNoGaps) {
+  CreateDefaultMoQTestParameters();
+  params_.testIntegerExtension = 1;
+  EXPECT_EQ(moxygen::priorGroupGap(params_, 0), 0);
+  EXPECT_EQ(moxygen::priorGroupGap(params_, 7), 0);
+  EXPECT_EQ(moxygen::priorObjectGap(params_, 0), 0);
+  EXPECT_EQ(moxygen::priorObjectGap(params_, 1), 0);
+  EXPECT_TRUE(moxygen::getGapExtensions(params_, 7, 1).empty());
+}
+
+TEST_F(MoQTrackTest, testAnIncrementIsAGap) {
+  CreateDefaultMoQTestParameters();
+  params_.groupIncrement = 3;
+  params_.objectIncrement = 2;
+  // The first group and object of a grid that starts at 0 skip nothing.
+  EXPECT_EQ(moxygen::priorGroupGap(params_, 0), 0);
+  EXPECT_EQ(moxygen::priorObjectGap(params_, 0), 0);
+  EXPECT_EQ(moxygen::priorGroupGap(params_, 3), 2);
+  EXPECT_EQ(moxygen::priorObjectGap(params_, 2), 1);
+}
+
+TEST_F(MoQTrackTest, testALeadingOffsetIsAGap) {
+  CreateDefaultMoQTestParameters();
+  params_.startGroup = 5;
+  params_.lastGroupInTrack = 7;
+  params_.startObject = 2;
+  params_.lastObjectInTrack = 4;
+  params_.objectsPerGroup = 4;
+  // Groups below startGroup and objects below startObject never exist, so the
+  // offset is a real gap even with an increment of 1.
+  EXPECT_EQ(moxygen::priorGroupGap(params_, 5), 5);
+  EXPECT_EQ(moxygen::priorGroupGap(params_, 6), 0);
+  EXPECT_EQ(moxygen::priorObjectGap(params_, 2), 2);
+  EXPECT_EQ(moxygen::priorObjectGap(params_, 3), 0);
+}
+
+TEST_F(MoQTrackTest, testGapExtensionsCarryTheGroupGapOnlyOnTheFirstObject) {
+  CreateGappyMoQTestParameters();
+  const std::vector<moxygen::Extension> firstObjectOfFirstGroup{
+      GroupGap(4), ObjectGap(3)};
+  const std::vector<moxygen::Extension> firstObjectOfLaterGroup{
+      GroupGap(1), ObjectGap(3)};
+  const std::vector<moxygen::Extension> laterObject{ObjectGap(2)};
+  EXPECT_EQ(moxygen::getGapExtensions(params_, 4, 3), firstObjectOfFirstGroup);
+  EXPECT_EQ(moxygen::getGapExtensions(params_, 4, 6), laterObject);
+  EXPECT_EQ(moxygen::getGapExtensions(params_, 6, 3), firstObjectOfLaterGroup);
+  EXPECT_EQ(moxygen::getGapExtensions(params_, 6, 9), laterObject);
+}
+
+TEST_F(MoQTrackTest, testGapExtensionsNeedADeclaredTestExtension) {
+  CreateGappyMoQTestParameters();
+  params_.testIntegerExtension = -1;
+  params_.testVariableExtension = -1;
+  EXPECT_TRUE(moxygen::getGapExtensions(params_, 4, 3).empty());
+
+  // Either declaration is enough: one extension already puts the extension bit
+  // in the track's headers.
+  params_.testVariableExtension = 1;
+  EXPECT_FALSE(moxygen::getGapExtensions(params_, 4, 3).empty());
+}
+
+TEST_F(MoQTrackTest, testValidateGapExtensionsAcceptsTheExactSet) {
+  CreateGappyMoQTestParameters();
+  moxygen::Extensions extensions(
+      moxygen::getExtensions(params_.testIntegerExtension, -1),
+      {GroupGap(4), ObjectGap(3)});
+  EXPECT_TRUE(moxygen::validateGapExtensions(extensions, params_, 4, 3));
+}
+
+TEST_F(MoQTrackTest, testValidateGapExtensionsRejectsAnythingElse) {
+  CreateGappyMoQTestParameters();
+  const moxygen::Extensions missing({}, {GroupGap(4)});
+  const moxygen::Extensions extra(
+      {}, {GroupGap(4), ObjectGap(3), ObjectGap(3)});
+  const moxygen::Extensions wrongValue({}, {GroupGap(3), ObjectGap(3)});
+  const moxygen::Extensions mutableSection({GroupGap(4), ObjectGap(3)}, {});
+  EXPECT_FALSE(moxygen::validateGapExtensions(missing, params_, 4, 3));
+  EXPECT_FALSE(moxygen::validateGapExtensions(extra, params_, 4, 3));
+  EXPECT_FALSE(moxygen::validateGapExtensions(wrongValue, params_, 4, 3));
+  EXPECT_FALSE(moxygen::validateGapExtensions(mutableSection, params_, 4, 3));
 }
 
 TEST_F(MoQTrackTest, testFetchForwardingPreferenceOnlyRemapsDatagram) {

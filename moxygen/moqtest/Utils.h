@@ -43,6 +43,27 @@ std::vector<Extension> getExtensions(
 
 int getObjectSize(uint64_t objectId, MoQTestParameters* params);
 
+// How many group IDs immediately below `groupID` the track never generates.
+// The leading offset counts as well as the increment.  Both gaps subtract one
+// from an increment that validateMoQTestParameters has rejected as zero.
+uint64_t priorGroupGap(const MoQTestParameters& params, uint64_t groupID);
+
+// The same for object IDs, which restart at startObject in every group.
+uint64_t priorObjectGap(const MoQTestParameters& params, uint64_t objectID);
+
+// The immutable extensions one object carries: Prior Object ID Gap, plus
+// Prior Group ID Gap on the group's first object.
+std::vector<Extension> getGapExtensions(
+    const MoQTestParameters& params,
+    uint64_t groupID,
+    uint64_t objectID);
+
+bool validateGapExtensions(
+    const Extensions& extensions,
+    const MoQTestParameters& params,
+    uint64_t groupID,
+    uint64_t objectID);
+
 // The priority every subgroup and datagram of `groupNumber` is published at.
 // Alternating on the group makes half the track match the advertised publisher
 // priority, so it is elided from the wire, and half differ, so it is written

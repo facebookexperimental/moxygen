@@ -2262,3 +2262,181 @@ TEST_F(MoQTrackServerTest, DatagramEndOfGroupMarkerIsAnEmptyStatusObject) {
           {2, moxygen::ObjectStatus::END_OF_GROUP, false, false}};
   EXPECT_EQ(sent, expected);
 }
+
+// Gap extension tests
+//
+// A track whose grid skips group or object IDs advertises each hole with the
+// Prior Group ID Gap and Prior Object ID Gap immutable extensions, so a
+// receiver can tell an intentional hole from loss.
+
+namespace {
+
+// (group, object, prior group gap, prior object gap), with -1 where the
+// publisher left the extension off.
+using GapLog = std::vector<std::tuple<uint64_t, uint64_t, int64_t, int64_t>>;
+
+// Deliberately ignores the mutable section: these belong in the immutable one.
+int64_t immutableGap(const moxygen::Extensions& extensions, uint64_t type) {
+  for (const auto& ext : extensions.getImmutableExtensions()) {
+    if (ext.type == type) {
+      return static_cast<int64_t>(ext.intValue);
+    }
+  }
+  return -1;
+}
+
+void recordGaps(
+    GapLog& log,
+    uint64_t group,
+    uint64_t object,
+    const moxygen::Extensions& extensions) {
+  log.emplace_back(
+      group,
+      object,
+      immutableGap(extensions, moxygen::kPriorGroupIdGapExtensionType),
+      immutableGap(extensions, moxygen::kPriorObjectIdGapExtensionType));
+}
+
+std::shared_ptr<testing::NiceMock<moxygen::MockTrackConsumer>>
+MakeGapRecordingTrackConsumer(GapLog& log) {
+  auto ok = folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
+  auto consumer =
+      std::make_shared<testing::NiceMock<moxygen::MockTrackConsumer>>();
+  ON_CALL(*consumer, setTrackAlias(testing::_))
+      .WillByDefault(testing::Return(ok));
+  ON_CALL(
+      *consumer, beginSubgroup(testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault([&log, ok](uint64_t group, uint64_t, uint8_t, auto) {
+        auto subgroup = std::make_shared<
+            testing::NiceMock<moxygen::MockSubgroupConsumer>>();
+        ON_CALL(
+            *subgroup, object(testing::_, testing::_, testing::_, testing::_))
+            .WillByDefault([&log, ok, group](
+                               uint64_t objectId,
+                               moxygen::Payload,
+                               const moxygen::Extensions& extensions,
+                               bool) {
+              recordGaps(log, group, objectId, extensions);
+              return ok;
+            });
+        ON_CALL(*subgroup, endOfGroup(testing::_))
+            .WillByDefault(testing::Return(ok));
+        ON_CALL(*subgroup, endOfSubgroup()).WillByDefault(testing::Return(ok));
+        return folly::makeExpected<moxygen::MoQPublishError>(
+            std::shared_ptr<moxygen::SubgroupConsumer>(subgroup));
+      });
+  ON_CALL(*consumer, datagram(testing::_, testing::_, testing::_))
+      .WillByDefault(
+          [&log, ok](
+              const moxygen::ObjectHeader& header, moxygen::Payload, bool) {
+            recordGaps(log, header.group, header.id, header.extensions);
+            return ok;
+          });
+  return consumer;
+}
+
+class MoQTrackServerGapTest : public MoQTrackServerTest {
+ public:
+  void SetUp() override {
+    CreateDefaultMoQTestParameters();
+    // Groups 2 and 4, each holding objects 1 and 3.
+    params_.startGroup = 2;
+    params_.lastGroupInTrack = 4;
+    params_.groupIncrement = 2;
+    params_.startObject = 1;
+    params_.lastObjectInTrack = 3;
+    params_.objectsPerGroup = 2;
+    params_.objectIncrement = 2;
+    params_.objectFrequency = 0;
+    params_.testIntegerExtension = 1;
+  }
+
+  // The group gap is the offset to group 2 on the first group and the one
+  // skipped group on the second; every object is one ID past a hole, and only
+  // the group's first object carries the group gap.
+  const GapLog kExpectedGaps{
+      {2, 1, 2, 1},
+      {2, 3, -1, 1},
+      {4, 1, 1, 1},
+      {4, 3, -1, 1}};
+};
+
+} // namespace
+
+TEST_F(MoQTrackServerGapTest, OneSubgroupPerGroup) {
+  GapLog log;
+  folly::coro::blockingWait(publisher_->sendOneSubgroupPerGroup(
+      params_, MakeGapRecordingTrackConsumer(log)));
+  EXPECT_EQ(log, kExpectedGaps);
+}
+
+TEST_F(MoQTrackServerGapTest, OneSubgroupPerObject) {
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::ONE_SUBGROUP_PER_OBJECT;
+  GapLog log;
+  folly::coro::blockingWait(publisher_->sendOneSubgroupPerObject(
+      params_, MakeGapRecordingTrackConsumer(log)));
+  EXPECT_EQ(log, kExpectedGaps);
+}
+
+TEST_F(MoQTrackServerGapTest, TwoSubgroupsPerGroup) {
+  params_.forwardingPreference =
+      moxygen::ForwardingPreference::TWO_SUBGROUPS_PER_GROUP;
+  GapLog log;
+  folly::coro::blockingWait(publisher_->sendTwoSubgroupsPerGroup(
+      params_, MakeGapRecordingTrackConsumer(log)));
+  EXPECT_EQ(log, kExpectedGaps);
+}
+
+TEST_F(MoQTrackServerGapTest, Datagram) {
+  params_.forwardingPreference = moxygen::ForwardingPreference::DATAGRAM;
+  GapLog log;
+  folly::coro::blockingWait(publisher_->sendDatagram(
+      moxygen::RequestID(0), params_, MakeGapRecordingTrackConsumer(log)));
+  EXPECT_EQ(log, kExpectedGaps);
+}
+
+TEST_F(MoQTrackServerGapTest, Fetch) {
+  GapLog log;
+  auto ok = folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
+  auto consumer =
+      std::make_shared<testing::NiceMock<moxygen::MockFetchConsumer>>();
+  ON_CALL(
+      *consumer,
+      object(
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_,
+          testing::_))
+      .WillByDefault([&log, ok](
+                         uint64_t group,
+                         uint64_t,
+                         uint64_t objectId,
+                         moxygen::Payload,
+                         const moxygen::Extensions& extensions,
+                         bool,
+                         bool) {
+        recordGaps(log, group, objectId, extensions);
+        return ok;
+      });
+  ON_CALL(*consumer, endOfFetch()).WillByDefault(testing::Return(ok));
+
+  folly::coro::blockingWait(publisher_->fetchObjects(
+      params_, consumer, moxygen::resolveFetchWindow(params_)));
+  EXPECT_EQ(log, kExpectedGaps);
+}
+
+TEST_F(MoQTrackServerGapTest, NoTestExtensionMeansNoGapExtensions) {
+  params_.testIntegerExtension = -1;
+  params_.testVariableExtension = -1;
+  GapLog log;
+  folly::coro::blockingWait(publisher_->sendOneSubgroupPerGroup(
+      params_, MakeGapRecordingTrackConsumer(log)));
+
+  const GapLog expected{
+      {2, 1, -1, -1}, {2, 3, -1, -1}, {4, 1, -1, -1}, {4, 3, -1, -1}};
+  EXPECT_EQ(log, expected);
+}

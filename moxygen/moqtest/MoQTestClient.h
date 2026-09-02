@@ -7,6 +7,7 @@
 #pragma once
 
 #include <folly/coro/Baton.h>
+#include <folly/io/async/AsyncTimeout.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include "moxygen/MoQClientBase.h"
 #include "moxygen/MoQRelaySession.h"
@@ -34,7 +35,8 @@ enum class PublishOrder : int { SubscribeFirst = 0, PublishFirst = 1 };
 enum ExtensionErrorCode : int {
   INVALID_INT_EXTENSION = 0,
   INVALID_VAR_EXTENSION = 1,
-  INVALID_EXTENSION_AMOUNT = 2
+  INVALID_EXTENSION_AMOUNT = 2,
+  INVALID_GAP_EXTENSION = 3
 };
 
 struct ExtensionError {
@@ -283,12 +285,18 @@ class MoQTestClient : public Subscriber,
   // At end: success == scoreboard.empty() (or within drop limit for datagrams)
   std::set<std::pair<uint64_t, uint64_t>> expectedObjects_;
 
-  // Set when a delivery-semantics check fails; suppresses the final SUCCESS
-  bool semanticsFailed_{false};
+  // Latched by the first failVerification; every later callback is a no-op
+  bool verificationFailed_{false};
 
   // Set once we cancel the request ourselves; the peer answers with a stream
   // reset that must not count against the track
   bool tearingDown_{false};
+
+  std::unique_ptr<folly::AsyncTimeout> objectTimeout_;
+  std::chrono::milliseconds objectTimeoutMs_{0};
+  // What objectTimeout_ is currently armed with, which adds the publish-done
+  // grace to objectTimeoutMs_ when that applies.
+  std::chrono::milliseconds armedTimeoutMs_{0};
 
   // Holds Datagram Objects Recieved - (Only relevant for forwarding preference
   // 3)
@@ -312,7 +320,17 @@ class MoQTestClient : public Subscriber,
       const ReceiveState& state,
       const ObjectHeader& header,
       bool endOfGroup);
-  void recordSemanticsFailure(const std::string& reason);
+  // Reports the first verification failure and ends the request there: later
+  // callbacks are ignored, so a failure can't be followed by a SUCCESS from
+  // whatever was still in flight.
+  void failVerification(const std::string& reason);
+
+  // A publisher that goes quiet is as much a failure as one that sends the
+  // wrong thing, and without this the run would hang until the harness killed
+  // it.  Rearmed by every object, so it measures the gap between them.  Both
+  // must run on the executor's EventBase, which is where the timeout lives.
+  void armObjectTimeout();
+  void cancelObjectTimeout();
   uint64_t draftMajorVersion() const;
 
   // The shape the objects actually arrive in, which is not always the track's
@@ -369,8 +387,10 @@ class MoQTestClient : public Subscriber,
       const ObjectHeader& header,
       const std::string& payload);
   folly::Expected<folly::Unit, ExtensionError> validateExtensions(
-      const std::vector<Extension>& extensions,
-      MoQTestParameters* params);
+      const Extensions& extensions,
+      MoQTestParameters* params,
+      uint64_t groupID,
+      uint64_t objectID);
 
   AdjustedExpectedResult adjustExpected(
       ReceiveState& state,

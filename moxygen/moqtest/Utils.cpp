@@ -70,6 +70,13 @@ folly::Expected<folly::Unit, std::runtime_error> validateMoQTestParameters(
         std::runtime_error("Object Increment Cannot Be Zero"));
   }
 
+  // Tuple Field 9. Bounds how long a conformance run can sit waiting on the
+  // next object, on the publisher as well as the subscriber.
+  if (track.objectFrequency > kMaxObjectFrequencyMs) {
+    return folly::makeUnexpected(
+        std::runtime_error("Object Frequency Exceeds One Minute"));
+  }
+
   return folly::Unit();
 }
 
@@ -184,6 +191,51 @@ std::vector<Extension> getExtensions(
 
 uint8_t publisherPriorityForGroup(uint64_t groupNumber) {
   return kMoQTestPublisherPriority + (groupNumber % 2);
+}
+
+uint64_t priorGroupGap(const MoQTestParameters& params, uint64_t groupID) {
+  return groupID == params.startGroup ? params.startGroup
+                                      : params.groupIncrement - 1;
+}
+
+uint64_t priorObjectGap(const MoQTestParameters& params, uint64_t objectID) {
+  return objectID == params.startObject ? params.startObject
+                                        : params.objectIncrement - 1;
+}
+
+std::vector<Extension> getGapExtensions(
+    const MoQTestParameters& params,
+    uint64_t groupID,
+    uint64_t objectID) {
+  std::vector<Extension> extensions;
+  // Only tracks that already declare a test extension.  The subgroup header's
+  // extension bit is a property of the whole track, so a gap on a track
+  // without one would cost the suite its no-extensions header coverage.
+  if (params.testIntegerExtension < 0 && params.testVariableExtension < 0) {
+    return extensions;
+  }
+  // Only the group's first object carries the group gap; a receiver rejects a
+  // group whose objects disagree about it.
+  if (objectID == params.startObject) {
+    auto groupGap = priorGroupGap(params, groupID);
+    if (groupGap > 0) {
+      extensions.emplace_back(kPriorGroupIdGapExtensionType, groupGap);
+    }
+  }
+  auto objectGap = priorObjectGap(params, objectID);
+  if (objectGap > 0) {
+    extensions.emplace_back(kPriorObjectIdGapExtensionType, objectGap);
+  }
+  return extensions;
+}
+
+bool validateGapExtensions(
+    const Extensions& extensions,
+    const MoQTestParameters& params,
+    uint64_t groupID,
+    uint64_t objectID) {
+  return extensions.getImmutableExtensions() ==
+      getGapExtensions(params, groupID, objectID);
 }
 
 int getObjectSize(uint64_t objectId, MoQTestParameters* params) {
