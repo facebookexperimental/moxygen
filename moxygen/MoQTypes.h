@@ -620,6 +620,28 @@ class Parameters {
     return params_.at(position);
   }
 
+  // Returns the first parameter with `key`, or nullptr. Invalidated by any
+  // subsequent mutation.
+  const Parameter* getFirstParam(uint64_t key) const {
+    auto it = std::find_if(
+        params_.begin(), params_.end(), [key](const Parameter& param) {
+          return param.key == key;
+        });
+    return it == params_.end() ? nullptr : &*it;
+  }
+
+  const Parameter* getFirstParam(TrackRequestParamKey key) const {
+    return getFirstParam(folly::to_underlying(key));
+  }
+
+  const Parameter* getFirstParam(SetupKey key) const {
+    return getFirstParam(folly::to_underlying(key));
+  }
+
+  bool hasParam(uint64_t key) const {
+    return getFirstParam(key) != nullptr;
+  }
+
   folly::Expected<folly::Unit, ErrorCode> insertParam(Parameter&& param) {
     auto key = static_cast<TrackRequestParamKey>(param.key);
     if (!isParamAllowed(key)) {
@@ -660,7 +682,10 @@ class Parameters {
   }
 
   void eraseAllParamsOfType(TrackRequestParamKey key) {
-    const auto targetKey = static_cast<uint64_t>(key);
+    eraseAllParamsOfType(folly::to_underlying(key));
+  }
+
+  void eraseAllParamsOfType(uint64_t targetKey) {
     params_.erase(
         std::remove_if(
             params_.begin(),
@@ -724,13 +749,15 @@ std::optional<uint64_t> getFirstIntParam(
 inline std::string getFirstStringParam(
     const SetupParameters& params,
     uint64_t key) {
-  for (const auto& param : params) {
-    if (param.key == key) {
-      return param.asString;
-    }
-  }
-  return {};
+  const auto* param = params.getFirstParam(key);
+  return param ? param->asString : std::string();
 }
+
+// Applies extraParams onto params, replacing any parameter with the same key
+// so a SETUP never carries a key twice.
+void applySetupParameters(
+    SetupParameters& params,
+    const std::vector<SetupParameter>& extraParams);
 
 struct Setup {
   SetupParameters params{FrameType::CLIENT_SETUP};

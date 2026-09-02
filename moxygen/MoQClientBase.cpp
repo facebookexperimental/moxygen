@@ -206,6 +206,9 @@ Setup MoQClientBase::getClientSetup(const std::optional<std::string>& path) {
         SetupParameter(folly::to_underlying(SetupKey::AUTHORITY), authority));
   }
 
+  // Last, so the application can override anything set above.
+  applySetupParameters(clientSetup.params, setupParams_);
+
   return clientSetup;
 }
 

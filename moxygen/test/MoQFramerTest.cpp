@@ -6037,6 +6037,127 @@ TEST(MoQFramerV16DeathTest, PublishNamespaceCancelWithoutRequestIDDies) {
       "RequestID required for v16\\+ PublishNamespaceCancel");
 }
 
+// Tests for Parameters::getFirstParam() / hasParam()
+class ParametersLookupTest : public ::testing::Test {};
+
+TEST_F(ParametersLookupTest, GetFirstParamReturnsEarliestMatch) {
+  Parameters params(FrameType::SUBSCRIBE);
+  ASSERT_TRUE(params
+                  .insertParam(Parameter(
+                      folly::to_underlying(
+                          TrackRequestParamKey::DELIVERY_TIMEOUT),
+                      1))
+                  .hasValue());
+  ASSERT_TRUE(params
+                  .insertParam(Parameter(
+                      folly::to_underlying(
+                          TrackRequestParamKey::MAX_CACHE_DURATION),
+                      2))
+                  .hasValue());
+  ASSERT_TRUE(params
+                  .insertParam(Parameter(
+                      folly::to_underlying(
+                          TrackRequestParamKey::DELIVERY_TIMEOUT),
+                      3))
+                  .hasValue());
+
+  const auto* found =
+      params.getFirstParam(TrackRequestParamKey::DELIVERY_TIMEOUT);
+  ASSERT_NE(found, nullptr);
+  EXPECT_EQ(found->asUint64, 1);
+  EXPECT_TRUE(params.hasParam(
+      folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION)));
+}
+
+TEST_F(ParametersLookupTest, GetFirstParamReturnsNullWhenAbsent) {
+  Parameters params(FrameType::SUBSCRIBE);
+  EXPECT_EQ(
+      params.getFirstParam(TrackRequestParamKey::DELIVERY_TIMEOUT), nullptr);
+  EXPECT_FALSE(params.hasParam(
+      folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT)));
+}
+
+TEST_F(ParametersLookupTest, GetFirstParamAcceptsSetupKeys) {
+  SetupParameters params(FrameType::CLIENT_SETUP);
+  ASSERT_TRUE(params
+                  .insertParam(SetupParameter(
+                      folly::to_underlying(SetupKey::MAX_REQUEST_ID), 17))
+                  .hasValue());
+
+  const auto* found = params.getFirstParam(SetupKey::MAX_REQUEST_ID);
+  ASSERT_NE(found, nullptr);
+  EXPECT_EQ(found->asUint64, 17);
+  EXPECT_EQ(params.getFirstParam(SetupKey::PATH), nullptr);
+}
+
+// Tests for applySetupParameters()
+class ApplySetupParametersTest : public ::testing::Test {};
+
+TEST_F(ApplySetupParametersTest, AppendsUnknownKeys) {
+  SetupParameters params(FrameType::CLIENT_SETUP);
+  ASSERT_TRUE(params
+                  .insertParam(SetupParameter(
+                      folly::to_underlying(SetupKey::MAX_REQUEST_ID), 100))
+                  .hasValue());
+
+  constexpr uint64_t kExtensionKey = 0x40B55;
+  applySetupParameters(
+      params, {SetupParameter(kExtensionKey, std::string{})});
+
+  EXPECT_EQ(params.size(), 2);
+  EXPECT_EQ(params.getFirstParam(SetupKey::MAX_REQUEST_ID)->asUint64, 100);
+  ASSERT_NE(params.getFirstParam(kExtensionKey), nullptr);
+  EXPECT_TRUE(params.getFirstParam(kExtensionKey)->asString.empty());
+}
+
+TEST_F(ApplySetupParametersTest, OverrideReplacesRatherThanDuplicates) {
+  SetupParameters params(FrameType::CLIENT_SETUP);
+  ASSERT_TRUE(params
+                  .insertParam(SetupParameter(
+                      folly::to_underlying(SetupKey::MAX_REQUEST_ID), 100))
+                  .hasValue());
+  ASSERT_TRUE(
+      params
+          .insertParam(SetupParameter(
+              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16))
+          .hasValue());
+
+  applySetupParameters(
+      params,
+      {SetupParameter(folly::to_underlying(SetupKey::MAX_REQUEST_ID), 500)});
+
+  EXPECT_EQ(params.size(), 2);
+  EXPECT_EQ(params.getFirstParam(SetupKey::MAX_REQUEST_ID)->asUint64, 500);
+  EXPECT_EQ(
+      params.getFirstParam(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE)->asUint64, 16);
+}
+
+TEST_F(ApplySetupParametersTest, LastWriterWinsAmongExtraParams) {
+  SetupParameters params(FrameType::CLIENT_SETUP);
+  constexpr uint64_t kExtensionKey = 0x40B55;
+
+  applySetupParameters(
+      params,
+      {SetupParameter(kExtensionKey, std::string("first")),
+       SetupParameter(kExtensionKey, std::string("second"))});
+
+  EXPECT_EQ(params.size(), 1);
+  EXPECT_EQ(params.getFirstParam(kExtensionKey)->asString, "second");
+}
+
+TEST_F(ApplySetupParametersTest, EmptyExtraParamsLeavesParamsUntouched) {
+  SetupParameters params(FrameType::CLIENT_SETUP);
+  ASSERT_TRUE(params
+                  .insertParam(SetupParameter(
+                      folly::to_underlying(SetupKey::MAX_REQUEST_ID), 100))
+                  .hasValue());
+
+  applySetupParameters(params, {});
+
+  EXPECT_EQ(params.size(), 1);
+  EXPECT_EQ(params.getFirstParam(SetupKey::MAX_REQUEST_ID)->asUint64, 100);
+}
+
 // Tests for Parameters::isParamAllowed()
 class ParametersIsParamAllowedTest : public ::testing::Test {};
 
