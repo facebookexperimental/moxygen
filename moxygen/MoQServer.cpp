@@ -29,6 +29,32 @@ namespace {
 constexpr size_t kUdpBufferSize = 1024 * 1024; // 1 MB
 } // namespace
 
+quic::TransportSettings MoQServer::defaultTransportSettings() {
+  quic::TransportSettings ts;
+  ts.defaultCongestionController = quic::CongestionControlType::Copa;
+  ts.copaDeltaParam = 0.05;
+  ts.pacingEnabled = true;
+  ts.maxCwndInMss = quic::kLargeMaxCwndInMss;
+  ts.batchingMode = quic::QuicBatchingMode::BATCHING_MODE_GSO;
+  ts.maxBatchSize = 48;
+  ts.dataPathType = quic::DataPathType::ContinuousMemory;
+  ts.maxServerRecvPacketsPerLoop = 10;
+  ts.writeConnectionDataPacketsLimit = 48;
+  ts.advertisedInitialConnectionFlowControlWindow = 1024 * 1024;
+  ts.advertisedInitialBidiLocalStreamFlowControlWindow = 1024 * 1024;
+  ts.advertisedInitialBidiRemoteStreamFlowControlWindow = 1024 * 1024;
+  ts.advertisedInitialUniStreamFlowControlWindow = 1024 * 1024;
+  // Priority schedule datagrams with streams rather than ahead of them,
+  // buffer more than the default 75, and prefer new datagrams when full.
+  ts.datagramConfig.enabled = true;
+  ts.datagramConfig.scheduleDatagramsWithStreams = true;
+  ts.datagramConfig.readBufSize = 1024;
+  ts.datagramConfig.writeBufSize = 1024;
+  ts.datagramConfig.recvDropOldDataFirst = true;
+  ts.datagramConfig.sendDropOldDataFirst = true;
+  return ts;
+}
+
 MoQServer::MoQServer(
     std::string cert,
     std::string key,
@@ -60,40 +86,9 @@ MoQServer::MoQServer(
       useQuicWtSession_(std::move(options.useQuicWtSession)) {
   params_.serverThreads = 1;
   params_.txnTimeout = std::chrono::seconds(60);
-  if (options.transportSettings) {
-    params_.transportSettings = *options.transportSettings;
-  } else {
-    // Sensible default values
-    params_.transportSettings.defaultCongestionController =
-        quic::CongestionControlType::Copa;
-    params_.transportSettings.copaDeltaParam = 0.05;
-    params_.transportSettings.pacingEnabled = true;
-    params_.transportSettings.maxCwndInMss = quic::kLargeMaxCwndInMss;
-    params_.transportSettings.batchingMode =
-        quic::QuicBatchingMode::BATCHING_MODE_GSO;
-    params_.transportSettings.maxBatchSize = 48;
-    params_.transportSettings.dataPathType =
-        quic::DataPathType::ContinuousMemory;
-    params_.transportSettings.maxServerRecvPacketsPerLoop = 10;
-    params_.transportSettings.writeConnectionDataPacketsLimit = 48;
-    params_.transportSettings.advertisedInitialConnectionFlowControlWindow =
-        1024 * 1024;
-    params_.transportSettings
-        .advertisedInitialBidiLocalStreamFlowControlWindow = 1024 * 1024;
-    params_.transportSettings
-        .advertisedInitialBidiRemoteStreamFlowControlWindow = 1024 * 1024;
-    params_.transportSettings.advertisedInitialUniStreamFlowControlWindow =
-        1024 * 1024;
-    // Priority schedule datagrams with streams rather than ahead of them,
-    // buffer more than the default 75, and prefer new datagrams when full.
-    params_.transportSettings.datagramConfig.enabled = true;
-    params_.transportSettings.datagramConfig.scheduleDatagramsWithStreams =
-        true;
-    params_.transportSettings.datagramConfig.readBufSize = 1024;
-    params_.transportSettings.datagramConfig.writeBufSize = 1024;
-    params_.transportSettings.datagramConfig.recvDropOldDataFirst = true;
-    params_.transportSettings.datagramConfig.sendDropOldDataFirst = true;
-  }
+  params_.transportSettings = options.transportSettings
+      ? *options.transportSettings
+      : defaultTransportSettings();
 
   // UDP socket buffer sizes
   params_.udpSendBufferSize = options.udpSendBufferBytes > 0

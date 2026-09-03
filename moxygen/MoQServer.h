@@ -27,11 +27,17 @@ const std::string kDefaultFilePath =
 class MoQServer : public MoQServerBase {
  public:
   struct Options {
+    // Replaces the defaults outright rather than merging with them, so a
+    // caller wanting one field changed should start from
+    // defaultTransportSettings().
     std::optional<quic::TransportSettings> transportSettings;
     std::function<bool()> useQuicWtSession;
     size_t udpSendBufferBytes{0};
     size_t udpRecvBufferBytes{0};
   };
+
+  // What a server uses when Options carries no transport settings.
+  static quic::TransportSettings defaultTransportSettings();
 
   MoQServer(
       std::string cert,
