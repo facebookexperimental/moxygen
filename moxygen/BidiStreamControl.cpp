@@ -61,22 +61,11 @@ void BidiStreamControl::onLocalWriteClose() {
   writeHandle_ = nullptr;
 }
 
-void BidiStreamControl::write(
-    std::unique_ptr<folly::IOBuf> data,
-    bool fin,
-    proxygen::WebTransport::ByteEventCallback* deliveryCallback) {
+void BidiStreamControl::write(std::unique_ptr<folly::IOBuf> data, bool fin) {
   if (!writeHandle_) {
-    if (deliveryCallback) {
-      deliveryCallback->onByteEventCanceled(0, 0);
-    }
     return;
   }
-  auto streamID = writeHandle_->getID();
-  auto writeResult =
-      writeHandle_->writeStreamData(std::move(data), fin, deliveryCallback);
-  if (!writeResult && deliveryCallback) {
-    deliveryCallback->onByteEventCanceled(streamID, 0);
-  }
+  writeHandle_->writeStreamData(std::move(data), fin, nullptr);
   if (fin) {
     onLocalWriteClose();
   }
@@ -97,19 +86,14 @@ BidiStreamReplyContext::BidiStreamReplyContext(
     folly::CancellationToken token)
     : ReplyContext(std::move(token)), control_(std::move(control)) {}
 
-void BidiStreamReplyContext::flush(
-    bool fin,
-    proxygen::WebTransport::ByteEventCallback* deliveryCallback) {
+void BidiStreamReplyContext::flush(bool fin) {
   if (fin && control_) {
     control_->disarmOnPeerTermination();
   }
   if (!cancelled() && control_) {
-    control_->write(writeBuf_.move(), fin, deliveryCallback);
+    control_->write(writeBuf_.move(), fin);
   } else {
     writeBuf_.move();
-    if (deliveryCallback) {
-      deliveryCallback->onByteEventCanceled(0, 0);
-    }
   }
 }
 

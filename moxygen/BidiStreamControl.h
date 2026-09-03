@@ -87,10 +87,7 @@ class BidiStreamControl {
 
   // Write to the write half; if fin, also release write-side bookkeeping.
   // No-op if the write handle is already null.
-  void write(
-      std::unique_ptr<folly::IOBuf> data,
-      bool fin,
-      proxygen::WebTransport::ByteEventCallback* deliveryCallback = nullptr);
+  void write(std::unique_ptr<folly::IOBuf> data, bool fin);
 
   // Code the exit guard uses for STOP_SENDING (0 unless cancel() set it).
   uint32_t readCancelCode() const {
@@ -152,10 +149,7 @@ class BidiStreamReplyContext : public ReplyContext {
   folly::IOBufQueue& writeBuf() override {
     return writeBuf_;
   }
-  void flush(
-      bool fin = false,
-      proxygen::WebTransport::ByteEventCallback* deliveryCallback =
-          nullptr) override;
+  void flush(bool fin = false) override;
   void cancel(ResetStreamErrorCode code) override;
 
  private:

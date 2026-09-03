@@ -692,7 +692,7 @@ class MoQSession : public Subscriber,
   static const folly::RequestToken& sessionRequestToken();
 
   folly::coro::Task<void> controlWriteLoop(
-      proxygen::WebTransport::StreamWriteHandle& writeHandle);
+      proxygen::WebTransport::StreamWriteHandle* writeHandle);
 
   folly::coro::Task<void> dataStreamReadLoop(
       std::shared_ptr<MoQSession> session,
@@ -702,7 +702,7 @@ class MoQSession : public Subscriber,
           false});
 
   void startControlWriteLoop(
-      proxygen::WebTransport::StreamWriteHandle& writeHandle);
+      proxygen::WebTransport::StreamWriteHandle* writeHandle);
 
   void replayBufferedUniStreams();
 
@@ -805,8 +805,6 @@ class MoQSession : public Subscriber,
       UnsubscribeNamespace unsubscribeNamespace) override;
   void removeSubscriptionState(TrackAlias alias, RequestID id);
   void checkForCloseOnDrain();
-  void completeDrainCloseDelivery();
-  proxygen::WebTransport::ByteEventCallback* makeDrainCloseDeliveryCallback();
 
   void sendMaxRequestID(bool signalWriteLoop);
   void fetchComplete(RequestID requestID);
@@ -890,8 +888,6 @@ class MoQSession : public Subscriber,
   folly::IOBufQueue controlWriteBuf_{folly::IOBufQueue::cacheChainLength()};
   moxygen::TimedBaton controlWriteEvent_;
   std::shared_ptr<ReplyContext> controlStreamReplyContext_;
-  bool closeAfterControlWriteDelivery_{false};
-  size_t pendingDrainCloseDeliveries_{0};
 
   std::unique_ptr<MoQControlCodec> controlCodec_;
 
