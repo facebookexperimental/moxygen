@@ -112,8 +112,13 @@ int main(int argc, char* argv[]) {
               fizz::server::ClientAuthMode::Optional,
               FLAGS_cert,
               FLAGS_key);
+    auto ts = MoQServer::defaultTransportSettings();
+    ts.orderedReadCallbacks = true;
     quicServer = std::make_shared<MoQRelayQuicServer>(
-        relay, std::move(fizzContext), FLAGS_endpoint);
+        relay,
+        std::move(fizzContext),
+        FLAGS_endpoint,
+        MoQServer::Options{.transportSettings = ts});
     servers.push_back(quicServer);
   }
 
