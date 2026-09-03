@@ -499,8 +499,11 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
     Payload payload) {
   XLOG(DBG1) << "MoQTest DEBUGGING: Calling onObject";
 
+  // A zero-length object arrives with no payload buffer at all.
+  auto payloadStr = payload ? payload->toString() : std::string();
+
   // Validate the received data
-  if (!validateSubscribedData(state, objHeader, payload->toString())) {
+  if (!validateSubscribedData(state, objHeader, payloadStr)) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Data Validation Failed";
     cancelRequest();
