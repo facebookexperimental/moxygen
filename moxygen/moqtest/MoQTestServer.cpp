@@ -40,13 +40,15 @@ MoQTestServer::MoQTestServer(
 void MoQTestServer::gracefulShutdown() {
   publisher_->cancelAll();
   if (relayClient_) {
-    if (auto session = relayClient_->getSession()) {
-      session->drain();
-    }
+    // Drains the session, so the relay sees a clean close, and stops us
+    // reconnecting to it afterwards.
+    relayClient_->stop();
   }
 }
 
-folly::coro::Task<void> MoQTestServer::doRelaySetup(
+folly::coro::Task<std::unique_ptr<MoQClientBase>> MoQTestServer::connectToRelay(
+    proxygen::URL url,
+    samples::TransportType transportType,
     int32_t connectTimeout,
     int32_t transactionTimeout) {
   // Every argument that outlives a suspend point below is a named local.  gcc
@@ -54,33 +56,36 @@ folly::coro::Task<void> MoQTestServer::doRelaySetup(
   // temporary with a non-trivial destructor into the coroutine frame.
   const quic::TransportSettings transportSettings;
   const auto alpns = getMoqtProtocols(versions_, true);
-  auto setupResult = co_await folly::coro::co_awaitTry(relayClient_->setup(
-      /*publisher=*/publisher_,
-      /*subscriber=*/nullptr,
-      std::chrono::milliseconds(connectTimeout),
-      std::chrono::milliseconds(transactionTimeout),
-      transportSettings,
-      alpns));
+  // The relay-session factory is required so the session supports
+  // publishNamespace.
+  auto moqClient = samples::makeRelayClientTransport(
+      moqEvb_,
+      std::move(url),
+      MoQRelaySession::createRelaySessionFactory(),
+      std::make_shared<test::InsecureVerifierDangerousDoNotUseInProduction>(),
+      transportType);
+  auto setupResult =
+      co_await folly::coro::co_awaitTry(moqClient->setupMoQSession(
+          std::chrono::milliseconds(connectTimeout),
+          std::chrono::milliseconds(transactionTimeout),
+          /*publishHandler=*/publisher_,
+          /*subscribeHandler=*/nullptr,
+          transportSettings,
+          alpns));
   if (setupResult.hasException()) {
     // Nothing observes this coroutine, so an escaping exception would leave
     // the server silently detached from the relay.
     XLOG(ERR) << "Relay setup failed: " << setupResult.exception().what();
-    co_return;
+    co_return nullptr;
   }
-
-  auto session = relayClient_->getSession();
-  if (!session) {
+  if (!moqClient->moqSession_) {
     XLOG(ERR) << "Failed to establish relay session";
-    co_return;
+    co_return nullptr;
   }
 
   // Pass session to onNewSession to treat it like any other client
-  onNewSession(session);
-
-  // Publishes 'moq-test-00' and then keeps the session alive with a periodic
-  // ping, so an idle relay doesn't time us out.
-  std::vector<TrackNamespace> namespaces{TrackNamespace("moq-test-00", "/")};
-  co_await relayClient_->run(publisher_, std::move(namespaces));
+  onNewSession(moqClient->moqSession_);
+  co_return std::move(moqClient);
 }
 
 bool MoQTestServer::startRelayClient(
@@ -100,18 +105,18 @@ bool MoQTestServer::startRelayClient(
     moqEvb_ = std::make_shared<MoQFollyExecutorImpl>(workerEvb);
   }
 
-  // The relay-session factory is required so the session supports
-  // publishNamespace.
-  relayClient_ = std::make_unique<
-      MoQRelayClient>(samples::makeRelayClientTransport(
-      moqEvb_,
-      std::move(url),
-      MoQRelaySession::createRelaySessionFactory(),
-      std::make_shared<test::InsecureVerifierDangerousDoNotUseInProduction>(),
-      transportType));
+  relayClient_ = std::make_unique<ReconnectingRelayClient>(
+      [this, url, transportType, connectTimeout, transactionTimeout] {
+        return connectToRelay(
+            url, transportType, connectTimeout, transactionTimeout);
+      });
 
-  // Start async relay setup (schedule on evb, don't block)
-  co_withExecutor(workerEvb, doRelaySetup(connectTimeout, transactionTimeout))
+  // Publishes 'moq-test-00' and then keeps the session alive with a periodic
+  // ping, so an idle relay doesn't time us out.  Start async (schedule on evb,
+  // don't block).
+  std::vector<TrackNamespace> namespaces{TrackNamespace("moq-test-00", "/")};
+  co_withExecutor(
+      workerEvb, relayClient_->run(publisher_, std::move(namespaces)))
       .start();
 
   return true;

@@ -12,7 +12,7 @@
 #include "moxygen/MoQServer.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
 #include "moxygen/moqtest/MoQTestPublisher.h"
-#include "moxygen/relay/MoQRelayClient.h"
+#include "moxygen/moqtest/ReconnectingRelayClient.h"
 #include "moxygen/samples/util/Utils.h"
 
 namespace moxygen {
@@ -54,7 +54,11 @@ class MoQTestServer : public moxygen::MoQServer {
       samples::TransportType transportType);
 
  private:
-  folly::coro::Task<void> doRelaySetup(
+  // Dials a fresh transport and completes MoQ setup. Returns null if either
+  // step fails; the caller decides whether to retry.
+  folly::coro::Task<std::unique_ptr<MoQClientBase>> connectToRelay(
+      proxygen::URL url,
+      samples::TransportType transportType,
       int32_t connectTimeout,
       int32_t transactionTimeout);
 
@@ -62,7 +66,7 @@ class MoQTestServer : public moxygen::MoQServer {
 
   // Upstream session to the relay (if using relay mode)
   std::string versions_;
-  std::unique_ptr<MoQRelayClient> relayClient_;
+  std::unique_ptr<ReconnectingRelayClient> relayClient_;
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb_;
 };
 
