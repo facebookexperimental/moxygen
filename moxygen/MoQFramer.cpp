@@ -516,7 +516,7 @@ folly::Expected<std::optional<AuthToken>, ErrorCode>
 MoQFrameParser::parseAuthToken(
     folly::io::Cursor& cursor,
     size_t length,
-    ParamsType paramsType) const noexcept {
+    bool isClientSetup) const noexcept {
   auto& tokenCache = *tokenCache_;
   std::optional<AuthToken> token;
   token.emplace(); // plan for success
@@ -535,7 +535,7 @@ MoQFrameParser::parseAuthToken(
   switch (aliasTypeVal) {
     case AliasType::DELETE_ALIAS:
     case AliasType::USE_ALIAS: {
-      if (paramsType == ParamsType::ClientSetup) {
+      if (isClientSetup) {
         XLOG(ERR) << "Can't delete/use-alias in client setup";
         return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
       }
@@ -551,8 +551,7 @@ MoQFrameParser::parseAuthToken(
         auto deleteRes = tokenCache.deleteToken(*token->alias);
         if (!deleteRes) {
           XLOG(ERR) << "Unknown Auth Token Alias for delete, alias="
-                    << *token->alias
-                    << ", paramsType=" << folly::to_underlying(paramsType);
+                    << *token->alias << ", isClientSetup=" << isClientSetup;
           return folly::makeUnexpected(ErrorCode::UNKNOWN_AUTH_TOKEN_ALIAS);
         }
         token.reset();
@@ -560,8 +559,7 @@ MoQFrameParser::parseAuthToken(
         auto lookupRes = tokenCache.getTokenForAlias(*token->alias);
         if (!lookupRes) {
           XLOG(ERR) << "Unknown Auth Token Alias for use_alias, alias="
-                    << *token->alias
-                    << ", paramsType=" << folly::to_underlying(paramsType);
+                    << *token->alias << ", isClientSetup=" << isClientSetup;
           return folly::makeUnexpected(ErrorCode::UNKNOWN_AUTH_TOKEN_ALIAS);
         }
         token->tokenType = lookupRes->tokenType;
@@ -589,7 +587,7 @@ MoQFrameParser::parseAuthToken(
       length -= token->tokenValue.size();
       // ClientSetup is allowed to send REGISTERs that exceed the server's
       // limit, which are treated as USE_VALUE
-      if (paramsType != ParamsType::ClientSetup ||
+      if (!isClientSetup ||
           tokenCache.canRegister(token->tokenType, token->tokenValue)) {
         auto registerRes = tokenCache.registerToken(
             *token->alias, token->tokenType, token->tokenValue);
@@ -735,8 +733,7 @@ MoQFrameParser::parseVariableParam(
     folly::io::Cursor& cursor,
     size_t& length,
     uint64_t version,
-    uint64_t key,
-    ParamsType paramsType) const noexcept {
+    uint64_t key) const noexcept {
   Parameter p;
   p.key = key;
   const auto authKey =
@@ -754,7 +751,7 @@ MoQFrameParser::parseVariableParam(
       XLOG(DBG4) << "parseVariableParam: UNDERFLOW on authKey data";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    auto tokenRes = parseAuthToken(cursor, res->first, paramsType);
+    auto tokenRes = parseAuthToken(cursor, res->first, /*isClientSetup=*/false);
     if (!tokenRes) {
       return folly::makeUnexpected(tokenRes.error());
     }
@@ -809,8 +806,7 @@ MoQFrameParser::parseIntParam(
     folly::io::Cursor& cursor,
     size_t& length,
     uint64_t version,
-    uint64_t key,
-    ParamsType paramsType) const noexcept {
+    uint64_t key) const noexcept {
   Parameter p;
   p.key = key;
   auto res = decodeVarint(cursor, length);
@@ -825,8 +821,7 @@ MoQFrameParser::parseIntParam(
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
-  if (paramsType == ParamsType::Request &&
-      getDraftMajorVersion(version) <= 16 &&
+  if (getDraftMajorVersion(version) <= 16 &&
       key == folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT) &&
       p.asUint64 == 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
@@ -839,8 +834,7 @@ MoQFrameParser::parseV18ParamValue(
     folly::io::Cursor& cursor,
     size_t& length,
     uint64_t version,
-    uint64_t key,
-    ParamsType paramsType) const noexcept {
+    uint64_t key) const noexcept {
   switch (paramEncodingV18(key)) {
     case ParamValueEncoding::Uint8: {
       if (length < 1 || !cursor.canAdvance(1)) {
@@ -855,7 +849,7 @@ MoQFrameParser::parseV18ParamValue(
       return Parameter(key, static_cast<uint64_t>(value));
     }
     case ParamValueEncoding::Varint:
-      return parseIntParam(cursor, length, version, key, paramsType);
+      return parseIntParam(cursor, length, version, key);
     case ParamValueEncoding::Location: {
       auto loc = parseAbsoluteLocation(cursor, length);
       if (!loc) {
@@ -864,132 +858,101 @@ MoQFrameParser::parseV18ParamValue(
       return Parameter(key, std::optional<AbsoluteLocation>(loc.value()));
     }
     case ParamValueEncoding::LengthPrefixed:
-      return parseVariableParam(cursor, length, version, key, paramsType);
+      return parseVariableParam(cursor, length, version, key);
   }
   XLOG(DFATAL) << "parseV18ParamValue: unreachable, key=" << key;
   return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
 }
 
-folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseParams(
+folly::Expected<uint64_t, ErrorCode> MoQFrameParser::parseParamKey(
+    folly::io::Cursor& cursor,
+    size_t& length,
+    uint64_t version,
+    uint64_t& previousKey) const noexcept {
+  auto keyOrDelta = decodeVarint(cursor, length);
+  if (!keyOrDelta) {
+    XLOG(DBG4) << "parseParamKey: UNDERFLOW on key";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= keyOrDelta->second;
+
+  // For v16+: decode delta to get absolute key
+  // For v15-: use absolute key directly
+  if (getDraftMajorVersion(version) < 16) {
+    return keyOrDelta->first;
+  }
+  auto decoded = decodeDelta(previousKey, keyOrDelta->first);
+  if (decoded.hasError()) {
+    return folly::makeUnexpected(decoded.error());
+  }
+  previousKey = decoded.value();
+  return decoded.value();
+}
+
+folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseSetupParams(
     folly::io::Cursor& cursor,
     size_t& length,
     uint64_t version,
     std::optional<size_t> numParams,
-    Parameters& params,
-    std::vector<Parameter>& requestSpecificParams,
-    ParamsType paramsType) const noexcept {
+    bool isClientSetup,
+    SetupParameters& params) const noexcept {
   uint64_t previousKey = 0;
+  const auto authKey = folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN);
 
-  // numParams == std::nullopt means "consume options until the declared
-  // message length is exhausted" (draft-17+ SETUP has no Number-of-Options
-  // field on the wire).
+  // AUTHORIZATION_TOKEN is the only setup option with a structured value.
   for (auto i = 0u; numParams ? i < *numParams : length > 0; i++) {
-    auto keyOrDelta = decodeVarint(cursor, length);
-    if (!keyOrDelta) {
-      XLOG(DBG4) << "parseParams: UNDERFLOW on key";
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    auto key = parseParamKey(cursor, length, version, previousKey);
+    if (key.hasError()) {
+      return folly::makeUnexpected(key.error());
     }
-    length -= keyOrDelta->second;
 
-    // For v16+: decode delta to get absolute key
-    // For v15-: use absolute key directly
-    uint64_t key;
-    if (getDraftMajorVersion(version) >= 16) {
-      auto decoded = decodeDelta(previousKey, keyOrDelta->first);
-      if (decoded.hasError()) {
-        return folly::makeUnexpected(decoded.error());
+    std::optional<Parameter> param;
+    if (*key == authKey) {
+      auto tokenLen = decodeVarint(cursor, length);
+      if (!tokenLen) {
+        XLOG(DBG4) << "parseSetupParams: UNDERFLOW on auth token length";
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
       }
-      key = decoded.value();
-      previousKey = key;
+      length -= tokenLen->second;
+      if (tokenLen->first > length || !cursor.canAdvance(tokenLen->first)) {
+        XLOG(DBG4) << "parseSetupParams: UNDERFLOW on auth token data";
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      auto token = parseAuthToken(cursor, tokenLen->first, isClientSetup);
+      if (!token) {
+        return folly::makeUnexpected(token.error());
+      }
+      length -= tokenLen->first;
+      if (!token->has_value()) {
+        // DELETE_ALIAS: the option is consumed but not exported.
+        continue;
+      }
+      param.emplace(*key, **token);
+    } else if ((*key & 0x01) == 0) {
+      auto value = decodeVarint(cursor, length);
+      if (!value) {
+        XLOG(DBG4) << "parseSetupParams: UNDERFLOW on integer value, key="
+                   << *key;
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= value->second;
+      param.emplace(*key, value->first);
     } else {
-      key = keyOrDelta->first;
+      auto value = parseFixedString(cursor, length);
+      if (!value) {
+        XLOG(DBG4) << "parseSetupParams: UNDERFLOW on string value, key="
+                   << *key;
+        return folly::makeUnexpected(value.error());
+      }
+      param.emplace(*key, value.value());
     }
 
-    if (getDraftMajorVersion(version) >= 16 &&
-        paramsType == ParamsType::Request &&
-        !Parameters::isKnownParamKey(key, getDraftMajorVersion(version))) {
-      XLOG(ERR) << "Unknown parameter key " << key << " in v16+";
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-    }
-
-    folly::Expected<std::optional<Parameter>, ErrorCode> res;
-
-    if (getDraftMajorVersion(version) >= 18 &&
-        paramsType == ParamsType::Request) {
-      res = parseV18ParamValue(cursor, length, version, key, paramsType);
-    } else if (
-        (paramsType == ParamsType::Request &&
-         key == folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT)) ||
-        ((key & 0x01) == 0 &&
-         (paramsType != ParamsType::Request ||
-          key !=
-              folly::to_underlying(
-                  TrackRequestParamKey::AUTHORIZATION_TOKEN)))) {
-      res = parseIntParam(cursor, length, version, key, paramsType);
-    } else if (
-        key == folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT)) {
-      if (getDraftMajorVersion(version) < 15) {
-        XLOG(ERR) << "Invalid parameter LARGEST_OBJECT for version " << version;
-        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-      }
-
-      // Read length prefix (odd key = length-prefixed)
-      auto lenRes = decodeVarint(cursor, length);
-      if (!lenRes) {
-        XLOG(DBG4) << "parseParams: UNDERFLOW on LARGEST_OBJECT length";
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      length -= lenRes->second;
-      auto objLen = lenRes->first;
-      if (objLen > length || !cursor.canAdvance(objLen)) {
-        XLOG(DBG4) << "parseParams: UNDERFLOW on LARGEST_OBJECT data";
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      size_t objSize = objLen;
-      auto largestLocation = parseAbsoluteLocation(cursor, objSize);
-      if (!largestLocation) {
-        XLOG(DBG4) << "parseParams: returning error from parseAbsoluteLocation";
-        return folly::makeUnexpected(largestLocation.error());
-      }
-      if (objSize > 0) {
-        XLOG(DBG4) << "parseParams: LARGEST_OBJECT did not consume"
-                   << " all declared bytes, remaining=" << objSize;
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      length -= lenRes->first;
-      res = Parameter(key, largestLocation.value());
-    } else {
-      res = parseVariableParam(cursor, length, version, key, paramsType);
-    }
-    if (!res) {
-      XLOG(DBG4)
-          << "parseParams: returning error from parseVariableParam/parseIntParam"
-          << " at param index=" << i << ", key=" << key
-          << ", version=" << version << ", length=" << length;
-      return folly::makeUnexpected(res.error());
-    }
-    if (*res) {
-      TrackRequestParamKey trackRequestParamKey = (TrackRequestParamKey)key;
-      if (getDraftMajorVersion(version) >= 15 &&
-          isRequestSpecificParam(trackRequestParamKey)) {
-        requestSpecificParams.push_back(std::move(*res.value()));
-      } else {
-        auto insertResult = params.insertParam(std::move(*res.value()));
-        if (insertResult.hasError()) {
-          // In draft 18+, receiving parameters in a message in which it isn't
-          // allowed is a protocol violation.
-          if (getDraftMajorVersion(version) >= 18) {
-            XLOG(ERR) << "parseParams: param not allowed for frame type in "
-                      << "v18+ at param index=" << i << ", key=" << key;
-            return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-          }
-          XLOG(WARN) << "parseParams: ignoring param not allowed for frame type"
-                     << " at param index=" << i << ", key=" << key;
-        }
-      }
+    if (params.insertParam(std::move(*param)).hasError()) {
+      XLOG(ERR) << "parseSetupParams: rejected setup option at index=" << i
+                << ", key=" << *key;
     }
   }
-  XLOG(DBG4) << "parseParams: returning success";
+  XLOG(DBG4) << "parseSetupParams: returning success";
   return folly::unit;
 }
 
@@ -1043,15 +1006,13 @@ folly::Expected<Setup, ErrorCode> MoQFrameParser::parseClientSetup(
     length -= decoded->second;
     numParams = decoded->first;
   }
-  std::vector<Parameter> requestSpecificParams;
-  auto res = parseParams(
+  auto res = parseSetupParams(
       cursor,
       length,
       serializationVersion,
       numParams,
-      clientSetup.params,
-      requestSpecificParams,
-      ParamsType::ClientSetup);
+      /*isClientSetup=*/true,
+      clientSetup.params);
   if (res.hasError()) {
     return folly::makeUnexpected(res.error());
   }
@@ -1101,15 +1062,13 @@ folly::Expected<Setup, ErrorCode> MoQFrameParser::parseServerSetup(
     length -= decoded->second;
     numParams = decoded->first;
   }
-  std::vector<Parameter> requestSpecificParams;
-  auto res = parseParams(
+  auto res = parseSetupParams(
       cursor,
       length,
       serializationVersion,
       numParams,
-      serverSetup.params,
-      requestSpecificParams,
-      ParamsType::ServerSetup);
+      /*isClientSetup=*/false,
+      serverSetup.params);
   if (res.hasError()) {
     return folly::makeUnexpected(res.error());
   }
@@ -1822,15 +1781,99 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     std::vector<Parameter>& requestSpecificParams) const noexcept {
   XCHECK(version_.has_value())
       << "The version must be set before parsing track request params";
-  params.setMajorVersion(getDraftMajorVersion(*version_));
-  return parseParams(
-      cursor,
-      length,
-      *version_,
-      numParams,
-      params,
-      requestSpecificParams,
-      ParamsType::Request);
+  const auto version = *version_;
+  params.setMajorVersion(getDraftMajorVersion(version));
+
+  uint64_t previousKey = 0;
+  for (auto i = 0u; i < numParams; i++) {
+    auto keyRes = parseParamKey(cursor, length, version, previousKey);
+    if (keyRes.hasError()) {
+      return folly::makeUnexpected(keyRes.error());
+    }
+    const auto key = keyRes.value();
+
+    if (getDraftMajorVersion(version) >= 16 &&
+        !Parameters::isKnownParamKey(key, getDraftMajorVersion(version))) {
+      XLOG(ERR) << "Unknown parameter key " << key << " in v16+";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+
+    folly::Expected<std::optional<Parameter>, ErrorCode> res;
+
+    if (getDraftMajorVersion(version) >= 18) {
+      res = parseV18ParamValue(cursor, length, version, key);
+    } else if ((key & 0x01) == 0) {
+      res = parseIntParam(cursor, length, version, key);
+    } else if (
+        key == folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT)) {
+      if (getDraftMajorVersion(version) < 15) {
+        XLOG(ERR) << "Invalid parameter LARGEST_OBJECT for version " << version;
+        return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      }
+
+      // Read length prefix (odd key = length-prefixed)
+      auto lenRes = decodeVarint(cursor, length);
+      if (!lenRes) {
+        XLOG(DBG4) << "parseTrackRequestParams: UNDERFLOW on LARGEST_OBJECT"
+                   << " length";
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= lenRes->second;
+      auto objLen = lenRes->first;
+      if (objLen > length || !cursor.canAdvance(objLen)) {
+        XLOG(DBG4) << "parseTrackRequestParams: UNDERFLOW on LARGEST_OBJECT"
+                   << " data";
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      size_t objSize = objLen;
+      auto largestLocation = parseAbsoluteLocation(cursor, objSize);
+      if (!largestLocation) {
+        XLOG(DBG4) << "parseTrackRequestParams: returning error from"
+                   << " parseAbsoluteLocation";
+        return folly::makeUnexpected(largestLocation.error());
+      }
+      if (objSize > 0) {
+        XLOG(DBG4) << "parseTrackRequestParams: LARGEST_OBJECT did not consume"
+                   << " all declared bytes, remaining=" << objSize;
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= lenRes->first;
+      res = Parameter(key, largestLocation.value());
+    } else {
+      res = parseVariableParam(cursor, length, version, key);
+    }
+    if (!res) {
+      XLOG(DBG4) << "parseTrackRequestParams: returning error from"
+                 << " parseVariableParam/parseIntParam at param index=" << i
+                 << ", key=" << key << ", version=" << version
+                 << ", length=" << length;
+      return folly::makeUnexpected(res.error());
+    }
+    if (*res) {
+      auto trackRequestParamKey = (TrackRequestParamKey)key;
+      if (getDraftMajorVersion(version) >= 15 &&
+          isRequestSpecificParam(trackRequestParamKey)) {
+        requestSpecificParams.push_back(std::move(*res.value()));
+      } else {
+        auto insertResult = params.insertParam(std::move(*res.value()));
+        if (insertResult.hasError()) {
+          // In draft 18+, receiving parameters in a message in which it isn't
+          // allowed is a protocol violation.
+          if (getDraftMajorVersion(version) >= 18) {
+            XLOG(ERR) << "parseTrackRequestParams: param not allowed for frame"
+                      << " type in v18+ at param index=" << i
+                      << ", key=" << key;
+            return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+          }
+          XLOG(WARN) << "parseTrackRequestParams: ignoring param not allowed"
+                     << " for frame type at param index=" << i
+                     << ", key=" << key;
+        }
+      }
+    }
+  }
+  XLOG(DBG4) << "parseTrackRequestParams: returning success";
+  return folly::unit;
 }
 
 std::optional<SubscriptionFilter> MoQFrameParser::extractSubscriptionFilter(

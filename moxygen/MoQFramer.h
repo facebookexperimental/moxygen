@@ -472,10 +472,6 @@ class MoQFrameParser {
       const TrackRequestParameters& params,
       Extensions& extensions) const noexcept;
 
-  // Promoted from free helpers so member-to-member calls can use the cached
-  // useMoQVarint_/version_/tokenCache_ state without threading them through.
-  enum class ParamsType { ClientSetup, ServerSetup, Request };
-
   folly::Expected<std::string, ErrorCode> parseFixedString(
       folly::io::Cursor& cursor,
       size_t& length) const noexcept;
@@ -488,43 +484,47 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t& length) const noexcept;
 
+  // CLIENT_SETUP is the only context that rejects DELETE_ALIAS/USE_ALIAS and
+  // downgrades an over-limit REGISTER to USE_VALUE, hence the bool.
   folly::Expected<std::optional<AuthToken>, ErrorCode> parseAuthToken(
       folly::io::Cursor& cursor,
       size_t length,
-      ParamsType paramsType) const noexcept;
+      bool isClientSetup) const noexcept;
 
   folly::Expected<std::optional<Parameter>, ErrorCode> parseVariableParam(
       folly::io::Cursor& cursor,
       size_t& length,
       uint64_t version,
-      uint64_t key,
-      ParamsType paramsType) const noexcept;
+      uint64_t key) const noexcept;
 
   folly::Expected<std::optional<Parameter>, ErrorCode> parseIntParam(
       folly::io::Cursor& cursor,
       size_t& length,
       uint64_t version,
-      uint64_t key,
-      ParamsType paramsType) const noexcept;
+      uint64_t key) const noexcept;
 
   folly::Expected<std::optional<Parameter>, ErrorCode> parseV18ParamValue(
       folly::io::Cursor& cursor,
       size_t& length,
       uint64_t version,
-      uint64_t key,
-      ParamsType paramsType) const noexcept;
+      uint64_t key) const noexcept;
+
+  folly::Expected<uint64_t, ErrorCode> parseParamKey(
+      folly::io::Cursor& cursor,
+      size_t& length,
+      uint64_t version,
+      uint64_t& previousKey) const noexcept;
 
   // numParams == std::nullopt means "consume options until the declared
   // message length is exhausted" (draft-17+ SETUP has no Number-of-Options
   // field on the wire).
-  folly::Expected<folly::Unit, ErrorCode> parseParams(
+  folly::Expected<folly::Unit, ErrorCode> parseSetupParams(
       folly::io::Cursor& cursor,
       size_t& length,
       uint64_t version,
       std::optional<size_t> numParams,
-      Parameters& params,
-      std::vector<Parameter>& requestSpecificParams,
-      ParamsType paramsType) const noexcept;
+      bool isClientSetup,
+      SetupParameters& params) const noexcept;
 
   std::optional<uint64_t> version_;
   bool useMoQVarint_{false};

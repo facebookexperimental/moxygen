@@ -102,6 +102,43 @@ std::pair<std::unique_ptr<folly::IOBuf>, size_t> makeLegacyServerSetupFrame(
   return {writeBuf.move(), payloadSize};
 }
 
+size_t writeSetupParams(
+    folly::IOBufQueue& buf,
+    std::vector<Parameter> params,
+    const MoQFrameWriter& writer,
+    uint64_t version,
+    bool& error) {
+  const auto majorVersion = getDraftMajorVersion(version);
+  if (majorVersion >= 16) {
+    std::sort(params.begin(), params.end(), [](const auto& a, const auto& b) {
+      return a.key < b.key;
+    });
+  }
+  size_t size = 0;
+  // Drafts < 17 carry an explicit Number-of-Options field.
+  if (majorVersion < 17) {
+    writer.writeVarint(buf, params.size(), size, error);
+  }
+  uint64_t previousKey = 0;
+  for (const auto& param : params) {
+    // Drafts >= 16 delta-encode each key against the previous one.
+    auto keyToWrite = param.key;
+    if (majorVersion >= 16) {
+      keyToWrite = param.key - previousKey;
+      previousKey = param.key;
+    }
+    writer.writeVarint(buf, keyToWrite, size, error);
+    if ((param.key & 0x01) == 0) {
+      writer.writeVarint(buf, param.asUint64, size, error);
+    } else {
+      writer.writeVarint(buf, param.asString.size(), size, error);
+      buf.append(param.asString.data(), param.asString.size());
+      size += param.asString.size();
+    }
+  }
+  return size;
+}
+
 // Skip the frame type and length varints; return payload length.
 size_t skipFrameHeader(folly::io::Cursor& cursor) {
   quic::follyutils::decodeQuicInteger(cursor); // frame type
@@ -1006,6 +1043,77 @@ TEST(MoQFramerTest, ParseServerSetupWithNon14VersionInLegacyModeFails) {
   auto result = parser.parseServerSetup(cursor, len);
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error(), ErrorCode::VERSION_NEGOTIATION_FAILED);
+}
+
+TEST_P(MoQFramerTest, TestSetupAcceptUnknownParams) {
+  // A SETUP option block keyed 1-10. Several unknown keys collide
+  // with TrackRequestParamKey values so a SETUP must read them by key parity.
+  const auto version = GetParam();
+  const std::vector<Parameter> params{
+      {folly::to_underlying(SetupKey::PATH), std::string("/live")},
+      {folly::to_underlying(SetupKey::MAX_REQUEST_ID), uint64_t{64}},
+      {folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
+       kDefaultMaxAuthTokenCacheSize},
+      {folly::to_underlying(SetupKey::AUTHORITY), std::string("moq.example")},
+      {6, uint64_t{1048576}},
+      {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION), std::string("MOQ")},
+      {8, uint64_t{8}},
+      {9, std::string("unknown-odd-key")},
+      {10, uint64_t{16}},
+  };
+
+  folly::IOBufQueue paramBuf{folly::IOBufQueue::cacheChainLength()};
+  bool error = false;
+  const size_t paramSize =
+      writeSetupParams(paramBuf, params, writer_, version, error);
+  ASSERT_FALSE(error);
+  auto paramBlock = paramBuf.move();
+
+  // Every option survives, in key order.
+  const std::vector<std::tuple<uint64_t, uint64_t, std::string>> expected{
+      {folly::to_underlying(SetupKey::PATH), 0, "/live"},
+      {folly::to_underlying(SetupKey::MAX_REQUEST_ID), 64, ""},
+      {folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
+       kDefaultMaxAuthTokenCacheSize,
+       ""},
+      {folly::to_underlying(SetupKey::AUTHORITY), 0, "moq.example"},
+      {6, 1048576, ""},
+      {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION), 0, "MOQ"},
+      {8, 8, ""},
+      {9, 0, "unknown-odd-key"},
+      {10, 16, ""},
+  };
+
+  // The options must decode the same whichever side receives them.
+  for (bool isClient : {true, false}) {
+    MoQFrameParser parser;
+    parser.initializeVersion(version);
+
+    folly::IOBufQueue frameBuf{folly::IOBufQueue::cacheChainLength()};
+    size_t payloadSize = 0;
+    if (getDraftMajorVersion(version) < 15) {
+      if (isClient) {
+        writer_.writeVarint(frameBuf, 1, payloadSize, error);
+      }
+      writer_.writeVarint(frameBuf, kVersionDraft14, payloadSize, error);
+    }
+    frameBuf.append(paramBlock->clone());
+    payloadSize += paramSize;
+    ASSERT_FALSE(error);
+
+    auto payload = frameBuf.move();
+    folly::io::Cursor cursor(payload.get());
+
+    auto result = isClient ? parser.parseClientSetup(cursor, payloadSize)
+                           : parser.parseServerSetup(cursor, payloadSize);
+    ASSERT_TRUE(result.hasValue());
+
+    std::vector<std::tuple<uint64_t, uint64_t, std::string>> parsed;
+    for (const auto& param : result->params) {
+      parsed.emplace_back(param.key, param.asUint64, param.asString);
+    }
+    EXPECT_EQ(parsed, expected);
+  }
 }
 
 ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
@@ -3316,6 +3424,84 @@ TEST(MoQFramerTest, ClientSetupRejectsUseAlias) {
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION)
       << "CLIENT_SETUP must reject USE_ALIAS (0x2) alias type";
+}
+
+TEST_P(MoQFramerTest, SetupRoundtripWithAuthToken) {
+  // The three setup options writeSetup actually puts on the wire
+  moxygen::Setup setup;
+  setup.params.insertParam(
+      Parameter(folly::to_underlying(SetupKey::PATH), std::string("/live")));
+  setup.params.insertParam(
+      Parameter(folly::to_underlying(SetupKey::MAX_REQUEST_ID), uint64_t{64}));
+  setup.params.insertParam(Parameter(
+      folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN),
+      writer_.encodeTokenValue(0, "stampolli")));
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writeClientSetup(writeBuf, setup, GetParam()).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  skipFrameType(cursor);
+  auto result = parser_.parseClientSetup(cursor, frameLength(cursor));
+  ASSERT_TRUE(result.hasValue());
+
+  ASSERT_EQ(result->params.size(), 3);
+  EXPECT_EQ(result->params.at(0).key, folly::to_underlying(SetupKey::PATH));
+  EXPECT_EQ(result->params.at(0).asString, "/live");
+  EXPECT_EQ(
+      result->params.at(1).key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
+  EXPECT_EQ(result->params.at(1).asUint64, 64);
+  // Written from the pre-encoded blob in asString, read back into asAuthToken.
+  EXPECT_EQ(
+      result->params.at(2).key,
+      folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN));
+  EXPECT_EQ(result->params.at(2).asAuthToken.tokenType, 0);
+  EXPECT_EQ(result->params.at(2).asAuthToken.tokenValue, "stampolli");
+}
+
+TEST(MoQFramerTest, ServerSetupDeleteAliasIsNotExported) {
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraftCurrent);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+  parser.setTokenCacheMaxSize(100);
+  ASSERT_TRUE(tokenCache.registerToken(42, 0, "stampolli").hasValue());
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+
+  writeVarint(writeBuf, kVersionDraftCurrent, size, error); // selected version
+  writeVarint(writeBuf, 1, size, error);                    // 1 parameter
+  writeVarint(
+      writeBuf,
+      folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN),
+      size,
+      error);
+
+  folly::IOBufQueue tokenBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t tokenSize = 0;
+  writeVarint(
+      tokenBuf,
+      folly::to_underlying(AliasType::DELETE_ALIAS),
+      tokenSize,
+      error);
+  writeVarint(tokenBuf, 42, tokenSize, error);
+
+  writeVarint(writeBuf, tokenSize, size, error);
+  writeBuf.append(tokenBuf.move());
+  size += tokenSize;
+  ASSERT_FALSE(error);
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+  auto result =
+      parser.parseServerSetup(cursor, buffer->computeChainDataLength());
+
+  ASSERT_TRUE(result.hasValue());
+  EXPECT_TRUE(result->params.empty());
+  EXPECT_TRUE(tokenCache.getTokenForAlias(42).hasError());
 }
 // Helper to write a datagram to a buffer
 static void writeDatagram(
