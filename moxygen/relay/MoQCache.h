@@ -371,6 +371,12 @@ class MoQCache {
       std::shared_ptr<FetchConsumer> consumer,
       const Fetch& fetch);
 
+  // A FETCH response has no END_OF_TRACK object, so the FETCH_OK flag is the
+  // only way a fetch learns the track ended inside the range.
+  static void recordUpstreamEndOfTrack(
+      CacheTrack& track,
+      const Publisher::FetchResult& upstreamResult);
+
   // Track LRU management helpers
   void addTrackToLRU(const FullTrackName& ftn, CacheTrack& track);
   void removeTrackFromLRU(CacheTrack& track);

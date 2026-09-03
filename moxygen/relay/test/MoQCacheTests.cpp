@@ -1236,6 +1236,28 @@ CO_TEST_F(MoQCacheTest, TestUpstreamServesGroupWithGap) {
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{2, 0}));
 }
 
+// A FETCH response has no END_OF_TRACK object, so the FETCH_OK flag is the
+// only way the cache learns the track ended inside the range.  The replay
+// below has to answer from cache and carry the flag forward.
+CO_TEST_F(MoQCacheTest, TestUpstreamFetchOkEndOfTrackIsCached) {
+  expectUpstreamFetch({0, 0}, {0, 5}, /*endOfTrack=*/1, AbsoluteLocation{0, 5});
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 5}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  expectFetchObjects({0, 0}, {0, 5}, true);
+  serveCacheRangeFromUpstream({0, 0}, {0, 5});
+
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // A range running past the end of track is answered entirely from cache.
+  expectFetchObjects({0, 0}, {0, 5}, false);
+  auto res2 = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res2.hasValue());
+  EXPECT_TRUE(res2.value()->fetchOk().endOfTrack);
+  EXPECT_EQ(res2.value()->fetchOk().endLocation, (AbsoluteLocation{0, 5}));
+}
+
 CO_TEST_F(MoQCacheTest, TestUpstreamServesEndOfTrack) {
   // Test case for upstream serving END_OF_TRACK
 
