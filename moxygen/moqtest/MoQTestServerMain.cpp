@@ -11,7 +11,6 @@
 #include "moxygen/mlog/FileMLogger.h"
 #include "moxygen/mlog/FileMLoggerFactory.h"
 #include "moxygen/moqtest/MoQTestServer.h"
-#include "moxygen/moqtest/Utils.h"
 #include "moxygen/samples/util/Utils.h"
 #include "moxygen/util/SignalHandler.h"
 
