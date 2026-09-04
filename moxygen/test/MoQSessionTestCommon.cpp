@@ -343,6 +343,11 @@ folly::Try<moxygen::Setup> MoQSessionTest::onClientSetup(
           SetupParameter{
               folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
     }
+    if (serverSendsAuthority_) {
+      ss.params.insertParam(
+          SetupParameter{
+              folly::to_underlying(SetupKey::AUTHORITY), "moq.example"});
+    }
     return ss;
   }());
 }

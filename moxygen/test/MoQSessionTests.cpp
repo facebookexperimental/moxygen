@@ -188,6 +188,20 @@ TEST(MoQSessionTest, WithoutAlpnUsesDraft14) {
     serverSession->close(SessionCloseErrorCode::NO_ERROR);
   }
 }
+class RecordingSessionCloseCallback
+    : public MoQSession::MoQSessionCloseCallback {
+ public:
+  void onMoQSessionClosed(
+      SessionCloseErrorCode error,
+      folly::Optional<uint32_t> /* wtError */) override {
+    errorCode = error;
+    closed.post();
+  }
+
+  std::optional<SessionCloseErrorCode> errorCode;
+  folly::coro::Baton closed;
+};
+
 // === AUTHORITY / PATH tests ===
 
 using MoQAuthorityPathTest = MoQSessionTest;
@@ -204,6 +218,73 @@ CO_TEST_P_X(MoQAuthorityPathTest, ServerSessionPathFromClientSetup) {
   EXPECT_EQ(serverSession_->getPath(), "/foo");
   EXPECT_EQ(serverSession_->getAuthority(), "");
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQAuthorityPathTest, ServerSeesClientAuthorityAndImplementation) {
+  clientSession_->setPublishHandler(clientPublisher);
+  clientSession_->setSubscribeHandler(clientSubscriber);
+  clientSession_->start();
+  serverSession_->setPublishHandler(serverPublisher);
+  serverSession_->setSubscribeHandler(serverSubscriber);
+  serverSession_->start();
+
+  if (useUniControlStreams(getServerSelectedVersion())) {
+    // Draft 18+: server proactively sends SERVER_SETUP on its uni stream.
+    moxygen::Setup serverSetupMsg;
+    serverSetupMsg.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+            initialMaxRequestID_});
+    serverSession_->sendSetup(std::move(serverSetupMsg));
+  }
+
+  auto clientSetup = getClientSetup(initialMaxRequestID_);
+  clientSetup.params.insertParam(
+      SetupParameter{folly::to_underlying(SetupKey::AUTHORITY), "moq.example"});
+
+  auto serverSetup = co_await clientSession_->setup(std::move(clientSetup));
+
+  EXPECT_EQ(serverSession_->getAuthority(), "moq.example");
+  EXPECT_EQ(
+      getFirstStringParam(
+          serverSetup.params,
+          folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION)),
+      MoQSession::getMoQTImplementationString());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQAuthorityPathTest, ServerSetupWithAuthorityIsRejected) {
+  serverSendsAuthority_ = true;
+
+  RecordingSessionCloseCallback closeCallback;
+  clientSession_->setSessionCloseCallback(&closeCallback);
+
+  clientSession_->setPublishHandler(clientPublisher);
+  clientSession_->setSubscribeHandler(clientSubscriber);
+  clientSession_->start();
+  serverSession_->setPublishHandler(serverPublisher);
+  serverSession_->setSubscribeHandler(serverSubscriber);
+  serverSession_->start();
+
+  if (useUniControlStreams(getServerSelectedVersion())) {
+    // Draft 18+: the SERVER_SETUP is sent from here rather than built by
+    // onClientSetup, so the offending param goes in on this path instead.
+    moxygen::Setup serverSetupMsg;
+    serverSetupMsg.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+            initialMaxRequestID_});
+    serverSetupMsg.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::AUTHORITY), "moq.example"});
+    serverSession_->sendSetup(std::move(serverSetupMsg));
+  }
+
+  auto result = co_await folly::coro::co_awaitTry(
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)));
+  EXPECT_TRUE(result.hasException() || clientWt_->isSessionClosed());
+  co_await closeCallback.closed;
+  EXPECT_EQ(closeCallback.errorCode, SessionCloseErrorCode::INVALID_AUTHORITY);
 }
 
 // If authority/path are already set on the server session before CLIENT_SETUP
@@ -544,20 +625,6 @@ CO_TEST_P_X(
         co_return result.error().errorCode;
       });
 }
-
-class RecordingSessionCloseCallback
-    : public MoQSession::MoQSessionCloseCallback {
- public:
-  void onMoQSessionClosed(
-      SessionCloseErrorCode error,
-      folly::Optional<uint32_t> /* wtError */) override {
-    errorCode = error;
-    closed.post();
-  }
-
-  std::optional<SessionCloseErrorCode> errorCode;
-  folly::coro::Baton closed;
-};
 
 class Draft18GoawayTimeoutTest : public MoQSessionTest {
  protected:

@@ -3460,6 +3460,32 @@ TEST_P(MoQFramerTest, SetupRoundtripWithAuthToken) {
   EXPECT_EQ(result->params.at(2).asAuthToken.tokenValue, "stampolli");
 }
 
+TEST_P(MoQFramerTest, SetupRoundtripWithAuthorityAndImplementation) {
+  moxygen::Setup setup;
+  setup.params.insertParam(Parameter(
+      folly::to_underlying(SetupKey::AUTHORITY), std::string("moq.example")));
+  setup.params.insertParam(Parameter(
+      folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION), std::string("MOQ")));
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writeClientSetup(writeBuf, setup, GetParam()).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  skipFrameType(cursor);
+  auto result = parser_.parseClientSetup(cursor, frameLength(cursor));
+  ASSERT_TRUE(result.hasValue());
+
+  ASSERT_EQ(result->params.size(), 2);
+  EXPECT_EQ(
+      result->params.at(0).key, folly::to_underlying(SetupKey::AUTHORITY));
+  EXPECT_EQ(result->params.at(0).asString, "moq.example");
+  EXPECT_EQ(
+      result->params.at(1).key,
+      folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION));
+  EXPECT_EQ(result->params.at(1).asString, "MOQ");
+}
+
 TEST(MoQFramerTest, ServerSetupDeleteAliasIsNotExported) {
   MoQFrameParser parser;
   parser.initializeVersion(kVersionDraftCurrent);

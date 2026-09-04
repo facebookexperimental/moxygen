@@ -283,6 +283,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   uint64_t initialMaxRequestID_{kTestMaxRequestID * getRequestIDMultiplier()};
   bool failServerSetup_{false};
   bool invalidVersion_{false};
+  bool serverSendsAuthority_{false};
   TrackAlias nextAlias_{12345};
   std::shared_ptr<testing::StrictMock<MockFetchConsumer>> fetchCallback_;
   std::shared_ptr<testing::StrictMock<MockTrackConsumer>> subscribeCallback_;
