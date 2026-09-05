@@ -326,7 +326,7 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
       return folly::makeUnexpected(MoQPublishError(
           MoQPublishError::MALFORMED_TRACK, "Invalid status change"));
     }
-    if (status == ObjectStatus::NORMAL && cachedObject->complete &&
+    if (status == ObjectStatus::NORMAL && complete && cachedObject->complete &&
         ((!payload && cachedObject->payload) ||
          (payload && !cachedObject->payload) ||
          (payload && cachedObject->payload &&
@@ -343,6 +343,12 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
           MoQPublishError::MALFORMED_TRACK, "forwardingPreference mismatch"));
     }
 
+    if (cachedObject->complete && !complete) {
+      // The first chunk of a re-delivery replaces a whole object.  Stop
+      // advertising the location until it is whole again: a fetch would
+      // neither serve it nor skip past it.
+      track.cachedContent.remove({groupID, objectID}, {groupID, objectID});
+    }
     // TODO: Consider removing status from CacheEntry. For fetch streams, we
     // could only publish NORMAL objects and let END_OF_GROUP/END_OF_TRACK be
     // implicit from the gap information.

@@ -1309,6 +1309,56 @@ CO_TEST_F(MoQCacheTest, TestPopulateObjectUsingBeginObjectAndObjectPayload) {
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 1}));
 }
 
+// An object large enough to span reads is re-delivered a chunk at a time, so
+// the first chunk is shorter than the copy already in cache.  That is not a
+// payload mismatch, and treating it as one resets the upstream subgroup.
+CO_TEST_F(MoQCacheTest, TestRecacheStreamedObjectWithPartialFirstChunk) {
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->objectStream(ObjectHeader(0, 0, 0, 0, 200), makeBuf(200));
+  writeback.reset();
+
+  writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  auto subgroupConsumer = writeback->beginSubgroup(0, 0, 0).value();
+  auto res = subgroupConsumer->beginObject(0, 200, makeBuf(50));
+  EXPECT_FALSE(res.hasError());
+  auto status = subgroupConsumer->objectPayload(makeBuf(150), false);
+  EXPECT_FALSE(status.hasError());
+  writeback.reset();
+
+  // The re-delivered object is whole again, not truncated to the first chunk.
+  EXPECT_CALL(*consumer_, object(0, 0, 0, HasChainDataLengthOf(200), _, _, _))
+      .WillOnce(Return(folly::unit));
+  auto fetchRes = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(fetchRes.hasValue());
+  co_await folly::coro::co_reschedule_on_current_executor;
+}
+
+// Re-delivery leaves the cached copy incomplete until its last chunk lands.
+// A fetch in that window has to treat the object as a miss and move past it;
+// cachedContent still advertising the location stalls the fetch loop.
+CO_TEST_F(MoQCacheTest, TestFetchWhileCachedObjectIsBeingRecached) {
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->objectStream(ObjectHeader(0, 0, 0, 0, 200), makeBuf(200));
+  writeback.reset();
+
+  // Start re-delivering the same object and stop before the last chunk.
+  writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  auto subgroupConsumer = writeback->beginSubgroup(0, 0, 0).value();
+  EXPECT_FALSE(subgroupConsumer->beginObject(0, 200, makeBuf(50)).hasError());
+
+  // Reaching upstream at all is the point: the object is a miss, and the
+  // fetch has to get past it to the end of the range.
+  expectUpstreamFetch(FetchError{0, FetchErrorCode::DOES_NOT_EXIST, "gone"});
+  EXPECT_CALL(*consumer_, reset(_));
+  // The track is live, so FETCH_OK goes out up front and the objects are
+  // served on a detached task.
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  co_await folly::coro::co_reschedule_on_current_executor;
+}
+
 CO_TEST_F(MoQCacheTest, TestUpstreamFetchUsingBeginObjectAndObjectPayload) {
   // Test case for upstream fetch using beginObject and objectPayload
 
@@ -3951,13 +4001,14 @@ TEST_F(MoQCacheTest, SubgroupWritebackCacheErrorResetsInnerConsumer) {
 
 // Same test but for beginObject path (multi-part object delivery).
 TEST_F(MoQCacheTest, SubgroupWritebackBeginObjectCacheErrorResetsInner) {
-  // Pre-populate cache with a complete object
+  // Record object 0 as non-existent, so beginObject for it is a cache error.
+  // A short first chunk is not one: the object arrives over several reads.
   auto writeback1 =
       cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
   auto sgRes1 = writeback1->beginSubgroup(0, 0, 0);
   ASSERT_TRUE(sgRes1.hasValue());
   auto sg1 = std::move(sgRes1.value());
-  auto objRes = sg1->object(0, makeBuf(50), noExtensions(), false);
+  auto objRes = sg1->object(1, makeBuf(50), makeObjectGapExtensions(1), false);
   ASSERT_TRUE(objRes.hasValue());
   sg1->endOfSubgroup();
   writeback1.reset();
@@ -3974,7 +4025,7 @@ TEST_F(MoQCacheTest, SubgroupWritebackBeginObjectCacheErrorResetsInner) {
   ASSERT_TRUE(sgRes2.hasValue());
   auto sg2 = std::move(sgRes2.value());
 
-  // beginObject with different payload size triggers "Payload mismatch"
+  // beginObject into a known gap triggers "Object in known gap"
   EXPECT_CALL(*innerSg, reset(_)).Times(1);
 
   auto beginRes = sg2->beginObject(0, 100, makeBuf(100), Extensions());
