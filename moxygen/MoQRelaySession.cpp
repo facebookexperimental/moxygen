@@ -602,7 +602,7 @@ MoQRelaySession::sendRequestUpdateOnBidi(
   if (shouldFailNewLocalRequestDueToGoaway()) {
     co_return folly::makeUnexpected(
         RequestError{
-            peekNextRequestID(),
+            failedLocalRequestID(),
             RequestErrorCode::GOING_AWAY,
             "Session received GOAWAY"});
   }
@@ -853,7 +853,7 @@ MoQRelaySession::publishNamespace(
   const auto& trackNamespace = ann.trackNamespace;
   if (shouldFailNewLocalRequestDueToGoaway()) {
     co_return folly::makeUnexpected(PublishNamespaceError(
-        {peekNextRequestID(),
+        {failedLocalRequestID(),
          PublishNamespaceErrorCode::GOING_AWAY,
          "Session received GOAWAY"}));
   }
@@ -1404,7 +1404,7 @@ MoQRelaySession::subscribeNamespace(
   const auto& trackNamespace = sa.trackNamespacePrefix;
   if (shouldFailNewLocalRequestDueToGoaway()) {
     co_return folly::makeUnexpected(SubscribeNamespaceError(
-        {peekNextRequestID(),
+        {failedLocalRequestID(),
          SubscribeNamespaceErrorCode::GOING_AWAY,
          "Session received GOAWAY"}));
   }
@@ -1766,7 +1766,7 @@ MoQRelaySession::subscribeTracks(
   // local request after we've received a GOAWAY.
   if (shouldFailNewLocalRequestDueToGoaway()) {
     co_return folly::makeUnexpected(SubscribeTracksError(
-        {peekNextRequestID(),
+        {failedLocalRequestID(),
          SubscribeTracksErrorCode::GOING_AWAY,
          "Session received GOAWAY"}));
   }

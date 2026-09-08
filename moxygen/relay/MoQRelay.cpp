@@ -510,7 +510,6 @@ Subscriber::PublishResult MoQRelay::publish(
       std::forward_as_tuple(forwarder, session));
   auto& rsub = subRes.first->second;
   rsub.promise.setValue(folly::unit);
-  rsub.requestID = pub.requestID;
   rsub.handle = std::move(handle);
   rsub.isPublish = true;
 
@@ -1711,7 +1710,7 @@ MoQRelay::subscribeToFirstRelaySubscription(
   auto forwarder =
       std::make_shared<MoQForwarder>(subReq.fullTrackName, std::nullopt);
   forwarder->setCallback(shared_from_this());
-  auto emplaceRes = subscriptions_.emplace(
+  subscriptions_.emplace(
       std::piecewise_construct,
       std::forward_as_tuple(subReq.fullTrackName),
       std::forward_as_tuple(forwarder, upstreamSession));
@@ -1748,7 +1747,6 @@ MoQRelay::subscribeToFirstRelaySubscription(
   // But should we if this is forward=0?
   upstreamSubReq.forward = forwarder->numForwardingSubscribers() > 0;
 
-  emplaceRes.first->second.requestID = upstreamSession->peekNextRequestID();
   auto subRes = co_await upstreamSession->subscribe(
       upstreamSubReq, getSubscribeWriteback(subReq.fullTrackName, forwarder));
   if (subRes.hasError()) {
@@ -1782,7 +1780,6 @@ MoQRelay::subscribeToFirstRelaySubscription(
     co_yield folly::coro::co_error(std::runtime_error("subscription is gone"));
   }
   auto& rsub = it->second;
-  rsub.requestID = subRes.value()->subscribeOk().requestID;
   rsub.handle = std::move(subRes.value());
   // Record NGR as outstanding (no fire — it rides the outgoing SUBSCRIBE).
   forwarder->tryProcessNewGroupRequest(subReq.params, /*fire=*/false);
@@ -1823,8 +1820,10 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
       fetch.args = StandaloneFetch(res.value().start, res.value().end);
       joining = nullptr;
     } else {
-      // Upstream is resolving the subscribe, forward joining fetch
-      joining->joiningRequestID = subscriptionIt->second.requestID;
+      // Upstream is still resolving the subscribe, so its request ID does not
+      // exist yet. Leave this unset: MoQSession matches an unnamed joining
+      // FETCH to the pending SUBSCRIBE for the same track when it sends.
+      joining->joiningRequestID.reset();
     }
   }
 

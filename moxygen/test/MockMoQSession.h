@@ -80,15 +80,10 @@ class MockMoQSession : public MoQSession {
       (TrackStatus),
       (override));
 
-  RequestID peekNextRequestID() {
-    return RequestID(nextRequestID_++);
-  }
-
  private:
   folly::EventBase evb_;
   std::thread evbThread_;
   bool ownsEventBase_;
-  uint64_t nextRequestID_{1};
 };
 
 } // namespace moxygen::test

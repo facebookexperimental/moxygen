@@ -181,7 +181,7 @@ CO_TEST_P_X(
   auto result = co_await subscription.clientHandle->requestUpdate(update);
   EXPECT_TRUE(result.hasError());
   if (result.hasError()) {
-    EXPECT_EQ(result.error().requestID, RequestID(getRequestIDMultiplier()));
+    EXPECT_EQ(result.error().requestID, MoQSession::failedLocalRequestID());
     EXPECT_EQ(result.error().errorCode, RequestErrorCode::GOING_AWAY);
   }
   co_await rescheduleN(4);

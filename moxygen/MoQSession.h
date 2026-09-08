@@ -11,6 +11,7 @@
 #include <moxygen/events/MoQDeliveryTimer.h>
 #include <moxygen/events/MoQExecutor.h>
 #include <chrono>
+#include <limits>
 
 #include <folly/MaybeManagedPtr.h>
 #include <folly/container/F14Map.h>
@@ -601,8 +602,12 @@ class MoQSession : public Subscriber,
 
   void setLogger(const std::shared_ptr<MLogger>& logger);
   std::shared_ptr<MLogger> getLogger() const;
-  RequestID peekNextRequestID() const {
-    return nextRequestID_;
+
+  // Reported as the request ID when a local request is rejected before it is
+  // sent, so it never got one. Request IDs are allocated upward from zero, so
+  // the maximum can never be one of them.
+  static RequestID failedLocalRequestID() {
+    return RequestID(std::numeric_limits<uint64_t>::max());
   }
 
   // Making this public temporarily until we have param management in a single
