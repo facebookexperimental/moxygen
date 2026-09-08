@@ -903,6 +903,8 @@ set_section "10" "Joining FETCH"
 JOIN_TRACK=(--last_group=15 --objects_per_group=5 --object_frequency=50)
 JOIN_DELAY=1.5
 
+if [ "$SKIP_FETCH" -ne 1 ]; then
+
 run_join_test "Join from the start of the track" 0 backfill \
     "${JOIN_TRACK[@]}"
 
@@ -933,6 +935,8 @@ run_join_test "Join with both extensions" 0 backfill \
 # nothing to anchor a join on.
 run_join_test "Join a track that has not started" 0 empty \
     --last_group=4
+
+fi
 
 # ============================================================================
 # Generate Report
@@ -969,7 +973,11 @@ for section in "${!SECTION_TOTAL[@]}"; do
     total=${SECTION_TOTAL[$section]}
     passed=${SECTION_PASSED[$section]}
     failed=${SECTION_FAILED[$section]}
-    section_rate=$(awk "BEGIN {printf \"%.1f\", ($passed/$total)*100}")
+    if [ "$total" -eq 0 ]; then
+        section_rate="N/A"
+    else
+        section_rate=$(awk "BEGIN {printf \"%.1f\", ($passed/$total)*100}")
+    fi
 
     if [ "$failed" -eq 0 ]; then
         echo -e "${GREEN}✓${NC} $section ($section_name): $passed/$total (${section_rate}%)"
@@ -1016,7 +1024,11 @@ REPORT_FILE="moqtest_conformance_report_$(date +%Y%m%d_%H%M%S).txt"
         total=${SECTION_TOTAL[$section]}
         passed=${SECTION_PASSED[$section]}
         failed=${SECTION_FAILED[$section]}
-        section_rate=$(awk "BEGIN {printf \"%.1f\", ($passed/$total)*100}")
+        if [ "$total" -eq 0 ]; then
+            section_rate="N/A"
+        else
+            section_rate=$(awk "BEGIN {printf \"%.1f\", ($passed/$total)*100}")
+        fi
 
         if [ "$failed" -eq 0 ]; then
             echo "✓ $section: $passed/$total (${section_rate}%)"
