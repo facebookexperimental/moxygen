@@ -288,9 +288,13 @@ int main(int argc, char** argv) {
             &evb, client->connect(&evb, FLAGS_versions)),
         &evb);
 
-    // Unregister the signal handler when the request completes so evb.loop()
-    // can return; the handler is what otherwise keeps the loop alive.
-    auto onComplete = [&sigHandler](auto&&) { sigHandler.unreg(); };
+    // Close the session and unregister the signal handler when the request
+    // completes, so evb.loop() can return; between them they are what keeps
+    // the loop alive.
+    auto onComplete = [&sigHandler, &client](auto&&) {
+      client->shutdown();
+      sigHandler.unreg();
+    };
     if (FLAGS_request == "subscribe" && joinStart) {
       XLOG(INFO) << "Joining from group " << *joinStart << " at "
                  << url.getHostAndPort();

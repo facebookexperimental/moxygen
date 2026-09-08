@@ -185,7 +185,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
 
   // Subscribe to the receiver
   auto res = co_await moqClient_->moqSession_->subscribe(sub, subReceiver_);
-  moqClient_->moqSession_->drain();
+  armObjectDeadlines();
 
   if (!res.hasError()) {
     subHandle_ = res.value();
@@ -331,6 +331,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::publishTrack(
     onFailure(std::runtime_error(pubRes.exception().what().toStdString()));
     co_return trackNamespace.value();
   }
+  armObjectDeadlines();
 
   co_await doneBaton_;
   // Drained here rather than up front: draining the subscriber session before
@@ -371,7 +372,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
 
   // Fetch to the receiver
   auto res = co_await moqClient_->moqSession_->fetch(fetch, fetchReceiver_);
-  moqClient_->moqSession_->drain();
+  armObjectDeadlines();
   if (!res.hasError()) {
     fetchHandle_ = res.value();
     validateFetchOk(fetchHandle_->fetchOk(), params, fetchRange);
@@ -440,7 +441,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::join(
       {},
       fetchReceiver_,
       relative ? FetchType::RELATIVE_JOINING : FetchType::ABSOLUTE_JOINING);
-  moqClient_->moqSession_->drain();
+  armObjectDeadlines();
 
   if (res.subscribeResult.hasError()) {
     XLOG(ERR)
@@ -548,7 +549,13 @@ void MoQTestClient::onObjectStatus(
   // Remove the end-of-group marker from the scoreboard.  End-of-group markers
   // don't go through validateSubscribedData(), so nothing else erases them and
   // they would show up as "objects still expected".
-  expectedObjects_.erase(std::make_pair(header.group, header.id));
+  auto marker = expectedObjects_.find(std::make_pair(header.group, header.id));
+  if (marker != expectedObjects_.end()) {
+    if (marker->second->expired()) {
+      ++datagramDrops_;
+    }
+    expectedObjects_.erase(marker);
+  }
 
   // Adjust the expected data
   if (adjustExpected(state, params_, objHeader) ==
@@ -598,6 +605,7 @@ void MoQTestClient::onAllDataReceived(ReceiveState& state) {
   }
 
   // Whatever verdict the checks below reach, the request is over.
+  cancelDeadlines();
   auto doneGuard = folly::makeGuard([this] { doneBaton_.post(); });
 
   if (semanticsFailed_) {
@@ -622,10 +630,11 @@ void MoQTestClient::onAllDataReceived(ReceiveState& state) {
           << "MoQTest verification result: FAILURE! reason: Datagram Failed - 0 Objects Received";
       cancelRequest();
       return;
-    } else if (expectedObjects_.size() > dropsAllowed) {
+    } else if (expectedObjects_.size() + datagramDrops_ > dropsAllowed) {
       XLOG(ERR)
           << "MoQTest verification result: FAILURE! reason: Datagram had too many drops: "
-          << expectedObjects_.size() << " missing, allowed " << dropsAllowed;
+          << expectedObjects_.size() << " missing, " << datagramDrops_
+          << " late, allowed " << dropsAllowed;
       cancelRequest();
       return;
     } else {
@@ -640,8 +649,9 @@ void MoQTestClient::onAllDataReceived(ReceiveState& state) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: PublishDone received while "
         << expectedObjects_.size() << " objects are still expected";
-    for (const auto& [group, objId] : expectedObjects_) {
-      XLOG(ERR) << "  Missing object: group=" << group << " id=" << objId;
+    for (const auto& [key, cb] : expectedObjects_) {
+      XLOG(ERR) << "  Missing object: group=" << key.first
+                << " id=" << key.second;
     }
     cancelRequest();
     return;
@@ -658,6 +668,73 @@ uint64_t MoQTestClient::draftMajorVersion() const {
 void MoQTestClient::recordSemanticsFailure(const std::string& reason) {
   semanticsFailed_ = true;
   XLOG(ERR) << "MoQTest verification result: FAILURE! reason: " << reason;
+}
+
+namespace {
+// A liveness backstop, not a latency bound: added to the interval the track
+// itself implies, so it only has to cover scheduling jitter.
+constexpr std::chrono::milliseconds kDeadlineSlack{1000};
+// Allowed per object, because a publisher that runs a few percent slow drifts
+// further behind with every object and a fixed slack is eventually spent.
+constexpr std::chrono::milliseconds kObjectDrift{10};
+} // namespace
+
+void MoQTestClient::armObjectDeadlines() {
+  for (auto& [unused, cb] : expectedObjects_) {
+    moqExecutor_->scheduleTimeout(cb.get(), cb->timeout());
+  }
+}
+
+std::chrono::milliseconds MoQTestClient::objectInterval() const {
+  return std::chrono::milliseconds(params_.objectFrequency) + kObjectDrift;
+}
+
+void MoQTestClient::cancelDeadlines() {
+  for (auto& [unused, cb] : expectedObjects_) {
+    cb->cancelTimerCallback();
+  }
+  requestDeadline_.cancelTimerCallback();
+}
+
+void MoQTestClient::objectDeadlineExpired(uint64_t group, uint64_t id) {
+  if (tearingDown_) {
+    return;
+  }
+  // A late datagram spends drop budget rather than failing outright, so the
+  // run continues and the verdict weighs it against the threshold.
+  if (params_.forwardingPreference != ForwardingPreference::DATAGRAM) {
+    recordSemanticsFailure(folly::to<std::string>(
+        "Object not delivered before deadline: group=", group, " id=", id));
+    finishRequest();
+  }
+}
+
+// Reaching a verdict is what cancels this, so it also catches a track that
+// delivered everything and never closed its streams.
+void MoQTestClient::requestDeadlineExpired() {
+  if (tearingDown_) {
+    return;
+  }
+  recordSemanticsFailure(folly::to<std::string>(
+      "Request did not complete by the track's expected end; ",
+      expectedObjects_.size(),
+      " objects outstanding, PUBLISH_DONE ",
+      publishDoneReceived_ ? "received" : "not received"));
+  finishRequest();
+}
+
+void MoQTestClient::finishRequest() {
+  // Each half returns early until the last one lands, which runs the verdict.
+  if (subState_.active && !subState_.done) {
+    onAllDataReceived(subState_);
+  }
+  if (fetchState_.active && !fetchState_.done) {
+    onAllDataReceived(fetchState_);
+  }
+}
+
+void MoQTestClient::onPublishDone(PublishDone /* done */) {
+  publishDoneReceived_ = true;
 }
 
 void MoQTestClient::validateSubgroupHeader(
@@ -1122,10 +1199,26 @@ void MoQTestClient::initializeExpecteds(
   subState_ = ReceiveState{};
   fetchState_ = ReceiveState{};
 
-  expectedObjects_ = expectedObjectsIn(params, window);
+  expectedObjects_.clear();
+  int64_t n = 0;
+  for (const auto& key : expectedObjectsIn(params, window)) {
+    expectedObjects_.emplace(
+        key,
+        std::make_unique<ObjectDeadline>(
+            *this,
+            key.first,
+            key.second,
+            n++ * objectInterval() + kDeadlineSlack));
+  }
 
   // Only relevant for Datagram Forwarding Preference
   datagramObjects_ = 0;
+  datagramDrops_ = 0;
+
+  publishDoneReceived_ = false;
+  moqExecutor_->scheduleTimeout(
+      &requestDeadline_,
+      int64_t(expectedObjects_.size()) * objectInterval() + kDeadlineSlack);
 }
 
 void MoQTestClient::seedCursor(
@@ -1242,6 +1335,9 @@ bool MoQTestClient::validateDatagramObjects(const ObjectHeader& header) {
         << "MoQTest verification result: FAILURE! reason: Duplicate datagram object: "
         << "group=" << header.group << " id=" << header.id;
     return false;
+  }
+  if (it->second->expired()) {
+    ++datagramDrops_;
   }
   expectedObjects_.erase(it);
 
