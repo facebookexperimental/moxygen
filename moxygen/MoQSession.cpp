@@ -1443,6 +1443,12 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       override {
     resetAllSubgroups(code);
     auto session = std::exchange(session_, nullptr);
+    // PUBLISH_DONE already went out; the publisher only lingered here to drain
+    // its subgroups, so there is nothing left to tell the peer. A publisher
+    // that was already retired has no session to write through either.
+    if (publishDoneSent() || !session) {
+      return;
+    }
     if (!subscriptionHandle_) {
       XCHECK(replyContext_);
       session->subscribeError(
@@ -1463,6 +1469,10 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     if (auto session = std::exchange(session_, nullptr)) {
       session->cleanupSubscribePublisherAfterGoawayReset(requestID_);
     }
+  }
+
+  bool hasOpenDataStreams() const override {
+    return !subgroups_.empty();
   }
 
   void resetAllSubgroups(ResetStreamErrorCode code) {
@@ -1615,6 +1625,10 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
   void onStreamComplete(const ObjectHeader&) override {
     streamPublisher_.reset();
     PublisherImpl::fetchComplete();
+  }
+
+  bool hasOpenDataStreams() const override {
+    return streamPublisher_ != nullptr;
   }
 
   void onTooManyBytesBuffered() override {
@@ -1844,6 +1858,9 @@ void MoQSession::TrackPublisherImpl::onStreamComplete(
   // from it.
   auto keepalive = shared_from_this();
   subgroups_.erase({finalHeader.group, finalHeader.subgroup});
+  if (session_ && isDone() && subgroups_.empty()) {
+    session_->publisherDrained(requestID_);
+  }
 }
 
 void MoQSession::TrackPublisherImpl::onTooManyBytesBuffered() {
@@ -2771,7 +2788,7 @@ void MoQSession::requestStreamGoaway(
 }
 
 void MoQSession::checkForCloseOnDrain() {
-  if (draining_ && !hasOpenRequestsForDrain()) {
+  if (draining_ && !hasOpenRequests()) {
     close(SessionCloseErrorCode::NO_ERROR);
   }
 }
@@ -2888,7 +2905,7 @@ void MoQSession::onGoawayTimeoutExpired() {
   if (closed_ || !draining_) {
     return;
   }
-  if (!hasOpenRequestsForGoaway()) {
+  if (!hasOpenRequests()) {
     checkForCloseOnDrain();
     return;
   }
@@ -2896,14 +2913,7 @@ void MoQSession::onGoawayTimeoutExpired() {
   close(SessionCloseErrorCode::GOAWAY_TIMEOUT);
 }
 
-bool MoQSession::hasOpenRequestsForDrain() const {
-  if (negotiatedVersion_ && getDraftMajorVersion(*negotiatedVersion_) >= 18) {
-    return hasOpenRequestsForGoaway();
-  }
-  return !fetches_.empty() || !subTracks_.empty();
-}
-
-bool MoQSession::hasOpenRequestsForGoaway() const {
+bool MoQSession::hasOpenRequests() const {
   return !pubTracks_.empty() || !fetches_.empty() || !subTracks_.empty();
 }
 
@@ -4573,10 +4583,13 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
               << unsubscribe.requestID << " sess=" << this;
   } else {
     trackPublisher->unsubscribe();
-    if (pubTracks_.erase(unsubscribe.requestID)) {
+    // A publisher whose subgroups are still draining is in pubTracks_ even
+    // though PUBLISH_DONE already went out and retired the request, so ask the
+    // publisher rather than the map.
+    if (!trackPublisher->publishDoneSent()) {
       endSubscriptionStat(*trackPublisher);
       retireRequestID(/*signalWriteLoop=*/true);
-      checkForCloseOnDrain();
+      publisherDrained(unsubscribe.requestID);
     } // else, the caller invoked publishDone, which isn't needed but fine
   }
 }
@@ -6196,9 +6209,17 @@ void MoQSession::subscribeError(
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_, onSubscribeError, subErr.errorCode);
-  pubTracks_.erase(subErr.requestID);
+  // A subscribe handler may legally open subgroups and then reject; those
+  // streams must not keep delivering objects for a refused subscription.
+  auto it = pubTracks_.find(subErr.requestID);
+  if (it != pubTracks_.end()) {
+    if (auto trackPublisher =
+            std::dynamic_pointer_cast<TrackPublisherImpl>(it->second)) {
+      trackPublisher->resetAllSubgroups(ResetStreamErrorCode::INTERNAL_ERROR);
+    }
+  }
   SCOPE_EXIT {
-    checkForCloseOnDrain();
+    publisherDrained(subErr.requestID);
   };
   auto res = moqFrameWriter_.writeRequestError(
       ctx.writeBuf(), subErr, FrameType::SUBSCRIBE_ERROR);
@@ -6289,11 +6310,16 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
               << " sess=" << this;
     return;
   }
-  endSubscriptionStat(*it->second);
-  auto* ctx = it->second->replyContext();
+  auto pubTrack = it->second;
+  endSubscriptionStat(*pubTrack);
+  auto* ctx = pubTrack->replyContext();
+  // Subgroups opened before PUBLISH_DONE may still be draining. They keep
+  // reporting through the session, so the write-side entry outlives the
+  // protocol request; onStreamComplete retires it when the last one ends.
   SCOPE_EXIT {
-    pubTracks_.erase(it);
-    checkForCloseOnDrain();
+    if (!pubTrack->hasOpenDataStreams()) {
+      publisherDrained(pubDone.requestID);
+    }
   };
   if (!ctx) {
     return;
@@ -6308,6 +6334,7 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
     logger_->logPublishDone(pubDone);
   }
   ctx->flushFinal();
+  pubTrack->markPublishDoneSent();
   retireRequestID(/*signalWriteLoop=*/false);
 }
 
@@ -6380,7 +6407,10 @@ void MoQSession::terminateRequestUpdateOnError(
         PublishDoneStatusCode::UPDATE_FAILED,
         static_cast<uint64_t>(requestError.errorCode),
         requestError.reasonPhrase};
-    it->second->terminatePublish(pubDone, ResetStreamErrorCode::CANCELLED);
+    // terminatePublish can retire the publisher and drop the map's reference
+    // to it before returning, so hold one for the duration of the call.
+    auto pubTrack = it->second;
+    pubTrack->terminatePublish(pubDone, ResetStreamErrorCode::CANCELLED);
   } else {
     XLOG(ERR) << "requestUpdateError for invalid subscription id="
               << existingRequestID << " sess=" << this;
@@ -6433,6 +6463,17 @@ void MoQSession::fetchComplete(RequestID requestID) {
   }
   pubTracks_.erase(it);
   retireRequestID(/*signalWriteLoop=*/true);
+  checkForCloseOnDrain();
+}
+
+void MoQSession::publisherDrained(RequestID requestID) {
+  auto it = pubTracks_.find(requestID);
+  if (it != pubTracks_.end()) {
+    XLOG(DBG1) << __func__ << " id=" << requestID << " sess=" << this;
+    auto pubTrack = std::move(it->second);
+    pubTracks_.erase(it);
+    pubTrack->setSession(nullptr);
+  }
   checkForCloseOnDrain();
 }
 

@@ -776,8 +776,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKNeverArrives) {
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   EXPECT_TRUE(res.hasError());
-  // Verify that the publisher's WebTransport received a stop sending on the
-  // object stream
+  // Verify the object stream the failed subscribe opened was torn down
   auto objectStreamId = serverObjectStreamId();
   auto waits = 0;
   while (!serverWt_->writeHandles[objectStreamId]->getWriteErr().has_value() &&
@@ -786,8 +785,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOKNeverArrives) {
   }
   EXPECT_TRUE(
       serverWt_->writeHandles[objectStreamId]->getWriteErr().has_value());
-  EXPECT_EQ(
-      serverWt_->writeHandles[objectStreamId]->writeException()->error, 0);
+  EXPECT_EQ(*serverWt_->writeHandles[objectStreamId]->getWriteErr(), 0);
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
