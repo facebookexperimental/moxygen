@@ -32,7 +32,8 @@ class Fmp4PlaybackTimeline;
 //    nullptr if not listed.
 //
 // Nothing is parsed at construction; the object just remembers where to look.
-// A per-open drop policy can omit media segments before retention/publication.
+// Per-open policies can omit media before retention/publication. Manual fault
+// controls are enabled only for tracks opened through the file_pr namespace.
 class Fmp4MediaSource {
  public:
   Fmp4MediaSource(
@@ -43,7 +44,9 @@ class Fmp4MediaSource {
   std::shared_ptr<SegmentSource> openTrack(
       const std::string& trackName,
       uint32_t dropPercent,
-      uint64_t dropSeed);
+      uint64_t dropSeed,
+      bool enableFilePrFaults,
+      uint64_t subgroupsPerGroup);
 
   std::shared_ptr<SegmentSource> openAbrCatalog(
       std::chrono::milliseconds updateInterval);

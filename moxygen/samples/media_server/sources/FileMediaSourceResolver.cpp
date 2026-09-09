@@ -14,8 +14,9 @@ namespace moxygen::media_server {
 
 namespace {
 
-constexpr uint32_t kFilePrDropPercent = 20;
+constexpr uint32_t kFilePrDropPercent = 0;
 constexpr uint64_t kFilePrDropSeed = 1;
+constexpr uint64_t kFilePrSubgroupsPerGroup = 1;
 static_assert(kFilePrDropPercent <= 100);
 
 } // namespace
@@ -57,9 +58,16 @@ FileMediaSourceResolver::openTrack(
   if (isAbrNamespace(ns) && trackName == kCatalogTrackName) {
     co_return source_.openAbrCatalog(catalogUpdateInterval_);
   }
-  const uint32_t dropPercent =
-      isPartiallyReliableNamespace(ns) ? kFilePrDropPercent : 0;
-  co_return source_.openTrack(trackName, dropPercent, kFilePrDropSeed);
+  const bool partiallyReliable = isPartiallyReliableNamespace(ns);
+  const uint32_t dropPercent = partiallyReliable ? kFilePrDropPercent : 0;
+  const uint64_t subgroupsPerGroup =
+      partiallyReliable ? kFilePrSubgroupsPerGroup : 1;
+  co_return source_.openTrack(
+      trackName,
+      dropPercent,
+      kFilePrDropSeed,
+      partiallyReliable,
+      subgroupsPerGroup);
 }
 
 } // namespace moxygen::media_server

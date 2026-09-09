@@ -8,6 +8,8 @@
 
 #include <moxygen/samples/media_server/MediaCatalog.h>
 #include <moxygen/samples/media_server/sources/CatalogSource.h>
+#include <moxygen/samples/media_server/sources/CmafFrameChunker.h>
+#include <moxygen/samples/media_server/sources/FilePrFaultState.h>
 
 #include <folly/base64.h>
 #include <folly/coro/Baton.h>
@@ -219,10 +221,7 @@ uint64_t mediaTicks(std::chrono::nanoseconds time, uint32_t timescale) {
       remainder * timescale / kNanosecondsPerSecond;
 }
 
-// Extract a fragment's presentation-time anchor from moof -> traf -> tfdt
-// (baseMediaDecodeTime): a content-derived, monotonic value used as the MoQ
-// group id. Returns 0 if the boxes aren't found.
-uint64_t extractSegmentStartPts(const uint8_t* d, size_t len) {
+uint64_t extractBaseMediaDecodeTime(const uint8_t* d, size_t len) {
   if (len < 8 || std::memcmp(d + 4, "moof", 4) != 0) {
     return 0;
   }
@@ -242,13 +241,14 @@ uint64_t extractSegmentStartPts(const uint8_t* d, size_t len) {
   if (version == 1) {
     return tfdtOff + 20 <= len ? readBE64(p) : 0;
   }
-  return readBE32(p);
+  return version == 0 ? readBE32(p) : 0;
 }
 
 // Overwrite the fragment's tfdt baseMediaDecodeTime in place. Looping replays
 // the same bytes, so without this the decode timeline resets to 0 each pass and
-// the player stalls at the loop boundary; rewriting it to the loop-offset PTS
-// keeps the media timeline monotonic, matching the (already offset) group id.
+// the player stalls at the loop boundary; applying the loop's decode-time
+// offset keeps the media timeline monotonic, matching the already-offset group
+// id.
 void rewriteBaseMediaDecodeTime(std::string& bytes, uint64_t value) {
   auto* d = reinterpret_cast<uint8_t*>(bytes.data());
   const size_t len = bytes.size();
@@ -287,8 +287,8 @@ void rewriteBaseMediaDecodeTime(std::string& bytes, uint64_t value) {
 
 // One media fragment: its presentation-time anchor (group id) and bytes.
 struct Fragment {
-  uint64_t pts;
-  std::string bytes; // moof + mdat
+  uint64_t baseMediaDecodeTime;
+  std::vector<ChunkedCmafObject> objects;
 };
 
 struct ParsedMp4 {
@@ -335,8 +335,11 @@ std::string readGlobConcat(const std::string& pattern) {
 // Split a fragmented MP4 into its init segment and its (moof+mdat) fragments by
 // walking the top-level box list. Everything before the first moof is init;
 // each moof plus the following mdat is one fragment. Each fragment's
-// segmentStartPts is extracted from its tfdt.
-ParsedMp4 parseFragmentedMp4Bytes(const std::string& data) {
+// decode-time anchor is extracted from its tfdt, and its samples become CMAF
+// objects.
+ParsedMp4 parseFragmentedMp4Bytes(
+    const std::string& data,
+    bool parseMedia = true) {
   const auto* d = reinterpret_cast<const uint8_t*>(data.data());
   const size_t len = data.size();
 
@@ -367,6 +370,10 @@ ParsedMp4 parseFragmentedMp4Bytes(const std::string& data) {
   ParsedMp4 out;
   out.init = data.substr(0, firstMoof == std::string::npos ? len : firstMoof);
   out.timescale = extractTrackTimescale(out.init);
+  if (!parseMedia) {
+    return out;
+  }
+  CmafFrameChunker chunker(out.init);
   for (size_t i = 0; i < boxes.size(); ++i) {
     if (boxes[i].type != "moof") {
       continue;
@@ -378,9 +385,15 @@ ParsedMp4 parseFragmentedMp4Bytes(const std::string& data) {
       ++i;
     }
     std::string bytes = data.substr(fragStart, fragEnd - fragStart);
-    uint64_t pts = extractSegmentStartPts(
-        reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
-    out.fragments.push_back(Fragment{pts, std::move(bytes)});
+    auto chunked = chunker.chunk(bytes);
+    if (!chunked) {
+      XLOG(WARN) << "[Fmp4Source] cannot split fragment "
+                 << out.fragments.size() << " into single-sample CMAF chunks";
+      out.fragments.clear();
+      return out;
+    }
+    out.fragments.push_back(
+        Fragment{chunked->baseMediaDecodeTime, std::move(chunked->objects)});
   }
   return out;
 }
@@ -400,8 +413,8 @@ std::string readFile(const std::string& path) {
   return data;
 }
 
-ParsedMp4 parseFragmentedMp4(const std::string& path) {
-  return parseFragmentedMp4Bytes(readFile(path));
+ParsedMp4 parseFragmentedMp4(const std::string& path, bool parseMedia = true) {
+  return parseFragmentedMp4Bytes(readFile(path), parseMedia);
 }
 
 // Directory of `path` including the trailing slash, or "" if there is none.
@@ -452,14 +465,35 @@ MediaCatalog loadCatalogMetadata(const std::string& path) {
   return def;
 }
 
-MediaObject
-makeObject(uint64_t group, const std::string& bytes, bool endOfGroup = false) {
+MediaObject makeObject(
+    uint64_t group,
+    uint64_t subgroup,
+    uint64_t object,
+    const std::string& bytes,
+    std::chrono::milliseconds publishDelay = std::chrono::milliseconds{0},
+    bool endOfSubgroup = false,
+    bool endOfGroup = false) {
   return MediaObject{
       .group = group,
-      .object = 0,
+      .subgroup = subgroup,
+      .object = object,
+      .publishDelay = publishDelay,
+      .endOfSubgroup = endOfSubgroup,
+      .endOfGroup = endOfGroup,
       .payload = folly::IOBuf::copyBuffer(bytes),
-      .extensions = noExtensions(),
-      .endOfGroup = endOfGroup};
+      .extensions = noExtensions()};
+}
+
+MediaObject
+makeObject(uint64_t group, const std::string& bytes, bool endOfGroup = false) {
+  return makeObject(
+      group,
+      /*subgroup=*/0,
+      /*object=*/0,
+      bytes,
+      std::chrono::milliseconds::zero(),
+      /*endOfSubgroup=*/true,
+      endOfGroup);
 }
 
 int64_t epochMilliseconds() {
@@ -527,7 +561,7 @@ class UpdatingCatalogSource : public SegmentSource {
 };
 
 // Map an MSF role to the MoQ forwarding spec. Audio sorts before video (lower
-// priority value = higher priority); both use one subgroup per fragment.
+// priority value = higher priority); both use subgroup stream delivery.
 TrackSpec specForRole(const std::string& name, const std::string& role) {
   TrackSpec spec;
   spec.name = name;
@@ -556,6 +590,8 @@ class Fmp4Track : public SegmentSource {
       std::shared_ptr<Fmp4PlaybackTimeline> timeline,
       uint32_t dropPercent,
       uint64_t dropSeed,
+      bool enableFilePrFaults,
+      uint64_t subgroupsPerGroup,
       bool loop)
       : spec_(specForRole(name, role)),
         parsed_(std::move(parsed)),
@@ -569,18 +605,35 @@ class Fmp4Track : public SegmentSource {
             folly::hash::hash_128_to_64(
                 dropSeed,
                 folly::hash::fnv64_FIXED(name))),
+        filePrFaults_(enableFilePrFaults),
+        subgroupsPerGroup_(subgroupsPerGroup),
         loop_(loop) {
+    XCHECK_GT(subgroupsPerGroup_, 0);
     timeline_->addTrack();
+    if (filePrFaults_) {
+      filePrFaultState().registerTrack(spec_.name, role);
+    }
+    size_t objectCount = 0;
+    for (const auto& fragment : parsed_.fragments) {
+      objectCount += fragment.objects.size();
+    }
     XLOG(INFO) << "[Fmp4Source] track=" << spec_.name << " role=" << role
                << " initBytes=" << parsed_.init.size()
-               << " fragments=" << parsed_.fragments.size() << " firstPts="
-               << (parsed_.fragments.empty() ? 0
-                                             : parsed_.fragments.front().pts)
-               << " lastPts="
-               << (parsed_.fragments.empty() ? 0 : parsed_.fragments.back().pts)
+               << " fragments=" << parsed_.fragments.size()
+               << " objects=" << objectCount << " firstDecodeTime="
+               << (parsed_.fragments.empty()
+                       ? 0
+                       : parsed_.fragments.front().baseMediaDecodeTime)
+               << " lastDecodeTime="
+               << (parsed_.fragments.empty()
+                       ? 0
+                       : parsed_.fragments.back().baseMediaDecodeTime)
                << " timescale=" << parsed_.timescale
                << " windowMs=" << interval_.count()
-               << " dropPercent=" << dropPercent_ << " loop=" << loop_;
+               << " dropPercent=" << dropPercent_
+               << " filePrFaults=" << filePrFaults_
+               << " subgroupsPerGroup=" << subgroupsPerGroup_
+               << " loop=" << loop_;
   }
 
   ~Fmp4Track() override {
@@ -596,24 +649,57 @@ class Fmp4Track : public SegmentSource {
     return spec_;
   }
 
+  void onSubgroupPublishStarted(uint64_t group, uint64_t subgroup) override {
+    auto held = std::find_if(
+        heldSubgroups_.begin(),
+        heldSubgroups_.end(),
+        [group, subgroup](const auto& item) {
+          return item.group == group && item.subgroup == subgroup;
+        });
+    if (held != heldSubgroups_.end()) {
+      filePrFaultState().beginHoldRelease(spec_.name, held->commandId);
+    }
+  }
+
+  void onSubgroupPublished(uint64_t group, uint64_t subgroup, size_t) override {
+    auto held = std::find_if(
+        heldSubgroups_.begin(),
+        heldSubgroups_.end(),
+        [group, subgroup](const auto& item) {
+          return item.group == group && item.subgroup == subgroup;
+        });
+    if (held == heldSubgroups_.end()) {
+      return;
+    }
+    const auto commandId = held->commandId;
+    const auto duration = held->duration;
+    const auto objects = held->objects;
+    heldSubgroups_.erase(held);
+    filePrFaultState().finishHold(
+        spec_.name, commandId, group, subgroup, objects, duration);
+  }
+
   folly::coro::AsyncGenerator<MediaObject&&> objects() override {
     const uint64_t span = loopSpan();
     uint64_t base = 0;
     (void)timeline_->windowFor(
-        mediaTime(parsed_.fragments.front().pts, parsed_.timescale), interval_);
+        mediaTime(
+            parsed_.fragments.front().baseMediaDecodeTime, parsed_.timescale),
+        interval_);
     if (loop_) {
       const uint64_t currentTicks =
           mediaTicks(timeline_->currentMediaTime(), parsed_.timescale);
-      const uint64_t firstPts = parsed_.fragments.front().pts;
-      if (currentTicks > firstPts) {
-        base = ((currentTicks - firstPts) / span) * span;
+      const uint64_t firstDecodeTime =
+          parsed_.fragments.front().baseMediaDecodeTime;
+      if (currentTicks > firstDecodeTime) {
+        base = ((currentTicks - firstDecodeTime) / span) * span;
       }
     }
 
     size_t skipped = 0;
     do {
       for (const auto& fragment : parsed_.fragments) {
-        const uint64_t group = base + fragment.pts;
+        const uint64_t group = base + fragment.baseMediaDecodeTime;
         auto window = timeline_->windowFor(
             mediaTime(group, parsed_.timescale), interval_);
         auto now = Fmp4PlaybackTimeline::Clock::now();
@@ -635,25 +721,151 @@ class Fmp4Track : public SegmentSource {
                      << " skipped expired fragments=" << skipped;
           skipped = 0;
         }
+
         ++dropCandidates_;
-        if (shouldDrop(group)) {
-          ++droppedSegments_;
-          XLOG(DBG1) << "[Fmp4Source] track=" << spec_.name
-                     << " dropped group=" << group;
-          continue;
+        const bool randomDrop = shouldDrop(group);
+        bool randomDropRecorded = false;
+        bool explicitFaultInGroup = false;
+
+        std::vector<ChunkedCmafObject> objects = fragment.objects;
+        if (base != 0) {
+          const uint64_t offset = group - fragment.baseMediaDecodeTime;
+          for (auto& object : objects) {
+            auto& bytes = object.bytes;
+            const uint64_t sampleDecodeTime = extractBaseMediaDecodeTime(
+                reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
+            rewriteBaseMediaDecodeTime(bytes, sampleDecodeTime + offset);
+          }
         }
 
-        std::string bytes = fragment.bytes;
-        if (base != 0) {
-          rewriteBaseMediaDecodeTime(bytes, group);
+        std::vector<RetainedObject> publishedObjects;
+        publishedObjects.reserve(objects.size());
+        const uint64_t subgroupCount = subgroupsPerGroup_;
+        std::vector<std::vector<RetainedObject>> subgroups(subgroupCount);
+        for (size_t objectIndex = 0; objectIndex < objects.size();
+             ++objectIndex) {
+          const uint64_t subgroup =
+              objectIndex * subgroupCount / objects.size();
+          subgroups[subgroup].push_back(
+              RetainedObject{
+                  subgroup,
+                  static_cast<uint64_t>(objectIndex),
+                  objects[objectIndex].bytes,
+                  objects[objectIndex].isSync});
         }
+
+        for (uint64_t subgroup = 0; subgroup < subgroupCount; ++subgroup) {
+          auto subgroupObjects = std::move(subgroups[subgroup]);
+          std::optional<FilePrFaultDecision> fault;
+          if (filePrFaults_) {
+            auto& state = filePrFaultState();
+            state.observeSubgroup(
+                spec_.name, group, subgroup, subgroupObjects.size());
+            fault = state.actionForSubgroup(spec_.name, group, subgroup);
+            explicitFaultInGroup = explicitFaultInGroup || fault.has_value();
+          }
+
+          if (randomDrop && !explicitFaultInGroup) {
+            if (!randomDropRecorded) {
+              ++droppedSegments_;
+              randomDropRecorded = true;
+              XLOG(DBG1) << "[Fmp4Source] track=" << spec_.name
+                         << " dropped group=" << group;
+            }
+            continue;
+          }
+
+          std::vector<RetainedObject> emitted;
+          if (fault && fault->action == FilePrFaultAction::Drop) {
+            const bool preserveIFrames =
+                spec_.kind == TrackKind::Video && !fault->affectIFrames;
+            if (preserveIFrames) {
+              for (auto& object : subgroupObjects) {
+                if (object.isSync) {
+                  emitted.push_back(std::move(object));
+                }
+              }
+            }
+            const size_t dropped = subgroupObjects.size() - emitted.size();
+            filePrFaultState().recordDrop(
+                spec_.name,
+                fault->commandId,
+                group,
+                subgroup,
+                dropped,
+                emitted.size());
+            XLOG(INFO) << "[FilePrFault] track=" << spec_.name
+                       << " dropped group=" << group << " subgroup=" << subgroup
+                       << " objects=" << dropped
+                       << " preservedIFrames=" << emitted.size();
+          } else {
+            emitted = std::move(subgroupObjects);
+          }
+
+          if (emitted.empty()) {
+            continue;
+          }
+
+          const bool hold = fault && fault->action == FilePrFaultAction::Hold;
+          const auto shouldDelayForHold = [&](const auto& object) {
+            return hold &&
+                (spec_.kind != TrackKind::Video || fault->affectIFrames ||
+                 !object.isSync);
+          };
+          if (hold) {
+            const size_t heldObjects = std::count_if(
+                emitted.begin(), emitted.end(), shouldDelayForHold);
+            if (heldObjects > 0) {
+              heldSubgroups_.push_back(
+                  HeldSubgroup{
+                      group,
+                      subgroup,
+                      fault->commandId,
+                      fault->duration,
+                      heldObjects});
+            } else {
+              filePrFaultState().beginHoldRelease(spec_.name, fault->commandId);
+              filePrFaultState().finishHold(
+                  spec_.name,
+                  fault->commandId,
+                  group,
+                  subgroup,
+                  0,
+                  fault->duration);
+            }
+            XLOG(INFO) << "[FilePrFault] track=" << spec_.name
+                       << " holding group=" << group << " subgroup=" << subgroup
+                       << " durationMs=" << fault->duration.count()
+                       << " heldObjects=" << heldObjects
+                       << " affectIFrames=" << fault->affectIFrames;
+          }
+
+          for (size_t index = 0; index < emitted.size(); ++index) {
+            const bool last = index + 1 == emitted.size();
+            const auto& object = emitted[index];
+            const auto publishDelay = shouldDelayForHold(object)
+                ? fault->duration
+                : std::chrono::milliseconds::zero();
+            publishedObjects.push_back(object);
+            co_yield makeObject(
+                group,
+                object.subgroup,
+                object.id,
+                object.bytes,
+                publishDelay,
+                last,
+                !filePrFaults_ && last && subgroup + 1 == subgroupCount);
+          }
+        }
+
         // Keep the last few GOPs so a joining FETCH can hand a subscriber some
         // backfill (a startup buffer) contiguous with the live subscribe.
-        recent_.emplace_back(group, bytes);
-        if (recent_.size() > kRecentGops) {
-          recent_.pop_front();
+        if (!publishedObjects.empty()) {
+          recent_.push_back(RetainedGroup{group, std::move(publishedObjects)});
+          if (recent_.size() > kRecentGops) {
+            recent_.pop_front();
+          }
         }
-        co_yield makeObject(group, bytes);
       }
       base += span;
     } while (loop_);
@@ -669,14 +881,17 @@ class Fmp4Track : public SegmentSource {
     // Serve buffered recently-published objects whose (loop-offset) group is in
     // [start.group, end.group). Snapshot synchronously first so the live
     // publish loop can keep mutating recent_ while we yield.
-    std::vector<std::pair<uint64_t, std::string>> snapshot;
-    for (const auto& [group, bytes] : recent_) {
-      if (group >= start.group && group < end.group) {
-        snapshot.emplace_back(group, bytes);
+    std::vector<RetainedGroup> snapshot;
+    for (const auto& retained : recent_) {
+      if (retained.group >= start.group && retained.group < end.group) {
+        snapshot.push_back(retained);
       }
     }
-    for (const auto& entry : snapshot) {
-      co_yield makeObject(entry.first, entry.second);
+    for (const auto& retained : snapshot) {
+      for (const auto& object : retained.objects) {
+        co_yield makeObject(
+            retained.group, object.subgroup, object.id, object.bytes);
+      }
     }
   }
 
@@ -694,14 +909,15 @@ class Fmp4Track : public SegmentSource {
     const auto& first = parsed_.fragments.front();
     const auto& last = parsed_.fragments.back();
     const uint64_t gap = parsed_.fragments.size() >= 2
-        ? last.pts - parsed_.fragments[parsed_.fragments.size() - 2].pts
+        ? last.baseMediaDecodeTime -
+            parsed_.fragments[parsed_.fragments.size() - 2].baseMediaDecodeTime
         : std::max<uint64_t>(
               1,
               mediaTicks(
                   std::chrono::duration_cast<std::chrono::nanoseconds>(
                       interval_),
                   parsed_.timescale));
-    return last.pts - first.pts + gap;
+    return last.baseMediaDecodeTime - first.baseMediaDecodeTime + gap;
   }
 
   TrackSpec spec_;
@@ -710,11 +926,31 @@ class Fmp4Track : public SegmentSource {
   std::shared_ptr<Fmp4PlaybackTimeline> timeline_;
   uint32_t dropPercent_;
   uint64_t dropSeed_;
+  bool filePrFaults_;
+  uint64_t subgroupsPerGroup_;
   bool loop_;
   uint64_t dropCandidates_{0};
   uint64_t droppedSegments_{0};
   static constexpr size_t kRecentGops = 3;
-  std::deque<std::pair<uint64_t, std::string>> recent_;
+  struct RetainedObject {
+    uint64_t subgroup;
+    uint64_t id;
+    std::string bytes;
+    bool isSync;
+  };
+  struct RetainedGroup {
+    uint64_t group;
+    std::vector<RetainedObject> objects;
+  };
+  struct HeldSubgroup {
+    uint64_t group;
+    uint64_t subgroup;
+    uint64_t commandId;
+    std::chrono::milliseconds duration;
+    size_t objects;
+  };
+  std::deque<RetainedGroup> recent_;
+  std::vector<HeldSubgroup> heldSubgroups_;
 };
 
 } // namespace
@@ -743,8 +979,9 @@ MediaCatalog Fmp4MediaSource::catalogMetadata() {
     }
     const auto path = resolveSourcePath(dir, track.sourceFile);
     const bool isGlob = path.find('*') != std::string::npos;
-    auto parsed = isGlob ? parseFragmentedMp4Bytes(readGlobConcat(path))
-                         : parseFragmentedMp4(path);
+    auto parsed = isGlob
+        ? parseFragmentedMp4Bytes(readGlobConcat(path), /*parseMedia=*/false)
+        : parseFragmentedMp4(path, /*parseMedia=*/false);
     catalog.initDataList.push_back(
         CatalogInitData{
             .id = track.initRef,
@@ -812,8 +1049,11 @@ std::shared_ptr<SegmentSource> Fmp4MediaSource::openAbrCatalog(
 std::shared_ptr<SegmentSource> Fmp4MediaSource::openTrack(
     const std::string& trackName,
     uint32_t dropPercent,
-    uint64_t dropSeed) {
+    uint64_t dropSeed,
+    bool enableFilePrFaults,
+    uint64_t subgroupsPerGroup) {
   XCHECK_LE(dropPercent, 100);
+  XCHECK_GT(subgroupsPerGroup, 0);
   if (trackName == kCatalogTrackName) {
     return std::make_shared<CatalogSource>(catalog());
   }
@@ -846,7 +1086,8 @@ std::shared_ptr<SegmentSource> Fmp4MediaSource::openTrack(
       return nullptr;
     }
     for (size_t i = 1; i < parsed.fragments.size(); ++i) {
-      if (parsed.fragments[i].pts <= parsed.fragments[i - 1].pts) {
+      if (parsed.fragments[i].baseMediaDecodeTime <=
+          parsed.fragments[i - 1].baseMediaDecodeTime) {
         XLOG(WARN) << "[Fmp4Source] openTrack " << trackName
                    << " has non-monotonic fragment timestamps: " << path;
         return nullptr;
@@ -860,6 +1101,8 @@ std::shared_ptr<SegmentSource> Fmp4MediaSource::openTrack(
         timeline_,
         dropPercent,
         dropSeed,
+        enableFilePrFaults,
+        subgroupsPerGroup,
         loop_);
   }
   XLOG(WARN) << "[Fmp4Source] openTrack " << trackName << " not in catalog";

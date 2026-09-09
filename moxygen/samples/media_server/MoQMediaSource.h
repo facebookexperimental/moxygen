@@ -11,6 +11,8 @@
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
 
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -22,7 +24,7 @@ enum class TrackKind : uint8_t { Video, Audio, Subtitle, Data, Catalog };
 
 // How the publish loop maps a track's objects onto MoQ streams.
 enum class ForwardMode : uint8_t {
-  SubgroupPerGroup, // one stream per group/GoP (video)
+  SubgroupPerGroup, // one or more subgroup streams per group/GoP
   StreamPerObject,  // one stream per object (audio)
   Datagram,         // one datagram per object
 };
@@ -40,15 +42,18 @@ struct TrackSpec {
   bool isStatic{false};
 };
 
-// One publishable unit. Move-only (owns payload). group/object are assigned by
-// the source (content-derived for a file, passthrough for a live upstream).
+// One publishable unit. Move-only (owns payload). group/subgroup/object are
+// assigned by the source (content-derived for a file, passthrough for a live
+// upstream).
 struct MediaObject {
   uint64_t group{0};
+  uint64_t subgroup{0};
   uint64_t object{0};
+  std::chrono::milliseconds publishDelay{0};
+  bool endOfSubgroup{false};
+  bool endOfGroup{false};
   Payload payload;
   Extensions extensions{noExtensions()};
-  // Finish the subgroup after this object without ending the track.
-  bool endOfGroup{false};
 };
 
 // The per-track segment feed for ONE track, opened on demand by that track's
@@ -70,6 +75,9 @@ class SegmentSource {
   virtual folly::coro::AsyncGenerator<MediaObject&&> fetch(
       AbsoluteLocation start,
       AbsoluteLocation end) = 0;
+
+  virtual void onSubgroupPublishStarted(uint64_t, uint64_t) {}
+  virtual void onSubgroupPublished(uint64_t, uint64_t, size_t) {}
 };
 
 } // namespace moxygen::media_server

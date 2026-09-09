@@ -9,6 +9,8 @@
 #include <moxygen/relay/MoQForwarder.h>
 #include <moxygen/samples/media_server/MoQMediaSource.h>
 
+#include <folly/CancellationToken.h>
+#include <folly/Executor.h>
 #include <folly/coro/Task.h>
 
 #include <memory>
@@ -16,8 +18,9 @@
 namespace moxygen::media_server {
 
 // Drains source->objects() into the forwarder, translating grouping per
-// spec().mode (SubgroupPerGroup: a new subgroup on each group change;
-// StreamPerObject: one stream per object) and handling BLOCKED backpressure.
+// spec().mode (SubgroupPerGroup: source-assigned subgroup streams within each
+// group; StreamPerObject: one stream per object) and handling BLOCKED
+// backpressure.
 // Runs on the publisher event base; one instance per track serving stack.
 //
 // Terminal behavior:
@@ -29,6 +32,8 @@ namespace moxygen::media_server {
 folly::coro::Task<void> runPublishLoop(
     std::shared_ptr<SegmentSource> source,
     std::shared_ptr<MoQForwarder> forwarder,
+    folly::Executor* executor,
+    folly::CancellationToken cancellationToken,
     bool waitForSubscriber = false);
 
 } // namespace moxygen::media_server

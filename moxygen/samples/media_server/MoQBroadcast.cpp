@@ -85,6 +85,7 @@ class ForwarderCallback : public MoQForwarder::Callback {
 folly::coro::Task<void> runTrackLoop(
     std::shared_ptr<SegmentSource> source,
     std::shared_ptr<MoQForwarder> forwarder,
+    folly::Executor* executor,
     folly::CancellationToken token,
     std::string trackName) {
   auto tried = co_await folly::coro::co_awaitTry(
@@ -92,7 +93,9 @@ folly::coro::Task<void> runTrackLoop(
           token,
           runPublishLoop(
               std::move(source),
-              std::move(forwarder), /*waitForSubscriber=*/
+              std::move(forwarder),
+              executor,
+              token, /*waitForSubscriber=*/
               false)));
   if (tried.hasException()) {
     XLOG(DBG1) << "[MoQBroadcast] track=" << trackName
@@ -162,7 +165,11 @@ void MoQBroadcast::startLoop(
   folly::coro::co_withExecutor(
       loopExecutor_,
       runTrackLoop(
-          stack->source, stack->forwarder, stack->loopCancel.getToken(), name))
+          stack->source,
+          stack->forwarder,
+          loopExecutor_,
+          stack->loopCancel.getToken(),
+          name))
       .start();
 }
 
@@ -363,7 +370,7 @@ folly::coro::Task<void> MoQBroadcast::serveMediaFetch(
     const bool last = (i + 1 == objs.size());
     auto res = consumer->object(
         objs[i].group,
-        /*subgroupID=*/0,
+        objs[i].subgroup,
         objs[i].object,
         std::move(objs[i].payload),
         noExtensions(),

@@ -42,6 +42,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 DEFINE_string(connect_url, "moqt://localhost:9779", "Server connect URL");
@@ -85,6 +86,7 @@ class Mp4Handler : public ObjectReceiverCallback {
       const bool inserted =
           objects_.try_emplace(location, std::move(bytes)).second;
       if (!inserted) {
+        ++duplicateObjects_;
         XLOG(WARN) << "[Mp4Receiver] duplicate group=" << header.group
                    << " subgroup=" << header.subgroup << " object=" << header.id
                    << "; retaining first object";
@@ -97,6 +99,7 @@ class Mp4Handler : public ObjectReceiverCallback {
       std::optional<TrackAlias> /*trackAlias*/,
       const ObjectHeader& header) override {
     XLOG(DBG1) << "[Mp4Receiver] status g=" << header.group
+               << " sg=" << header.subgroup
                << " status=" << uint32_t(header.status);
   }
 
@@ -151,12 +154,17 @@ class Mp4Handler : public ObjectReceiverCallback {
     return failed_;
   }
 
+  size_t duplicateCount() const {
+    return duplicateObjects_;
+  }
+
   folly::coro::Baton baton;
 
  private:
   std::string init_;
   std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::string> objects_;
   bool failed_{false};
+  size_t duplicateObjects_{0};
 };
 
 // Collects the catalog document (a single retained object) and unblocks when it
@@ -352,6 +360,7 @@ class MoQMp4Receiver {
       }
       XLOG(INFO) << "[Mp4Receiver] track=" << dl->name
                  << " wrote objects=" << dl->handler->count()
+                 << " duplicates=" << dl->handler->duplicateCount()
                  << " bytes=" << *total << " to " << dl->output;
     }
     closeSession();

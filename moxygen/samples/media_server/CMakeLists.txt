@@ -16,16 +16,20 @@ moxygen_add_library(moxygen_samples_media_server_media_catalog
 
 moxygen_add_library(moxygen_samples_media_server
   SRCS
+    FilePrControlServer.cpp
     MoQBroadcast.cpp
     MoQBroadcastDispatcher.cpp
     MoQBroadcastFactory.cpp
     PublishLoop.cpp
+    sources/CmafFrameChunker.cpp
     sources/FileMediaSourceResolver.cpp
+    sources/FilePrFaultState.cpp
     sources/Fmp4MediaSource.cpp
   DEPS
     moxygen_moq_consumers
     moxygen_moq_publish_error
     Folly::folly_base64
+    Folly::folly_dynamic
     Folly::folly_coro_sleep
     Folly::folly_coro_with_cancellation
     Folly::folly_hash_hash

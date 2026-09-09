@@ -5,6 +5,7 @@
  */
 
 #include <moxygen/MoQVersions.h>
+#include <moxygen/samples/media_server/FilePrControlServer.h>
 #include <moxygen/samples/media_server/MoQBroadcastDispatcher.h>
 #include <moxygen/samples/media_server/MoQBroadcastFactory.h>
 #include <moxygen/samples/media_server/MoQMediaServer.h>
@@ -42,6 +43,10 @@ DEFINE_int32(
     10,
     "Seconds between file_abr catalog updates");
 DEFINE_bool(loop, false, "Loop the fMP4 source forever");
+DEFINE_int32(
+    file_pr_control_port,
+    60101,
+    "Loopback HTTP port for file_pr fault controls; 0 disables the UI");
 
 namespace {
 using namespace moxygen;
@@ -61,6 +66,8 @@ int main(int argc, char* argv[]) {
   XCHECK(!FLAGS_input.empty()) << "--input is required";
   XCHECK_GT(FLAGS_fragment_interval_ms, 0);
   XCHECK_GT(FLAGS_catalog_update_interval, 0);
+  XCHECK_GE(FLAGS_file_pr_control_port, 0);
+  XCHECK_LE(FLAGS_file_pr_control_port, 65535);
 
   folly::ScopedEventBaseThread worker("MoQMediaWorker");
   auto* workerEvb = worker.getEventBase();
@@ -98,6 +105,13 @@ int main(int argc, char* argv[]) {
              << " (namespaces resolved by prefix; file backend input="
              << FLAGS_input << ")";
 
+  std::unique_ptr<FilePrControlServer> filePrControl;
+  if (FLAGS_file_pr_control_port > 0) {
+    filePrControl = std::make_unique<FilePrControlServer>(
+        static_cast<uint16_t>(FLAGS_file_pr_control_port));
+    XCHECK(filePrControl->start()) << "cannot start file_pr control server";
+  }
+
   folly::EventBase evb;
   moxygen::SignalHandler handler(&evb, [&evb](int sig) {
     XLOG(INFO) << "[main] received signal " << sig << ", shutting down";
@@ -105,6 +119,7 @@ int main(int argc, char* argv[]) {
   });
   evb.loopForever();
 
+  filePrControl.reset();
   server->stop();
   XLOG(INFO) << "[main] stopped";
   return 0;
