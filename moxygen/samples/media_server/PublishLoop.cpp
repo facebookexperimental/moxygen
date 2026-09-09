@@ -23,7 +23,10 @@ namespace {
 // Returns false if the subgroup errored and should be dropped.
 folly::coro::Task<bool> writeObject(SubgroupConsumer& sg, MediaObject obj) {
   auto res = sg.object(
-      obj.object, std::move(obj.payload), std::move(obj.extensions), false);
+      obj.object,
+      std::move(obj.payload),
+      std::move(obj.extensions),
+      obj.endOfGroup);
   if (res.hasValue()) {
     co_return true;
   }
@@ -126,10 +129,14 @@ folly::coro::Task<void> runPublishLoop(
     }
 
     lastObjectId = object;
+    const bool endOfGroup = obj.endOfGroup;
     const bool ok = co_await writeObject(*sg, std::move(obj));
     if (!ok) {
       sg.reset();
       continue;
+    }
+    if (endOfGroup) {
+      sg.reset();
     }
     ++published;
   }

@@ -14,7 +14,7 @@ namespace moxygen::media_server {
 
 namespace {
 
-constexpr uint32_t kFilePrDropPercent = 10;
+constexpr uint32_t kFilePrDropPercent = 20;
 constexpr uint64_t kFilePrDropSeed = 1;
 static_assert(kFilePrDropPercent <= 100);
 
@@ -23,18 +23,27 @@ static_assert(kFilePrDropPercent <= 100);
 FileMediaSourceResolver::FileMediaSourceResolver(
     std::string catalogPath,
     std::chrono::milliseconds fragmentInterval,
+    std::chrono::milliseconds catalogUpdateInterval,
     bool loop)
-    : source_(std::move(catalogPath), fragmentInterval, loop) {}
+    : source_(std::move(catalogPath), fragmentInterval, loop),
+      catalogUpdateInterval_(catalogUpdateInterval) {
+  XCHECK_GT(catalogUpdateInterval_.count(), 0);
+}
 
 bool FileMediaSourceResolver::isFileNamespace(const TrackNamespace& ns) {
   return !ns.trackNamespace.empty() &&
       (ns.trackNamespace.front() == "file" ||
-       ns.trackNamespace.front() == "file_pr");
+       ns.trackNamespace.front() == "file_pr" ||
+       ns.trackNamespace.front() == "file_abr");
 }
 
 bool FileMediaSourceResolver::isPartiallyReliableNamespace(
     const TrackNamespace& ns) {
   return !ns.trackNamespace.empty() && ns.trackNamespace.front() == "file_pr";
+}
+
+bool FileMediaSourceResolver::isAbrNamespace(const TrackNamespace& ns) {
+  return !ns.trackNamespace.empty() && ns.trackNamespace.front() == "file_abr";
 }
 
 folly::coro::Task<std::shared_ptr<SegmentSource>>
@@ -44,6 +53,9 @@ FileMediaSourceResolver::openTrack(
   if (!isFileNamespace(ns)) {
     XLOG(WARN) << "[FileResolver] openTrack: not a file-backend namespace";
     co_return nullptr;
+  }
+  if (isAbrNamespace(ns) && trackName == kCatalogTrackName) {
+    co_return source_.openAbrCatalog(catalogUpdateInterval_);
   }
   const uint32_t dropPercent =
       isPartiallyReliableNamespace(ns) ? kFilePrDropPercent : 0;

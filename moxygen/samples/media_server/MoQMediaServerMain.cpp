@@ -35,8 +35,12 @@ DEFINE_string(
     input,
     "",
     "Catalog JSON for the file backend (required). Any namespace with first "
-    "tuple field 'file' or 'file_pr' is served from it.");
+    "tuple field 'file', 'file_pr', or 'file_abr' is served from it.");
 DEFINE_int32(fragment_interval_ms, 1000, "fMP4 playback window width (ms)");
+DEFINE_int32(
+    catalog_update_interval,
+    10,
+    "Seconds between file_abr catalog updates");
 DEFINE_bool(loop, false, "Loop the fMP4 source forever");
 
 namespace {
@@ -56,6 +60,7 @@ int main(int argc, char* argv[]) {
 
   XCHECK(!FLAGS_input.empty()) << "--input is required";
   XCHECK_GT(FLAGS_fragment_interval_ms, 0);
+  XCHECK_GT(FLAGS_catalog_update_interval, 0);
 
   folly::ScopedEventBaseThread worker("MoQMediaWorker");
   auto* workerEvb = worker.getEventBase();
@@ -69,6 +74,7 @@ int main(int argc, char* argv[]) {
       std::make_shared<MoQBroadcastFactory>(
           FLAGS_input,
           std::chrono::milliseconds(FLAGS_fragment_interval_ms),
+          std::chrono::seconds(FLAGS_catalog_update_interval),
           FLAGS_loop,
           workerEvb),
       workerEvb);

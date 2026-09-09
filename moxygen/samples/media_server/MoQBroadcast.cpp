@@ -130,9 +130,8 @@ MoQBroadcast::getOrCreateTrack(const std::string& name) {
       throw;
     }
     if (stack->source && stack->source->spec().initialLargest) {
-      // A static track (the catalog): its object is already available, so seed
-      // largest here - before any subscriber is added - so both its SubscribeOk
-      // and a joining FETCH resolve against {0,0} immediately.
+      // Seed retained content before any subscriber is added so SubscribeOk
+      // and a joining FETCH can resolve immediately.
       stack->forwarder->setLargest(*stack->source->spec().initialLargest);
     }
     stack->ready.setValue(folly::Unit{});
@@ -189,15 +188,14 @@ void MoQBroadcast::onForwarderSourceEnded(const std::string& trackName) {
   if (auto it = mediaTracks_.find(trackName); it != mediaTracks_.end()) {
     it->second->ended = true;
   }
-  // When every LIVE track's source has ended, the broadcast is over: drain the
-  // static tracks (the catalog) so their subscribers get publishDone too. A
-  // static track (spec().initialLargest set) has no publish loop and never ends
-  // on its own.
+  // When every media track's source has ended, the broadcast is over: drain the
+  // catalog so its subscribers get publishDone too. A catalog can be static or
+  // remain open waiting for future updates, so it does not end on its own.
   bool anyLive = false;
   bool allLiveEnded = true;
   for (auto& [n, st] : mediaTracks_) {
-    if (st->source && st->source->spec().initialLargest) {
-      continue; // static (catalog): not a live track
+    if (st->source && st->source->spec().kind == TrackKind::Catalog) {
+      continue;
     }
     anyLive = true;
     if (!st->ended) {
@@ -207,7 +205,8 @@ void MoQBroadcast::onForwarderSourceEnded(const std::string& trackName) {
   }
   if (anyLive && allLiveEnded) {
     for (auto& [n, st] : mediaTracks_) {
-      if (!st->source || !st->source->spec().initialLargest || st->ended) {
+      if (!st->source || st->source->spec().kind != TrackKind::Catalog ||
+          st->ended) {
         continue;
       }
       // Mark ended BEFORE publishDone: its onPublishDone re-enters this method,
@@ -280,9 +279,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQBroadcast::subscribe(
             "track ended"});
   }
   XLOG(INFO) << "[MoQBroadcast] subscriber added track=" << ftn.trackName;
-  // Live tracks produce objects through a publish loop; a static track (the
-  // catalog) is served entirely via FETCH and never runs one.
-  if (!stack->loopStarted && !stack->source->spec().initialLargest) {
+  // Non-static tracks produce objects through a publish loop. A source may
+  // still seed initialLargest while continuing to publish future objects.
+  if (!stack->loopStarted && !stack->source->spec().isStatic) {
     startLoop(ftn.trackName, stack);
   }
   co_return sub;

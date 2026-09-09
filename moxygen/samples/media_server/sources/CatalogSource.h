@@ -19,8 +19,8 @@ namespace moxygen::media_server {
 
 // A static, single-object track: it serves one opaque document (the catalog) as
 // the object at {0,0}. It has no live feed, so it flows through the exact same
-// serving stack as a media track but behaves differently in two documented ways
-// keyed off spec().initialLargest being set:
+// serving stack as a media track but behaves differently in two documented
+// ways:
 //   - the broadcast seeds the forwarder's largest to {0,0} so a joining FETCH
 //     resolves immediately, and starts NO publish loop for it;
 //   - the bytes are delivered on a (joining) FETCH via fetch().
@@ -33,6 +33,7 @@ class CatalogSource : public SegmentSource {
     spec_.mode = ForwardMode::SubgroupPerGroup;
     spec_.priority = 0; // highest: discovery should win over media
     spec_.initialLargest = AbsoluteLocation{0, 0};
+    spec_.isStatic = true;
   }
 
   const TrackSpec& spec() const override {
@@ -41,7 +42,7 @@ class CatalogSource : public SegmentSource {
 
   folly::coro::AsyncGenerator<MediaObject&&> objects() override {
     // Static track: nothing is produced live. The broadcast starts no publish
-    // loop for a track with initialLargest set, so this is never pulled; if it
+    // loop for a static track, so this is never pulled; if it
     // ever were, hold open until cancelled rather than signalling end-of-track.
     folly::coro::Baton never;
     co_await never;

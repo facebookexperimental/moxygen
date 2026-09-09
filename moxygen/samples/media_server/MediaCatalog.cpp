@@ -29,6 +29,9 @@ std::string serializeCatalog(const MediaCatalog& catalog) {
     putIfSet(obj, "packaging", t.packaging);
     obj["isLive"] = t.isLive;
     putIfSet(obj, "initRef", t.initRef);
+    if (t.renderGroup) {
+      obj["renderGroup"] = *t.renderGroup;
+    }
     if (t.altGroup) {
       obj["altGroup"] = *t.altGroup;
     }
@@ -39,6 +42,9 @@ std::string serializeCatalog(const MediaCatalog& catalog) {
     }
     if (t.bitrate) {
       obj["bitrate"] = *t.bitrate;
+    }
+    if (t.avgBitrate) {
+      obj["avgBitrate"] = *t.avgBitrate;
     }
     if (t.width) {
       obj["width"] = *t.width;
@@ -91,6 +97,9 @@ std::optional<MediaCatalog> parseCatalog(folly::ByteRange json) {
       info.packaging = t.getDefault("packaging", "").asString();
       info.isLive = t.getDefault("isLive", true).asBool();
       info.initRef = t.getDefault("initRef", "").asString();
+      if (const auto* r = t.get_ptr("renderGroup")) {
+        info.renderGroup = static_cast<int32_t>(r->asInt());
+      }
       if (const auto* a = t.get_ptr("altGroup")) {
         info.altGroup = static_cast<int32_t>(a->asInt());
       }
@@ -101,6 +110,9 @@ std::optional<MediaCatalog> parseCatalog(folly::ByteRange json) {
       }
       if (const auto* b = t.get_ptr("bitrate")) {
         info.bitrate = b->asInt();
+      }
+      if (const auto* b = t.get_ptr("avgBitrate")) {
+        info.avgBitrate = b->asInt();
       }
       if (const auto* w = t.get_ptr("width")) {
         info.width = static_cast<int32_t>(w->asInt());

@@ -30,6 +30,7 @@ class MoQBroadcastFactory : public BroadcastFactory {
   MoQBroadcastFactory(
       std::string fileInput,
       std::chrono::milliseconds fragmentInterval,
+      std::chrono::milliseconds catalogUpdateInterval,
       bool loop,
       folly::Executor* loopExecutor);
 

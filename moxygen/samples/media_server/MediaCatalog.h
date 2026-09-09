@@ -27,20 +27,22 @@ inline constexpr std::string_view kCatalogTrackName = "catalog";
 // today are modeled; parsing ignores unknown fields, so the schema can grow
 // toward the full MSF/CMSF set without breaking older readers.
 struct CatalogTrack {
-  std::string name;                // 5.2.3 (required) MOQT track name
-  std::string role;                // 5.2.6 "video" | "audio" | "caption" | ...
-  std::string packaging;           // 5.2.4 "cmaf" (CMSF) | "loc" | ...
-  bool isLive{true};               // 5.2.7 (required)
-  std::string initRef;             // 5.2.13 -> id in the catalog's initDataList
-  std::optional<int32_t> altGroup; // 5.2.12 switching-set (ABR) id
-  std::string codec;               // 5.2.18
-  std::string mimeType;            // 5.2.19
-  std::optional<int32_t> framerate;  // 5.2.20
-  std::optional<int64_t> bitrate;    // 5.2.22
-  std::optional<int32_t> width;      // 5.2.26
-  std::optional<int32_t> height;     // 5.2.27
-  std::optional<int32_t> samplerate; // 5.2.28
-  std::string channelConfig;         // 5.2.29
+  std::string name;      // 5.2.3 (required) MOQT track name
+  std::string role;      // 5.2.6 "video" | "audio" | "caption" | ...
+  std::string packaging; // 5.2.4 "cmaf" (CMSF) | "loc" | ...
+  bool isLive{true};     // 5.2.7 (required)
+  std::string initRef;   // 5.2.13 -> id in the catalog's initDataList
+  std::optional<int32_t> renderGroup; // 5.2.11 synchronized presentation set
+  std::optional<int32_t> altGroup;    // 5.2.12 switching-set (ABR) id
+  std::string codec;                  // 5.2.18
+  std::string mimeType;               // 5.2.19
+  std::optional<int32_t> framerate;   // 5.2.20
+  std::optional<int64_t> bitrate;     // 5.2.22 maximum bitrate
+  std::optional<int64_t> avgBitrate;  // 5.2.23 average bitrate
+  std::optional<int32_t> width;       // 5.2.26
+  std::optional<int32_t> height;      // 5.2.27
+  std::optional<int32_t> samplerate;  // 5.2.28
+  std::string channelConfig;          // 5.2.29
   // Demo-only (not part of MSF, not serialized): the fragmented-MP4 file
   // backing this track, resolved relative to the catalog file.
   std::string sourceFile;

@@ -6,12 +6,14 @@
 
 #pragma once
 
+#include <moxygen/samples/media_server/MediaCatalog.h>
 #include <moxygen/samples/media_server/MoQMediaSource.h>
 
 #include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace moxygen::media_server {
 
@@ -43,10 +45,17 @@ class Fmp4MediaSource {
       uint32_t dropPercent,
       uint64_t dropSeed);
 
+  std::shared_ptr<SegmentSource> openAbrCatalog(
+      std::chrono::milliseconds updateInterval);
+
  private:
+  MediaCatalog catalogMetadata();
+
   // Assemble the served catalog document (authored metadata + inlined init
   // segments) for the catalog track; wrapped in a CatalogSource by openTrack().
   std::string catalog();
+
+  std::vector<MediaCatalog> abrCatalogSnapshots();
 
   std::string catalogPath_;
   std::shared_ptr<Fmp4PlaybackTimeline> timeline_;

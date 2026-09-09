@@ -10,6 +10,7 @@
 #include <moxygen/samples/media_server/sources/CatalogSource.h>
 
 #include <folly/base64.h>
+#include <folly/coro/Baton.h>
 #include <folly/coro/Sleep.h>
 #include <folly/hash/Hash.h>
 #include <folly/io/IOBuf.h>
@@ -451,13 +452,79 @@ MediaCatalog loadCatalogMetadata(const std::string& path) {
   return def;
 }
 
-MediaObject makeObject(uint64_t group, const std::string& bytes) {
+MediaObject
+makeObject(uint64_t group, const std::string& bytes, bool endOfGroup = false) {
   return MediaObject{
       .group = group,
       .object = 0,
       .payload = folly::IOBuf::copyBuffer(bytes),
-      .extensions = noExtensions()};
+      .extensions = noExtensions(),
+      .endOfGroup = endOfGroup};
 }
+
+int64_t epochMilliseconds() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+// A retained catalog whose complete snapshots advance one group at a time.
+// Group 0 is available immediately via FETCH; later groups are published at
+// the configured interval and become the new result for subsequent FETCHes.
+class UpdatingCatalogSource : public SegmentSource {
+ public:
+  UpdatingCatalogSource(
+      std::vector<MediaCatalog> snapshots,
+      std::chrono::milliseconds updateInterval)
+      : snapshots_(std::move(snapshots)), updateInterval_(updateInterval) {
+    XCHECK(!snapshots_.empty());
+    XCHECK_GT(updateInterval_.count(), 0);
+    spec_.name = std::string(kCatalogTrackName);
+    spec_.kind = TrackKind::Catalog;
+    spec_.mode = ForwardMode::SubgroupPerGroup;
+    spec_.priority = 0;
+    spec_.initialLargest = AbsoluteLocation{0, 0};
+    materialize(0);
+  }
+
+  const TrackSpec& spec() const override {
+    return spec_;
+  }
+
+  folly::coro::AsyncGenerator<MediaObject&&> objects() override {
+    for (size_t group = 1; group < snapshots_.size(); ++group) {
+      co_await folly::coro::sleep(updateInterval_);
+      materialize(group);
+      co_yield makeObject(group, latestDocument_, true);
+    }
+
+    folly::coro::Baton never;
+    co_await never;
+  }
+
+  folly::coro::AsyncGenerator<MediaObject&&> fetch(
+      AbsoluteLocation /*start*/,
+      AbsoluteLocation /*end*/) override {
+    co_yield makeObject(latestGroup_, latestDocument_, true);
+  }
+
+ private:
+  void materialize(size_t group) {
+    auto& snapshot = snapshots_.at(group);
+    snapshot.generatedAt = epochMilliseconds();
+    latestGroup_ = group;
+    latestDocument_ = serializeCatalog(snapshot);
+    XLOG(INFO) << "[Fmp4Source] catalog snapshot group=" << group
+               << " tracks=" << snapshot.tracks.size()
+               << " bytes=" << latestDocument_.size();
+  }
+
+  TrackSpec spec_;
+  std::vector<MediaCatalog> snapshots_;
+  std::chrono::milliseconds updateInterval_;
+  uint64_t latestGroup_{0};
+  std::string latestDocument_;
+};
 
 // Map an MSF role to the MoQ forwarding spec. Audio sorts before video (lower
 // priority value = higher priority); both use one subgroup per fragment.
@@ -663,7 +730,7 @@ Fmp4MediaSource::Fmp4MediaSource(
   XCHECK_GT(fragmentInterval_.count(), 0);
 }
 
-std::string Fmp4MediaSource::catalog() {
+MediaCatalog Fmp4MediaSource::catalogMetadata() {
   // Assemble the served catalog: authored metadata + each track's init segment
   // inlined as base64 (read from the head of its fMP4). sourceFile is
   // input-only and never serialized.
@@ -684,10 +751,62 @@ std::string Fmp4MediaSource::catalog() {
             .type = "inline",
             .data = folly::base64Encode(parsed.init)});
   }
+  return catalog;
+}
+
+std::string Fmp4MediaSource::catalog() {
+  auto catalog = catalogMetadata();
+  catalog.generatedAt = epochMilliseconds();
   auto json = serializeCatalog(catalog);
   XLOG(INFO) << "[Fmp4Source] assembled catalog tracks="
              << catalog.tracks.size() << " catalogBytes=" << json.size();
   return json;
+}
+
+std::vector<MediaCatalog> Fmp4MediaSource::abrCatalogSnapshots() {
+  auto full = catalogMetadata();
+  const auto videoCount = std::count_if(
+      full.tracks.begin(), full.tracks.end(), [](const auto& track) {
+        return track.role == "video";
+      });
+  const size_t snapshotCount = std::max<size_t>(1, videoCount);
+
+  std::vector<MediaCatalog> snapshots;
+  snapshots.reserve(snapshotCount);
+  for (size_t visibleVideos = 1; visibleVideos <= snapshotCount;
+       ++visibleVideos) {
+    auto snapshot = full;
+    snapshot.generatedAt.reset();
+    snapshot.tracks.clear();
+    snapshot.initDataList.clear();
+
+    size_t seenVideos = 0;
+    for (const auto& track : full.tracks) {
+      const bool isVideo = track.role == "video";
+      if (!isVideo || seenVideos++ < visibleVideos) {
+        snapshot.tracks.push_back(track);
+      }
+    }
+    for (const auto& init : full.initDataList) {
+      const bool referenced = std::any_of(
+          snapshot.tracks.begin(),
+          snapshot.tracks.end(),
+          [&init](const auto& track) { return track.initRef == init.id; });
+      if (referenced) {
+        snapshot.initDataList.push_back(init);
+      }
+    }
+    snapshots.push_back(std::move(snapshot));
+  }
+  XLOG(INFO) << "[Fmp4Source] assembled ABR catalog snapshots="
+             << snapshots.size() << " videoTracks=" << videoCount;
+  return snapshots;
+}
+
+std::shared_ptr<SegmentSource> Fmp4MediaSource::openAbrCatalog(
+    std::chrono::milliseconds updateInterval) {
+  return std::make_shared<UpdatingCatalogSource>(
+      abrCatalogSnapshots(), updateInterval);
 }
 
 std::shared_ptr<SegmentSource> Fmp4MediaSource::openTrack(

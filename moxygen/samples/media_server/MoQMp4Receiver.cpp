@@ -165,10 +165,16 @@ class CatalogHandler : public ObjectReceiverCallback {
  public:
   FlowControlState onObject(
       std::optional<TrackAlias> /*trackAlias*/,
-      const ObjectHeader& /*header*/,
+      const ObjectHeader& header,
       Payload payload) override {
     if (payload) {
-      bytes += payload->moveToFbString().toStdString();
+      bytes = payload->moveToFbString().toStdString();
+      auto catalog = parseCatalog(
+          folly::ByteRange(
+              reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
+      XLOG(INFO) << "[Mp4Receiver] catalog object g=" << header.group
+                 << " o=" << header.id << " bytes=" << bytes.size()
+                 << " tracks=" << (catalog ? catalog->tracks.size() : 0);
       // ObjectReceiver delivers a complete MoQ object in each callback, and
       // the joining FETCH returns exactly one retained catalog object.
       baton.post();

@@ -33,12 +33,11 @@ struct TrackSpec {
   ForwardMode mode{ForwardMode::SubgroupPerGroup};
   // MoQ publisher priority; lower is higher (audio should sort before video).
   uint8_t priority{kDefaultPriority};
-  // Set for a STATIC track (e.g. the catalog): its content is a single,
-  // already-available object at this location rather than a live feed. When
-  // set, the broadcast seeds the forwarder's largest here (so a joining FETCH
-  // resolves immediately), serves the object via FETCH, and runs NO publish
-  // loop. Live tracks leave this empty and produce objects through objects().
+  // Set when content is already available at open time, so a joining FETCH can
+  // resolve before the publish loop produces another object.
   std::optional<AbsoluteLocation> initialLargest;
+  // A static source is served through fetch() and has no publish loop.
+  bool isStatic{false};
 };
 
 // One publishable unit. Move-only (owns payload). group/object are assigned by
@@ -48,6 +47,8 @@ struct MediaObject {
   uint64_t object{0};
   Payload payload;
   Extensions extensions{noExtensions()};
+  // Finish the subgroup after this object without ending the track.
+  bool endOfGroup{false};
 };
 
 // The per-track segment feed for ONE track, opened on demand by that track's

@@ -15,12 +15,14 @@ namespace moxygen::media_server {
 MoQBroadcastFactory::MoQBroadcastFactory(
     std::string fileInput,
     std::chrono::milliseconds fragmentInterval,
+    std::chrono::milliseconds catalogUpdateInterval,
     bool loop,
     folly::Executor* loopExecutor)
     : fileResolver_(
           std::make_shared<FileMediaSourceResolver>(
               std::move(fileInput),
               fragmentInterval,
+              catalogUpdateInterval,
               loop)),
       loopExecutor_(loopExecutor) {}
 

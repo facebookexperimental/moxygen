@@ -28,9 +28,9 @@ namespace moxygen::media_server {
 // content knowledge until a client asks. Each track a client requests gets its
 // own serving stack (segment source + fan-out forwarder + cancellable publish
 // loop), built on demand and joined by later subscribers. The catalog is just
-// another track: the resolver returns a static single-object source for
-// kCatalogTrackName, so it flows through the same stack (seeded largest, no
-// publish loop, bytes served via FETCH) with no special-case path here.
+// another track: the resolver may return either a static single-object source
+// or an updating source for kCatalogTrackName. Both flow through the same stack
+// and expose their latest object through FETCH.
 //
 // Teardown is demand-driven, two ways, both via the track's MoQForwarder
 // callbacks and always deferred onto the loop executor (never destroy a
