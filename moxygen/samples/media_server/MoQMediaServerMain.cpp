@@ -35,7 +35,7 @@ DEFINE_string(
     input,
     "",
     "Catalog JSON for the file backend (required). Any namespace with first "
-    "tuple field 'file' is served from it, e.g. file-<id>--video0.");
+    "tuple field 'file' or 'file_pr' is served from it.");
 DEFINE_int32(fragment_interval_ms, 1000, "fMP4 playback window width (ms)");
 DEFINE_bool(loop, false, "Loop the fMP4 source forever");
 

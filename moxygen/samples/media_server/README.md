@@ -3,7 +3,8 @@
 A Media-over-QUIC (MoQ) origin that serves fragmented-MP4 media as MoQ tracks. It
 boots content-agnostic: a client discovers a broadcast's tracks via a `catalog`
 track, then subscribes to the media tracks. Namespaces are routed to a backend by
-their first tuple field (`file` -> local disk today; `oil` -> FBMS later).
+their first tuple field (`file` -> reliable local disk, `file_pr` -> local disk
+with simulated segment loss, `oil` -> FBMS later).
 
 ## Build
 
@@ -19,8 +20,7 @@ buck2 run fbcode//ti/experimental/moxygen/samples/media_server:moq_media_server 
 
 Flags:
 
-- `--input` (required): catalog JSON for the `file` backend. Any namespace whose
-  first tuple field is `file` (e.g. `file-<id>--video0`) is served from it.
+- `--input` (required): catalog JSON for the `file` and `file_pr` backends.
 - `--port` (default `9779`): QUIC/WebTransport listen port.
 - `--fragment_interval_ms` (default `1000`): media-time window width used to
   pace fragments on the shared playback clock.
@@ -42,6 +42,9 @@ buck2 run fbcode//ti/experimental/moxygen/samples/media_server:moq_mp4_receiver 
 ```
 
 It writes `/tmp/moq_out.<track>.mp4` per track (e.g. `video0`, `audio0`).
+Use `file_pr/moq-media` as the namespace to exercise configured segment loss.
+The percentage and deterministic seed are `kFilePrDropPercent` and
+`kFilePrDropSeed` in `sources/FileMediaSourceResolver.cpp`.
 
 ## Layout
 

@@ -9,6 +9,7 @@
 #include <moxygen/samples/media_server/MoQMediaSource.h>
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -29,6 +30,7 @@ class Fmp4PlaybackTimeline;
 //    nullptr if not listed.
 //
 // Nothing is parsed at construction; the object just remembers where to look.
+// A per-open drop policy can omit media segments before retention/publication.
 class Fmp4MediaSource {
  public:
   Fmp4MediaSource(
@@ -36,7 +38,10 @@ class Fmp4MediaSource {
       std::chrono::milliseconds fragmentInterval,
       bool loop);
 
-  std::shared_ptr<SegmentSource> openTrack(const std::string& trackName);
+  std::shared_ptr<SegmentSource> openTrack(
+      const std::string& trackName,
+      uint32_t dropPercent,
+      uint64_t dropSeed);
 
  private:
   // Assemble the served catalog document (authored metadata + inlined init

@@ -28,6 +28,7 @@ moxygen_add_library(moxygen_samples_media_server
     Folly::folly_base64
     Folly::folly_coro_sleep
     Folly::folly_coro_with_cancellation
+    Folly::folly_hash_hash
   EXPORTED_DEPS
     moxygen_samples_media_server_media_catalog
     moxygen_moq

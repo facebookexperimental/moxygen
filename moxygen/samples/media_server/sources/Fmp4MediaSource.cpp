@@ -11,6 +11,7 @@
 
 #include <folly/base64.h>
 #include <folly/coro/Sleep.h>
+#include <folly/hash/Hash.h>
 #include <folly/io/IOBuf.h>
 #include <folly/logging/xlog.h>
 
@@ -486,11 +487,21 @@ class Fmp4Track : public SegmentSource {
       ParsedMp4 parsed,
       std::chrono::milliseconds interval,
       std::shared_ptr<Fmp4PlaybackTimeline> timeline,
+      uint32_t dropPercent,
+      uint64_t dropSeed,
       bool loop)
       : spec_(specForRole(name, role)),
         parsed_(std::move(parsed)),
         interval_(interval),
         timeline_(std::move(timeline)),
+        dropPercent_(
+            spec_.kind == TrackKind::Video || spec_.kind == TrackKind::Audio
+                ? dropPercent
+                : 0),
+        dropSeed_(
+            folly::hash::hash_128_to_64(
+                dropSeed,
+                folly::hash::fnv64_FIXED(name))),
         loop_(loop) {
     timeline_->addTrack();
     XLOG(INFO) << "[Fmp4Source] track=" << spec_.name << " role=" << role
@@ -501,10 +512,16 @@ class Fmp4Track : public SegmentSource {
                << " lastPts="
                << (parsed_.fragments.empty() ? 0 : parsed_.fragments.back().pts)
                << " timescale=" << parsed_.timescale
-               << " windowMs=" << interval_.count() << " loop=" << loop_;
+               << " windowMs=" << interval_.count()
+               << " dropPercent=" << dropPercent_ << " loop=" << loop_;
   }
 
   ~Fmp4Track() override {
+    if (dropPercent_ > 0) {
+      XLOG(INFO) << "[Fmp4Source] track=" << spec_.name
+                 << " partial-reliability candidates=" << dropCandidates_
+                 << " dropped=" << droppedSegments_;
+    }
     timeline_->removeTrack();
   }
 
@@ -551,6 +568,13 @@ class Fmp4Track : public SegmentSource {
                      << " skipped expired fragments=" << skipped;
           skipped = 0;
         }
+        ++dropCandidates_;
+        if (shouldDrop(group)) {
+          ++droppedSegments_;
+          XLOG(DBG1) << "[Fmp4Source] track=" << spec_.name
+                     << " dropped group=" << group;
+          continue;
+        }
 
         std::string bytes = fragment.bytes;
         if (base != 0) {
@@ -590,6 +614,15 @@ class Fmp4Track : public SegmentSource {
   }
 
  private:
+  bool shouldDrop(uint64_t group) const {
+    if (dropPercent_ == 0) {
+      return false;
+    }
+    const uint64_t sample =
+        folly::hash::twang_mix64(folly::hash::hash_128_to_64(dropSeed_, group));
+    return sample % 100 < dropPercent_;
+  }
+
   uint64_t loopSpan() const {
     const auto& first = parsed_.fragments.front();
     const auto& last = parsed_.fragments.back();
@@ -608,7 +641,11 @@ class Fmp4Track : public SegmentSource {
   ParsedMp4 parsed_;
   std::chrono::milliseconds interval_;
   std::shared_ptr<Fmp4PlaybackTimeline> timeline_;
+  uint32_t dropPercent_;
+  uint64_t dropSeed_;
   bool loop_;
+  uint64_t dropCandidates_{0};
+  uint64_t droppedSegments_{0};
   static constexpr size_t kRecentGops = 3;
   std::deque<std::pair<uint64_t, std::string>> recent_;
 };
@@ -654,7 +691,10 @@ std::string Fmp4MediaSource::catalog() {
 }
 
 std::shared_ptr<SegmentSource> Fmp4MediaSource::openTrack(
-    const std::string& trackName) {
+    const std::string& trackName,
+    uint32_t dropPercent,
+    uint64_t dropSeed) {
+  XCHECK_LE(dropPercent, 100);
   if (trackName == kCatalogTrackName) {
     return std::make_shared<CatalogSource>(catalog());
   }
@@ -699,6 +739,8 @@ std::shared_ptr<SegmentSource> Fmp4MediaSource::openTrack(
         std::move(parsed),
         fragmentInterval_,
         timeline_,
+        dropPercent,
+        dropSeed,
         loop_);
   }
   XLOG(WARN) << "[Fmp4Source] openTrack " << trackName << " not in catalog";

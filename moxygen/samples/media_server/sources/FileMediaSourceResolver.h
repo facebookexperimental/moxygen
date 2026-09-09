@@ -16,9 +16,10 @@
 
 namespace moxygen::media_server {
 
-// Resolves namespaces whose first tuple field is "file" from fragmented MP4
-// media on disk. Other namespaces are not handled. A single configured catalog
-// is used for every matching namespace.
+// Resolver for the file-backed modes: "file" serves every segment, while
+// "file_pr" deterministically omits the configured percentage of audio/video
+// segments. Other prefixes resolve to nothing. v0 serves one configured catalog
+// for every file-backed namespace.
 class FileMediaSourceResolver : public MediaSourceResolver {
  public:
   FileMediaSourceResolver(
@@ -31,8 +32,9 @@ class FileMediaSourceResolver : public MediaSourceResolver {
       const std::string& trackName) override;
 
  private:
-  // True if `ns` selects the file backend (first tuple field == "file").
+  // True if `ns` selects either file-backed mode.
   static bool isFileNamespace(const TrackNamespace& ns);
+  static bool isPartiallyReliableNamespace(const TrackNamespace& ns);
 
   Fmp4MediaSource source_;
 };
