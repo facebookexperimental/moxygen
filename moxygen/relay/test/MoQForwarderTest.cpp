@@ -1535,4 +1535,33 @@ TEST_F(MoQForwarderTest, JoiningFetchNonForwardingSubscriptionIsRequestError) {
   EXPECT_EQ(res.error().errorCode, FetchErrorCode::INVALID_RANGE);
 }
 
+// Test: a hard error removes the only subscriber while forEachSubscriber is
+// still iterating. With no open subgroups the forwarder is now empty, so
+// onEmpty fires and drops the last reference to it. forEachSubscriber reads
+// subscribers_ after the callback returns, which is a use-after-free unless
+// onEmpty is deferred until the operation unwinds.
+TEST_F(MoQForwarderTest, LastSubscriberRemovedDuringObjectStreamIteration) {
+  auto session = createMockSession();
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto callback = std::make_shared<ForwarderDestroyingCallback>(forwarder);
+  forwarder->setCallback(callback);
+
+  auto consumer = createMockConsumer();
+  EXPECT_CALL(*consumer, objectStream(_, _, _))
+      .WillOnce(Return(
+          folly::makeUnexpected(MoQPublishError(
+              MoQPublishError::WRITE_ERROR, "Write after stream complete"))));
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  addSubscriber(*forwarder, session, consumer, RequestID(1));
+
+  auto res = forwarder->objectStream(
+      ObjectHeader(0, 0, 0, 0, uint64_t(10)), test::makeBuf(10));
+  EXPECT_TRUE(res.hasError());
+
+  EXPECT_EQ(forwarder, nullptr);
+}
+
 } // namespace moxygen::test
