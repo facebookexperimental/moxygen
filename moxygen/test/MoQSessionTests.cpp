@@ -1418,6 +1418,136 @@ CO_TEST_P_X(MoQUniControlTest, UniControlDataStreamBeforeSetup) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// Drops everything the peer sends, so a test can drive one session in
+// isolation.
+class NullWebTransportHandler : public proxygen::WebTransportHandler {
+ public:
+  void onNewUniStream(
+      proxygen::WebTransport::StreamReadHandle*) noexcept override {}
+  void onNewBidiStream(
+      proxygen::WebTransport::BidiStreamHandle) noexcept override {}
+  void onDatagram(std::unique_ptr<folly::IOBuf>) noexcept override {}
+  void onSessionEnd(folly::Optional<uint32_t>) noexcept override {}
+  void onSessionDrain() noexcept override {}
+};
+
+CO_TEST_P_X(MoQUniControlTest, UniControlSetupStreamFinBeforeSetup) {
+  // A peer that packs SETUP and the FIN into one write finishes its control
+  // stream before the session can hand it to the control read loop. The
+  // transport destroys a peer uni stream's read handle the moment the FIN is
+  // delivered, so the session must not read from that handle again.
+  NullWebTransportHandler nullHandler;
+  clientWt_->setPeerHandler(&nullHandler);
+  // clientWt_ outlives nullHandler and calls back into it on session end.
+  auto peerHandlerGuard =
+      folly::makeGuard([this] { clientWt_->setPeerHandler(nullptr); });
+  clientSession_->setPublishHandler(clientPublisher);
+  clientSession_->setSubscribeHandler(clientSubscriber);
+  clientSession_->start();
+
+  auto* wh = CHECK_NOTNULL(serverWt_->createUniStream().value_or(nullptr));
+  const auto streamId = wh->getID();
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  moxygen::Setup serverSetup;
+  serverSetup.params.insertParam(
+      SetupParameter{
+          folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+          initialMaxRequestID_});
+  writeServerSetup(writeBuf, serverSetup, kVersionDraft18);
+  wh->writeStreamData(writeBuf.move(), /*fin=*/true, nullptr);
+
+  // Returning at all means the FIN-complete SETUP was parsed.
+  co_await clientSession_->setup(getClientSetup(initialMaxRequestID_));
+
+  const auto* peerHandle = serverWt_->writeHandles.at(streamId).get();
+  EXPECT_EQ(peerHandle->readCount_, 1);
+  EXPECT_EQ(peerHandle->stopSendingCount_, 0);
+  EXPECT_FALSE(clientWt_->isSessionClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQUniControlTest, UniControlDataStreamFinBeforeSetup) {
+  // Same shape as UniControlDataStreamBeforeSetup, except the peer FINs the
+  // data stream in the same write. Its read handle is gone by the time the
+  // stream is replayed, so the object has to be delivered from the buffered
+  // bytes alone, with no further read.
+  clientSession_->setPublishHandler(clientPublisher);
+  clientSession_->setSubscribeHandler(clientSubscriber);
+  serverSession_->setPublishHandler(serverPublisher);
+  serverSession_->setSubscribeHandler(serverSubscriber);
+
+  clientSession_->start();
+  serverSession_->start();
+
+  moxygen::Setup serverSetup;
+  serverSetup.params.insertParam(
+      SetupParameter{
+          folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+          initialMaxRequestID_});
+  serverSetup.params.insertParam(
+      SetupParameter{
+          folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
+  serverSession_->sendSetup(std::move(serverSetup));
+
+  auto dataWh = CHECK_NOTNULL(serverWt_->createUniStream().value_or(nullptr));
+  const auto dataStreamId = dataWh->getID();
+  folly::IOBufQueue dataBuf{folly::IOBufQueue::cacheChainLength()};
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  TrackAlias trackAlias(0);
+  ObjectHeader objHeader(0, 0, 0, 0, ObjectStatus::NORMAL);
+  objHeader.length = 5;
+  writer.writeSubgroupHeader(
+      dataBuf, trackAlias, objHeader, SubgroupOptions{.hasExtensions = true});
+  writer.writeStreamObject(
+      dataBuf,
+      getSubgroupStreamType(
+          kVersionDraft18, SubgroupIDFormat::Present, true, false),
+      objHeader,
+      makeBuf(5));
+  dataWh->writeStreamData(dataBuf.move(), /*fin=*/true, nullptr);
+
+  clientSession_->setServerMaxTokenCacheSizeGuess(1024);
+  auto peerSetup =
+      co_await clientSession_->setup(getClientSetup(initialMaxRequestID_));
+
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  expectSubscribe([](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto sgConsumer =
+      std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton baton;
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, _, _))
+      .WillOnce(testing::Return(sgConsumer));
+  // The FIN rode in with the object, so it surfaces as finSubgroup on the
+  // object call itself -- that is the one terminal callback the MoQConsumers
+  // contract allows, so neither of the other two may also fire.
+  EXPECT_CALL(*sgConsumer, object(0, HasChainDataLengthOf(5), _, true))
+      .WillOnce([&](auto, auto, const auto&, auto) {
+        baton.post();
+        return folly::unit;
+      });
+  EXPECT_CALL(*sgConsumer, endOfSubgroup()).Times(0);
+  EXPECT_CALL(*sgConsumer, reset(_)).Times(0);
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_TRUE(res.hasValue());
+
+  co_await baton;
+
+  const auto* peerHandle = serverWt_->writeHandles.at(dataStreamId).get();
+  EXPECT_EQ(peerHandle->readCount_, 1);
+  EXPECT_EQ(peerHandle->stopSendingCount_, 0);
+
+  res.value()->unsubscribe();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQUniControlTest, UniControlDuplicateSetupStream) {
   co_await setupMoQSession();
 
@@ -1455,6 +1585,49 @@ CO_TEST_P_X(MoQUniControlTest, BidiSetupRejectedInUniControlMode) {
     co_await folly::coro::co_reschedule_on_current_executor;
   }
   EXPECT_TRUE(serverWt_->isSessionClosed());
+}
+
+CO_TEST_P_X(MoQUniControlTest, BidiRequestStreamFinWithFirstFrame) {
+  // A peer that packs its request frame and the FIN into one write leaves
+  // nothing more to read. bidiStreamDemuxer hands the FIN to controlReadLoop
+  // as part of initialData, and per WebTransport.h the read handle is invalid
+  // from that point on, so the session must not read it again.
+  co_await setupMoQSession();
+  serverSession_->setPublishHandler(nullptr);
+
+  auto bidiResult = clientWt_->createBidiStream();
+  EXPECT_TRUE(bidiResult.hasValue());
+  if (!bidiResult.hasValue()) {
+    co_return;
+  }
+  const auto streamId = bidiResult->writeHandle->getID();
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  EXPECT_TRUE(
+      writer.writeSubscribeTracks(writeBuf, getSubscribeTracks()).hasValue());
+  bidiResult->writeHandle->writeStreamData(
+      writeBuf.move(), /*fin=*/true, nullptr);
+
+  // The buffered bytes still have to be parsed and answered, so a fix that
+  // simply dropped initialData would not pass. Waiting on the answer rather
+  // than on a fixed number of turns keeps the assertions below meaningful.
+  for (int i = 0;
+       i < 50 && clientWt_->readHandles.at(streamId)->dataWritten_ == 0;
+       ++i) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+  EXPECT_GT(clientWt_->readHandles.at(streamId)->dataWritten_, 0u);
+  // The answer is written before the read loop re-arms, so keep draining: a
+  // spurious post-FIN read has to have landed by the time we sample it.
+  co_await rescheduleN(10);
+
+  const auto* peerHandle = clientWt_->writeHandles.at(streamId).get();
+  EXPECT_EQ(peerHandle->readCount_, 1);
+  EXPECT_EQ(peerHandle->stopSendingCount_, 0);
+  EXPECT_FALSE(serverWt_->isSessionClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
 CO_TEST_P_X(MoQUniControlTest, MaxBufferedPreSetupUniStreams) {

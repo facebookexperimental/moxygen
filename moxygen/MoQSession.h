@@ -13,6 +13,7 @@
 #include <chrono>
 #include <limits>
 
+#include <folly/CancellationToken.h>
 #include <folly/MaybeManagedPtr.h>
 #include <folly/container/F14Map.h>
 #include <folly/coro/Promise.h>
@@ -575,19 +576,96 @@ class MoQSession : public Subscriber,
     std::unique_ptr<GoawayResetTimeoutCallback> goawayResetTimer_;
   };
 
+  // The transport destroys a StreamReadHandle as soon as a read yields a FIN
+  // or an exception, so identity is captured while it is live.  The destructor
+  // sends STOP_SENDING if the stream is still open.
+  class ReadHandleRef {
+   public:
+    ReadHandleRef() = default;
+    ReadHandleRef(
+        MoQSession* session,
+        proxygen::WebTransport::StreamReadHandle* handle)
+        : session_(session),
+          handle_(handle),
+          id_(handle->getID()),
+          cancelToken_(handle->getCancelToken()) {}
+
+    // The callback captures this, so it cannot travel with the move.
+    ReadHandleRef(ReadHandleRef&& other) noexcept
+        : session_(other.session_),
+          handle_(std::exchange(other.handle_, nullptr)),
+          id_(other.id_),
+          cancelToken_(std::move(other.cancelToken_)) {
+      other.cancelCallback_.reset();
+    }
+
+    // Moved once at handoff, never reassigned.
+    ReadHandleRef& operator=(ReadHandleRef&&) = delete;
+    ReadHandleRef(const ReadHandleRef&) = delete;
+    ReadHandleRef& operator=(const ReadHandleRef&) = delete;
+
+    ~ReadHandleRef() {
+      stopSending(0);
+    }
+
+    uint64_t id() const {
+      return id_;
+    }
+
+    const folly::CancellationToken& cancelToken() const {
+      return cancelToken_;
+    }
+
+    // Arms on first use; the callback ctor fires inline if cancellation
+    // already happened, so this also catches a stream that died before it.
+    proxygen::WebTransport::StreamReadHandle* get() {
+      if (handle_ && !cancelCallback_) {
+        cancelCallback_.emplace(cancelToken_, [this] { handle_ = nullptr; });
+      }
+      return handle_;
+    }
+
+    // A FIN frees the handle without requesting cancellation, so it is the one
+    // invalidation the callback cannot see.
+    void onReadComplete(
+        const folly::Try<proxygen::WebTransport::StreamData>& streamData) {
+      if (streamData.hasException() || streamData->fin) {
+        handle_ = nullptr;
+      }
+    }
+
+    void stopSending(uint32_t error) {
+      if (auto* handle = get()) {
+        handle_ = nullptr;
+        XLOG(DBG1) << "Sending STOP_SENDING id=" << id_ << " code=" << error
+                   << " sess=" << session_;
+        handle->stopSending(error);
+      }
+    }
+
+   private:
+    void* session_{nullptr}; // opaque, only streamed as "sess="
+    proxygen::WebTransport::StreamReadHandle* handle_{nullptr};
+    uint64_t id_{0};
+    folly::CancellationToken cancelToken_;
+    std::optional<folly::CancellationCallback> cancelCallback_;
+  };
+
   void onNewUniStream(
       proxygen::WebTransport::StreamReadHandle* rh) noexcept override;
   void onNewBidiStream(
       proxygen::WebTransport::BidiStreamHandle bh) noexcept override;
 
   void handleClientSetup(
-      proxygen::WebTransport::BidiStreamHandle bh,
+      ReadHandleRef readHandle,
+      proxygen::WebTransport::StreamWriteHandle* writeHandle,
       proxygen::WebTransport::StreamData initialData) noexcept;
 
   // Used to tease apart the control stream from subscribe namespace streams.
   // This is only called for draft >= 16.
   folly::coro::Task<void> bidiStreamDemuxer(
-      proxygen::WebTransport::BidiStreamHandle bh) noexcept;
+      ReadHandleRef readHandle,
+      proxygen::WebTransport::StreamWriteHandle* writeHandle) noexcept;
 
   struct BidiStreamConfig {
     std::vector<FrameType> allowedFrames;
@@ -717,7 +795,7 @@ class MoQSession : public Subscriber,
 
   folly::coro::Task<void> dataStreamReadLoop(
       std::shared_ptr<MoQSession> session,
-      proxygen::WebTransport::StreamReadHandle* readHandle,
+      ReadHandleRef readHandle,
       proxygen::WebTransport::StreamData initialBufferedData = {
           nullptr,
           false});
@@ -729,7 +807,7 @@ class MoQSession : public Subscriber,
 
   folly::coro::Task<void> handlePreSetupUniStream(
       std::shared_ptr<MoQSession> session,
-      proxygen::WebTransport::StreamReadHandle* readHandle);
+      ReadHandleRef readHandle);
 
   class TrackPublisherImpl;
   class FetchPublisherImpl;
@@ -887,7 +965,7 @@ class MoQSession : public Subscriber,
       const std::shared_ptr<BidiStreamControl>& control = nullptr);
 
   folly::coro::Task<void> controlReadLoop(
-      proxygen::WebTransport::StreamReadHandle* readHandle,
+      ReadHandleRef readHandle,
       proxygen::WebTransport::StreamData initialData,
       std::unique_ptr<MoQControlCodec> codec = nullptr,
       std::unique_ptr<BidiRequestCallback> bidiCallback = nullptr,
@@ -1313,7 +1391,7 @@ class MoQSession : public Subscriber,
   bool setupComplete_{false};
   bool peerControlStreamReceived_{false};
   struct BufferedUniStream {
-    proxygen::WebTransport::StreamReadHandle* readHandle;
+    ReadHandleRef readHandle;
     proxygen::WebTransport::StreamData initialData;
   };
   std::vector<BufferedUniStream> bufferedPreSetupUniStreams_;
