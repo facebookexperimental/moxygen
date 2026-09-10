@@ -553,6 +553,150 @@ CO_TEST_P_X(MoQSessionTest, FreeUpBufferSpaceOneSubgroup) {
   co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+// A draining session must stay open until every subgroup the subscription
+// opened has finished writing. Retiring the publisher when PUBLISH_DONE is
+// sent, rather than when its streams end, would leave checkForCloseOnDrain
+// looking at an idle session and close it with objects still buffered in the
+// transport.
+CO_TEST_P_X(MoQSessionTest, DrainWaitsForInflightSubgroup) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<TrackConsumer> pub;
+  std::shared_ptr<SubgroupConsumer> sgp;
+  uint64_t objStreamId = 0;
+  RequestID subRequestID{0};
+
+  // The session must stay open across every step below, so drive them from the
+  // test coroutine rather than one synchronous callback.
+  expectSubscribe([&](auto sub, auto p) -> TaskSubscribeResult {
+    pub = p;
+    subRequestID = sub.requestID;
+    objStreamId = serverObjectStreamId();
+    eventBase_.add([this, p, &sgp, objStreamId] {
+      sgp = p->beginSubgroup(0, 0, 0).value();
+      EXPECT_TRUE(sgp->object(0, moxygen::test::makeBuf(10)).hasValue());
+      // Hold the rest of the subgroup in the transport, so the stream is still
+      // open when PUBLISH_DONE goes out.
+      serverWt_->writeHandles[objStreamId]->setImmediateDelivery(false);
+      EXPECT_TRUE(sgp->object(1, moxygen::test::makeBuf(10)).hasValue());
+    });
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  auto sg = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(_, _, _, _))
+      .WillRepeatedly(testing::Return(folly::unit));
+  EXPECT_CALL(*sg, endOfSubgroup()).WillOnce(testing::Return(folly::unit));
+  expectPublishDone();
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await rescheduleN(2);
+  if (!sgp) {
+    ADD_FAILURE() << "subgroup was never opened";
+    co_return;
+  }
+
+  serverSession_->drain();
+  EXPECT_FALSE(serverWt_->isSessionClosed());
+
+  EXPECT_TRUE(
+      pub->publishDone(getTrackEndedPublishDone(subRequestID)).hasValue());
+  EXPECT_FALSE(serverWt_->isSessionClosed());
+
+  serverWt_->writeHandles[objStreamId]->setImmediateDelivery(true);
+  serverWt_->writeHandles[objStreamId]->deliverInflightData();
+  co_await rescheduleN(2);
+  EXPECT_FALSE(serverWt_->isSessionClosed());
+
+  EXPECT_TRUE(sgp->endOfSubgroup().hasValue());
+  co_await rescheduleN(2);
+  EXPECT_TRUE(serverWt_->isSessionClosed());
+}
+// beginSubgroup is legal inside the subscribe handler -- publishEnded() is
+// false until the subscription is DONE -- so a handler may open subgroups and
+// then reject. Dropping the publisher without resetting those streams or
+// clearing its session pointer would leave the peer receiving objects for a
+// subscription it was told was refused.
+CO_TEST_P_X(MoQSessionTest, SubscribeErrorResetsOpenSubgroups) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<SubgroupConsumer> leaked;
+  expectSubscribe(
+      [&leaked](auto sub, auto pub) -> TaskSubscribeResult {
+        leaked = pub->beginSubgroup(0, 0, 0).value();
+        EXPECT_TRUE(leaked->object(0, moxygen::test::makeBuf(10)).hasValue());
+        co_return folly::makeUnexpected(
+            SubscribeError{
+                sub.requestID, SubscribeErrorCode::UNAUTHORIZED, "rejected"});
+      },
+      MoQControlCodec::Direction::SERVER,
+      SubscribeErrorCode::UNAUTHORIZED);
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_TRUE(res.hasError());
+  co_await rescheduleN(5);
+  if (!leaked) {
+    ADD_FAILURE() << "subgroup was never opened";
+    co_return;
+  }
+
+  // The rejected subscription's stream must not still be writable.
+  EXPECT_TRUE(leaked->object(1, moxygen::test::makeBuf(10)).hasError());
+
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(5);
+}
+// A PUBLISH_DONE that fails to serialize still ends the subscription. With a
+// subgroup open the publisher stays in pubTracks_, so teardown reaches it and
+// must not answer an already accepted subscribe with a SUBSCRIBE_ERROR.
+CO_TEST_P_X(MoQSessionTest, PublishDoneWriteFailureAfterSubscribeOK) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<TrackConsumer> pub;
+  std::shared_ptr<SubgroupConsumer> sgp;
+  RequestID subRequestID{0};
+  expectSubscribe([&](auto sub, auto p) -> TaskSubscribeResult {
+    pub = p;
+    subRequestID = sub.requestID;
+    sgp = p->beginSubgroup(0, 0, 0).value();
+    EXPECT_TRUE(sgp->object(0, moxygen::test::makeBuf(10)).hasValue());
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  auto sg = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(_, _, _, _))
+      .WillRepeatedly(testing::Return(folly::unit));
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillRepeatedly(testing::Return(folly::unit));
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await rescheduleN(2);
+  if (!pub) {
+    ADD_FAILURE() << "subscribe handler never ran";
+    co_return;
+  }
+
+  // The peer holds a SUBSCRIBE_OK; nothing may now report this as refused.
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeError(_)).Times(0);
+
+  auto pubDone = getTrackEndedPublishDone(subRequestID);
+  // Over the 64KB control message limit, so the write fails.
+  pubDone.reasonPhrase = std::string(70000, 'x');
+  EXPECT_TRUE(pub->publishDone(pubDone).hasValue());
+  co_await rescheduleN(2);
+
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(5);
+}
 CO_TEST_P_X(MoQSessionTest, TooFarBehindMultipleSubgroups) {
   co_await setupMoQSession();
 
