@@ -8,7 +8,7 @@
 
 #include <folly/container/F14Map.h>
 #include <folly/coro/SharedPromise.h>
-#include <folly/futures/ThreadWheelTimekeeper.h>
+#include <folly/futures/HeapTimekeeper.h>
 #include "moxygen/Publisher.h"
 #include "moxygen/moqtest/Types.h"
 #include "moxygen/moqtest/Utils.h"
@@ -189,8 +189,26 @@ class MoQTestPublisher : public Publisher,
       MoQTestFetchWindow window,
       std::shared_ptr<FetchConsumer> callback);
 
-  // Inter-object delay using the publisher-owned timekeeper.
-  folly::coro::Task<void> delay(uint64_t ms);
+  // Sleeps to a deadline, not for a duration: sleeping objectFrequency after
+  // each object would make the real period "frequency plus however long the
+  // object took".
+  class ObjectPacer {
+   public:
+    ObjectPacer(std::chrono::nanoseconds period, folly::Timekeeper* timekeeper)
+        : period_(period),
+          timekeeper_(timekeeper),
+          nextObject_(std::chrono::steady_clock::now()) {}
+
+    folly::coro::Task<void> awaitNextObject();
+
+   private:
+    std::chrono::nanoseconds period_;
+    folly::Timekeeper* timekeeper_;
+    std::chrono::steady_clock::time_point nextObject_;
+  };
+
+  // Starts the clock, so make one immediately before the loop it paces.
+  ObjectPacer makePacer(const MoQTestParameters& params);
 
   // The forwarder every subscriber to `ftn` attaches to.  Deliberately leaves
   // the track alias unset: addSubscriber then gives each subscriber its own
@@ -223,9 +241,9 @@ class MoQTestPublisher : public Publisher,
   // Cancellation sources for fetches that are still generating objects, so
   // cancelAll() reaches them the way it reaches subscriptions.
   std::vector<std::shared_ptr<folly::CancellationSource>> activeFetches_;
-  // Owned timekeeper for inter-object delays. Avoids the global Timekeeper
-  // singleton, which can crash if used during process teardown.
-  folly::ThreadWheelTimekeeper timekeeper_;
+  // Not the global singleton, which can crash if used during teardown, and not
+  // a wheel: wheels arm through libevent, whose timeouts are jiffy granular.
+  folly::HeapTimekeeper timekeeper_;
   bool includeTimestampExtension_{false};
 };
 
