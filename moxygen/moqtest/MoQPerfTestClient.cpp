@@ -31,7 +31,6 @@ DEFINE_int32(
 // Constants for moq-test scheme parameters
 constexpr uint64_t kStartGroup = 0;
 
-constexpr uint64_t kObjectInterval = 33; // ms
 constexpr int kRequestId = 0;
 constexpr const char* kTrackName = "test";
 
@@ -289,7 +288,8 @@ MoQPerfTestClient::MoQPerfTestClient(
     uint32_t firstObjectSize,
     uint32_t otherObjectSize,
     uint32_t deliveryTimeoutMs,
-    uint32_t objectsPerGroup)
+    uint32_t objectsPerGroup,
+    uint32_t objectIntervalMs)
     : evb_(evb),
       url_(std::move(url)),
       transportType_(transportType),
@@ -303,7 +303,7 @@ MoQPerfTestClient::MoQPerfTestClient(
   params_.objectsPerGroup = objectsPerGroup;
   params_.sizeOfObjectZero = firstObjectSize;
   params_.sizeOfObjectGreaterThanZero = otherObjectSize;
-  params_.objectFrequency = kObjectInterval;
+  params_.objectFrequency = objectIntervalMs;
   params_.sendEndOfGroupMarkers = false;
   params_.testIntegerExtension = -1;  // no extensions
   params_.testVariableExtension = -1; // no extensions
