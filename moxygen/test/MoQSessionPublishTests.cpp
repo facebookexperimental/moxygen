@@ -169,6 +169,77 @@ CO_TEST_P_X(MoQSessionTest, PublishTimeout) {
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+CO_TEST_P_X(Draft18Test, BufferLimitAfterPublishErrorReleasesHandle) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  MoQSettings moqSettings;
+  moqSettings.bufferingThresholds.perSubscription = 100;
+  clientSession_->setMoqSettings(moqSettings);
+
+  folly::coro::Baton allowError;
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&](const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle>)
+              -> Subscriber::PublishResult {
+            auto consumer =
+                std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+            ON_CALL(*consumer, setTrackAlias(_))
+                .WillByDefault(testing::Return(folly::unit));
+            EXPECT_CALL(*consumer, publishDone(_)).Times(0);
+            return Subscriber::PublishConsumerAndReplyTask{
+                consumer,
+                folly::coro::co_invoke(
+                    [&allowError, actualPub]()
+                        -> folly::coro::Task<
+                            folly::Expected<PublishOk, PublishError>> {
+                      co_await allowError;
+                      co_return folly::makeUnexpected(
+                          PublishError{
+                              actualPub.requestID,
+                              PublishErrorCode::INTERNAL_ERROR,
+                              "publish rejected"});
+                    })};
+          });
+
+  auto handle = makePublishHandle();
+  std::weak_ptr<SubscriptionHandle> weakHandle = handle;
+
+  PublishRequest pub;
+  pub.fullTrackName =
+      FullTrackName{TrackNamespace{{"test"}}, "detached-publisher-track"};
+  pub.forward = true;
+  auto result = clientSession_->publish(pub, handle);
+  CO_ASSERT_TRUE(result.hasValue());
+  auto publish = std::move(result.value());
+  auto consumer = publish.consumer;
+  auto reply = co_withExecutor(&eventBase_, std::move(publish.reply)).start();
+
+  auto subgroup = consumer->beginSubgroup(0, 0, 0);
+  CO_ASSERT_TRUE(subgroup.hasValue());
+  clientWt_->writeHandles.rbegin()->second->setImmediateDelivery(false);
+  EXPECT_TRUE(
+      subgroup.value()->object(0, moxygen::test::makeBuf(10)).hasValue());
+
+  handle.reset();
+  allowError.post();
+
+  auto replyResult = co_await std::move(reply).via(&eventBase_);
+  CO_ASSERT_TRUE(replyResult.hasError());
+  EXPECT_EQ(replyResult.error().errorCode, PublishErrorCode::INTERNAL_ERROR);
+  EXPECT_FALSE(weakHandle.expired());
+
+  // PUBLISH_ERROR detached the session while the returned consumer kept the
+  // publisher alive. Exceeding its buffer limit must terminate safely.
+  auto objectResult = subgroup.value()->object(1, moxygen::test::makeBuf(101));
+  EXPECT_TRUE(objectResult.hasError());
+  EXPECT_TRUE(weakHandle.expired());
+  EXPECT_FALSE(clientSession_->isClosed());
+  EXPECT_FALSE(serverSession_->isClosed());
+
+  consumer.reset();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, PublishBasicSuccess) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
 

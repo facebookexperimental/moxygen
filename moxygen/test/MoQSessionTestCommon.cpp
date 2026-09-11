@@ -578,24 +578,27 @@ void MoQSessionTest::expectSubscribe(
         const SubscribeRequest&,
         std::shared_ptr<TrackConsumer>)>& lambda,
     MoQControlCodec::Direction direction,
-    const std::optional<SubscribeErrorCode>& error) {
+    const std::optional<SubscribeErrorCode>& error,
+    bool expectResultStat) {
   EXPECT_CALL(*getPublisher(direction), subscribe(_, _))
       .WillOnce(
-          [this, lambda, error, direction](
+          [this, lambda, error, direction, expectResultStat](
               auto sub, auto pub) -> TaskSubscribeResult {
             EXPECT_CALL(
                 *getSubscriberStatsCallback(oppositeDirection(direction)),
                 recordSubscribeLatency(_));
             pub->setTrackAlias(TrackAlias(sub.requestID.value));
-            if (error) {
-              EXPECT_CALL(
-                  *getPublisherStatsCallback(direction),
-                  onSubscribeError(*error))
-                  .RetiresOnSaturation();
-            } else {
-              EXPECT_CALL(
-                  *getPublisherStatsCallback(direction), onSubscribeSuccess())
-                  .RetiresOnSaturation();
+            if (expectResultStat) {
+              if (error) {
+                EXPECT_CALL(
+                    *getPublisherStatsCallback(direction),
+                    onSubscribeError(*error))
+                    .RetiresOnSaturation();
+              } else {
+                EXPECT_CALL(
+                    *getPublisherStatsCallback(direction), onSubscribeSuccess())
+                    .RetiresOnSaturation();
+              }
             }
             return lambda(sub, pub);
           })

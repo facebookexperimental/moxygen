@@ -409,6 +409,9 @@ class MoQSession : public Subscriber,
     }
 
     void setSession(MoQSession* session) {
+      if (!session) {
+        cancelGoawayResetTimer();
+      }
       session_ = session;
     }
 
@@ -423,10 +426,9 @@ class MoQSession : public Subscriber,
         PublishDone pubDone,
         ResetStreamErrorCode error = ResetStreamErrorCode::INTERNAL_ERROR) = 0;
 
-    // Spec draft-18 §10.4: on request-stream GOAWAY timeout, reset the request
-    // (bidi) stream and the data streams with the given code (no PUBLISH_DONE),
-    // then clean up publisher state. Parallels terminatePublish but resets the
-    // request stream instead of gracefully closing it.
+    // End the request after a draft-18 request-stream GOAWAY timeout.
+    // Subscriptions use PUBLISH_DONE; FETCH resets its request and data
+    // streams.
     virtual void resetForGoaway(ResetStreamErrorCode code) = 0;
 
     virtual void onStreamCreated() {}
@@ -546,10 +548,9 @@ class MoQSession : public Subscriber,
       return !std::exchange(requestStreamGoawaySent_, true);
     }
 
-    // Spec draft-18 §10.4: after sending a request-stream GOAWAY, the sender
-    // SHOULD reset the stream with GOING_AWAY once the advertised timeout
-    // elapses. Arming is the caller's responsibility (only when timeout > 0);
-    // the timer is cancelled on any teardown via ~PublisherImpl.
+    // Expire an established request after its request-stream GOAWAY timeout.
+    // Arming is the caller's responsibility (only when timeout > 0), and
+    // logical request completion cancels the timer.
     void armGoawayResetTimer(std::chrono::milliseconds timeout);
     void cancelGoawayResetTimer();
 
@@ -569,6 +570,7 @@ class MoQSession : public Subscriber,
     State state_{State::PENDING};
     bool publishDoneSent_{false};
     bool requestStreamGoawaySent_{false};
+    bool goawayResetPending_{false};
 
    private:
     class GoawayResetTimeoutCallback;

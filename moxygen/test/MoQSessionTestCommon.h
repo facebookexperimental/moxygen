@@ -232,7 +232,8 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
           const SubscribeRequest&,
           std::shared_ptr<TrackConsumer>)>& lambda,
       MoQControlCodec::Direction direction = MoQControlCodec::Direction::SERVER,
-      const std::optional<SubscribeErrorCode>& error = std::nullopt);
+      const std::optional<SubscribeErrorCode>& error = std::nullopt,
+      bool expectResultStat = true);
 
   void expectPublishDone(
       MoQControlCodec::Direction recipient =

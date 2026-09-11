@@ -1010,12 +1010,16 @@ CO_TEST_P_X(MoQSessionTest, ServerClosesDuringSubscribeHandler) {
   co_await setupMoQSession();
 
   // The server's subscribe handler will close the server session immediately
-  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
-    // Close the server session as soon as the subscribe handler is invoked
-    serverSession_->close(SessionCloseErrorCode::INTERNAL_ERROR);
-    // Optionally, return a valid handle (should not matter)
-    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
-  });
+  expectSubscribe(
+      [this](auto sub, auto /* pub */) -> TaskSubscribeResult {
+        // Close the server session as soon as the subscribe handler is invoked
+        serverSession_->close(SessionCloseErrorCode::INTERNAL_ERROR);
+        // Optionally, return a valid handle (should not matter)
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+      },
+      MoQControlCodec::Direction::SERVER,
+      std::nullopt,
+      /*expectResultStat=*/false);
 
   // The client should see an error or session closure
   auto subscribeRequest = getSubscribe(kTestTrackName);

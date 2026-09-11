@@ -1428,6 +1428,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   }
 
   void unsubscribe() {
+    cancelGoawayResetTimer();
     if (!subscriptionHandle_) {
       XLOG(ERR) << "Received Unsubscribe before sending SUBSCRIBE_OK id="
                 << requestID_ << " trackPub=" << this;
@@ -1441,12 +1442,14 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
   void terminatePublish(PublishDone pubDone, ResetStreamErrorCode code)
       override {
+    cancelGoawayResetTimer();
     resetAllSubgroups(code);
     auto session = std::exchange(session_, nullptr);
     // PUBLISH_DONE already went out; the publisher only lingered here to drain
     // its subgroups, so there is nothing left to tell the peer. A publisher
     // that was already retired has no session to write through either.
     if (publishDoneSent() || !session) {
+      subscriptionHandle_.reset();
       return;
     }
     if (!subscriptionHandle_) {
@@ -1461,14 +1464,23 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   }
 
   void resetForGoaway(ResetStreamErrorCode code) override {
-    resetAllSubgroups(code);
-    subscriptionHandle_.reset();
-    if (replyContext_) {
-      replyContext_->cancel(code);
+    if (!subscriptionHandle_) {
+      resetAllSubgroups(code);
+      if (replyContext_) {
+        replyContext_->cancel(code);
+      }
+      if (auto session = std::exchange(session_, nullptr)) {
+        session->cleanupSubscribePublisherAfterGoawayReset(requestID_);
+      }
+      return;
     }
-    if (auto session = std::exchange(session_, nullptr)) {
-      session->cleanupSubscribePublisherAfterGoawayReset(requestID_);
-    }
+    terminatePublish(
+        PublishDone{
+            requestID_,
+            PublishDoneStatusCode::GOING_AWAY,
+            streamCount_,
+            "Request stream GOAWAY timeout expired"},
+        code);
   }
 
   bool hasOpenDataStreams() const override {
@@ -1594,6 +1606,7 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
   }
 
   void cancel() {
+    cancelGoawayResetTimer();
     cancelled_ = true;
     // reset -> onStreamComplete -> fetchComplete: handles pubTracks_.erase
     // and retireRequestID
@@ -1623,6 +1636,7 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
   }
 
   void onStreamComplete(const ObjectHeader&) override {
+    cancelGoawayResetTimer();
     streamPublisher_.reset();
     PublisherImpl::fetchComplete();
   }
@@ -1999,6 +2013,7 @@ MoQSession::TrackPublisherImpl::publishDone(PublishDone pubDone) {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "publishDone twice or after close"));
   }
+  cancelGoawayResetTimer();
   pubDone.requestID = requestID_;
   if (!subscriptionHandle_) {
     // publishDone called from inside the subscribe handler,
@@ -2815,12 +2830,9 @@ void MoQSession::cancelGoawayTimeout() {
   }
 }
 
-// Per-request reset timer (draft-18 §10.4). Owned by the PublisherImpl whose
-// request stream it resets, so any teardown path that destroys the
-// PublisherImpl cancels it via ~PublisherImpl. The expiry callback re-hops to
-// the executor and re-checks a weak_ptr to the PublisherImpl, so it cannot fire
-// on freed state even though the reset itself destroys the PublisherImpl (and
-// this timer).
+// Per-request timeout for draft-18 §10.4. Owned by the PublisherImpl and
+// cancelled when the request completes. The expiry callback re-hops to the
+// executor and re-checks a weak_ptr to the PublisherImpl.
 class MoQSession::PublisherImpl::GoawayResetTimeoutCallback
     : public quic::QuicTimerCallback {
  public:
@@ -2858,12 +2870,14 @@ void MoQSession::PublisherImpl::armGoawayResetTimer(
     return;
   }
   goawayResetTimer_ = std::make_unique<GoawayResetTimeoutCallback>(*this);
+  goawayResetPending_ = true;
   XLOG(DBG1) << "Scheduling request-stream GOAWAY reset timeoutMs="
              << timeout.count() << " pub=" << this;
   exec->scheduleTimeout(goawayResetTimer_.get(), timeout);
 }
 
 void MoQSession::PublisherImpl::cancelGoawayResetTimer() {
+  goawayResetPending_ = false;
   if (goawayResetTimer_) {
     goawayResetTimer_->cancelTimerCallback();
     goawayResetTimer_.reset();
@@ -2871,13 +2885,13 @@ void MoQSession::PublisherImpl::cancelGoawayResetTimer() {
 }
 
 void MoQSession::PublisherImpl::onGoawayResetTimerExpired() {
-  XLOG(DBG1) << "request-stream GOAWAY reset timer expired, resetting stream "
+  if (!std::exchange(goawayResetPending_, false)) {
+    return;
+  }
+  XLOG(DBG1) << "request-stream GOAWAY timer expired, terminating request "
              << "id=" << requestID_ << " pub=" << this;
-  // Spec draft-18 §10.4: reset the request (bidi) stream and data streams with
-  // GOING_AWAY -- do NOT send PUBLISH_DONE. resetForGoaway also cleans up the
-  // publisher state (pubTracks_.erase + accounting). Safe to destroy this
-  // PublisherImpl here: the expiry callback holds a shared_ptr for the call's
-  // duration (see GoawayResetTimeoutCallback).
+  // End this request with GOING_AWAY. Subscriptions send PUBLISH_DONE, while
+  // FETCH requests reset their request and data streams.
   resetForGoaway(ResetStreamErrorCode::GOING_AWAY);
 }
 
@@ -4353,6 +4367,11 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
       publishHandler_->subscribe(
           std::move(sub),
           std::static_pointer_cast<TrackConsumer>(trackPublisher))));
+  auto publisherIt = pubTracks_.find(requestID);
+  if (publisherIt == pubTracks_.end() ||
+      publisherIt->second.get() != trackPublisher.get()) {
+    co_return;
+  }
   if (subscribeResult.hasException()) {
     XLOG(ERR) << "Exception in Publisher callback ex="
               << subscribeResult.exception().what().toStdString();
@@ -6301,6 +6320,7 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
     return;
   }
   auto pubTrack = it->second;
+  pubTrack->cancelGoawayResetTimer();
   endSubscriptionStat(*pubTrack);
   // A failed write still ends the request. The publisher can outlive this call
   // draining its subgroups, and teardown must not answer the request again.
