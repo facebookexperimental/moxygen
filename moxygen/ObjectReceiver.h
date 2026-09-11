@@ -32,6 +32,12 @@ class ObjectReceiverCallback {
   // For FETCHes:
   // Called when the FETCH subgroup is closed.
   virtual void onAllDataReceived() {}
+  // Draft-18 request-stream GOAWAY: the publisher asks for THIS request to be
+  // migrated. By value and unnamed to match TrackConsumer::goaway, which this
+  // mirrors, and onPublishDone alongside it.
+  //
+  // NOLINTNEXTLINE(performance-unnecessary-value-param)
+  virtual void onGoaway(Goaway /*goaway*/) {}
 };
 
 class ObjectReceiver;
@@ -184,6 +190,10 @@ class ObjectReceiver : public TrackConsumer,
     if (t == FETCH) {
       fetchPublisher_.emplace(callback, trackAlias_);
     }
+  }
+
+  void goaway(Goaway goaway) override {
+    callback_->onGoaway(std::move(goaway));
   }
 
   folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(

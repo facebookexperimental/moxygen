@@ -29,6 +29,7 @@ class MockObjectReceiverCallback : public ObjectReceiverCallback {
   MOCK_METHOD(void, onError, (ResetStreamErrorCode), (override));
   MOCK_METHOD(void, onPublishDone, (PublishDone), (override));
   MOCK_METHOD(void, onAllDataReceived, (), (override));
+  MOCK_METHOD(void, onGoaway, (Goaway), (override));
 };
 
 Payload makePayload(const std::string& str) {
@@ -45,6 +46,23 @@ class ObjectReceiverTest : public Test {
 
   std::shared_ptr<MockObjectReceiverCallback> callback_;
 };
+
+// One implementation serves both the TrackConsumer and FetchConsumer bases --
+// Type only decides whether fetchPublisher_ is built -- so SUBSCRIBE covers
+// the FETCH path too.
+TEST_F(ObjectReceiverTest, GoawayForwardedToCallback) {
+  auto receiver = std::make_shared<ObjectReceiver>(
+      ObjectReceiver::Type::SUBSCRIBE, callback_);
+
+  Goaway goaway;
+  goaway.newSessionUri = "moqt://relay-b.example/path";
+
+  EXPECT_CALL(
+      *callback_,
+      onGoaway(Field(&Goaway::newSessionUri, "moqt://relay-b.example/path")));
+
+  receiver->goaway(goaway);
+}
 
 TEST_F(ObjectReceiverTest, PublishDoneDelivery) {
   auto receiver = std::make_shared<ObjectReceiver>(
