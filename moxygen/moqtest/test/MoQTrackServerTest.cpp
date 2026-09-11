@@ -2271,13 +2271,19 @@ TEST_F(MoQTrackServerTest, DatagramEndOfGroupMarkerIsAnEmptyStatusObject) {
 }
 
 // A cadence regression here surfaces as unexplained drift in a moqperf run, not
-// as a failure.  5ms is under the 10ms jiffy libevent-backed timers quantize to,
-// so anything scheduling through the EventBase doubles the interval.
-TEST_F(MoQTrackServerTest, HoldsTheRequestedObjectFrequency) {
+// as a failure.  The property under test is that producing an object is
+// deducted from the period rather than added to it: sleeping the frequency
+// after each object made the real period "frequency plus however long the
+// object took".  The other half of the fix -- that timers no longer quantize to
+// the 10ms libevent jiffy -- is deliberately not asserted: it is a sub-10ms
+// effect, and seeing it needs a period small enough that CI timer slack swamps
+// the signal.
+TEST_F(MoQTrackServerTest, DeductsObjectWorkFromTheObjectPeriod) {
   using namespace std::chrono;
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
-  constexpr uint64_t kPeriodMs = 5;
-  constexpr uint64_t kObjects = 100;
+  constexpr uint64_t kPeriodMs = 40;
+  constexpr uint64_t kWorkMs = 20;
+  constexpr uint64_t kObjects = 20;
   params_.lastGroupInTrack = 0;
   params_.objectsPerGroup = kObjects;
   params_.lastObjectInTrack = kObjects - 1;
@@ -2288,8 +2294,14 @@ TEST_F(MoQTrackServerTest, HoldsTheRequestedObjectFrequency) {
   auto subgroup =
       std::make_shared<testing::NiceMock<moxygen::MockSubgroupConsumer>>();
   ON_CALL(*subgroup, object(testing::_, testing::_, testing::_, testing::_))
-      .WillByDefault([&times, ok](auto, auto, const auto&, auto) {
+      .WillByDefault([&times, ok, kWorkMs](auto, auto, const auto&, auto) {
         times.push_back(steady_clock::now());
+        // Spin rather than sleep: producing an object has to cost real time on
+        // the generator's thread, and a spin can only ever overrun, which is
+        // the direction both assertions below tolerate.
+        auto until = times.back() + milliseconds(kWorkMs);
+        while (steady_clock::now() < until) {
+        }
         return ok;
       });
   ON_CALL(*subgroup, endOfSubgroup()).WillByDefault(testing::Return(ok));
@@ -2312,16 +2324,26 @@ TEST_F(MoQTrackServerTest, HoldsTheRequestedObjectFrequency) {
     intervals.push_back(
         duration<double, std::milli>(times[i] - times[i - 1]).count());
   }
-  auto mean = duration<double, std::milli>(times.back() - times.front()).count() /
-      double(intervals.size());
+  auto elapsedMs =
+      duration<double, std::milli>(times.back() - times.front()).count();
   std::sort(intervals.begin(), intervals.end());
   auto median = intervals[intervals.size() / 2];
 
-  EXPECT_NEAR(mean, double(kPeriodMs), 2.0)
-      << "a " << kPeriodMs << "ms object frequency produced a " << mean
-      << "ms mean interval";
-  // The pacer partly recovers the rate after a quantized sleep, so the mean
-  // nearly hides quantization while the median still shows it.
-  EXPECT_NEAR(median, double(kPeriodMs), 2.0)
-      << "the typical interval was " << median << "ms";
+  // Both bounds are one-sided in the direction a slow or contended machine
+  // pushes.  A CI hiccup inflates intervals, so the upper bound reads the
+  // median, which a handful of long intervals cannot move; re-anchoring after
+  // one shortens the intervals that follow, so the lower bound reads the total,
+  // which no amount of slowness can shrink.
+  constexpr double kMaxMedianMs = kPeriodMs + kWorkMs / 2.0;
+  EXPECT_LT(median, kMaxMedianMs)
+      << "a " << kPeriodMs << "ms period with " << kWorkMs
+      << "ms of work per object produced a typical interval of " << median
+      << "ms, close to the " << kPeriodMs + kWorkMs
+      << "ms of a generator that sleeps the period after each object instead of"
+         " to a deadline";
+  constexpr double kMinElapsedMs = (kObjects - 1) * (kPeriodMs * 0.8);
+  EXPECT_GT(elapsedMs, kMinElapsedMs)
+      << kObjects << " objects took " << elapsedMs << "ms, short of the "
+      << (kObjects - 1) * kPeriodMs << "ms a " << kPeriodMs
+      << "ms period calls for";
 }
