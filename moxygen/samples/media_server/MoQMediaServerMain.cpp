@@ -14,7 +14,6 @@
 #include <proxygen/httpserver/samples/hq/FizzContext.h>
 
 #include <folly/SocketAddress.h>
-#include <folly/coro/Task.h>
 #include <folly/init/Init.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
