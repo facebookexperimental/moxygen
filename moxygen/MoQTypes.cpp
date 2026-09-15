@@ -557,4 +557,16 @@ Fetch::Fetch(
   }
 }
 
+void applySetupParameters(
+    SetupParameters& params,
+    const std::vector<SetupParameter>& extraParams) {
+  for (const auto& param : extraParams) {
+    params.eraseAllParamsOfType(param.key);
+    auto result = params.insertParam(param);
+    if (result.hasError()) {
+      XLOG(ERR) << "Setup param not allowed, key=" << param.key;
+    }
+  }
+}
+
 } // namespace moxygen
