@@ -244,8 +244,8 @@ class MoQCache {
     folly::Expected<folly::Unit, MoQPublishError> updateLargest(
         AbsoluteLocation current,
         bool endOfTrack = false);
-    // The requested end, clamped to one past the largest object in the track
-    // but never below start.
+    // The requested end, clamped to one past the track's Largest Object but
+    // never below start.  Only clamped when the Largest is known.
     FetchOkEnd fetchOkEnd(AbsoluteLocation start, AbsoluteLocation exclusiveEnd)
         const;
     CacheGroup& getOrCreateGroup(uint64_t groupID);

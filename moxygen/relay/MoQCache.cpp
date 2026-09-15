@@ -461,6 +461,13 @@ MoQCache::FetchOkEnd MoQCache::CacheTrack::fetchOkEnd(
     // start is a session error at the receiver.
     return {start, false};
   }
+  if (!endOfTrack && liveWritebackCount == 0) {
+    // Nothing is holding largestGroupAndObject at the track's Largest, so it
+    // is only the high-water mark of what has been cached.  Reporting the
+    // requested end is what tells the subscriber the objects between the last
+    // one served and the end do not exist.
+    return {exclusiveEnd, false};
+  }
   return {trackEnd, endOfTrack};
 }
 
