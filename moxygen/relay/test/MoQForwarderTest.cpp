@@ -700,6 +700,42 @@ TEST_F(MoQForwarderTest, SubscribeUpdateStartLocationCanDecrease) {
       << "Start location should be updated to {5, 0}";
 }
 
+// Test: a requestUpdate whose new end is at or before its new start is a
+// request-level error, and leaves the subscription's range untouched rather
+// than half applied.
+TEST_F(MoQForwarderTest, SubscribeUpdateEndBeforeStartLeavesRangeUnchanged) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+
+  SubscribeRequest sub;
+  sub.fullTrackName = kFwdTestTrackName;
+  sub.requestID = RequestID(1);
+  sub.locType = LocationType::AbsoluteRange;
+  sub.start = AbsoluteLocation{10, 0};
+  sub.endGroup = 20;
+
+  auto subscriber =
+      forwarder->addSubscriber(createMockSession(), sub, consumer);
+  ASSERT_NE(subscriber, nullptr);
+  const auto originalRange = subscriber->range;
+
+  SubscribeUpdate subscribeUpdate{
+      RequestID(2),
+      sub.requestID,
+      AbsoluteLocation{15, 0},
+      15,
+      kDefaultPriority,
+      true};
+
+  auto updateRes =
+      folly::coro::blockingWait(subscriber->requestUpdate(subscribeUpdate));
+  ASSERT_TRUE(updateRes.hasError());
+  EXPECT_EQ(updateRes.error().errorCode, RequestErrorCode::INVALID_RANGE);
+
+  EXPECT_EQ(subscriber->range.start, originalRange.start);
+  EXPECT_EQ(subscriber->range.end, originalRange.end);
+}
+
 TEST_F(
     MoQForwarderTest,
     RequestUpdateForwardResumeReopensTombstonedSubgroupDraft18) {

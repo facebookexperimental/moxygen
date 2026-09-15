@@ -777,20 +777,15 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
   // - Forward state is optional and only updated if explicitly provided
   // - A New Group can be requested
 
-  // Only update start if provided
-  if (requestUpdate.start.has_value()) {
-    range.start = *requestUpdate.start;
-  }
-
-  // Only update end if provided
+  // Resolve the whole range before applying any of it: a rejected update must
+  // leave it as it was.
+  const auto newStart = requestUpdate.start.value_or(range.start);
   if (requestUpdate.endGroup.has_value()) {
     AbsoluteLocation newEnd{*requestUpdate.endGroup, 0};
-
-    // Validate: for bounded end, the end must not be less than the start
-    if (*requestUpdate.endGroup > 0 && range.start >= newEnd) {
+    // The end is exclusive; 0 means open-ended.
+    if (*requestUpdate.endGroup > 0 && newStart >= newEnd) {
       XLOG(ERR) << "Invalid requestUpdate: end Location " << newEnd
-                << " is less than start " << range.start;
-      session->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+                << " is less than start " << newStart;
       co_return folly::makeUnexpected(RequestError(
           requestUpdate.requestID,
           RequestErrorCode::INVALID_RANGE,
@@ -798,6 +793,7 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
     }
     range.end = newEnd;
   }
+  range.start = newStart;
 
   if (forwarder) {
     // Only update forward state if explicitly provided (per draft 15+)
