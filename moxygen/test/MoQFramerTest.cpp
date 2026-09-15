@@ -2300,6 +2300,60 @@ TEST(MoQFramerTest, TrackNamespacePrefixParamMalformed) {
   EXPECT_TRUE(decoded.hasError());
 }
 
+namespace {
+// Writes a draft-18 REQUEST_UPDATE carrying `prefixParam` and parses it back.
+folly::Expected<RequestUpdate, ErrorCode> roundTripRequestUpdateWithPrefixParam(
+    Parameter prefixParam) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft18);
+
+  RequestUpdate update;
+  update.requestID = RequestID(4);
+  update.params.setMajorVersion(getDraftMajorVersion(kVersionDraft18));
+  update.params.insertParam(std::move(prefixParam));
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto writeResult = writer.writeSubscribeUpdate(writeBuf, update);
+  EXPECT_TRUE(writeResult.hasValue()) << "Failed to write REQUEST_UPDATE";
+
+  auto buffer = writeBuf.move();
+  folly::io::Cursor cursor(buffer.get());
+  quic::follyutils::decodeQuicInteger(cursor); // frame type
+  size_t frameLength = cursor.readBE<uint16_t>();
+  return parser.parseRequestUpdate(cursor, frameLength);
+}
+} // namespace
+
+// The prefix tuple is validated while parsing REQUEST_UPDATE, so a malformed
+// one is a protocol violation the session acts on, not something each consumer
+// of the parameter has to detect for itself.
+TEST(MoQFramerTest, RequestUpdateMalformedPrefixParamIsProtocolViolation) {
+  Parameter bad;
+  bad.key = folly::to_underlying(TrackRequestParamKey::TRACK_NAMESPACE_PREFIX);
+  bad.asString = std::string("\x05", 1); // claims 5 elements, carries none
+
+  auto parsed = roundTripRequestUpdateWithPrefixParam(std::move(bad));
+  ASSERT_TRUE(parsed.hasError());
+  EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST(MoQFramerTest, RequestUpdateWellFormedPrefixParamParses) {
+  const TrackNamespace prefix(std::vector<std::string>{"foo", "bar"});
+  auto parsed = roundTripRequestUpdateWithPrefixParam(
+      MoQFrameWriter::encodeTrackNamespacePrefixParam(prefix, kVersionDraft18));
+  ASSERT_TRUE(parsed.hasValue());
+  EXPECT_EQ(parsed->requestID.value, 4);
+
+  // Validating must not consume the parameter: the relay still decodes it.
+  auto decoded = MoQFrameParser::findTrackNamespacePrefixParam(
+      parsed->params, kVersionDraft18);
+  ASSERT_TRUE(decoded.hasValue());
+  ASSERT_TRUE(decoded.value().has_value());
+  EXPECT_EQ(*decoded.value(), prefix);
+}
+
 TEST_P(MoQFramerTest, OddExtensionLengthVarintBoundary) {
   // This verifies that for odd-type extensions (length-prefixed), the length
   // varint size is computed from the extension payload length, not from

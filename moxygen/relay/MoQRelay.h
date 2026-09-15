@@ -247,13 +247,12 @@ class MoQRelay : public Publisher,
   enum class PrefixUpdateKind { Tracks, Namespace };
   // Shared REQUEST_UPDATE handling for the SUBSCRIBE_TRACKS and
   // SUBSCRIBE_NAMESPACE handles: extracts and decodes the
-  // TRACK_NAMESPACE_PREFIX parameter, closes the session on a malformed tuple
-  // (§2.4.1), and moves the registration (which backfills newly-matched
-  // content). For SUBSCRIBE_TRACKS it also applies the FORWARD parameter, which
-  // updates the Forwarding State on future matching subscriptions (existing
-  // subscriptions are unaffected) and may appear with or without a prefix
-  // change. Returns the (possibly unchanged) prefix on success or a per-request
-  // error to relay back to the peer.
+  // TRACK_NAMESPACE_PREFIX parameter and moves the registration (which
+  // backfills newly-matched content). For SUBSCRIBE_TRACKS it also applies the
+  // FORWARD parameter, which updates the Forwarding State on future matching
+  // subscriptions (existing subscriptions are unaffected) and may appear with
+  // or without a prefix change. Returns the (possibly unchanged) prefix on
+  // success or a per-request error to relay back to the peer.
   folly::Expected<TrackNamespace, RequestError> updatePrefixFromRequest(
       const RequestUpdate& reqUpdate,
       const TrackNamespace& currentPrefix,

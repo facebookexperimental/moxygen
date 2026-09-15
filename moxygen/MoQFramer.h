@@ -325,6 +325,14 @@ class MoQFrameParser {
   static folly::Expected<TrackNamespace, ErrorCode>
   parseTrackNamespacePrefixParam(const std::string& value, uint64_t version);
 
+  // Look for a TRACK_NAMESPACE_PREFIX parameter in `params` and decode it.
+  // An empty optional means the parameter is absent, which callers must be
+  // able to tell apart from a prefix that failed to decode.
+  static folly::Expected<std::optional<TrackNamespace>, ErrorCode>
+  findTrackNamespacePrefixParam(
+      const TrackRequestParameters& params,
+      uint64_t version);
+
   // Version-aware varint decode. Dispatches to QUIC varint on drafts <17 and
   // MoQ varint on drafts >=17. The dispatch flag is cached in
   // `initializeVersion` so this stays a single load + branch. The default cap

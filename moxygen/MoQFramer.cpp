@@ -2140,6 +2140,15 @@ folly::Expected<RequestUpdate, ErrorCode> MoQFrameParser::parseRequestUpdate(
     return folly::makeUnexpected(res2.error());
   }
   handleRequestSpecificParams(requestUpdate, requestSpecificParams);
+  // TRACK_NAMESPACE_PREFIX carries a Track Namespace tuple, so a malformed
+  // tuple is a protocol violation like any other bad field. The parameter
+  // value is self-contained: a short tuple inside it is malformed, not a
+  // signal to wait for more bytes.
+  if (getDraftMajorVersion(*version_) >= 18 &&
+      !findTrackNamespacePrefixParam(requestUpdate.params, *version_)) {
+    XLOG(DBG4) << "parseRequestUpdate: malformed TRACK_NAMESPACE_PREFIX";
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
@@ -3955,6 +3964,25 @@ MoQFrameParser::parseTrackNamespacePrefixParam(
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return TrackNamespace(std::move(tuple.value()));
+}
+
+/*static*/ folly::Expected<std::optional<TrackNamespace>, ErrorCode>
+MoQFrameParser::findTrackNamespacePrefixParam(
+    const TrackRequestParameters& params,
+    uint64_t version) {
+  const auto prefixKey =
+      folly::to_underlying(TrackRequestParamKey::TRACK_NAMESPACE_PREFIX);
+  for (const auto& param : params) {
+    if (param.key != prefixKey) {
+      continue;
+    }
+    auto decoded = parseTrackNamespacePrefixParam(param.asString, version);
+    if (decoded.hasError()) {
+      return folly::makeUnexpected(decoded.error());
+    }
+    return std::move(decoded.value());
+  }
+  return std::optional<TrackNamespace>{};
 }
 
 /*static*/ Parameter MoQFrameWriter::encodeTrackNamespacePrefixParam(

@@ -1280,16 +1280,26 @@ folly::Expected<TrackNamespace, RequestError> MoQRelay::updatePrefixFromRequest(
   // SUBSCRIBE_NAMESPACE updates, so it is ignored there.
   const std::optional<bool> forward = tracks ? reqUpdate.forward : std::nullopt;
 
-  const auto prefixKey =
-      folly::to_underlying(TrackRequestParamKey::TRACK_NAMESPACE_PREFIX);
-  const std::string* prefixValue = nullptr;
-  for (const auto& param : reqUpdate.params) {
-    if (param.key == prefixKey) {
-      prefixValue = &param.asString;
-      break;
-    }
+  auto version = session->getNegotiatedVersion();
+  if (!version) {
+    return folly::makeUnexpected(
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::INTERNAL_ERROR,
+            "No negotiated version"});
   }
-  if (!prefixValue) {
+  auto decoded =
+      MoQFrameParser::findTrackNamespacePrefixParam(reqUpdate.params, *version);
+  if (decoded.hasError()) {
+    // Unreachable for anything that arrived on the wire: the parser rejects a
+    // malformed tuple as a protocol violation before the message gets here.
+    return folly::makeUnexpected(
+        RequestError{
+            reqUpdate.requestID,
+            RequestErrorCode::MALFORMED_TRACK,
+            "Malformed TRACK_NAMESPACE_PREFIX"});
+  }
+  if (!decoded.value()) {
     // No prefix change. A SUBSCRIBE_TRACKS FORWARD-only update just moves the
     // stored Forwarding State in place; anything else has nothing to update.
     if (forward.has_value()) {
@@ -1310,30 +1320,7 @@ folly::Expected<TrackNamespace, RequestError> MoQRelay::updatePrefixFromRequest(
                    : "REQUEST_UPDATE for SUBSCRIBE_NAMESPACE requires a "
                      "TRACK_NAMESPACE_PREFIX"});
   }
-  auto version = session->getNegotiatedVersion();
-  if (!version) {
-    return folly::makeUnexpected(
-        RequestError{
-            reqUpdate.requestID,
-            RequestErrorCode::INTERNAL_ERROR,
-            "No negotiated version"});
-  }
-  auto decoded =
-      MoQFrameParser::parseTrackNamespacePrefixParam(*prefixValue, *version);
-  if (decoded.hasError()) {
-    // A malformed Track Namespace tuple (a zero-length field or more than 32
-    // fields, §2.4.1) is a session-fatal protocol violation, not a per-request
-    // error.
-    XLOG(ERR) << "Malformed TRACK_NAMESPACE_PREFIX in REQUEST_UPDATE, closing "
-              << "session sess=" << session.get();
-    session->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-    return folly::makeUnexpected(
-        RequestError{
-            reqUpdate.requestID,
-            RequestErrorCode::MALFORMED_TRACK,
-            "Malformed TRACK_NAMESPACE_PREFIX"});
-  }
-  auto newPrefix = std::move(decoded.value());
+  auto newPrefix = std::move(*decoded.value());
   // On a combined prefix + FORWARD update, the new Forwarding State is applied
   // inside updateTracksSubscriptionPrefix after the move succeeds (so it is not
   // applied if the move is rejected for overlap) and before the backfill.
