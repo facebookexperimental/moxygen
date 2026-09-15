@@ -57,7 +57,10 @@ class BidiStreamControl {
   }
 
   // Fires at most once on peer-initiated close. Requires setRequestID().
-  void setOnPeerTermination(folly::Function<void(RequestID)> fn) {
+  // The error is present for RESET_STREAM or STOP_SENDING and absent for FIN.
+  void setOnPeerTermination(
+      folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
+          fn) {
     onPeerTerminationFn_ = std::move(fn);
   }
 
@@ -72,7 +75,8 @@ class BidiStreamControl {
   }
 
   // Invoked by the read loop on FIN/RST exit. Idempotent.
-  void firePeerTermination();
+  void firePeerTermination(
+      std::optional<ResetStreamErrorCode> errorCode = std::nullopt);
 
   // Local cancel: RST our write half, cancel the read source (the read
   // loop's exit guard STOP_SENDINGs the read half), and clear the
@@ -129,7 +133,8 @@ class BidiStreamControl {
   folly::CancellationToken sessionShutdownToken_;
   uint64_t negotiatedVersion_;
   uint32_t readCancelCode_{0};
-  folly::Function<void(RequestID)> onPeerTerminationFn_;
+  folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
+      onPeerTerminationFn_;
   std::optional<RequestID> requestID_;
   std::optional<folly::CancellationCallback> writeCancelCb_;
   std::deque<RequestID> responseIDQueue_;

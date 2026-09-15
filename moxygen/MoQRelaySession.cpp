@@ -871,7 +871,7 @@ MoQRelaySession::publishNamespace(
       /*senderCallback=*/nullptr,
       // Peer reset the PUBLISH_NAMESPACE bidi: synthesize
       // PUBLISH_NAMESPACE_CANCEL so our announcement-handler unwinds.
-      [this](RequestID id) {
+      [this](RequestID id, std::optional<ResetStreamErrorCode>) {
         PublishNamespaceCancel cancel;
         cancel.requestID = id;
         cancel.errorCode = RequestErrorCode::CANCELLED;
