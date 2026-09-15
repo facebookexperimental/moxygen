@@ -561,7 +561,8 @@ Subscriber::PublishResult MoQRelay::publish(
           pub.groupOrder,
           LocationType::AbsoluteRange,
           kLocationMin,
-          kLocationMax.group})};
+          kLocationMax.group}),
+      /*consumerReady=*/true};
 }
 
 void MoQRelay::publishBlockedToTracksSubscriber(

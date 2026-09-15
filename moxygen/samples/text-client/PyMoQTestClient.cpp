@@ -285,7 +285,8 @@ class PyMoQSubscriber : public Subscriber,
         subReceiver_,
         folly::coro::makeTask(
             folly::Expected<moxygen::PublishOk, moxygen::PublishError>(
-                publishOk))};
+                publishOk)),
+        /*consumerReady=*/true};
 
     return publishResponse;
   }

@@ -5004,6 +5004,27 @@ void MoQSession::onPublishImpl(
       .start();
 }
 
+bool MoQSession::installPublishReceiveState(
+    const FullTrackName& fullTrackName,
+    RequestID requestID,
+    TrackAlias alias,
+    std::optional<uint64_t> publisherPriority,
+    const std::shared_ptr<TrackConsumer>& consumer) {
+  auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
+      fullTrackName, requestID, consumer, this, alias, logger_, true);
+  auto emplaceRes = subTracks_.try_emplace(alias, trackReceiveState);
+  if (!emplaceRes.second) {
+    XLOG(ERR) << "TrackAlias already in use alias=" << alias
+              << " sess=" << this;
+    return false;
+  }
+  reqIdToTrackAlias_.emplace(requestID, alias);
+  applyResolvedPublisherPriority(publisherPriority, trackReceiveState);
+  consumer->setTrackAlias(alias);
+  deliverBufferedData(alias);
+  return true;
+}
+
 folly::coro::Task<void> MoQSession::handlePublish(
     PublishRequest publish,
     std::shared_ptr<Publisher::SubscriptionHandle> publishHandle,
@@ -5035,6 +5056,13 @@ folly::coro::Task<void> MoQSession::handlePublish(
     } else {
       // Extract the initiator and process reply with co_await
       auto& initiator = publishResult.value();
+      // A ready consumer takes objects before the reply arrives.
+      if (initiator.consumerReady &&
+          !installPublishReceiveState(
+              ftn, requestID, alias, publisherPriority, initiator.consumer)) {
+        close(SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS);
+        co_return;
+      }
       // Process the async reply - this is the only async part
       auto replyResult =
           co_await folly::coro::co_awaitTry(std::move(initiator.reply));
@@ -5045,24 +5073,17 @@ folly::coro::Task<void> MoQSession::handlePublish(
       } else if (replyResult->hasError()) {
         publishErr.reasonPhrase = replyResult->error().reasonPhrase;
       } else {
-        // Create SubscribeTrackReceiveState
-        // Need in order to obtain Alias Later on
-        reqIdToTrackAlias_.emplace(requestID, alias);
-
-        // Add ReceiveState to subTracks_
-        auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
-            ftn, requestID, initiator.consumer, this, alias, logger_, true);
-
-        applyResolvedPublisherPriority(publisherPriority, trackReceiveState);
-
-        initiator.consumer->setTrackAlias(alias);
-        subTracks_.emplace(alias, trackReceiveState);
+        if (!initiator.consumerReady &&
+            !installPublishReceiveState(
+                ftn, requestID, alias, publisherPriority, initiator.consumer)) {
+          close(SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS);
+          co_return;
+        }
         // Ensure the PublishOk we send back corresponds to the inbound
         // publish request (requestID), not the republish's requestID.
         auto pubOk = replyResult->value();
         pubOk.requestID = requestID;
         publishOk(pubOk, *replyContext);
-        deliverBufferedData(alias);
         co_return;
       }
     }
@@ -6027,10 +6048,12 @@ Subscriber::PublishResult MoQSession::publish(
         co_return result;
       });
 
-  // Return PublishConsumerAndReplyTask immediately (no co_await)
+  // Return PublishConsumerAndReplyTask immediately (no co_await). forward, not
+  // the reply, gates whether the consumer accepts writes.
   return Subscriber::PublishConsumerAndReplyTask{
       std::static_pointer_cast<TrackConsumer>(trackPublisher),
-      std::move(replyTask)};
+      std::move(replyTask),
+      /*consumerReady=*/true};
 }
 
 void MoQSession::publishOk(const PublishOk& pubOk, ReplyContext& replyContext) {
@@ -6070,9 +6093,12 @@ void MoQSession::publishError(
 
   auto aliasRes = reqIdToTrackAlias_.find(publishError.requestID);
   if (aliasRes == reqIdToTrackAlias_.end()) {
-    XLOG(ERR) << "No track alias found for requestId="
-              << publishError.requestID;
     return;
+  }
+  auto trackIt = subTracks_.find(aliasRes->second);
+  if (trackIt != subTracks_.end()) {
+    // Readers already holding this state keep writing unless it's cancelled.
+    trackIt->second->cancel();
   }
   removeSubscriptionState(aliasRes->second, publishError.requestID);
 }

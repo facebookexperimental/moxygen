@@ -244,7 +244,8 @@ class MoQTextClient : public Subscriber,
         subTextReceiver_,
         folly::coro::makeTask(
             folly::Expected<moxygen::PublishOk, moxygen::PublishError>(
-                publishOk))};
+                publishOk)),
+        /*consumerReady=*/true};
 
     return publishResponse;
   }

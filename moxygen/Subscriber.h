@@ -105,9 +105,11 @@ class Subscriber {
   struct PublishConsumerAndReplyTask {
     std::shared_ptr<TrackConsumer> consumer;
     folly::coro::Task<folly::Expected<PublishOk, PublishError>> reply;
+    // True if consumer can be used before reply completes.
+    bool consumerReady{false};
   };
 
-  // Send/respond to a PUBLISH - synchronous API o that the publisher can
+  // Send/respond to a PUBLISH - synchronous API so that the publisher can
   // immediately start sending data instead of waiting for a PUBLISH_OK from the
   // peer
   using PublishResult =

@@ -228,7 +228,8 @@ Subscriber::PublishResult MoQTestClient::publish(
   return Subscriber::PublishConsumerAndReplyTask{
       subReceiver_,
       folly::coro::makeTask(
-          folly::Expected<PublishOk, PublishError>(std::move(ok)))};
+          folly::Expected<PublishOk, PublishError>(std::move(ok))),
+      /*consumerReady=*/true};
 }
 
 folly::coro::Task<void> MoQTestClient::subscribeTracks(

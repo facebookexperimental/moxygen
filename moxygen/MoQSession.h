@@ -876,6 +876,13 @@ class MoQSession : public Subscriber,
       PublishRequest publish,
       std::shared_ptr<Publisher::SubscriptionHandle> publishHandle,
       std::shared_ptr<ReplyContext> replyContext);
+  // Returns false if the peer reused a live track alias.
+  bool installPublishReceiveState(
+      const FullTrackName& fullTrackName,
+      RequestID requestID,
+      TrackAlias alias,
+      std::optional<uint64_t> publisherPriority,
+      const std::shared_ptr<TrackConsumer>& consumer);
   void publishOk(const PublishOk& pubOk, ReplyContext& replyContext);
   void publishError(
       const PublishError& publishError,

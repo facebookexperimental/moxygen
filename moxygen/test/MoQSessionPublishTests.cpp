@@ -806,6 +806,148 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+CO_TEST_P_X(MoQSessionTest, PublishConsumerReadyDeliversDataBeforePublishOk) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  folly::coro::Baton allowOk;
+  bool datagramDelivered = false;
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&](const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle>)
+              -> Subscriber::PublishResult {
+            auto consumer =
+                std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+            ON_CALL(*consumer, setTrackAlias(_))
+                .WillByDefault(testing::Return(folly::unit));
+            EXPECT_CALL(*consumer, datagram(_, _, _))
+                .WillOnce(
+                    [&datagramDelivered](const ObjectHeader&, Payload, bool) {
+                      datagramDelivered = true;
+                      return folly::unit;
+                    });
+            EXPECT_CALL(*consumer, publishDone(_))
+                .WillOnce(testing::Return(folly::unit));
+            return Subscriber::PublishConsumerAndReplyTask{
+                consumer,
+                folly::coro::co_invoke(
+                    [&allowOk, actualPub]()
+                        -> folly::coro::Task<
+                            folly::Expected<PublishOk, PublishError>> {
+                      co_await allowOk;
+                      co_return PublishOk{
+                          actualPub.requestID,
+                          true,
+                          128,
+                          GroupOrder::Default,
+                          LocationType::LargestObject,
+                          std::nullopt,
+                          std::nullopt};
+                    }),
+                /*consumerReady=*/true};
+          });
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100}, // largest
+      true,                     // forward
+  };
+
+  auto handle = makePublishHandle();
+  auto result = clientSession_->publish(std::move(pub), handle);
+  CO_ASSERT_TRUE(result.hasValue());
+  auto publish = std::move(result.value());
+  auto reply = co_withExecutor(&eventBase_, std::move(publish.reply)).start();
+
+  EXPECT_TRUE(
+      publish.consumer
+          ->datagram(ObjectHeader(0, 0, 0, 0, 10), moxygen::test::makeBuf(10))
+          .hasValue());
+  co_await rescheduleN(3);
+  EXPECT_TRUE(datagramDelivered)
+      << "A ready consumer should see objects while the reply is pending";
+
+  allowOk.post();
+  auto replyResult = co_await std::move(reply).via(&eventBase_);
+  EXPECT_TRUE(replyResult.hasValue());
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+CO_TEST_P_X(MoQSessionTest, PublishConsumerReadyErrorReleasesState) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  folly::coro::Baton allowError;
+  std::weak_ptr<MockTrackConsumer> weakConsumer;
+  bool datagramDelivered = false;
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&](const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle>)
+              -> Subscriber::PublishResult {
+            auto consumer =
+                std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+            weakConsumer = consumer;
+            ON_CALL(*consumer, setTrackAlias(_))
+                .WillByDefault(testing::Return(folly::unit));
+            EXPECT_CALL(*consumer, datagram(_, _, _))
+                .WillOnce(
+                    [&datagramDelivered](const ObjectHeader&, Payload, bool) {
+                      datagramDelivered = true;
+                      return folly::unit;
+                    });
+            EXPECT_CALL(*consumer, publishDone(_)).Times(0);
+            return Subscriber::PublishConsumerAndReplyTask{
+                consumer,
+                folly::coro::co_invoke(
+                    [&allowError, actualPub]()
+                        -> folly::coro::Task<
+                            folly::Expected<PublishOk, PublishError>> {
+                      co_await allowError;
+                      co_return folly::makeUnexpected(
+                          PublishError{
+                              actualPub.requestID,
+                              PublishErrorCode::INTERNAL_ERROR,
+                              "publish rejected"});
+                    }),
+                /*consumerReady=*/true};
+          });
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100}, // largest
+      true,                     // forward
+  };
+
+  auto handle = makePublishHandle();
+  auto result = clientSession_->publish(std::move(pub), handle);
+  CO_ASSERT_TRUE(result.hasValue());
+  auto publish = std::move(result.value());
+  auto reply = co_withExecutor(&eventBase_, std::move(publish.reply)).start();
+
+  EXPECT_TRUE(
+      publish.consumer
+          ->datagram(ObjectHeader(0, 0, 0, 0, 10), moxygen::test::makeBuf(10))
+          .hasValue());
+  co_await rescheduleN(3);
+  EXPECT_TRUE(datagramDelivered);
+
+  allowError.post();
+  auto replyResult = co_await std::move(reply).via(&eventBase_);
+  CO_ASSERT_TRUE(replyResult.hasError());
+  EXPECT_EQ(replyResult.error().errorCode, PublishErrorCode::INTERNAL_ERROR);
+
+  co_await rescheduleN(3);
+  EXPECT_TRUE(weakConsumer.expired())
+      << "PUBLISH_ERROR should drop the installed receive state";
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, InboundPublish_NoSubscriber_PublishError) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
 

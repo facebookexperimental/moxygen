@@ -220,7 +220,8 @@ class MoQTextClientMobile
         subTextReceiver_,
         folly::coro::makeTask(
             folly::Expected<moxygen::PublishOk, moxygen::PublishError>(
-                publishOk))};
+                publishOk)),
+        /*consumerReady=*/true};
 
     return publishResponse;
   }
