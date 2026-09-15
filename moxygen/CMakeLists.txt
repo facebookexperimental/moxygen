@@ -79,6 +79,8 @@ moxygen_add_library(moxygen_moq
     mvfst::mvfst_common_circular_deque
     mvfst::mvfst_priority_http_priority_queue
     Folly::folly_chrono
+    Folly::folly_concurrency_process_local_unique_id
+    Folly::folly_coro_baton
     Folly::folly_coro_collect
     Folly::folly_coro_future_util
     Folly::folly_utility

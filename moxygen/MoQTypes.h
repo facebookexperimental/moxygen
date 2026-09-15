@@ -748,6 +748,31 @@ enum class ObjectStatus : uint64_t {
 
 std::ostream& operator<<(std::ostream& os, ObjectStatus type);
 
+// Opaque identity for a MoQSession, distinct among all live sessions. Key on
+// this when you only need to tell peers apart; holding the session would also
+// let an identity check turn into a call on the peer.
+struct SessionId {
+  constexpr SessionId() = default;
+  constexpr explicit SessionId(uint64_t v) : value(v) {}
+  uint64_t value{0};
+  constexpr bool operator==(const SessionId& other) const {
+    return value == other.value;
+  }
+  constexpr bool operator!=(const SessionId& other) const {
+    return value != other.value;
+  }
+  struct hash {
+    size_t operator()(const SessionId& id) const {
+      return std::hash<uint64_t>{}(id.value);
+    }
+  };
+};
+std::ostream& operator<<(std::ostream& os, SessionId id);
+
+// 0 is never a real session, so it identifies no session. Compare against this
+// rather than a bare 0 when a SessionId may not have been filled in yet.
+inline constexpr SessionId kUnsetSessionId{};
+
 struct TrackAlias {
   /* implicit */ TrackAlias(uint64_t v) : value(v) {}
   TrackAlias() = default;

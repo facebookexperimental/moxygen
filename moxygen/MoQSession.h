@@ -158,6 +158,10 @@ class MoQSession : public Subscriber,
 
   static std::shared_ptr<MoQSession> getRequestSession();
 
+  SessionId sessionId() const {
+    return id_;
+  }
+
   void setServerMaxTokenCacheSizeGuess(size_t size);
 
   class ServerSetupCallback {
@@ -795,6 +799,10 @@ class MoQSession : public Subscriber,
 
  private:
   static const folly::RequestToken& sessionRequestToken();
+
+  static SessionId makeSessionId();
+
+  const SessionId id_{makeSessionId()};
 
   folly::coro::Task<void> controlWriteLoop(
       proxygen::WebTransport::StreamWriteHandle* writeHandle);

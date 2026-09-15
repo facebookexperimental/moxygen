@@ -247,6 +247,11 @@ std::ostream& operator<<(std::ostream& os, ObjectStatus status) {
   return os;
 }
 
+std::ostream& operator<<(std::ostream& os, SessionId id) {
+  os << id.value;
+  return os;
+}
+
 std::ostream& operator<<(std::ostream& os, TrackAlias alias) {
   os << alias.value;
   return os;

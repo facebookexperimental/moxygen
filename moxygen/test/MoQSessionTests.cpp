@@ -75,6 +75,39 @@ INSTANTIATE_TEST_SUITE_P(
     CurrentVersionOnly,
     testing::Values(
         VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent}));
+namespace {
+std::shared_ptr<MoQRelaySession> makeBareSession(
+    const std::shared_ptr<MoQFollyExecutorImpl>& exec,
+    proxygen::WebTransport* wt) {
+  return std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(wt), exec);
+}
+} // namespace
+
+// Ids key maps that can outlive the session they name, so two sessions must
+// never share one -- including a session created where an earlier one was
+// freed.
+TEST(MoQSessionTest, SessionIdsAreDistinct) {
+  folly::EventBase eventBase;
+  auto exec = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+
+  auto first = makeBareSession(exec, clientWt.get());
+  auto second = makeBareSession(exec, clientWt.get());
+  EXPECT_NE(first->sessionId(), second->sessionId());
+  // Callers use kUnsetSessionId to mean "no peer yet", so a live session must
+  // never collide with it.
+  EXPECT_NE(first->sessionId(), kUnsetSessionId);
+  EXPECT_NE(second->sessionId(), kUnsetSessionId);
+
+  auto firstId = first->sessionId();
+  first.reset();
+  auto third = makeBareSession(exec, clientWt.get());
+  EXPECT_NE(third->sessionId(), firstId);
+  EXPECT_NE(third->sessionId(), second->sessionId());
+}
+
 TEST(MoQSessionTest, SetVersionFromAlpnLegacy) {
   folly::EventBase eventBase;
   auto MoQExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);

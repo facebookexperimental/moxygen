@@ -6,6 +6,7 @@
 
 #include "moxygen/MoQSession.h"
 #include <folly/Chrono.h>
+#include <folly/concurrency/ProcessLocalUniqueId.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/Collect.h>
 #include <folly/coro/FutureUtil.h>
@@ -7737,6 +7738,11 @@ std::shared_ptr<MoQSession> MoQSession::getRequestSession() {
   XCHECK(sessionData);
   XCHECK(sessionData->session);
   return sessionData->session;
+}
+
+SessionId MoQSession::makeSessionId() {
+  // Never returns 0, which is what kUnsetSessionId relies on.
+  return SessionId(folly::processLocalUniqueId());
 }
 
 GroupOrder MoQSession::resolveGroupOrder(
