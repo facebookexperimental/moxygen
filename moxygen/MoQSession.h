@@ -669,7 +669,8 @@ class MoQSession : public Subscriber,
 
   struct BidiStreamConfig {
     std::vector<FrameType> allowedFrames;
-    folly::Function<void(RequestID)> onPeerTermination;
+    folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
+        onPeerTermination;
     // If true, peer FIN fires onPeerTermination (FIN-cancels-the-request, per
     // SUBSCRIBE_NAMESPACE spec). If false, only peer RST fires it.
     bool finIsCancellation{false};
@@ -718,7 +719,8 @@ class MoQSession : public Subscriber,
     BidiRequestCallback(
         MoQSession* session,
         std::shared_ptr<BidiStreamControl> control,
-        folly::Function<void(RequestID)> onPeerTermination)
+        folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
+            onPeerTermination)
         : session_(session),
           control_(std::move(control)),
           onPeerTerminationFn_(std::move(onPeerTermination)) {}
@@ -746,7 +748,8 @@ class MoQSession : public Subscriber,
 
     MoQSession* session_;
     std::shared_ptr<BidiStreamControl> control_;
-    folly::Function<void(RequestID)> onPeerTerminationFn_;
+    folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
+        onPeerTerminationFn_;
     std::optional<RequestID> requestID_;
     std::shared_ptr<ReplyContext> replyContext_;
   };
@@ -781,7 +784,8 @@ class MoQSession : public Subscriber,
       uint64_t minBidiDraftVersion = 18,
       std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback =
           nullptr,
-      folly::Function<void(RequestID)> onPeerTermination = nullptr);
+      folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
+          onPeerTermination = nullptr);
 
   // Fail a pending sender request when its bidi closes before the terminal
   // reply. No-op if the entry is already gone.

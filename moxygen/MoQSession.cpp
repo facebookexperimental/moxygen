@@ -3346,6 +3346,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     std::shared_ptr<BidiStreamControl> control,
     std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  const auto negotiatedVersion = negotiatedVersion_;
   auto g = folly::makeGuard([func = __func__, this] {
     XLOG(DBG1) << "exit " << func << " sess=" << this;
   });
@@ -3368,6 +3369,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   }
 
   bool exceptionalExit = false;
+  std::optional<ResetStreamErrorCode> peerTerminationError;
   auto token = co_await folly::coro::co_current_cancellation_token;
   while (auto* handle = readHandle.get()) {
     if (token.isCancellationRequested()) {
@@ -3380,6 +3382,13 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
       XLOG(DBG4) << folly::exceptionStr(streamData.exception())
                  << " id=" << streamId << " sess=" << this;
       exceptionalExit = true;
+      if (auto* wtEx =
+              streamData
+                  .tryGetExceptionObject<proxygen::WebTransport::Exception>();
+          negotiatedVersion && wtEx) {
+        peerTerminationError =
+            fromWireResetStreamErrorCode(wtEx->error, *negotiatedVersion);
+      }
       break;
     }
     if (!token.isCancellationRequested() &&
@@ -3412,7 +3421,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
       !cancellationSource_.isCancellationRequested() &&
       (exceptionalExit || fin)) {
     if (exceptionalExit || control->finIsCancellation()) {
-      control->firePeerTermination();
+      control->firePeerTermination(peerTerminationError);
     }
     if (control->requestID().has_value()) {
       // No-op if the terminal reply already resolved + erased the pending.
@@ -3475,7 +3484,8 @@ MoQSession::SendRequestResult MoQSession::sendRequest(
     RequestID requestID,
     uint64_t minBidiDraftVersion,
     std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback,
-    folly::Function<void(RequestID)> onPeerTermination) {
+    folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
+        onPeerTermination) {
   if (getDraftMajorVersion(*negotiatedVersion_) >= minBidiDraftVersion) {
     auto bidiStream = wt_->createBidiStream();
     if (!bidiStream) {
@@ -5584,7 +5594,7 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
       /*senderCallback=*/nullptr,
       // Peer close (FIN or RST) before sending a reply: synthesize
       // TRACK_STATUS_ERROR. (sender control finIsCancellation=true.)
-      [this](RequestID id) {
+      [this](RequestID id, std::optional<ResetStreamErrorCode>) {
         onTrackStatusError(
             TrackStatusError{
                 id,
@@ -5893,7 +5903,7 @@ Subscriber::PublishResult MoQSession::publish(
       /*minBidiDraftVersion=*/18,
       /*senderCallback=*/nullptr,
       // Peer cancelled the PUBLISH bidi: tear down the local publisher.
-      [this](RequestID id) {
+      [this](RequestID id, std::optional<ResetStreamErrorCode>) {
         auto it = pubTracks_.find(id);
         if (it == pubTracks_.end()) {
           return;
@@ -6109,10 +6119,12 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
       /*minBidiDraftVersion=*/18,
       /*senderCallback=*/nullptr,
       // streamCount=max so in-flight subgroups flush; timeout delivers done.
-      [this](RequestID id) {
+      [this](RequestID id, std::optional<ResetStreamErrorCode> resetError) {
         PublishDone pd;
         pd.requestID = id;
-        pd.statusCode = PublishDoneStatusCode::SUBSCRIPTION_ENDED;
+        pd.statusCode = resetError == ResetStreamErrorCode::GOING_AWAY
+            ? PublishDoneStatusCode::GOING_AWAY
+            : PublishDoneStatusCode::SUBSCRIPTION_ENDED;
         pd.streamCount = std::numeric_limits<uint64_t>::max();
         pd.reasonPhrase = "peer closed stream before reply";
         onPublishDone(std::move(pd));
@@ -6626,7 +6638,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
       /*senderCallback=*/nullptr,
       // After FETCH_OK we disarm in onFetchOk so the data streams own
       // completion.
-      [this](RequestID id) {
+      [this](RequestID id, std::optional<ResetStreamErrorCode>) {
         auto fetchIt = fetches_.find(id);
         if (fetchIt == fetches_.end()) {
           return;
@@ -6934,7 +6946,7 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
   auto subscribeNamespaceConfig = [this](FrameType wireType) {
     return BidiStreamConfig{
         {wireType, FrameType::REQUEST_UPDATE},
-        [this](RequestID id) {
+        [this](RequestID id, std::optional<ResetStreamErrorCode>) {
           onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
         },
         /*finIsCancellation=*/true};
@@ -6944,11 +6956,15 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
       case FrameType::SUBSCRIBE:
         return BidiStreamConfig{
             {FrameType::SUBSCRIBE, FrameType::REQUEST_UPDATE},
-            [this](RequestID id) { onUnsubscribe(Unsubscribe{id}); }};
+            [this](RequestID id, std::optional<ResetStreamErrorCode>) {
+              onUnsubscribe(Unsubscribe{id});
+            }};
       case FrameType::FETCH:
         return BidiStreamConfig{
             {FrameType::FETCH, FrameType::REQUEST_UPDATE},
-            [this](RequestID id) { onFetchCancel(FetchCancel{id}); }};
+            [this](RequestID id, std::optional<ResetStreamErrorCode>) {
+              onFetchCancel(FetchCancel{id});
+            }};
       case FrameType::PUBLISH:
         return BidiStreamConfig{
             {FrameType::PUBLISH,
@@ -6962,7 +6978,7 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
         // the announce — both signal end-of-PUBLISH_NAMESPACE.
         return BidiStreamConfig{
             {FrameType::PUBLISH_NAMESPACE, FrameType::REQUEST_UPDATE},
-            [this](RequestID id) {
+            [this](RequestID id, std::optional<ResetStreamErrorCode>) {
               PublishNamespaceDone done;
               done.requestID = id;
               onPublishNamespaceDone(std::move(done));
@@ -6979,7 +6995,9 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
         // surfaces via exceptionalExit regardless of finIsCancellation.
         return BidiStreamConfig{
             {FrameType::SUBSCRIBE_TRACKS, FrameType::REQUEST_UPDATE},
-            [this](RequestID id) { onSubscribeTracksStreamClosed(id); }};
+            [this](RequestID id, std::optional<ResetStreamErrorCode>) {
+              onSubscribeTracksStreamClosed(id);
+            }};
       default:
         return std::nullopt;
     }
