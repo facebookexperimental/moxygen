@@ -8,6 +8,7 @@
 
 #include <folly/String.h>
 #include <proxygen/lib/http/HQConnector.h>
+#include <proxygen/lib/http/HeaderConstants.h>
 #include <proxygen/lib/http/session/QuicProtocolInfo.h>
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
 #include <quic/common/address/QuicSocketAddressBridge.h>
@@ -22,10 +23,12 @@ proxygen::HTTPMessage getWebTransportConnectRequest(
   req.setSecure(true);
   req.getHeaders().set(
       proxygen::HTTP_HEADER_HOST, url.getHostAndPortOmitDefault());
-  req.getHeaders().add("Sec-Webtransport-Http3-Draft02", "1");
+  req.getHeaders().add(
+      proxygen::headers::kSecWebTransportHttp3Draft02,
+      proxygen::headers::kSecWebTransportHttp3Draft02Value);
   req.setURL(url.makeRelativeURL());
   req.setMethod(proxygen::HTTPMethod::CONNECT);
-  req.setUpgradeProtocol("webtransport");
+  req.setUpgradeProtocol(std::string{proxygen::headers::kWebTransport});
 
   // Set available MoQT protocols for version negotiation (skip if empty)
   if (!wtProtocols.empty()) {
