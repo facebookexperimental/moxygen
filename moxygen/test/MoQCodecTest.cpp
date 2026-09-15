@@ -531,28 +531,32 @@ TEST_P(MoQCodecTest, Fetch) {
   obj.length = 5;
   res = moqFrameWriter_.writeStreamObject(
       writeBuf, streamType, obj, folly::IOBuf::copyBuffer("hello"));
-  obj.group++;
-  obj.id = 0;
-  obj.status = ObjectStatus::END_OF_TRACK;
-  obj.length = 0;
-  res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
-  obj.id++;
-  obj.status = ObjectStatus::END_OF_GROUP;
-  obj.length = 0;
-  res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
 
   EXPECT_CALL(objectStreamCodecCallback_, onFetchHeader(testing::_));
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, 5, _, true, false, testing::_));
-  EXPECT_CALL(
-      objectStreamCodecCallback_,
-      onObjectStatus(
-          3, 3, 0, std::optional<uint8_t>(5), ObjectStatus::END_OF_TRACK));
-  // object after terminal status
-  EXPECT_CALL(
-      objectStreamCodecCallback_,
-      onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+
+  if (fetchObjectsHaveStatus(GetParam())) {
+    obj.group++;
+    obj.id = 0;
+    obj.status = ObjectStatus::END_OF_TRACK;
+    obj.length = 0;
+    res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
+    obj.id++;
+    obj.status = ObjectStatus::END_OF_GROUP;
+    obj.length = 0;
+    res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
+
+    EXPECT_CALL(
+        objectStreamCodecCallback_,
+        onObjectStatus(
+            3, 3, 0, std::optional<uint8_t>(5), ObjectStatus::END_OF_TRACK));
+    // object after terminal status
+    EXPECT_CALL(
+        objectStreamCodecCallback_,
+        onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  }
   objectStreamCodec_.onIngress(writeBuf.move(), false);
 }
 
@@ -1739,6 +1743,9 @@ TEST_P(MoQCodecTest, ObjectPayloadBlockedPropagation) {
 
 // Test that onObjectStatus returning BLOCKED propagates on a fetch stream
 TEST_P(MoQCodecTest, FetchObjectStatusBlockedPropagation) {
+  if (!fetchObjectsHaveStatus(GetParam())) {
+    GTEST_SKIP() << "FETCH objects have no Object Status in draft 16+";
+  }
   testing::NiceMock<MockMoQCodecCallback> callback;
   MoQObjectStreamCodec codec(&callback);
   codec.initializeVersion(GetParam());

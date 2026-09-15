@@ -115,6 +115,10 @@ bool useUniControlStreams(uint64_t version);
 // token aliasing) and request-frame-on-control-stream patterns.
 bool useBidiRequestStreams(uint64_t version);
 
+// True if Objects on a FETCH stream carry an Object Status field. Draft 16
+// removed it; gaps in the serialized Object IDs now mean "does not exist".
+bool fetchObjectsHaveStatus(uint64_t version);
+
 // Returns a comma-separated list of supported versions, useful for logging.
 std::string getSupportedVersionsString();
 

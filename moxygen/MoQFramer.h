@@ -386,7 +386,8 @@ class MoQFrameParser {
   folly::Expected<folly::Unit, ErrorCode> parseObjectStatusAndLength(
       folly::io::Cursor& cursor,
       size_t& length,
-      ObjectHeader& objectHeader) const noexcept;
+      ObjectHeader& objectHeader,
+      bool hasStatus = true) const noexcept;
 
   bool isValidStatusForExtensions(
       const ObjectHeader& objectHeader) const noexcept;

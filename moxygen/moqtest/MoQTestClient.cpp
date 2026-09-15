@@ -368,6 +368,9 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::fetch(
   // Set Current Request
   initializeExpecteds(params, resolveFetchWindow(params, fetchRange));
   startReceiving(fetchState_, ReceivingType::FETCH);
+  if (fetchState_.endOfGroupOmitted) {
+    trimExpectedEndOfGroupMarkers(window_.first.group, window_.last);
+  }
 
   // Fetch to the receiver
   auto res = co_await moqClient_->moqSession_->fetch(fetch, fetchReceiver_);
@@ -481,6 +484,11 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::join(
       validateJoiningFetchOk(
           fetchHandle_->fetchOk(), params, *largest, startGroup);
       trimExpectedBefore(startGroup);
+      if (fetchState_.endOfGroupOmitted) {
+        // The backfill stops at Largest, so a group the two halves split
+        // still gets its marker from the subscription.
+        trimExpectedEndOfGroupMarkers(startGroup, *largest);
+      }
       // Where the two halves met, so a caller can tell the join landed
       // mid-track.
       XLOG(INFO) << "MoQTest: joining FETCH backfills groups " << startGroup
@@ -782,11 +790,18 @@ bool MoQTestClient::validateSubscribedData(
   if (!state.seeded) {
     seedCursor(state, header);
   }
+  // Only TWO_SUBGROUPS_PER_GROUP has a slot per subgroup.
+  // ONE_SUBGROUP_PER_OBJECT numbers its subgroups by object ID, so indexing by
+  // the subgroup would run off the array.
+  const size_t cursorSlot =
+      preference == ForwardingPreference::TWO_SUBGROUPS_PER_GROUP
+      ? header.subgroup
+      : 0;
   // Validate Group, Object Id, SubGroup (and End of Group Markers if
   // applicable)
   XLOG(DBG1) << "MoQTest DEBUGGING: Expected Group=" << state.expectedGroup
              << " Expected ObjectId="
-             << state.subgroupToExpectedObjId[header.subgroup];
+             << state.subgroupToExpectedObjId[cursorSlot];
   XLOG(DBG1) << "MoQTest DEBUGGING: Object Group=" << header.group
              << " end of group markers=" << params_.sendEndOfGroupMarkers
              << " expected end of group markers=" << state.expectEndOfGroup;
@@ -889,11 +904,11 @@ bool MoQTestClient::validateSubscribedData(
 
   if (preference != ForwardingPreference::DATAGRAM &&
       preference != ForwardingPreference::ONE_SUBGROUP_PER_OBJECT &&
-      header.id != state.subgroupToExpectedObjId[header.subgroup]) {
+      header.id != state.subgroupToExpectedObjId[cursorSlot]) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Object Id Mismatch: Actual="
         << header.id
-        << "  Expected=" << state.subgroupToExpectedObjId[header.subgroup]
+        << "  Expected=" << state.subgroupToExpectedObjId[cursorSlot]
         << " (Subgroup=" << header.subgroup << ")";
     return false;
   }
@@ -935,7 +950,7 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForOneSubgroupPerGroup(
     ReceiveState& state,
     MoQTestParameters& params) {
   // Adjust Expected Group and ObjectId
-  const uint64_t lastObject = window_.lastObjectIn(state.expectedGroup);
+  const uint64_t lastObject = lastObjectDeliveredIn(state, state.expectedGroup);
   if (state.expectedGroup < window_.last.group &&
       state.subgroupToExpectedObjId[0] >= lastObject) {
     state.expectedGroup += params.groupIncrement;
@@ -962,7 +977,7 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForTwoSubgroupsPerGroup(
     ReceiveState& state,
     const ObjectHeader& header,
     MoQTestParameters& params) {
-  const uint64_t lastObject = window_.lastObjectIn(state.expectedGroup);
+  const uint64_t lastObject = lastObjectDeliveredIn(state, state.expectedGroup);
   auto subgroup = header.subgroup;
   // Adjust Expected Group, ObjectId and Subgroup
   if (state.expectedGroup < window_.last.group &&
@@ -1092,6 +1107,16 @@ void MoQTestClient::trimExpectedBefore(uint64_t group) {
       expectedObjects_.begin(), expectedObjects_.lower_bound({group, 0}));
 }
 
+void MoQTestClient::trimExpectedEndOfGroupMarkers(
+    uint64_t first,
+    AbsoluteLocation last) {
+  const uint64_t marker = lastObjectInGroup(params_);
+  for (uint64_t group = first; AbsoluteLocation{group, marker} <= last;
+       group += params_.groupIncrement) {
+    expectedObjects_.erase({group, marker});
+  }
+}
+
 void MoQTestClient::validateJoiningFetchOk(
     const FetchOk& ok,
     const MoQTestParameters& params,
@@ -1165,10 +1190,26 @@ void MoQTestClient::startReceiving(
   }
   // A fetched datagram track is the one combination the server cannot mark:
   // FetchConsumer::endOfGroup() has no way to flag its status object as a
-  // datagram.  Every other combination honors the parameter.
-  state.expectEndOfGroup = params_.sendEndOfGroupMarkers &&
-      !(type == ReceivingType::FETCH &&
-        params_.forwardingPreference == ForwardingPreference::DATAGRAM);
+  // datagram, so the marker arrives as an ordinary object instead.
+  const bool datagramFetch = type == ReceivingType::FETCH &&
+      params_.forwardingPreference == ForwardingPreference::DATAGRAM;
+  // From draft 16 a FETCH object has no status field, so a marker has no
+  // encoding at all and the object it sits on is left out of the response.
+  state.endOfGroupOmitted = params_.sendEndOfGroupMarkers && !datagramFetch &&
+      type == ReceivingType::FETCH && draftMajorVersion() >= 16;
+  state.expectEndOfGroup = params_.sendEndOfGroupMarkers && !datagramFetch &&
+      !state.endOfGroupOmitted;
+}
+
+uint64_t MoQTestClient::lastObjectDeliveredIn(
+    const ReceiveState& state,
+    uint64_t group) const {
+  const uint64_t last = window_.lastObjectIn(group);
+  if (!state.endOfGroupOmitted || last != lastObjectInGroup(params_) ||
+      last < window_.firstObjectIn(group) + params_.objectIncrement) {
+    return last;
+  }
+  return last - params_.objectIncrement;
 }
 
 AdjustedExpectedResult MoQTestClient::adjustExpected(

@@ -572,6 +572,22 @@ CO_TEST_F(MoQCacheTest, TestFetchAllHitEOG) {
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 0}));
 }
 
+// A zero-length object arrives from the codec with a null payload. Draft 16+
+// dropped Object Status from FETCH, so this is the ordinary encoding for an
+// empty object rather than something only a misbehaving peer sends.
+CO_TEST_F(MoQCacheTest, TestFetchZeroLengthObjectFromUpstream) {
+  expectUpstreamFetch({0, 0}, {0, 1}, 0, AbsoluteLocation{0, 1});
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+
+  EXPECT_CALL(*consumer_, object(0, 0, 0, _, _, _, _))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer_, endOfFetch()).WillOnce(Return(folly::unit));
+  upstreamFetchConsumer_->object(0, 0, 0, nullptr);
+  upstreamFetchConsumer_->endOfFetch();
+}
+
 CO_TEST_F(MoQCacheTest, TestFetchMissUpstreamError) {
   // Test case for fetch with complete cache miss when no track is present
   expectUpstreamFetch(

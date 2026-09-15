@@ -400,12 +400,16 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_EQ(r22aobj.extensions, Extensions(test::getTestExtensions(), {}));
     skip(cursor, *r22aobj.length);
 
+    const auto emptyStatus = fetchObjectsHaveStatus(GetParam())
+        ? ObjectStatus::END_OF_GROUP
+        : ObjectStatus::NORMAL;
     auto r23 =
         parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
     testUnderflowResult(r23);
     ASSERT_TRUE(std::holds_alternative<ObjectHeader>(r23->value));
     auto& r23obj = std::get<ObjectHeader>(r23->value);
-    EXPECT_EQ(r23obj.status, ObjectStatus::END_OF_GROUP);
+    EXPECT_EQ(r23obj.status, emptyStatus);
+    EXPECT_EQ(r23obj.length, 0);
 
     auto r23a =
         parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
@@ -413,7 +417,8 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     ASSERT_TRUE(std::holds_alternative<ObjectHeader>(r23a->value));
     auto& r23aobj = std::get<ObjectHeader>(r23a->value);
     EXPECT_EQ(r23aobj.extensions, Extensions({}, {}));
-    EXPECT_EQ(r23aobj.status, ObjectStatus::END_OF_GROUP);
+    EXPECT_EQ(r23aobj.status, emptyStatus);
+    EXPECT_EQ(r23aobj.length, 0);
   }
 
  protected:
@@ -1356,12 +1361,15 @@ TEST_P(MoQFramerTest, ParseFetchHeader) {
       folly::IOBuf::copyBuffer("EFGH"));
   EXPECT_TRUE(result.hasValue());
 
-  // Test ObjectStatus::END_OF_GROUP
-  expectedObjectHeader.status = ObjectStatus::END_OF_GROUP;
-  expectedObjectHeader.length = 0;
-  result = writer_.writeStreamObject(
-      writeBuf, StreamType::FETCH_HEADER, expectedObjectHeader, nullptr);
-  EXPECT_TRUE(result.hasValue());
+  // Test ObjectStatus::END_OF_GROUP. v16+ FETCH objects have no status field.
+  const bool hasStatus = fetchObjectsHaveStatus(GetParam());
+  if (hasStatus) {
+    expectedObjectHeader.status = ObjectStatus::END_OF_GROUP;
+    expectedObjectHeader.length = 0;
+    result = writer_.writeStreamObject(
+        writeBuf, StreamType::FETCH_HEADER, expectedObjectHeader, nullptr);
+    EXPECT_TRUE(result.hasValue());
+  }
 
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
@@ -1383,6 +1391,10 @@ TEST_P(MoQFramerTest, ParseFetchHeader) {
   EXPECT_EQ(*obj1.length, 4);
   cursor.skip(*obj1.length);
 
+  if (!hasStatus) {
+    EXPECT_EQ(cursor.totalLength(), 0);
+    return;
+  }
   parseResult = parser_.parseFetchObjectHeader(
       cursor, cursor.totalLength(), headerTemplate);
   EXPECT_TRUE(parseResult.hasValue());
@@ -3071,6 +3083,12 @@ TEST_P(MoQFramerTest, FetchObjectWithExtensionsAndNonNormalStatus) {
 
   auto objResult = writer_.writeStreamObject(
       writeBuf, StreamType::FETCH_HEADER, obj, nullptr);
+
+  if (!fetchObjectsHaveStatus(GetParam())) {
+    EXPECT_TRUE(objResult.hasError())
+        << "v16+ FETCH objects have no Object Status field to write";
+    return;
+  }
   EXPECT_TRUE(objResult.hasValue());
 
   auto buffer = writeBuf.move();
@@ -6067,6 +6085,101 @@ TEST_F(MoQFramerV18Test, WriteFetchObjectDeltaEncodesAscendingOrder) {
   EXPECT_EQ(readVarintFrom(cursor), 1);
   cursor.skip(1);
   EXPECT_EQ(cursor.totalLength(), 0);
+}
+
+TEST_F(MoQFramerV18Test, WriteFetchZeroLengthObjectOmitsStatus) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeFetchHeader(writeBuf, RequestID(1)).hasValue());
+
+  ObjectHeader empty(10, 0, 4, 7, uint64_t(0));
+  ASSERT_TRUE(
+      writer_
+          .writeStreamObject(writeBuf, StreamType::FETCH_HEADER, empty, nullptr)
+          .hasValue());
+  ObjectHeader next(10, 0, 5, 7, uint64_t(1));
+  ASSERT_TRUE(writer_
+                  .writeStreamObject(
+                      writeBuf,
+                      StreamType::FETCH_HEADER,
+                      next,
+                      folly::IOBuf::copyBuffer("b"))
+                  .hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  EXPECT_EQ(
+      readVarintFrom(cursor), folly::to_underlying(StreamType::FETCH_HEADER));
+  EXPECT_EQ(readVarintFrom(cursor), RequestID(1).value);
+
+  EXPECT_EQ(readVarintFrom(cursor), 0x1c);
+  EXPECT_EQ(readVarintFrom(cursor), 10);
+  EXPECT_EQ(readVarintFrom(cursor), 4);
+  EXPECT_EQ(cursor.readBE<uint8_t>(), 7);
+  EXPECT_EQ(readVarintFrom(cursor), 0);
+
+  // No status varint between the two objects; 0x00 here would be read as the
+  // next object's Serialization Flags.
+  EXPECT_EQ(readVarintFrom(cursor), 0x00);
+  EXPECT_EQ(readVarintFrom(cursor), 1);
+  cursor.skip(1);
+  EXPECT_EQ(cursor.totalLength(), 0);
+}
+
+TEST_F(MoQFramerV18Test, FetchZeroLengthObjectRoundTrips) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeFetchHeader(writeBuf, RequestID(1)).hasValue());
+
+  ObjectHeader empty(10, 0, 4, 7, uint64_t(0));
+  ASSERT_TRUE(
+      writer_
+          .writeStreamObject(writeBuf, StreamType::FETCH_HEADER, empty, nullptr)
+          .hasValue());
+  ObjectHeader next(11, 0, 0, 7, uint64_t(1));
+  ASSERT_TRUE(writer_
+                  .writeStreamObject(
+                      writeBuf,
+                      StreamType::FETCH_HEADER,
+                      next,
+                      folly::IOBuf::copyBuffer("b"))
+                  .hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  cursor.skip(1); // stream type
+  ASSERT_TRUE(
+      parser_.parseFetchHeader(cursor, cursor.totalLength()).hasValue());
+
+  ObjectHeader headerTemplate;
+  auto first = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(first.hasValue());
+  ASSERT_TRUE(std::holds_alternative<ObjectHeader>(first->value));
+  const auto& firstObj = std::get<ObjectHeader>(first->value);
+  EXPECT_EQ(firstObj.group, 10);
+  EXPECT_EQ(firstObj.id, 4);
+  EXPECT_EQ(firstObj.length, 0);
+  EXPECT_EQ(firstObj.status, ObjectStatus::NORMAL);
+
+  auto second = parser_.parseFetchObjectHeader(
+      cursor, cursor.totalLength(), headerTemplate);
+  ASSERT_TRUE(second.hasValue());
+  ASSERT_TRUE(std::holds_alternative<ObjectHeader>(second->value));
+  const auto& secondObj = std::get<ObjectHeader>(second->value);
+  EXPECT_EQ(secondObj.group, 11);
+  EXPECT_EQ(secondObj.id, 0);
+  EXPECT_EQ(secondObj.length, 1);
+}
+
+TEST_F(MoQFramerV18Test, WriteFetchObjectRejectsNonNormalStatus) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeFetchHeader(writeBuf, RequestID(1)).hasValue());
+
+  ObjectHeader endOfGroup(10, 0, 4, 7, ObjectStatus::END_OF_GROUP);
+  EXPECT_TRUE(writer_
+                  .writeStreamObject(
+                      writeBuf, StreamType::FETCH_HEADER, endOfGroup, nullptr)
+                  .hasError());
 }
 
 TEST_F(MoQFramerV18Test, WriteFetchObjectDeltaEncodesDescendingOrder) {

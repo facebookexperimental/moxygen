@@ -385,9 +385,14 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
 }
 
 std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
-    const MoQFrameWriter& moqFrameWriter) {
+    const MoQFrameWriter& moqFrameWriter,
+    uint64_t version) {
   // writes a fetch header, object without extensions, object with
-  // extensions, status without extensions, status with extensions
+  // extensions, then two empty objects. Before draft 16 the empty objects
+  // carry END_OF_GROUP; after, FETCH objects have no status field.
+  const auto emptyStatus = fetchObjectsHaveStatus(version)
+      ? ObjectStatus::END_OF_GROUP
+      : ObjectStatus::NORMAL;
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter.writeFetchHeader(writeBuf, RequestID(1));
   ObjectHeader obj(2, 3, 4, 5, 11);
@@ -416,7 +421,7 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
       obj.subgroup,
       obj.id,
       obj.priority,
-      ObjectStatus::END_OF_GROUP,
+      emptyStatus,
       Extensions({}, {}));
   res = moqFrameWriter.writeStreamObject(
       writeBuf, StreamType::FETCH_HEADER, objNoExts2, nullptr);
@@ -427,7 +432,7 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
       obj.subgroup,
       obj.id,
       obj.priority,
-      ObjectStatus::END_OF_GROUP,
+      emptyStatus,
       Extensions({}, {}));
   res = moqFrameWriter.writeStreamObject(
       writeBuf, StreamType::FETCH_HEADER, objWithExts4, nullptr);

@@ -1610,7 +1610,8 @@ MoQFrameParser::parseFetchObjectDraft15(
   // If flag not set, no extensions (extensions remain empty)
 
   // Parse Object Status and Length
-  auto res = parseObjectStatusAndLength(cursor, remainingLength, objectHeader);
+  auto res = parseObjectStatusAndLength(
+      cursor, remainingLength, objectHeader, fetchObjectsHaveStatus(*version_));
   if (!res) {
     XLOG(DBG4)
         << "parseFetchObjectDraft15: error in parseObjectStatusAndLength: "
@@ -1639,7 +1640,8 @@ folly::Expected<folly::Unit, ErrorCode>
 MoQFrameParser::parseObjectStatusAndLength(
     folly::io::Cursor& cursor,
     size_t& length,
-    ObjectHeader& objectHeader) const noexcept {
+    ObjectHeader& objectHeader,
+    bool hasStatus) const noexcept {
   auto payloadLength = decodeVarint(cursor, length);
   if (!payloadLength) {
     XLOG(DBG4) << "parseObjectStatusAndLength: UNDERFLOW on payloadLength";
@@ -1648,7 +1650,7 @@ MoQFrameParser::parseObjectStatusAndLength(
   length -= payloadLength->second;
   objectHeader.length = payloadLength->first;
 
-  if (objectHeader.length == 0) {
+  if (hasStatus && objectHeader.length == 0) {
     auto objectStatus = decodeVarint(cursor, length);
     if (!objectStatus) {
       XLOG(DBG4) << "parseObjectStatusAndLength: UNDERFLOW on objectStatus";
@@ -5173,6 +5175,13 @@ WriteResult MoQFrameWriter::writeStreamObject(
     bool forwardingPreferenceIsDatagram) const noexcept {
   XCHECK(version_.has_value())
       << "The version must be set before writing stream object";
+  const bool fetchOmitsStatus = streamType == StreamType::FETCH_HEADER &&
+      !fetchObjectsHaveStatus(*version_);
+  if (fetchOmitsStatus && objectHeader.status != ObjectStatus::NORMAL) {
+    XLOG(ERR) << "No encoding for status on a FETCH stream, status="
+              << folly::to_underlying(objectHeader.status);
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
   size_t size = 0;
   bool error = false;
   if (streamType == StreamType::FETCH_HEADER) {
@@ -5227,8 +5236,10 @@ WriteResult MoQFrameWriter::writeStreamObject(
     XCHECK(!objectPayload || objectPayload->computeChainDataLength() == 0)
         << "non-empty objectPayload with no header length";
     writeVarint(writeBuf, 0, size, error);
-    writeVarint(
-        writeBuf, folly::to_underlying(objectHeader.status), size, error);
+    if (!fetchOmitsStatus) {
+      writeVarint(
+          writeBuf, folly::to_underlying(objectHeader.status), size, error);
+    }
   }
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);

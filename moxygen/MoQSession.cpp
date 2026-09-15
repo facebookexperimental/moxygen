@@ -955,6 +955,16 @@ StreamPublisherImpl::publishStatus(
   if (!validateRes) {
     return validateRes;
   }
+  if (streamType_ == StreamType::FETCH_HEADER &&
+      !fetchObjectsHaveStatus(publisher_->getVersion())) {
+    // Nothing to serialize: leaving objectID out of the response is what tells
+    // the subscriber it doesn't exist.
+    header_.id = objectID;
+    if (finStream) {
+      return writeToStream(/*finStream=*/true);
+    }
+    return folly::unit;
+  }
   header_.status = status;
   header_.length = std::nullopt;
   return writeCurrentObject(
@@ -3790,10 +3800,15 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       obj.forwardingPreferenceIsDatagram = forwardingPreferenceIsDatagram;
       if (objectComplete && subscribeState_) {
         logger_->logSubgroupObjectParsed(
-            currentStreamId_, trackAlias_, obj, initialPayload->clone());
+            currentStreamId_,
+            trackAlias_,
+            obj,
+            initialPayload ? initialPayload->clone() : nullptr);
       } else if (objectComplete && fetchState_) {
         logger_->logFetchObjectParsed(
-            currentStreamId_, obj, initialPayload->clone());
+            currentStreamId_,
+            obj,
+            initialPayload ? initialPayload->clone() : nullptr);
       } else {
         currentObj_ = std::move(obj);
       }

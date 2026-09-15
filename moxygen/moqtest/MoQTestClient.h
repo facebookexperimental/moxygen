@@ -151,6 +151,9 @@ class MoQTestClient : public Subscriber,
     uint64_t expectedSubgroup{};
     std::array<uint64_t, 2> subgroupToExpectedObjId{};
     bool expectEndOfGroup{};
+    // Nothing arrives at the group's last object, so the cursor steps from the
+    // one before it straight to the next group.
+    bool endOfGroupOmitted{};
     bool active{false};
     bool done{false};
     // A joining subscription starts wherever the publisher had reached, which
@@ -350,6 +353,15 @@ class MoQTestClient : public Subscriber,
   // Drops expectations below `group`.  A join that does not reach back to the
   // start of the track never delivers those, and neither half is at fault.
   void trimExpectedBefore(uint64_t group);
+
+  // Drops the end-of-group marker expectation for every group from `first` up
+  // to `last`, which a FETCH that cannot carry markers never delivers.
+  void trimExpectedEndOfGroupMarkers(uint64_t first, AbsoluteLocation last);
+
+  // The highest object ID `state` will see in `group`, which is one below the
+  // window's when the half omits the group's end-of-group marker.
+  uint64_t lastObjectDeliveredIn(const ReceiveState& state, uint64_t group)
+      const;
 
   // Subscription Data Validation functions.  Expectations follow `window`,
   // which is the whole track except for a ranged FETCH.

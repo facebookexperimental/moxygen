@@ -45,6 +45,55 @@ CO_TEST_P_X(MoQSessionTest, Fetch) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// endOfGroup on a FETCH stream serializes nothing in draft 16+. If it did, the
+// subscriber would read those bytes as the next object and desync.
+CO_TEST_P_X(MoQSessionTest, FetchEndOfGroupBetweenObjects) {
+  co_await setupMoQSession();
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    EXPECT_TRUE(
+        fetchPub->object(0, 0, 0, moxygen::test::makeBuf(100), noExtensions())
+            .hasValue());
+    EXPECT_TRUE(fetchPub->endOfGroup(0, 0, 1, /*finFetch=*/false).hasValue());
+    EXPECT_TRUE(fetchPub
+                    ->object(
+                        1,
+                        0,
+                        0,
+                        moxygen::test::makeBuf(100),
+                        noExtensions(),
+                        /*finFetch=*/true)
+                    .hasValue());
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{1, 1});
+  });
+
+  folly::coro::Baton baton;
+  const bool hasStatus = fetchObjectsHaveStatus(getServerSelectedVersion());
+  {
+    testing::InSequence seq;
+    EXPECT_CALL(
+        *fetchCallback_,
+        object(0, 0, 0, HasChainDataLengthOf(100), _, false, _))
+        .WillOnce(testing::Return(folly::unit));
+    if (hasStatus) {
+      EXPECT_CALL(*fetchCallback_, endOfGroup(0, 0, 1, false))
+          .WillOnce(testing::Return(folly::unit));
+    }
+    EXPECT_CALL(
+        *fetchCallback_, object(1, 0, 0, HasChainDataLengthOf(100), _, true, _))
+        .WillOnce([&] {
+          baton.post();
+          return folly::unit;
+        });
+  }
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {1, 1}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await baton;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, FetchNewestFirstResponseObjects) {
   if (getDraftMajorVersion(getServerSelectedVersion()) < 18) {
     co_return;

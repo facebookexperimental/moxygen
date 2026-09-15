@@ -140,6 +140,10 @@ bool useBidiRequestStreams(uint64_t version) {
   return getDraftMajorVersion(version) >= 18;
 }
 
+bool fetchObjectsHaveStatus(uint64_t version) {
+  return getDraftMajorVersion(version) < 16;
+}
+
 std::string getSupportedVersionsString() {
   std::string result;
   for (size_t i = 0; i < kSupportedVersions.size(); ++i) {
