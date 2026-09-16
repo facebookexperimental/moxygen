@@ -988,7 +988,7 @@ CO_TEST_P_X(
 // timeout, the publisher resets that request's (bidi) stream with GOING_AWAY
 // once the timeout elapses -- it does NOT send PUBLISH_DONE. The subscriber
 // observes the peer reset as a synthesized PUBLISH_DONE with status
-// SUBSCRIPTION_ENDED. On the publisher side the request state is cleaned up
+// GOING_AWAY. On the publisher side the request state is cleaned up
 // (onSubscriptionEnd fires, so pubTracks_ no longer holds the request), and the
 // session is not drained/closed.
 CO_TEST_P_X(
@@ -1007,7 +1007,7 @@ CO_TEST_P_X(
 
   EXPECT_CALL(*subscribeCallback_, goaway(_)).WillOnce(testing::Return());
   // The publisher resets the request stream instead of sending PUBLISH_DONE;
-  // the subscriber surfaces the peer reset as SUBSCRIPTION_ENDED.
+  // the subscriber surfaces the peer reset as GOING_AWAY.
   folly::coro::Baton publishDoneReceived;
   PublishDone received;
   EXPECT_CALL(*subscribeCallback_, publishDone(_))
@@ -1032,13 +1032,42 @@ CO_TEST_P_X(
       std::chrono::milliseconds(1));
   co_await publishDoneReceived;
 
-  EXPECT_EQ(received.statusCode, PublishDoneStatusCode::SUBSCRIPTION_ENDED);
+  EXPECT_EQ(received.statusCode, PublishDoneStatusCode::GOING_AWAY);
   auto requestError = requestStream->getWriteErr();
   EXPECT_TRUE(requestError.has_value());
   if (requestError) {
     EXPECT_EQ(*requestError, 0x4);
   }
   // The reset tears down the request but does not close the session.
+  EXPECT_FALSE(clientWt_->isSessionClosed());
+  EXPECT_FALSE(serverSession_->isClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    Draft18RequestStreamGoawayTest,
+    GoingAwayResetSynthesizesGoingAwayPublishDone) {
+  auto subscription = co_await openClientSubscription();
+  if (!subscription) {
+    co_return;
+  }
+
+  folly::coro::Baton publishDoneReceived;
+  PublishDone received;
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(
+          testing::Invoke(
+              [&](PublishDone done)
+                  -> folly::Expected<folly::Unit, MoQPublishError> {
+                received = std::move(done);
+                publishDoneReceived.post();
+                return folly::unit;
+              }));
+
+  serverWt_->writeHandles.at(0)->resetStream(0x4);
+  co_await publishDoneReceived;
+
+  EXPECT_EQ(received.statusCode, PublishDoneStatusCode::GOING_AWAY);
   EXPECT_FALSE(clientWt_->isSessionClosed());
   EXPECT_FALSE(serverSession_->isClosed());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);

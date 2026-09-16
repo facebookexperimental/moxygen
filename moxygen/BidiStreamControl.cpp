@@ -43,16 +43,17 @@ void BidiStreamControl::onPeerStopSending() {
   // post-OK controls (e.g. PUBLISH_NAMESPACE) live only in user handles
   // where cleanup can't reach them to disarm.
   if (!sessionShutdownToken_.isCancellationRequested()) {
-    firePeerTermination();
+    firePeerTermination(fromWireResetStreamErrorCode(code, negotiatedVersion_));
   }
 }
 
-void BidiStreamControl::firePeerTermination() {
+void BidiStreamControl::firePeerTermination(
+    std::optional<ResetStreamErrorCode> errorCode) {
   if (!onPeerTerminationFn_ || !requestID_) {
     return;
   }
   auto fn = std::move(onPeerTerminationFn_);
-  fn(*requestID_);
+  fn(*requestID_, errorCode);
 }
 
 void BidiStreamControl::onLocalWriteClose() {
