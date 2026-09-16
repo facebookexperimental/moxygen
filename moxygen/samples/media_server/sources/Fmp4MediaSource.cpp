@@ -6,7 +6,7 @@
 
 #include <moxygen/samples/media_server/sources/Fmp4MediaSource.h>
 
-#include <moxygen/samples/media_server/MediaCatalog.h>
+#include <moxygen/msf/MediaCatalog.h>
 #include <moxygen/samples/media_server/sources/CatalogSource.h>
 #include <moxygen/samples/media_server/sources/CmafFrameChunker.h>
 #include <moxygen/samples/media_server/sources/FilePrFaultState.h>

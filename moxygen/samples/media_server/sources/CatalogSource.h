@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include <moxygen/samples/media_server/MediaCatalog.h>
+#include <moxygen/msf/MediaCatalog.h>
 #include <moxygen/samples/media_server/MoQMediaSource.h>
 
 #include <folly/coro/Baton.h>

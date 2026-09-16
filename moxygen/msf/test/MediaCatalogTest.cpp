@@ -4,7 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <moxygen/samples/media_server/MediaCatalog.h>
+#include <moxygen/msf/MediaCatalog.h>
 
 #include <folly/json.h>
 #include <folly/portability/GTest.h>
@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <string>
 
-namespace moxygen::media_server { namespace {
+namespace moxygen { namespace {
 
 folly::ByteRange asByteRange(const std::string& value) {
   return folly::ByteRange{
@@ -131,4 +131,4 @@ TEST(MediaCatalogTest, ParseRejectsMalformedJson) {
   EXPECT_FALSE(parseCatalog(asByteRange(json)).has_value());
 }
 
-}} // namespace moxygen::media_server
+}} // namespace moxygen

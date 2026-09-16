@@ -16,8 +16,8 @@
 #include <moxygen/MoQVersions.h>
 #include <moxygen/ObjectReceiver.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
+#include <moxygen/msf/MediaCatalog.h>
 #include <moxygen/relay/MoQRelayClient.h>
-#include <moxygen/samples/media_server/MediaCatalog.h>
 #include <moxygen/samples/util/Utils.h>
 #include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
 
@@ -66,7 +66,6 @@ DEFINE_string(versions, "", "Comma-separated MoQ draft versions; empty = all");
 
 namespace {
 using namespace moxygen;
-using namespace moxygen::media_server;
 
 // Collects received objects keyed by group/subgroup/object, then writes them in
 // order.

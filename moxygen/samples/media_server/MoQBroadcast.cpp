@@ -7,7 +7,7 @@
 #include <moxygen/samples/media_server/MoQBroadcast.h>
 
 #include <moxygen/MoQSession.h>
-#include <moxygen/samples/media_server/MediaCatalog.h>
+#include <moxygen/msf/MediaCatalog.h>
 #include <moxygen/samples/media_server/PublishLoop.h>
 
 #include <folly/CancellationToken.h>

@@ -14,7 +14,7 @@
 #include <string_view>
 #include <vector>
 
-namespace moxygen::media_server {
+namespace moxygen {
 
 // Well-known track name carrying a namespace's catalog, per the MOQT Streaming
 // Format (draft-ietf-moq-msf) and its CMAF profile (draft-ietf-moq-cmsf). A
@@ -73,4 +73,4 @@ std::string serializeCatalog(const MediaCatalog& catalog);
 // Parse a catalog JSON document; std::nullopt on malformed input.
 std::optional<MediaCatalog> parseCatalog(folly::ByteRange json);
 
-} // namespace moxygen::media_server
+} // namespace moxygen
