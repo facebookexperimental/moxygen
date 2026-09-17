@@ -6,8 +6,18 @@
 
 #include <moxygen/MoQQmuxClient.h>
 
+#include <folly/CancellationToken.h>
 #include <folly/coro/Error.h>
+#include <folly/coro/WithCancellation.h>
+#include <folly/io/async/AsyncServerSocket.h>
+#include <folly/io/async/AsyncSocket.h>
+#include <folly/io/async/AsyncTransport.h>
+#include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/portability/GTest.h>
+#include <folly/synchronization/SaturatingSemaphore.h>
+#include <moxygen/MoQFollyQmuxTransportFactory.h>
+#include <moxygen/events/MoQFollyExecutorImpl.h>
+#include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
 
 #undef EV_READ
 #undef EV_WRITE
@@ -20,6 +30,8 @@
 #include <stdexcept>
 
 namespace moxygen { namespace {
+
+using namespace std::chrono_literals;
 
 class EvLoop : public quic::LibevQuicEventBase::EvLoopHolder {
  public:
@@ -97,6 +109,87 @@ class StubQmuxTransport final : public proxygen::qmux::QmuxTransport {
   }
 };
 
+class IdleTcpServer : public folly::AsyncServerSocket::AcceptCallback,
+                      public folly::AsyncTransport::ReadCallback {
+ public:
+  IdleTcpServer() : evb_(thread_.getEventBase()) {
+    evb_->runInEventBaseThreadAndWait([&] {
+      serverSocket_ = folly::AsyncServerSocket::newSocket(evb_);
+      serverSocket_->bind(folly::SocketAddress("127.0.0.1", 0));
+      serverSocket_->listen(1);
+      serverSocket_->addAcceptCallback(this, nullptr);
+      serverSocket_->startAccepting();
+      serverSocket_->getAddress(&address_);
+    });
+  }
+
+  ~IdleTcpServer() override {
+    evb_->runInEventBaseThreadAndWait([&] {
+      if (acceptedSocket_) {
+        acceptedSocket_->setReadCB(nullptr);
+        acceptedSocket_->closeNow();
+        acceptedSocket_.reset();
+      }
+      serverSocket_->stopAccepting();
+      serverSocket_.reset();
+    });
+  }
+
+  const folly::SocketAddress& getAddress() const {
+    return address_;
+  }
+
+  bool waitForClientHello(std::chrono::milliseconds timeout) {
+    return clientHelloReceived_.try_wait_for(timeout);
+  }
+
+  void closeAcceptedConnection() {
+    evb_->runInEventBaseThreadAndWait([&] {
+      if (acceptedSocket_) {
+        acceptedSocket_->setReadCB(nullptr);
+        acceptedSocket_->closeNow();
+        acceptedSocket_.reset();
+      }
+    });
+  }
+
+  void connectionAccepted(
+      folly::NetworkSocket fd,
+      const folly::SocketAddress& /* clientAddr */,
+      AcceptInfo /* info */) noexcept override {
+    acceptedSocket_ = folly::AsyncSocket::newSocket(evb_, fd);
+    acceptedSocket_->setReadCB(this);
+  }
+
+  void acceptError(folly::exception_wrapper ex) noexcept override {
+    ADD_FAILURE() << "TCP accept failed: " << ex.what();
+  }
+
+  void getReadBuffer(void** bufReturn, size_t* lenReturn) override {
+    *bufReturn = readBuffer_;
+    *lenReturn = sizeof(readBuffer_);
+  }
+
+  void readDataAvailable(size_t len) noexcept override {
+    if (len > 0) {
+      clientHelloReceived_.post();
+    }
+  }
+
+  void readEOF() noexcept override {}
+
+  void readErr(const folly::AsyncSocketException& /* ex */) noexcept override {}
+
+ private:
+  folly::ScopedEventBaseThread thread_{"idle-qmux-server"};
+  folly::EventBase* evb_;
+  std::shared_ptr<folly::AsyncServerSocket> serverSocket_;
+  folly::AsyncSocket::UniquePtr acceptedSocket_;
+  folly::SocketAddress address_;
+  folly::SaturatingSemaphore<true> clientHelloReceived_;
+  char readBuffer_[4096]{};
+};
+
 folly::coro::Task<void> setupAndCapture(
     std::shared_ptr<MoQQmuxClient> client,
     std::chrono::milliseconds connectTimeout,
@@ -109,11 +202,29 @@ folly::coro::Task<void> setupAndCapture(
       nullptr,
       nullptr,
       quic::TransportSettings{},
-      std::move(alpns)));
+      alpns));
   if (result.hasException()) {
     *error = result.exception();
   }
   *done = true;
+}
+
+struct QmuxConnectState {
+  folly::SaturatingSemaphore<true> done;
+  folly::exception_wrapper exception;
+};
+
+folly::coro::Task<void> connectQmuxAndSignal(
+    std::shared_ptr<QmuxTransportFactory> transportFactory,
+    proxygen::URL url,
+    std::shared_ptr<QmuxConnectState> state) {
+  auto result =
+      co_await folly::coro::co_awaitTry(transportFactory->createQmuxTransport(
+          url, 60s, std::vector<std::string>{"moqt-16"}));
+  if (result.hasException()) {
+    state->exception = std::move(result.exception());
+  }
+  state->done.post();
 }
 
 TEST(MoQQmuxClientTest, UsesInjectedTransportFactoryOnLibevExecutor) {
@@ -176,6 +287,61 @@ TEST(MoQQmuxClientTest, AdoptedTransportSkipsTransportFactory) {
 
   ASSERT_TRUE(done);
   EXPECT_FALSE(transportFactory->called);
+}
+
+void testCancellationDrainsParkedFizzHandshake(bool cancelOnEventBase) {
+  IdleTcpServer server;
+  folly::ScopedEventBaseThread clientThread("qmux-client");
+  auto executor =
+      std::make_shared<MoQFollyExecutorImpl>(clientThread.getEventBase());
+  auto transportFactory = makeFollyQmuxTransportFactory(
+      executor,
+      std::make_shared<test::InsecureVerifierDangerousDoNotUseInProduction>());
+  const auto& serverAddress = server.getAddress();
+  proxygen::URL url(
+      "moqt", serverAddress.getAddressStr(), serverAddress.getPort(), "/");
+  folly::CancellationSource cancellationSource;
+  auto state = std::make_shared<QmuxConnectState>();
+
+  folly::coro::co_withExecutor(
+      executor.get(),
+      folly::coro::co_withCancellation(
+          cancellationSource.getToken(),
+          connectQmuxAndSignal(transportFactory, std::move(url), state)))
+      .start();
+
+  const bool sawClientHello = server.waitForClientHello(5s);
+  const bool completedBeforeCancellation = state->done.try_wait_for(0ms);
+  if (cancelOnEventBase) {
+    clientThread.getEventBase()->runInEventBaseThreadAndWait(
+        [&] { cancellationSource.requestCancellation(); });
+  } else {
+    cancellationSource.requestCancellation();
+  }
+
+  const bool completedPromptly = state->done.try_wait_for(5s);
+
+  server.closeAcceptedConnection();
+  const bool drainedAfterPeerClose = completedBeforeCancellation ||
+      completedPromptly || state->done.try_wait_for(5s);
+
+  EXPECT_TRUE(sawClientHello) << "QMUX client did not start the Fizz handshake";
+  EXPECT_FALSE(completedBeforeCancellation)
+      << "QMUX connection completed before cancellation";
+  ASSERT_TRUE(drainedAfterPeerClose)
+      << "QMUX client did not finish after the peer connection was closed";
+  EXPECT_TRUE(completedPromptly)
+      << "QMUX client waited for the Fizz handshake after cancellation";
+  EXPECT_TRUE(state->exception.is_compatible_with<folly::OperationCancelled>());
+  clientThread.getEventBase()->runInEventBaseThreadAndWait([] {});
+}
+
+TEST(MoQQmuxClientTest, CancellationDrainsParkedFizzHandshake) {
+  testCancellationDrainsParkedFizzHandshake(true);
+}
+
+TEST(MoQQmuxClientTest, OffThreadCancellationDrainsParkedFizzHandshake) {
+  testCancellationDrainsParkedFizzHandshake(false);
 }
 
 }} // namespace moxygen
