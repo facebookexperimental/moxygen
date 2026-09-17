@@ -8,6 +8,7 @@
 
 #include <fizz/client/AsyncFizzClient.h>
 #include <fizz/client/FizzClientContext.h>
+#include <folly/CancellationToken.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/CurrentExecutor.h>
 #include <folly/io/async/AsyncSocket.h>
@@ -20,6 +21,32 @@
 
 namespace moxygen {
 namespace {
+
+class CloseOnCancellation {
+ public:
+  CloseOnCancellation(
+      folly::CancellationToken token,
+      folly::AsyncTransport* transport)
+      : transport_(std::make_shared<folly::AsyncTransport*>(transport)),
+        callback_(
+            std::move(token),
+            [evb = transport->getEventBase(), state = transport_] {
+              evb->runImmediatelyOrRunInEventBaseThread([state] {
+                if (*state) {
+                  (*state)->closeNow();
+                }
+              });
+            }) {}
+
+  ~CloseOnCancellation() {
+    // A queued cancellation can run after the coroutine releases its socket.
+    *transport_ = nullptr;
+  }
+
+ private:
+  std::shared_ptr<folly::AsyncTransport*> transport_;
+  folly::CancellationCallback callback_;
+};
 
 class TcpConnectCb : public folly::AsyncSocket::ConnectCallback {
  public:
@@ -59,10 +86,14 @@ folly::coro::Task<folly::AsyncSocket::UniquePtr> connectTcp(
     folly::EventBase* evb,
     const folly::SocketAddress& addr,
     std::chrono::milliseconds connectTimeout) {
+  co_await folly::coro::co_safe_point;
   folly::AsyncSocket::UniquePtr asyncSocket(folly::AsyncSocket::newSocket(evb));
   TcpConnectCb tcpCb;
   asyncSocket->connect(&tcpCb, addr, static_cast<int>(connectTimeout.count()));
+  CloseOnCancellation cancelCb(
+      co_await folly::coro::co_current_cancellation_token, asyncSocket.get());
   co_await tcpCb.baton;
+  co_await folly::coro::co_safe_point;
   if (tcpCb.exception) {
     co_yield folly::coro::co_error(*tcpCb.exception);
   }
@@ -75,6 +106,7 @@ folly::coro::Task<fizz::client::AsyncFizzClient::UniquePtr> fizzHandshake(
     std::string host,
     const std::vector<std::string>& alpns,
     std::chrono::milliseconds fizzTimeout) {
+  co_await folly::coro::co_safe_point;
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
   fizzContext->setSupportedAlpns(alpns);
   fizz::client::AsyncFizzClient::UniquePtr fizzClient(
@@ -90,7 +122,10 @@ folly::coro::Task<fizz::client::AsyncFizzClient::UniquePtr> fizzHandshake(
       /*pskIdentity=*/host,
       /*echConfigs=*/folly::none,
       fizzTimeout);
+  CloseOnCancellation cancelCb(
+      co_await folly::coro::co_current_cancellation_token, fizzClient.get());
   co_await fizzCb.baton;
+  co_await folly::coro::co_safe_point;
   if (fizzCb.exception) {
     co_yield folly::coro::co_error(std::move(fizzCb.exception));
   }

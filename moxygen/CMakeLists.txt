@@ -246,6 +246,7 @@ moxygen_add_library(moxygen_moq_folly_qmux_transport_factory
   DEPS
     moxygen_events_moq_folly_executor_impl
     proxygen::proxygen_transport_qmux_folly_qmux_transport
+    Folly::folly_cancellation_token
     Folly::folly_coro_baton
     Folly::folly_coro_current_executor
     Folly::folly_io_async_async_socket
