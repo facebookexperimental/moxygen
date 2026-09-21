@@ -147,6 +147,10 @@ class MoQForwarder : public TrackConsumer {
     // publishing subgroups.  Having this state here makes it easy to remove
     // a Subscriber and all open subgroups.
     SubgroupConsumerMap subgroups;
+    // Subgroups this subscriber declined, so they are not reopened. Cleared
+    // when the subgroup finishes or a forward 0->1 update renews interest.
+    folly::F14FastSet<SubgroupIdentifier, SubgroupIdentifier::hash>
+        tombstonedSubgroups;
     MoQForwarder* forwarder;
     bool shouldForward;
     bool receivedPublishDone_{false};
@@ -371,8 +375,8 @@ class MoQForwarder : public TrackConsumer {
 
   // Handles errors on a subgroup for a specific subscriber.
   // Soft errors (CANCELLED - from STOP_SENDING or delivery timeout) tombstone
-  // the subgroup by setting it to nullptr, preventing reopening but keeping
-  // the subscription alive. Hard errors remove the entire subscription.
+  // the subgroup, preventing reopening but keeping the subscription alive.
+  // Hard errors remove the entire subscription.
   void handleSubgroupError(
       Subscriber& sub,
       const SubgroupIdentifier& subgroupId,

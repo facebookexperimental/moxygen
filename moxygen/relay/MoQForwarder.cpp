@@ -27,16 +27,6 @@ bool isSoftError(const MoQPublishError& err) {
       return false;
   }
 }
-
-void clearTombstonedSubgroups(MoQForwarder::Subscriber& sub) {
-  for (auto it = sub.subgroups.begin(); it != sub.subgroups.end();) {
-    if (!it->second) {
-      it = sub.subgroups.erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
 } // namespace
 
 // Template implementations
@@ -46,6 +36,7 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::forEachSubscriber(
     Fn&& fn) {
   for (auto subscriberIt = subscribers_.begin();
        subscriberIt != subscribers_.end();) {
+    // Copy and pre-advance so fn can retire this subscriber.
     auto sub = subscriberIt->second;
     subscriberIt++;
     fn(sub);
@@ -87,11 +78,6 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
       if (forwarder_->checkPastEnd(*sub)) {
         return;
       }
-      if (!subgroupConsumerIt->second) {
-        // Tombstoned - skip this subscriber for this subgroup
-        XLOG(DBG2) << "Skipping tombstoned subgroup for sub=" << sub.get();
-        return;
-      }
       if (!sub->checkShouldForward()) {
         // If we're attempting to send anything on an existing subgroup when
         // forward == false, then we reset the stream, so that we don't end
@@ -103,11 +89,17 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
             sub, "SubgroupForwarder::forEachSubscriberSubgroup");
       } else {
         anyForwarded = true;
-        fn(sub, subgroupConsumerIt->second);
+        // fn's error path erases this entry, so hold our own reference.
+        auto consumer = subgroupConsumerIt->second;
+        fn(sub, consumer);
       }
     } else {
       // No consumer yet: full range check gates new subgroup creation.
       if (!forwarder_->checkRange(*sub)) {
+        return;
+      }
+      if (sub->tombstonedSubgroups.count(identifier_)) {
+        XLOG(DBG2) << "Skipping tombstoned subgroup for sub=" << sub.get();
         return;
       }
       if (!sub->checkShouldForward()) {
@@ -130,10 +122,10 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
       if (res.hasError()) {
         forwarder_->removeSubscriberOnError(*sub, res.error(), callsite);
       } else {
-        auto emplaceRes = sub->subgroups.emplace(identifier_, res.value());
-        subgroupConsumerIt = emplaceRes.first;
+        XCHECK(res.value());
+        sub->subgroups.emplace(identifier_, res.value());
         anyForwarded = true;
-        fn(sub, subgroupConsumerIt->second);
+        fn(sub, res.value());
       }
     }
   });
@@ -383,10 +375,7 @@ void MoQForwarder::removeSubscriberIt(
   auto& subscriber = *subIt->second;
   XLOG(DBG1) << "Resetting open subgroups for subscriber=" << &subscriber;
   for (auto& subgroup : subscriber.subgroups) {
-    // Skip tombstoned subgroups (nullptr entries)
-    if (subgroup.second) {
-      subgroup.second->reset(ResetStreamErrorCode::CANCELLED);
-    }
+    subgroup.second->reset(ResetStreamErrorCode::CANCELLED);
   }
   if (pubDone && subscriber.trackConsumer) {
     pubDone->requestID = subscriber.requestID;
@@ -472,14 +461,16 @@ void MoQForwarder::handleSubgroupError(
              << " subgroup=" << subgroupId.subgroup;
 
   if (isSoftError(err)) {
-    // Tombstone the subgroup by setting to nullptr. A later forward 0->1
-    // update can renew interest and clear the tombstone.
     // Per the SubgroupConsumer API contract, returning an error implicitly
     // resets the consumer, so no explicit reset() call is needed.
-    auto it = sub.subgroups.find(subgroupId);
-    if (it != sub.subgroups.end() && it->second) {
-      it->second = nullptr; // Tombstone marker
+    if (sub.subgroups.erase(subgroupId) > 0) {
+      sub.tombstonedSubgroups.insert(subgroupId);
       XLOG(DBG1) << "Tombstoned subgroup for subscriber";
+    }
+    // Nothing will close this subgroup now, so a draining subscriber waiting
+    // only on it has to be retired here.
+    if (sub.shouldRemove()) {
+      removeSubscriber(sub.session, std::nullopt, callsite);
     }
   } else {
     // Hard error - remove the entire subscription
@@ -513,27 +504,39 @@ MoQForwarder::beginSubgroup(
   if (existingIt != subgroups_.end()) {
     bool anyReset = false;
     bool anyReopenCandidate = false;
-    for (auto& [sess, sub] : subscribers_) {
+    forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
       auto it = sub->subgroups.find(subgroupIdentifier);
-      if (it != sub->subgroups.end() && it->second) {
+      if (it != sub->subgroups.end()) {
         it->second->reset(ResetStreamErrorCode::CANCELLED);
         sub->subgroups.erase(it);
         anyReset = true;
+        if (sub->shouldRemove()) {
+          removeSubscriber(
+              sub->session, std::nullopt, "beginSubgroup duplicate");
+        }
       } else if (
-          it == sub->subgroups.end() && sub->trackConsumer &&
-          checkRange(*sub) && sub->checkShouldForward()) {
+          !sub->tombstonedSubgroups.count(subgroupIdentifier) &&
+          sub->trackConsumer && checkRange(*sub) && sub->checkShouldForward()) {
         anyReopenCandidate = true;
       }
-    }
+    });
     existingIt->second->detach();
     subgroups_.erase(existingIt);
+    // Both returns below skip the forwarding loop, so each has to ask for
+    // onEmpty itself.
     if (!anyReset && !anyReopenCandidate) {
       XLOG(WARN) << "beginSubgroup: duplicate group=" << groupID
                  << " subgroup=" << subgroupID
                  << " - no active consumers, returning CANCELLED";
+      checkAndFireOnEmpty();
       return folly::makeUnexpected(MoQPublishError(
           MoQPublishError::CANCELLED,
           "duplicate subgroup, no active consumers"));
+    }
+    if (subscribers_.empty()) {
+      checkAndFireOnEmpty();
+      return folly::makeUnexpected(MoQPublishError(
+          MoQPublishError::CANCELLED, "duplicate subgroup, no subscribers"));
     }
     XLOG(WARN) << "beginSubgroup: duplicate group=" << groupID
                << " subgroup=" << subgroupID << " - resetting active consumers";
@@ -547,7 +550,8 @@ MoQForwarder::beginSubgroup(
     }
     // Skip if tombstoned - subscriber already sent stop_sending for this
     // subgroup and should not receive it again.
-    if (sub->subgroups.count(subgroupIdentifier)) {
+    if (sub->subgroups.count(subgroupIdentifier) ||
+        sub->tombstonedSubgroups.count(subgroupIdentifier)) {
       return;
     }
     auto sgRes = sub->trackConsumer->beginSubgroup(
@@ -555,6 +559,7 @@ MoQForwarder::beginSubgroup(
     if (sgRes.hasError()) {
       removeSubscriberOnError(*sub, sgRes.error(), "beginSubgroup");
     } else {
+      XCHECK(sgRes.value());
       sub->subgroups[subgroupIdentifier] = sgRes.value();
     }
   });
@@ -801,9 +806,7 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
       const auto wasForwarding = shouldForward;
       updateForwardState(*requestUpdate.forward);
       if (!wasForwarding && shouldForward) {
-        // Clearing out the "tombstoned" entry allows us to reopen the
-        // subgroup.
-        clearTombstonedSubgroups(*this);
+        tombstonedSubgroups.clear();
       }
     }
     // Only update new group request if provided
@@ -847,7 +850,7 @@ void MoQForwarder::SubgroupForwarder::detach() {
   if (forwarder_) {
     forwarder_->forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
       auto it = sub->subgroups.find(identifier_);
-      if (it != sub->subgroups.end() && it->second) {
+      if (it != sub->subgroups.end()) {
         it->second->reset(ResetStreamErrorCode::SESSION_CLOSED);
       }
     });
@@ -890,7 +893,13 @@ MoQForwarder::SubgroupForwarder::optionsForNewSubgroup(uint64_t objectID) {
 void MoQForwarder::SubgroupForwarder::closeSubgroupForSubscriber(
     const std::shared_ptr<Subscriber>& sub,
     const std::string& callsite) {
+  if (!sub->forwarder) {
+    // Already retired, e.g. by a soft error earlier in this same fn call.
+    return;
+  }
   sub->subgroups.erase(identifier_);
+  // The subgroup is finished, so its tombstone has nothing left to suppress.
+  sub->tombstonedSubgroups.erase(identifier_);
   // If this subscriber is draining and this was the last subgroup, remove it
   if (sub->shouldRemove()) {
     forwarder_->removeSubscriber(sub->session, std::nullopt, callsite);
