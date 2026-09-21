@@ -5,6 +5,7 @@
  */
 
 #include <folly/coro/BlockingWait.h>
+#include <folly/io/IOBuf.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
@@ -85,6 +86,16 @@ class MoQProxyTest : public Test {
     return request;
   }
 
+  Fetch makeFetch(RequestID requestID) {
+    return Fetch(
+        requestID,
+        kTrackName,
+        AbsoluteLocation{0, 0},
+        AbsoluteLocation{1, 0},
+        7,
+        GroupOrder::OldestFirst);
+  }
+
   std::shared_ptr<NiceMock<MockSubscriptionHandle>> makeUpstreamHandle(
       RequestID requestID) {
     SubscribeOk subscribeOk{
@@ -94,6 +105,15 @@ class MoQProxyTest : public Test {
         .largest = AbsoluteLocation{10, 2}};
     return std::make_shared<NiceMock<MockSubscriptionHandle>>(
         std::move(subscribeOk));
+  }
+
+  std::shared_ptr<NiceMock<MockFetchHandle>> makeFetchHandle(
+      RequestID requestID) {
+    return std::make_shared<NiceMock<MockFetchHandle>>(FetchOk{
+        .requestID = requestID,
+        .groupOrder = GroupOrder::OldestFirst,
+        .endOfTrack = 1,
+        .endLocation = AbsoluteLocation{1, 0}});
   }
 
   template <typename Func>
@@ -118,6 +138,19 @@ class MoQProxyTest : public Test {
       return folly::coro::blockingWait(
           proxy_->subscribe(std::move(request), std::move(consumer)),
           &eventBase_);
+    });
+  }
+
+  Publisher::FetchResult fetch(
+      std::shared_ptr<MoQSession> session,
+      Fetch request,
+      std::shared_ptr<FetchConsumer> consumer = nullptr) {
+    if (!consumer) {
+      consumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+    }
+    return withSessionContext(std::move(session), [&]() {
+      return folly::coro::blockingWait(
+          proxy_->fetch(std::move(request), std::move(consumer)), &eventBase_);
     });
   }
 
@@ -294,6 +327,130 @@ TEST_F(MoQProxyTest, CloseStopsTracksAndRejectsNewSubscriptions) {
   EXPECT_EQ(rejected.error().requestID, RequestID(2));
   EXPECT_EQ(rejected.error().errorCode, SubscribeErrorCode::GOING_AWAY);
   EXPECT_EQ(provider_->calls, 1);
+}
+
+TEST_F(MoQProxyTest, ForwardsFetchThroughCache) {
+  auto consumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  auto upstreamHandle = makeFetchHandle(RequestID(100));
+  Fetch upstreamRequest;
+  EXPECT_CALL(*upstreamSession_, fetch(_, _))
+      .WillOnce(
+          [&](Fetch request, std::shared_ptr<FetchConsumer>)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            upstreamRequest = std::move(request);
+            co_return upstreamHandle;
+          });
+
+  auto result =
+      fetch(makeDownstreamSession(), makeFetch(RequestID(7)), consumer);
+
+  ASSERT_TRUE(result.hasValue());
+  EXPECT_EQ(result.value(), upstreamHandle);
+  EXPECT_EQ(provider_->calls, 1);
+  EXPECT_EQ(provider_->lastTrackName, kTrackName);
+  EXPECT_EQ(upstreamRequest.requestID, RequestID(7));
+  EXPECT_EQ(upstreamRequest.fullTrackName, kTrackName);
+  EXPECT_EQ(upstreamRequest.priority, 7);
+  EXPECT_EQ(upstreamRequest.groupOrder, GroupOrder::OldestFirst);
+  const auto* range = std::get_if<StandaloneFetch>(&upstreamRequest.args);
+  ASSERT_NE(range, nullptr);
+  EXPECT_EQ(range->start, AbsoluteLocation(0, 0));
+  EXPECT_EQ(range->end, AbsoluteLocation(1, 0));
+}
+
+TEST_F(MoQProxyTest, FetchPopulatesFetchCache) {
+  auto firstConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  auto upstreamHandle = std::make_shared<NiceMock<MockFetchHandle>>(FetchOk{
+      .requestID = RequestID(100),
+      .groupOrder = GroupOrder::OldestFirst,
+      .endOfTrack = 1,
+      .endLocation = AbsoluteLocation{0, 1}});
+  EXPECT_CALL(*firstConsumer, object(0, 0, 0, _, _, true, false))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*upstreamSession_, fetch(_, _))
+      .WillOnce(
+          [upstreamHandle](Fetch, std::shared_ptr<FetchConsumer> consumer)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            auto result = consumer->object(
+                0, 0, 0, folly::IOBuf::copyBuffer("x"), {}, true);
+            EXPECT_TRUE(result.hasValue());
+            co_return upstreamHandle;
+          });
+
+  auto first =
+      fetch(makeDownstreamSession(), makeFetch(RequestID(1)), firstConsumer);
+  ASSERT_TRUE(first.hasValue());
+
+  auto secondConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  EXPECT_CALL(*secondConsumer, object(0, 0, 0, _, _, true, false))
+      .WillOnce(Return(folly::unit));
+  auto second =
+      fetch(makeDownstreamSession(), makeFetch(RequestID(2)), secondConsumer);
+
+  ASSERT_TRUE(second.hasValue());
+  EXPECT_EQ(second.value()->fetchOk().requestID, RequestID(2));
+}
+
+TEST_F(MoQProxyTest, FetchFallsBackToNextProvider) {
+  auto fallbackSession =
+      std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
+  auto fallbackProvider =
+      std::make_shared<TestUpstreamProvider>(fallbackSession);
+  proxy_ = MoQProxy::create({provider_, fallbackProvider});
+
+  EXPECT_CALL(*upstreamSession_, fetch(_, _))
+      .WillOnce(
+          [](Fetch fetch, std::shared_ptr<FetchConsumer>)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            co_return folly::makeUnexpected(
+                FetchError{
+                    fetch.requestID,
+                    FetchErrorCode::INTERNAL_ERROR,
+                    "unavailable"});
+          });
+  auto upstreamHandle = makeFetchHandle(RequestID(101));
+  EXPECT_CALL(*fallbackSession, fetch(_, _))
+      .WillOnce(
+          [upstreamHandle](Fetch, std::shared_ptr<FetchConsumer>)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            co_return upstreamHandle;
+          });
+
+  auto result = fetch(makeDownstreamSession(), makeFetch(RequestID(8)));
+
+  ASSERT_TRUE(result.hasValue());
+  EXPECT_EQ(result.value()->fetchOk().requestID, RequestID(8));
+  EXPECT_EQ(provider_->lastFallbackExists, true);
+  EXPECT_EQ(fallbackProvider->lastFallbackExists, false);
+}
+
+TEST_F(MoQProxyTest, RejectsJoiningFetch) {
+  auto request = Fetch(
+      RequestID(9),
+      RequestID(1),
+      0,
+      FetchType::RELATIVE_JOINING,
+      7,
+      GroupOrder::OldestFirst);
+  request.fullTrackName = kTrackName;
+
+  auto result = fetch(makeDownstreamSession(), std::move(request));
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().requestID, RequestID(9));
+  EXPECT_EQ(result.error().errorCode, FetchErrorCode::NOT_SUPPORTED);
+  EXPECT_EQ(provider_->calls, 0);
+}
+
+TEST_F(MoQProxyTest, CloseRejectsFetch) {
+  proxy_->close();
+
+  auto result = fetch(makeDownstreamSession(), makeFetch(RequestID(10)));
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().requestID, RequestID(10));
+  EXPECT_EQ(result.error().errorCode, FetchErrorCode::GOING_AWAY);
+  EXPECT_EQ(provider_->calls, 0);
 }
 
 }} // namespace moxygen

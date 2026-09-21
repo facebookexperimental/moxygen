@@ -6,11 +6,14 @@
 
 #include "moxygen/proxy/MoQProxy.h"
 
+#include <folly/coro/Result.h>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 #include "moxygen/MoQSession.h"
 #include "moxygen/proxy/MoQProxyTrack.h"
+#include "moxygen/relay/MoQCache.h"
 
 namespace moxygen {
 
@@ -21,7 +24,8 @@ std::shared_ptr<MoQProxy> MoQProxy::create(
 
 MoQProxy::MoQProxy(
     std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders)
-    : upstreamProviders_(std::move(upstreamProviders)) {
+    : upstreamProviders_(std::move(upstreamProviders)),
+      cache_(std::make_shared<MoQCache>()) {
   if (upstreamProviders_.empty()) {
     throw std::invalid_argument("MoQProxy requires upstream providers");
   }
@@ -57,6 +61,68 @@ folly::coro::Task<Publisher::SubscribeResult> MoQProxy::subscribe(
       std::move(downstreamSession));
 }
 
+folly::coro::Task<Publisher::FetchResult> MoQProxy::fetch(
+    Fetch fetch,
+    std::shared_ptr<FetchConsumer> consumer) {
+  auto self = shared_from_this();
+  if (closed_) {
+    co_return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID, FetchErrorCode::GOING_AWAY, "proxy is closed"});
+  }
+  if (!std::holds_alternative<StandaloneFetch>(fetch.args)) {
+    co_return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::NOT_SUPPORTED,
+            "joining fetch is not supported"});
+  }
+
+  FetchError failure{
+      fetch.requestID, FetchErrorCode::INTERNAL_ERROR, "no upstream available"};
+  auto setInternalFailure = [&](std::string reason) {
+    failure = FetchError{
+        fetch.requestID, FetchErrorCode::INTERNAL_ERROR, std::move(reason)};
+  };
+  for (size_t i = 0; i < upstreamProviders_.size(); ++i) {
+    auto sessionResult = co_await folly::coro::co_awaitTry(
+        upstreamProviders_[i]->getSession(
+            fetch.fullTrackName,
+            fetch.params,
+            i + 1 < upstreamProviders_.size()));
+    if (closed_) {
+      co_return folly::makeUnexpected(
+          FetchError{
+              fetch.requestID, FetchErrorCode::GOING_AWAY, "proxy is closed"});
+    }
+    if (sessionResult.hasException() || sessionResult->hasError()) {
+      setInternalFailure(
+          sessionResult.hasException()
+              ? sessionResult.exception().what().toStdString()
+              : sessionResult->error().message);
+      continue;
+    }
+
+    auto upstreamSession = std::move(sessionResult->value());
+    if (!upstreamSession) {
+      setInternalFailure("upstream provider returned a null session");
+      continue;
+    }
+    auto result = co_await folly::coro::co_awaitTry(
+        cache_->fetch(fetch, consumer, std::move(upstreamSession)));
+    if (result.hasException()) {
+      setInternalFailure(result.exception().what().toStdString());
+      continue;
+    }
+    if (result->hasValue()) {
+      co_return std::move(result->value());
+    }
+    failure = std::move(result->error());
+    failure.requestID = fetch.requestID;
+  }
+  co_return folly::makeUnexpected(std::move(failure));
+}
+
 std::shared_ptr<MoQProxyTrack> MoQProxy::getOrCreateTrack(
     const FullTrackName& fullTrackName) {
   auto it = tracks_.find(fullTrackName);
@@ -88,6 +154,7 @@ void MoQProxy::close() {
     track->setCallback({});
     track->close();
   }
+  cache_->clear();
 }
 
 } // namespace moxygen

@@ -16,6 +16,8 @@
 
 namespace moxygen {
 
+class MoQCache;
+
 class MoQProxy : public Publisher,
                  public std::enable_shared_from_this<MoQProxy>,
                  public MoQProxyTrack::Callback {
@@ -32,6 +34,10 @@ class MoQProxy : public Publisher,
       SubscribeRequest subscribeRequest,
       std::shared_ptr<TrackConsumer> consumer) override;
 
+  folly::coro::Task<FetchResult> fetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> consumer) override;
+
   void close();
 
  private:
@@ -44,6 +50,7 @@ class MoQProxy : public Publisher,
   void onNoSubscribers(MoQProxyTrack* track) override;
 
   std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders_;
+  std::shared_ptr<MoQCache> cache_;
   folly::F14FastMap<
       FullTrackName,
       std::shared_ptr<MoQProxyTrack>,
