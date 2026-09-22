@@ -120,6 +120,13 @@ class ForwarderDestroyingCallback : public MoQForwarder::Callback {
   std::shared_ptr<MoQForwarder>& forwarderRef_;
 };
 
+struct CountingCallback : public MoQForwarder::Callback {
+  void onEmpty(MoQForwarder*) override {
+    onEmptyCount++;
+  }
+  size_t onEmptyCount{0};
+};
+
 struct TestNGRCallback : public MoQForwarder::Callback {
   void onEmpty(MoQForwarder*) override {}
   void newGroupRequested(MoQForwarder*, uint64_t group) override {
@@ -923,6 +930,341 @@ TEST_F(MoQForwarderTest, TombstonedSubgroupIgnoresSubsequentObjects) {
   EXPECT_EQ(res2.error().code, MoQPublishError::CANCELLED);
 
   subgroup->reset(ResetStreamErrorCode::SESSION_CLOSED);
+}
+
+// Test: A subscriber whose only subgroup was tombstoned is removed by
+// publishDone.  The subgroup's stream is already gone, so nothing else would
+// ever close it and the subscriber would drain forever.
+TEST_F(MoQForwarderTest, DrainingSubscriberRemovedWhenOnlyTombstonesRemain) {
+  auto subscriber = createMockSession();
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+  std::shared_ptr<MockSubgroupConsumer> sg;
+
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
+        sg = createMockSubgroupConsumer();
+        EXPECT_CALL(*sg, object(0, _, _, false))
+            .WillOnce(Return(
+                folly::makeUnexpected(MoQPublishError(
+                    MoQPublishError::CANCELLED, "delivery timeout"))));
+        return subgroupConsumerResult(sg);
+      });
+
+  addSubscriber(*forwarder, subscriber, consumer, RequestID(1));
+
+  auto subgroup = forwarder->beginSubgroup(0, 0, 0).value();
+  // The delivery timeout tombstones the subgroup, then the next object finds
+  // no live consumer and drops the SubgroupForwarder.
+  EXPECT_TRUE(subgroup->object(0, test::makeBuf(10)).hasValue());
+  auto res = subgroup->object(1, test::makeBuf(10));
+  ASSERT_TRUE(res.hasError());
+  EXPECT_EQ(res.error().code, MoQPublishError::CANCELLED);
+
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*sg, reset(_)).Times(0);
+
+  forwarder->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::TRACK_ENDED,
+          0,
+          "publisher ended"});
+
+  EXPECT_TRUE(forwarder->empty());
+}
+
+// Test: Tombstoning the last open subgroup of an already-draining subscriber
+// removes it.
+TEST_F(MoQForwarderTest, TombstoneAfterPublishDoneRemovesDrainingSubscriber) {
+  auto subscriber = createMockSession();
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+  std::shared_ptr<MockSubgroupConsumer> sg;
+
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
+        sg = createMockSubgroupConsumer();
+        EXPECT_CALL(*sg, objectPayload(_, false))
+            .WillOnce(Return(
+                folly::makeUnexpected(MoQPublishError(
+                    MoQPublishError::CANCELLED, "delivery timeout"))));
+        return subgroupConsumerResult(sg);
+      });
+
+  addSubscriber(*forwarder, subscriber, consumer, RequestID(1));
+
+  auto subgroup = forwarder->beginSubgroup(0, 0, 0).value();
+  EXPECT_TRUE(subgroup->beginObject(0, 10, 0).hasValue());
+
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  forwarder->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::TRACK_ENDED,
+          0,
+          "publisher ended"});
+  EXPECT_FALSE(forwarder->empty());
+
+  // Losing the last subscriber propagates CANCELLED back to the publisher.
+  auto res = subgroup->objectPayload(test::makeBuf(5), false);
+  ASSERT_TRUE(res.hasError());
+  EXPECT_EQ(res.error().code, MoQPublishError::CANCELLED);
+  EXPECT_TRUE(forwarder->empty());
+}
+
+// Test: A soft error on an object that also finishes the subgroup leaves no
+// tombstone behind.  Nothing reopens a finished subgroup to clear it later, so
+// one left here would outlive the subgroup for the life of the subscription.
+TEST_F(MoQForwarderTest, TombstoneClearedWhenSubgroupFinishes) {
+  auto subscriber = createMockSession();
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+  std::shared_ptr<MockSubgroupConsumer> sg;
+
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
+        sg = createMockSubgroupConsumer();
+        EXPECT_CALL(*sg, object(0, _, _, true))
+            .WillOnce(Return(
+                folly::makeUnexpected(MoQPublishError(
+                    MoQPublishError::CANCELLED, "delivery timeout"))));
+        return subgroupConsumerResult(sg);
+      });
+
+  auto sub = addSubscriber(*forwarder, subscriber, consumer, RequestID(1));
+  ASSERT_NE(sub, nullptr);
+
+  auto subgroup = forwarder->beginSubgroup(0, 0, 0).value();
+  subgroup->object(0, test::makeBuf(10), noExtensions(), /*finSubgroup=*/true);
+
+  EXPECT_TRUE(sub->subgroups.empty());
+  EXPECT_TRUE(sub->tombstonedSubgroups.empty());
+}
+
+// Test: onEmpty fires exactly once when beginSubgroup loses its last
+// subscriber.  The new subgroup is not in subgroups_ yet, so the removal
+// inside the loop is already what empties the forwarder.
+TEST_F(MoQForwarderTest, BeginSubgroupErrorFiresOnEmptyOnce) {
+  auto subscriber = createMockSession();
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto callback = std::make_shared<CountingCallback>();
+  forwarder->setCallback(callback);
+  auto consumer = createMockConsumer();
+
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(
+          folly::makeUnexpected(MoQPublishError(
+              MoQPublishError::WRITE_ERROR, "transport broken"))));
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  addSubscriber(*forwarder, subscriber, consumer, RequestID(1));
+
+  auto res = forwarder->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(res.hasError());
+  EXPECT_EQ(res.error().code, MoQPublishError::CANCELLED);
+  EXPECT_TRUE(forwarder->empty());
+  EXPECT_EQ(callback->onEmptyCount, 1);
+}
+
+// Test: A draining subscriber with both a tombstoned and a still-open subgroup
+// survives until the open one closes.
+TEST_F(MoQForwarderTest, DrainingSubscriberWaitsForNonTombstonedSubgroup) {
+  auto subscriber = createMockSession();
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+  std::array<std::shared_ptr<MockSubgroupConsumer>, 2> sgs;
+
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sgs](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
+        sgs[0] = createMockSubgroupConsumer();
+        EXPECT_CALL(*sgs[0], object(0, _, _, false))
+            .WillOnce(Return(
+                folly::makeUnexpected(MoQPublishError(
+                    MoQPublishError::CANCELLED, "delivery timeout"))));
+        return subgroupConsumerResult(sgs[0]);
+      });
+  EXPECT_CALL(*consumer, beginSubgroup(1, 0, _, _))
+      .WillOnce([this, &sgs](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
+        sgs[1] = createMockSubgroupConsumer();
+        EXPECT_CALL(*sgs[1], endOfSubgroup()).WillOnce(Return(folly::unit));
+        return subgroupConsumerResult(sgs[1]);
+      });
+
+  auto sub = addSubscriber(*forwarder, subscriber, consumer, RequestID(1));
+  ASSERT_NE(sub, nullptr);
+
+  auto subgroup0 = forwarder->beginSubgroup(0, 0, 0).value();
+  auto subgroup1 = forwarder->beginSubgroup(1, 0, 0).value();
+  EXPECT_TRUE(subgroup0->object(0, test::makeBuf(10)).hasValue());
+  EXPECT_EQ(sub->tombstonedSubgroups.size(), 1);
+
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  forwarder->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::TRACK_ENDED,
+          0,
+          "publisher ended"});
+  // The tombstone must not retire the subscriber while group 1 is still open.
+  EXPECT_FALSE(forwarder->empty());
+
+  EXPECT_TRUE(subgroup1->endOfSubgroup().hasValue());
+  EXPECT_TRUE(forwarder->empty());
+}
+
+// Test: Tombstoning one subscriber mid-iteration does not disturb the others.
+// The forwarder removes subscribers from inside its own subscriber loop, so
+// this pins the iteration against that.
+TEST_F(MoQForwarderTest, TombstoneDuringDrainLeavesOtherSubscribersIntact) {
+  std::array<std::shared_ptr<MoQSession>, 3> subscribers;
+  std::array<std::shared_ptr<MockTrackConsumer>, 3> consumers;
+  std::array<std::shared_ptr<MockSubgroupConsumer>, 3> sgs;
+  for (size_t i = 0; i < 3; ++i) {
+    subscribers[i] = createMockSession();
+    consumers[i] = createMockConsumer();
+  }
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+
+  for (size_t i = 0; i < 3; ++i) {
+    EXPECT_CALL(*consumers[i], beginSubgroup(0, 0, _, _))
+        .WillOnce([this, i, &sgs](
+                      uint64_t,
+                      uint64_t,
+                      uint8_t,
+                      moxygen::TrackConsumer::BeginSubgroupOptions) {
+          sgs[i] = createMockSubgroupConsumer();
+          if (i == 1) {
+            EXPECT_CALL(*sgs[i], object(0, _, _, false))
+                .WillOnce(Return(
+                    folly::makeUnexpected(MoQPublishError(
+                        MoQPublishError::CANCELLED, "delivery timeout"))));
+          } else {
+            EXPECT_CALL(*sgs[i], object(0, _, _, false))
+                .WillOnce(Return(folly::unit));
+            EXPECT_CALL(*sgs[i], endOfSubgroup()).WillOnce(Return(folly::unit));
+          }
+          return subgroupConsumerResult(sgs[i]);
+        });
+  }
+
+  std::array<std::shared_ptr<MoQForwarder::Subscriber>, 3> subs;
+  for (size_t i = 0; i < 3; ++i) {
+    subs[i] = addSubscriber(
+        *forwarder, subscribers[i], consumers[i], RequestID(i + 1));
+    ASSERT_NE(subs[i], nullptr);
+  }
+
+  auto subgroup = forwarder->beginSubgroup(0, 0, 0).value();
+
+  // Subscriber 1 tombstones; the other two keep the subgroup open.
+  EXPECT_TRUE(subgroup->object(0, test::makeBuf(10)).hasValue());
+  EXPECT_EQ(subs[1]->tombstonedSubgroups.size(), 1);
+  EXPECT_TRUE(subs[0]->subgroups.count({0, 0}));
+  EXPECT_TRUE(subs[2]->subgroups.count({0, 0}));
+
+  for (auto& consumer : consumers) {
+    EXPECT_CALL(*consumer, publishDone(_))
+        .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  }
+  forwarder->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::TRACK_ENDED,
+          0,
+          "publisher ended"});
+
+  // Only the tombstoned subscriber is retired by the drain; detach() nulls
+  // forwarder on exactly the one that was removed.
+  EXPECT_FALSE(forwarder->empty());
+  EXPECT_EQ(subs[1]->forwarder, nullptr);
+  EXPECT_NE(subs[0]->forwarder, nullptr);
+  EXPECT_NE(subs[2]->forwarder, nullptr);
+
+  EXPECT_TRUE(subgroup->endOfSubgroup().hasValue());
+  EXPECT_TRUE(forwarder->empty());
+}
+
+// Test: A duplicate subgroup resets the subscriber's open stream for it.  If
+// that was the last stream a draining subscriber was waiting on, and the
+// subgroup can't be reopened, the subscriber has to be retired.
+TEST_F(MoQForwarderTest, DuplicateSubgroupRetiresDrainingSubscriber) {
+  auto subscriber = createMockSession();
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+  std::shared_ptr<MockSubgroupConsumer> sg;
+
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce([this, &sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
+        sg = createMockSubgroupConsumer();
+        return subgroupConsumerResult(sg);
+      });
+
+  auto callback = std::make_shared<CountingCallback>();
+  forwarder->setCallback(callback);
+
+  auto sub = addSubscriber(*forwarder, subscriber, consumer, RequestID(1));
+  ASSERT_NE(sub, nullptr);
+  forwarder->beginSubgroup(0, 0, 0).value();
+
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  forwarder->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::TRACK_ENDED,
+          0,
+          "publisher ended"});
+  EXPECT_FALSE(forwarder->empty());
+
+  // forward=0 stops the duplicate from being reopened for this subscriber.
+  ASSERT_TRUE(applyForwardUpdate(sub, RequestID(2), false));
+
+  EXPECT_CALL(*sg, reset(ResetStreamErrorCode::CANCELLED));
+  auto res = forwarder->beginSubgroup(0, 0, 0);
+
+  ASSERT_TRUE(res.hasError());
+  EXPECT_EQ(res.error().code, MoQPublishError::CANCELLED);
+  EXPECT_TRUE(forwarder->empty());
+  // Retiring the subscriber here is the one case where nothing downstream
+  // fires onEmpty, so the duplicate path has to do it itself.
+  EXPECT_EQ(callback->onEmptyCount, 1);
 }
 
 // Test: Late joiner gets a subgroup even after another subscriber tombstoned
