@@ -1006,7 +1006,18 @@ TEST_P(MoQCodecTest, ZeroLengthObjectFollowedByNormalObject) {
   EXPECT_CALL(
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, 0, testing::_, true, false, false))
-      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
+      .WillOnce([](uint64_t,
+                   uint64_t,
+                   uint64_t,
+                   const Extensions&,
+                   uint64_t,
+                   Payload payload,
+                   bool,
+                   bool,
+                   bool) {
+        EXPECT_EQ(payload, nullptr);
+        return MoQCodec::ParseResult::CONTINUE;
+      });
 
   // Expect onObjectBegin for the normal object (this would crash without the
   // fix)
