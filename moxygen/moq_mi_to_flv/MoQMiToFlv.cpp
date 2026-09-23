@@ -43,7 +43,9 @@ std::list<flv::FlvTag> MoQMiToFlv::MoQMiToFlvPayload(
         bool isIdr = moqv->isIdr();
         if ((!firstIDRSeen_ && isIdr) || firstIDRSeen_) {
           // Write frame
-          uint8_t frameType = isIdr ? 1 : 0;
+          // FLV VideoTag FrameType 1 is a key frame and 2 is an inter frame.
+          // Zero is reserved and strict decoders drop those packets.
+          uint8_t frameType = isIdr ? 1 : 2;
           XLOG(DBG1) << "Writing video frame, type: " << frameType;
           auto flv_ts = convertTsToFlv(moqv->pts, moqv->timescale);
           auto vtag = flv::createVideoTag(
