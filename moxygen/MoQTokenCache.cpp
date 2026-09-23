@@ -43,8 +43,7 @@ MoQTokenCache::registerToken(
 
   // Insert the new token into the cache with the provided alias
   lru_.push_back(alias);
-  XLOG(DBG4) << "Inserting alias: " << alias << ", tokenType: " << tokenType
-             << ", tokenLength: " << tokenValue.size();
+  XLOG(DBG4) << "Inserting alias: " << alias;
 
   aliasToToken_.emplace(
       alias, CachedToken{tokenType, std::move(tokenValue), --lru_.end()});
@@ -71,9 +70,7 @@ MoQTokenCache::deleteToken(Alias alias) {
     return folly::makeUnexpected(ErrorCode::UNKNOWN_ALIAS);
   }
 
-  XLOG(DBG4) << "Deleting alias: " << alias
-             << ", tokenType: " << it->second.tokenType
-             << ", tokenLength: " << it->second.tokenValue.size();
+  XLOG(DBG4) << "Deleting alias: " << alias;
   auto size = cachedSize(it->second.tokenValue);
   XCHECK_GE(totalSize_, size);
   totalSize_ -= size;
@@ -101,9 +98,7 @@ MoQTokenCache::Alias MoQTokenCache::evictHelper(std::list<Alias>::iterator it) {
   auto tokenIt = aliasToToken_.find(alias);
   XCHECK(tokenIt != aliasToToken_.end());
   XCHECK_GE(totalSize_, cachedSize(tokenIt->second.tokenValue));
-  XLOG(DBG4) << "Removing alias: " << alias
-             << ", tokenType: " << tokenIt->second.tokenType
-             << ", tokenLength: " << tokenIt->second.tokenValue.size();
+  XLOG(DBG4) << "Removing alias: " << alias;
   totalSize_ -= cachedSize(tokenIt->second.tokenValue);
   aliasToToken_.erase(tokenIt);
   return alias;
