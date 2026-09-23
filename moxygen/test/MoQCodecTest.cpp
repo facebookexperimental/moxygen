@@ -499,6 +499,56 @@ TEST_P(MoQCodecTest, TruncatedObjectPayload) {
   objectStreamCodec_.onIngress(writeBuf.move(), true);
 }
 
+TEST(MoQCodecTest, RejectsOversizedIncompleteExtensionBlock) {
+  constexpr auto kVersion = kVersionDraft18;
+  constexpr size_t kOversizedValueLength = 64 * 1024;
+  const std::string marker = "oversized-extension-value";
+  std::string extensionValue;
+  extensionValue.reserve(kOversizedValueLength);
+  while (extensionValue.size() < kOversizedValueLength) {
+    extensionValue.append(marker);
+  }
+  extensionValue.resize(kOversizedValueLength);
+
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersion);
+  ObjectHeader object(2, 3, 4, 5);
+  object.extensions.insertMutableExtension(
+      Extension{13, folly::IOBuf::copyBuffer(extensionValue)});
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto streamType =
+      getSubgroupStreamType(kVersion, SubgroupIDFormat::Present, true, false);
+  ASSERT_TRUE(writer
+                  .writeSubgroupHeader(
+                      writeBuf,
+                      TrackAlias(1),
+                      object,
+                      SubgroupOptions{.hasExtensions = true})
+                  .hasValue());
+  ASSERT_TRUE(writer.writeStreamObject(writeBuf, streamType, object, nullptr)
+                  .hasValue());
+
+  auto wire = writeBuf.move()->moveToFbString().toStdString();
+  auto extensionValueOffset = wire.find(marker);
+  ASSERT_NE(extensionValueOffset, std::string::npos);
+  auto incompleteHeader =
+      folly::IOBuf::copyBuffer(wire.data(), extensionValueOffset);
+  EXPECT_LT(incompleteHeader->computeChainDataLength(), 64);
+
+  testing::StrictMock<MockMoQCodecCallback> callback;
+  MoQObjectStreamCodec codec(&callback);
+  codec.initializeVersion(kVersion);
+  EXPECT_CALL(
+      callback,
+      onSubgroup(TrackAlias(1), 2, 3, std::optional<uint8_t>(5), testing::_));
+  EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+
+  EXPECT_EQ(
+      codec.onIngress(std::move(incompleteHeader), false),
+      MoQCodec::ParseResult::ERROR_TERMINATE);
+}
+
 TEST_P(MoQCodecTest, StreamTypeUnderflow) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   uint8_t big = 0xff;
