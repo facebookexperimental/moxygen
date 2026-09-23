@@ -43,7 +43,8 @@ MoQTokenCache::registerToken(
 
   // Insert the new token into the cache with the provided alias
   lru_.push_back(alias);
-  XLOG(DBG4) << "Inserting alias: " << alias << ", TokenValue: " << tokenValue;
+  XLOG(DBG4) << "Inserting alias: " << alias << ", tokenType: " << tokenType
+             << ", tokenLength: " << tokenValue.size();
 
   aliasToToken_.emplace(
       alias, CachedToken{tokenType, std::move(tokenValue), --lru_.end()});
@@ -71,7 +72,8 @@ MoQTokenCache::deleteToken(Alias alias) {
   }
 
   XLOG(DBG4) << "Deleting alias: " << alias
-             << ", TokenValue: " << it->second.tokenValue;
+             << ", tokenType: " << it->second.tokenType
+             << ", tokenLength: " << it->second.tokenValue.size();
   auto size = cachedSize(it->second.tokenValue);
   XCHECK_GE(totalSize_, size);
   totalSize_ -= size;
@@ -100,7 +102,8 @@ MoQTokenCache::Alias MoQTokenCache::evictHelper(std::list<Alias>::iterator it) {
   XCHECK(tokenIt != aliasToToken_.end());
   XCHECK_GE(totalSize_, cachedSize(tokenIt->second.tokenValue));
   XLOG(DBG4) << "Removing alias: " << alias
-             << ", TokenValue: " << tokenIt->second.tokenValue;
+             << ", tokenType: " << tokenIt->second.tokenType
+             << ", tokenLength: " << tokenIt->second.tokenValue.size();
   totalSize_ -= cachedSize(tokenIt->second.tokenValue);
   aliasToToken_.erase(tokenIt);
   return alias;

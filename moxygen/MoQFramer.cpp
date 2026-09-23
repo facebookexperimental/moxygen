@@ -611,7 +611,8 @@ MoQFrameParser::parseAuthToken(
       } else {
         XLOG(WARN)
             << "Converting too-large CLIENT_SETUP register to USE_VALUE alias="
-            << *token->alias << " value=" << token->tokenValue;
+            << *token->alias << " tokenType=" << token->tokenType
+            << " tokenLength=" << token->tokenValue.size();
       }
     } break;
     case AliasType::USE_VALUE: {
