@@ -57,6 +57,19 @@ TEST(DeJitterTest, NoGapsUniquePrt) {
   EXPECT_EQ(dejitter.sizeMs(), 30);
 }
 
+TEST(DeJitterTest, DrainReturnsBufferedItemsInOrder) {
+  DeJitter<int> dejitter(/*bufferSizeMs=*/100);
+
+  EXPECT_FALSE(std::get<0>(dejitter.insertItem(2, 10, 2)).has_value());
+  EXPECT_FALSE(std::get<0>(dejitter.insertItem(0, 10, 0)).has_value());
+  EXPECT_FALSE(std::get<0>(dejitter.insertItem(1, 10, 1)).has_value());
+
+  const std::vector<int> expected{0, 1, 2};
+  EXPECT_EQ(dejitter.drain(), expected);
+  EXPECT_EQ(dejitter.size(), 0);
+  EXPECT_EQ(dejitter.sizeMs(), 0);
+}
+
 TEST(DeJitterTest, OutOfOrder) {
   uint64_t bufferSizeMs = 30;
   DeJitter<int> dejitter(bufferSizeMs);

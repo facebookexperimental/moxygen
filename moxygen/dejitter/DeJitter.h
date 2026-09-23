@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <vector>
 
 namespace moxygen::dejitter {
 
@@ -40,6 +41,17 @@ class DeJitter {
   }
   uint64_t sizeMs() const {
     return currentBufferSizeMs_;
+  }
+  std::vector<T> drain() {
+    std::vector<T> items;
+    items.reserve(buffer_.size());
+    for (auto& [pos, itemAndDuration] : buffer_) {
+      lastSent_ = pos;
+      items.push_back(std::move(itemAndDuration.item));
+    }
+    buffer_.clear();
+    currentBufferSizeMs_ = 0;
+    return items;
   }
 
   // Assuming pos in monotically increasing
