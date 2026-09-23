@@ -431,6 +431,10 @@ class MoQSession : public Subscriber,
         PublishDone pubDone,
         ResetStreamErrorCode error = ResetStreamErrorCode::INTERNAL_ERROR) = 0;
 
+    // Tear down during session close. The entry is already out of pubTracks_,
+    // so reset the data streams and do not answer the peer.
+    virtual void sessionClosed(ResetStreamErrorCode code) = 0;
+
     // End the request after a draft-18 request-stream GOAWAY timeout.
     // Subscriptions use PUBLISH_DONE; FETCH resets its request and data
     // streams.
