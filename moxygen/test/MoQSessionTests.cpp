@@ -52,6 +52,214 @@ TEST_P(MoQVersionNegotiationTest, Setup) {
 }
 using CurrentVersionOnly = MoQSessionTest;
 
+class SetupTokenCacheTest : public MoQSessionTest {
+ public:
+  folly::Try<moxygen::Setup> onClientSetup(
+      moxygen::Setup setup,
+      const std::shared_ptr<MoQSession>&) override {
+    receivedSetup_ = true;
+    std::vector<std::tuple<uint64_t, std::string, std::optional<uint64_t>>>
+        setupTokens;
+    for (const auto& param : setup.params) {
+      if (param.key == folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN)) {
+        setupTokens.emplace_back(
+            param.asAuthToken.tokenType,
+            param.asAuthToken.tokenValue,
+            param.asAuthToken.alias);
+      }
+    }
+    EXPECT_EQ(setupTokens, expectedSetupTokens_);
+
+    moxygen::Setup serverSetup;
+    serverSetup.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+            initialMaxRequestID_});
+    serverSetup.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
+            finalCacheSize_});
+    return folly::Try<moxygen::Setup>(std::move(serverSetup));
+  }
+
+  folly::coro::Task<Publisher::TrackStatusResult> validateTrackStatus(
+      TrackStatus request) {
+    EXPECT_EQ(request.params.size(), 1);
+    if (request.params.size() != 1) {
+      co_return makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
+    }
+    const auto& token = request.params.at(0).asAuthToken;
+    const auto& expectedValue =
+        requestIndex_ == 0 ? retainedToken_ : evictedToken_;
+    const auto expectedAlias = requestIndex_ == 0 ? 0 : reregisteredAlias_;
+    EXPECT_EQ(token.tokenType, 7);
+    EXPECT_EQ(token.tokenValue, expectedValue);
+    EXPECT_EQ(token.alias, expectedAlias);
+    ++requestIndex_;
+    co_return makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
+  }
+
+ protected:
+  std::vector<std::tuple<uint64_t, std::string, std::optional<uint64_t>>>
+      expectedSetupTokens_;
+  uint64_t finalCacheSize_{0};
+  std::string retainedToken_;
+  std::string evictedToken_;
+  uint64_t reregisteredAlias_{0};
+  size_t requestIndex_{0};
+  bool receivedSetup_{false};
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    LegacySetupTokenCacheTest,
+    SetupTokenCacheTest,
+    testing::Values(
+        VersionParams{{kVersionDraft14}, kVersionDraft14},
+        VersionParams{{kVersionDraft15}, kVersionDraft15},
+        VersionParams{{kVersionDraft16}, kVersionDraft16}));
+
+CO_TEST_P_X(SetupTokenCacheTest, PreservesSetupAliasesAcrossFinalClamp) {
+  std::vector<std::string> setupTokens;
+  for (uint64_t i = 0; i < 32; ++i) {
+    auto token = std::string("setup-token-");
+    token.push_back('a' + (i / 26));
+    token.push_back('a' + (i % 26));
+    setupTokens.push_back(std::move(token));
+  }
+  retainedToken_ = setupTokens.front();
+  evictedToken_ = setupTokens.back();
+  reregisteredAlias_ = setupTokens.size();
+  expectedSetupTokens_.reserve(setupTokens.size());
+  for (uint64_t i = 0; i < setupTokens.size(); ++i) {
+    expectedSetupTokens_.emplace_back(7, setupTokens.at(i), i);
+  }
+  finalCacheSize_ = MoQTokenCache::cachedSize(retainedToken_) + 1;
+
+  clientSession_->setPublishHandler(clientPublisher);
+  clientSession_->setSubscribeHandler(clientSubscriber);
+  clientSession_->start();
+  serverSession_->setPublishHandler(serverPublisher);
+  serverSession_->setSubscribeHandler(serverSubscriber);
+  serverSession_->start();
+  clientSession_->setServerMaxTokenCacheSizeGuess(1024);
+
+  auto clientSetup = getClientSetup(initialMaxRequestID_);
+  for (const auto& token : setupTokens) {
+    clientSetup.params.insertParam(Parameter(
+        folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN),
+        AuthToken{7, token, AuthToken::Register}));
+  }
+  auto serverSetup = co_await clientSession_->setup(std::move(clientSetup));
+
+  auto finalCacheParam = std::find_if(
+      serverSetup.params.begin(),
+      serverSetup.params.end(),
+      [](const auto& param) {
+        return param.key ==
+            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE);
+      });
+  EXPECT_NE(finalCacheParam, serverSetup.params.end());
+  if (finalCacheParam == serverSetup.params.end()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+  EXPECT_EQ(finalCacheParam->asUint64, finalCacheSize_);
+
+  EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus()).Times(2);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus()).Times(2);
+  EXPECT_CALL(*serverPublisher, trackStatus(_))
+      .Times(2)
+      .WillRepeatedly(
+          testing::Invoke(this, &SetupTokenCacheTest::validateTrackStatus));
+
+  auto request = getTrackStatus();
+  request.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+      AuthToken{7, retainedToken_, AuthToken::Register}));
+  auto retainedResult = co_await clientSession_->trackStatus(request);
+  EXPECT_FALSE(retainedResult.hasError());
+
+  request = getTrackStatus();
+  request.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+      AuthToken{7, evictedToken_, AuthToken::Register}));
+  auto evictedResult = co_await clientSession_->trackStatus(request);
+  EXPECT_FALSE(evictedResult.hasError());
+  EXPECT_EQ(requestIndex_, 2);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+class DisabledTokenCacheTest : public SetupTokenCacheTest {
+ public:
+  DisabledTokenCacheTest() {
+    serverAuthTokenCacheEnabled_ = false;
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    LegacyDisabledTokenCacheTest,
+    DisabledTokenCacheTest,
+    testing::Values(
+        VersionParams{{kVersionDraft14}, kVersionDraft14},
+        VersionParams{{kVersionDraft15}, kVersionDraft15},
+        VersionParams{{kVersionDraft16}, kVersionDraft16}));
+
+CO_TEST_P_X(DisabledTokenCacheTest, SendsFullTokenValues) {
+  clientSession_->setPublishHandler(clientPublisher);
+  clientSession_->start();
+  serverSession_->setPublishHandler(serverPublisher);
+  serverSession_->start();
+  moxygen::Setup clientSetup;
+  clientSetup.params.insertParam(Parameter(
+      folly::to_underlying(SetupKey::MAX_REQUEST_ID), initialMaxRequestID_));
+  clientSetup.params.insertParam(Parameter(
+      folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 1024));
+  auto serverSetup = co_await clientSession_->setup(std::move(clientSetup));
+  auto cacheSizeParam = std::find_if(
+      serverSetup.params.begin(),
+      serverSetup.params.end(),
+      [](const auto& param) {
+        return param.key ==
+            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE);
+      });
+  EXPECT_NE(cacheSizeParam, serverSetup.params.end());
+  if (cacheSizeParam == serverSetup.params.end()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+  EXPECT_EQ(cacheSizeParam->asUint64, 0);
+
+  auto validateToken = [](TrackStatus request)
+      -> folly::coro::Task<Publisher::TrackStatusResult> {
+    EXPECT_EQ(request.params.size(), 1);
+    if (request.params.size() == 1) {
+      const auto& token = request.params.at(0).asAuthToken;
+      EXPECT_EQ(token.tokenType, 7);
+      EXPECT_EQ(token.tokenValue, "token");
+      EXPECT_FALSE(token.alias.has_value());
+    }
+    co_return makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
+  };
+  EXPECT_CALL(*clientPublisher, trackStatus(_))
+      .Times(2)
+      .WillRepeatedly(validateToken);
+  EXPECT_CALL(*serverPublisher, trackStatus(_))
+      .Times(2)
+      .WillRepeatedly(validateToken);
+
+  for (size_t i = 0; i < 2; ++i) {
+    auto request = getTrackStatus();
+    request.params.insertParam(Parameter(
+        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+        AuthToken{7, "token", AuthToken::Register}));
+    auto serverResult = co_await serverSession_->trackStatus(request);
+    EXPECT_FALSE(serverResult.hasError());
+    auto clientResult = co_await clientSession_->trackStatus(request);
+    EXPECT_FALSE(clientResult.hasError());
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(CurrentVersionOnly, SetupTimeout) {
   MoQSettings moqSettings;
   moqSettings.setupTimeout = std::chrono::milliseconds(500);
@@ -234,6 +442,39 @@ class RecordingSessionCloseCallback
   std::optional<SessionCloseErrorCode> errorCode;
   folly::coro::Baton closed;
 };
+
+CO_TEST_P_X(DisabledTokenCacheTest, SetupRegistrationsRemainUncached) {
+  RecordingSessionCloseCallback closeCallback;
+  serverSession_->setSessionCloseCallback(&closeCallback);
+  serverSession_->start();
+
+  const std::string token = "uncached-setup-token";
+  expectedSetupTokens_ = {{7, token, 42}, {7, token, 42}};
+  MoQFrameWriter writer;
+  writer.initializeVersion(getServerSelectedVersion());
+  auto setup = getClientSetup(initialMaxRequestID_);
+  for (size_t i = 0; i < 2; ++i) {
+    setup.params.insertParam(Parameter(
+        folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN),
+        writer.encodeRegisterToken(42, 7, token)));
+  }
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  EXPECT_TRUE(
+      writeClientSetup(writeBuf, setup, getServerSelectedVersion()).hasValue());
+  auto request = getTrackStatus();
+  request.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+      writer.encodeUseAlias(42)));
+  EXPECT_TRUE(writer.writeTrackStatus(writeBuf, request).hasValue());
+
+  auto bidi = clientWt_->createBidiStream();
+  EXPECT_TRUE(bidi.hasValue());
+  bidi->writeHandle->writeStreamData(writeBuf.move(), false, nullptr);
+  co_await closeCallback.closed;
+  EXPECT_TRUE(receivedSetup_);
+  EXPECT_EQ(closeCallback.errorCode, SessionCloseErrorCode::PROTOCOL_VIOLATION);
+}
 
 // === AUTHORITY / PATH tests ===
 

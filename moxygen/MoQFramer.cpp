@@ -151,7 +151,7 @@ validateDeliveryTimeoutExtension(
 
 std::vector<moxygen::Parameter> sortParamsByKey(
     std::vector<moxygen::Parameter> params) {
-  std::sort(
+  std::stable_sort(
       params.begin(),
       params.end(),
       [](const moxygen::Parameter& a, const moxygen::Parameter& b) {
@@ -518,7 +518,7 @@ MoQFrameParser::parseAuthToken(
     folly::io::Cursor& cursor,
     size_t length,
     bool isClientSetup) const noexcept {
-  auto& tokenCache = *tokenCache_;
+  auto& tokenCache = getTokenCache();
   std::optional<AuthToken> token;
   token.emplace(); // plan for success
   auto aliasType = decodeVarint(cursor, length);

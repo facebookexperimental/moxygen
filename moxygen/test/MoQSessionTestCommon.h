@@ -283,6 +283,7 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
       std::make_shared<MockSubscriber>()};
   uint64_t initialMaxRequestID_{kTestMaxRequestID * getRequestIDMultiplier()};
   bool failServerSetup_{false};
+  bool serverAuthTokenCacheEnabled_{true};
   bool invalidVersion_{false};
   bool serverSendsAuthority_{false};
   TrackAlias nextAlias_{12345};

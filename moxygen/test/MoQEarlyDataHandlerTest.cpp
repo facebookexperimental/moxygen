@@ -66,6 +66,14 @@ TEST_F(MoQEarlyDataHandlerTest, ValidateWithZeroParams) {
   EXPECT_TRUE(handler_.validate(std::string("moqt-17"), buf));
 }
 
+TEST_F(MoQEarlyDataHandlerTest, DisablingTokenCacheRejectsPreviousBudget) {
+  handler_.setCurrentParams(100, 1024);
+  auto cachedParams = handler_.get();
+  handler_.setMaxAuthTokenCacheSize(0);
+  EXPECT_FALSE(handler_.validate(std::string("moqt-16"), cachedParams));
+  EXPECT_TRUE(handler_.validate(std::string("moqt-16"), handler_.get()));
+}
+
 TEST_F(MoQEarlyDataHandlerTest, ValidateWithNullAppParams) {
   handler_.setCurrentParams(100, 1024);
   EXPECT_FALSE(handler_.validate(std::string("moqt-17"), nullptr));

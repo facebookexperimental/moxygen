@@ -32,6 +32,10 @@ class MoQEarlyDataHandler : public quic::EarlyDataAppParamsHandler {
     maxAuthTokenCacheSize_ = maxAuthTokenCacheSize;
   }
 
+  void setMaxAuthTokenCacheSize(uint64_t maxAuthTokenCacheSize) {
+    maxAuthTokenCacheSize_ = maxAuthTokenCacheSize;
+  }
+
   bool validate(
       const quic::Optional<std::string>& /*alpn*/,
       const quic::BufPtr& appParams) override {

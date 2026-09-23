@@ -30,7 +30,7 @@ std::shared_ptr<MoQSession> MoQServerBase::createSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
     std::shared_ptr<MoQExecutor> executor) {
   return std::make_shared<MoQSession>(
-      std::move(wt), *this, std::move(executor));
+      std::move(wt), *this, std::move(executor), authTokenCacheEnabled_);
 }
 
 folly::coro::Task<void> MoQServerBase::handleClientSession(
@@ -78,7 +78,7 @@ Setup MoQServerBase::makeServerSetup() {
   setup.params.insertParam(
       Parameter{
           folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
-          kDefaultMaxAuthTokenCacheSize});
+          authTokenCacheEnabled_ ? kDefaultMaxAuthTokenCacheSize : 0});
   return setup;
 }
 

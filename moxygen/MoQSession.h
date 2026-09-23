@@ -221,7 +221,8 @@ class MoQSession : public Subscriber,
   explicit MoQSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       ServerSetupCallback& serverSetupCallback,
-      std::shared_ptr<MoQExecutor> exec);
+      std::shared_ptr<MoQExecutor> exec,
+      bool authTokenCacheEnabled = true);
 
   void setVersion(uint64_t version);
   void setMoqSettings(MoQSettings settings);
@@ -1379,6 +1380,7 @@ class MoQSession : public Subscriber,
   // (control stream, draft16+ SUBSCRIBE_NAMESPACE bidi streams, etc.) point to
   // this cache so that aliases registered on one stream are visible on all
   // others and the total budget is enforced once rather than per-codec.
+  static constexpr uint64_t kMaxReceiveTokenCacheSize{4096};
   MoQTokenCache receiveTokenCache_;
 
  private:
@@ -1428,6 +1430,8 @@ class MoQSession : public Subscriber,
   ServerSetupCallback* serverSetupCallback_{nullptr};
   MoQSessionCloseCallback* closeCallback_{nullptr};
   MoQSettings moqSettings_;
+
+  bool authTokenCacheEnabled_{true};
 
   // Send-side auth token cache (for aliasifyAuthTokens).
   MoQTokenCache tokenCache_{1024};

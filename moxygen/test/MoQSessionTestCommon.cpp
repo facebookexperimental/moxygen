@@ -194,7 +194,8 @@ void MoQSessionTest::SetUp() {
   serverSession_ = std::make_shared<MoQRelaySession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt_.get()),
       *this,
-      MoQExecutor_);
+      MoQExecutor_,
+      serverAuthTokenCacheEnabled_);
   clientWt_->setPeerHandler(serverSession_.get());
 
   fetchCallback_ = std::make_shared<testing::StrictMock<MockFetchConsumer>>();

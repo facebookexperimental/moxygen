@@ -2543,12 +2543,15 @@ MoQSession::MoQSession(
       nextRequestID_(0),
 
       nextExpectedPeerRequestID_(1),
-      nextPeerRequestIDForGoaway_(1) {}
+      nextPeerRequestIDForGoaway_(1) {
+  controlCodec_->setTokenCache(&receiveTokenCache_);
+}
 
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
     ServerSetupCallback& serverSetupCallback,
-    std::shared_ptr<MoQExecutor> exec)
+    std::shared_ptr<MoQExecutor> exec,
+    bool authTokenCacheEnabled)
     : dir_(MoQControlCodec::Direction::SERVER),
       wt_(std::move(wt)),
       exec_(std::move(exec)),
@@ -2556,7 +2559,15 @@ MoQSession::MoQSession(
       nextRequestID_(1),
       nextExpectedPeerRequestID_(0),
       nextPeerRequestIDForGoaway_(0),
-      serverSetupCallback_(&serverSetupCallback) {}
+      serverSetupCallback_(&serverSetupCallback),
+      authTokenCacheEnabled_(authTokenCacheEnabled),
+      tokenCache_(authTokenCacheEnabled ? kMaxSendTokenCacheSize : 0) {
+  // Legacy CLIENT_SETUP is parsed before the application chooses its final
+  // advertised budget, so optimistic registrations need a bounded ceiling.
+  receiveTokenCache_.setMaxSize(
+      authTokenCacheEnabled_ ? kMaxReceiveTokenCacheSize : 0);
+  controlCodec_->setTokenCache(&receiveTokenCache_);
+}
 
 MoQSession::~MoQSession() {
   cleanup();
@@ -3050,8 +3061,9 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
   // Set up the shared receive-side token cache and point the control codec
   // at it. The cache is necessarily empty at this point.
   receiveTokenCache_.setMaxSize(
-      getMaxAuthTokenCacheSizeIfPresent(
-          setup.params, setupSerializationVersion),
+      authTokenCacheEnabled_ ? getMaxAuthTokenCacheSizeIfPresent(
+                                   setup.params, setupSerializationVersion)
+                             : 0,
       /*evict=*/!isClient);
   controlCodec_->setTokenCache(&receiveTokenCache_);
   // Optimistically registers params without knowing peer's capabilities
@@ -3152,7 +3164,9 @@ void MoQSession::onServerSetup(Setup serverSetup) {
   auto peerAuthCacheSize = getMaxAuthTokenCacheSizeIfPresent(
       serverSetup.params, *getNegotiatedVersion());
   tokenCache_.setMaxSize(
-      std::min(kMaxSendTokenCacheSize, peerAuthCacheSize),
+      authTokenCacheEnabled_
+          ? std::min(kMaxSendTokenCacheSize, peerAuthCacheSize)
+          : 0,
       /*evict=*/true);
   setupPromise_.setValue(std::move(serverSetup));
 }
@@ -3178,7 +3192,9 @@ void MoQSession::onClientSetup(Setup clientSetup) {
   auto peerAuthCacheSize = getMaxAuthTokenCacheSizeIfPresent(
       clientSetup.params, negotiatedVersion_.value_or(kVersionDraft14));
   tokenCache_.setMaxSize(
-      std::min(kMaxSendTokenCacheSize, peerAuthCacheSize),
+      authTokenCacheEnabled_
+          ? std::min(kMaxSendTokenCacheSize, peerAuthCacheSize)
+          : 0,
       /*evict=*/true);
 
   auto clientAuthority = getFirstStringParam(
@@ -7360,6 +7376,9 @@ void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {
   negotiatedVersion_ = negotiatedVersion;
   moqFrameWriter_.initializeVersion(*negotiatedVersion_);
   controlCodec_->initializeVersion(*negotiatedVersion_);
+  if (useBidiRequestStreams(*negotiatedVersion_)) {
+    receiveTokenCache_.setMaxSize(0, /*evict=*/true);
+  }
   for (const auto& versionBaton : subgroupsWaitingForVersion_) {
     versionBaton->signal();
   }
@@ -7405,11 +7424,10 @@ uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(
   if (useBidiRequestStreams(version)) {
     return 0;
   }
-  constexpr uint64_t kMaxAuthTokenCacheSize = 4096;
   for (const auto& param : params) {
     if (param.key ==
         folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE)) {
-      return std::min(param.asUint64, kMaxAuthTokenCacheSize);
+      return std::min(param.asUint64, kMaxReceiveTokenCacheSize);
     }
   }
   return 0;
@@ -7453,7 +7471,8 @@ void MoQSession::aliasifyAuthTokens(
     // bidi streams, breaking the request-order assumption). Bypass the
     // tokenCache_ branch unconditionally — the send-side cache may still
     // hold a pre-SETUP default size before negotiation completes.
-    const bool aliasingDisabled = useBidiRequestStreams(*version);
+    const bool aliasingDisabled =
+        !authTokenCacheEnabled_ || useBidiRequestStreams(*version);
     if (!aliasingDisabled && token.alias &&
         token.tokenValue.size() < tokenCache_.maxTokenSize()) {
       auto lookupRes =

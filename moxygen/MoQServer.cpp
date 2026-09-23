@@ -126,6 +126,12 @@ MoQServer::MoQServer(
       std::make_unique<HQServer>(params_, std::move(factory_), fizzContext_);
 }
 
+void MoQServer::setAuthTokenCacheEnabled(bool enabled) {
+  MoQServerBase::setAuthTokenCacheEnabled(enabled);
+  earlyDataHandler_.setMaxAuthTokenCacheSize(
+      enabled ? kDefaultMaxAuthTokenCacheSize : 0);
+}
+
 void MoQServer::registerAlpnHandler(const std::vector<std::string>& alpns) {
   if (!factory_) {
     XLOG(DBG1) << "Cannot register ALPN handler: factory not initialized";

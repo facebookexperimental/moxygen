@@ -107,6 +107,8 @@ class MoQServer : public MoQServerBase {
 
   void stop() override;
 
+  void setAuthTokenCacheEnabled(bool enabled) override;
+
   // Takeover runtime wrapper methods - forward to underlying QuicServer
   // Takeover part 1: Methods called on the old instance.
   void allowBeingTakenOver(const folly::SocketAddress& addr);

@@ -120,6 +120,12 @@ inline DatagramType getDatagramType(
 
 class MoQFrameParser {
  public:
+  MoQFrameParser() = default;
+  MoQFrameParser(const MoQFrameParser&) = delete;
+  MoQFrameParser& operator=(const MoQFrameParser&) = delete;
+  MoQFrameParser(MoQFrameParser&&) noexcept = default;
+  MoQFrameParser& operator=(MoQFrameParser&&) noexcept = default;
+
   template <typename T>
   struct ParseResultAndLength {
     T value;
@@ -357,7 +363,7 @@ class MoQFrameParser {
   void setFetchGroupOrder(GroupOrder groupOrder) noexcept;
 
   void setTokenCacheMaxSize(size_t size) {
-    tokenCache_->setMaxSize(size, /*evict=*/true);
+    getTokenCache().setMaxSize(size, /*evict=*/true);
   }
 
   // Use an external token cache instead of the internal one.
@@ -376,6 +382,10 @@ class MoQFrameParser {
   }
 
  private:
+  MoQTokenCache& getTokenCache() const noexcept {
+    return tokenCache_ ? *tokenCache_ : fallbackTokenCache_;
+  }
+
   // Legacy FETCH object parser (draft <= 14)
   folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeaderLegacy(
       folly::io::Cursor& cursor,
@@ -537,6 +547,7 @@ class MoQFrameParser {
 
   std::optional<uint64_t> version_;
   bool useMoQVarint_{false};
+  mutable MoQTokenCache fallbackTokenCache_;
   MoQTokenCache* tokenCache_{nullptr};
   mutable std::optional<uint64_t> previousObjectID_;
   // Context for FETCH object delta encoding (draft-15+)
