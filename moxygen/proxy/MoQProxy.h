@@ -44,6 +44,13 @@ class MoQProxy : public Publisher,
   explicit MoQProxy(
       std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders);
 
+  template <typename Result, typename Operation>
+  folly::coro::Task<folly::Expected<Result, RequestError>> tryUpstreams(
+      RequestID requestID,
+      const FullTrackName& fullTrackName,
+      const TrackRequestParameters& params,
+      Operation operation);
+
   std::shared_ptr<MoQProxyTrack> getOrCreateTrack(
       const FullTrackName& fullTrackName);
 

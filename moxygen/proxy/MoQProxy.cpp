@@ -17,6 +17,56 @@
 
 namespace moxygen {
 
+template <typename Result, typename Operation>
+folly::coro::Task<folly::Expected<Result, RequestError>> MoQProxy::tryUpstreams(
+    RequestID requestID,
+    const FullTrackName& fullTrackName,
+    const TrackRequestParameters& params,
+    Operation operation) {
+  RequestError failure{
+      requestID, RequestErrorCode::INTERNAL_ERROR, "no upstream available"};
+  auto setInternalFailure = [&](std::string reason) {
+    failure = RequestError{
+        requestID, RequestErrorCode::INTERNAL_ERROR, std::move(reason)};
+  };
+
+  for (size_t i = 0; i < upstreamProviders_.size(); ++i) {
+    auto sessionResult = co_await folly::coro::co_awaitTry(
+        upstreamProviders_[i]->getSession(
+            fullTrackName, params, i + 1 < upstreamProviders_.size()));
+    if (closed_) {
+      co_return folly::makeUnexpected(
+          RequestError{
+              requestID, RequestErrorCode::GOING_AWAY, "proxy is closed"});
+    }
+    if (sessionResult.hasException() || sessionResult->hasError()) {
+      setInternalFailure(
+          sessionResult.hasException()
+              ? sessionResult.exception().what().toStdString()
+              : sessionResult->error().message);
+      continue;
+    }
+
+    auto upstreamSession = std::move(sessionResult->value());
+    if (!upstreamSession) {
+      setInternalFailure("upstream provider returned a null session");
+      continue;
+    }
+    auto result = co_await folly::coro::co_awaitTry(
+        operation(std::move(upstreamSession)));
+    if (result.hasException()) {
+      setInternalFailure(result.exception().what().toStdString());
+      continue;
+    }
+    if (result->hasValue()) {
+      co_return std::move(result->value());
+    }
+    failure = std::move(result->error());
+    failure.requestID = requestID;
+  }
+  co_return folly::makeUnexpected(std::move(failure));
+}
+
 std::shared_ptr<MoQProxy> MoQProxy::create(
     std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders) {
   return std::shared_ptr<MoQProxy>(new MoQProxy(std::move(upstreamProviders)));
@@ -78,49 +128,13 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::fetch(
             "joining fetch is not supported"});
   }
 
-  FetchError failure{
-      fetch.requestID, FetchErrorCode::INTERNAL_ERROR, "no upstream available"};
-  auto setInternalFailure = [&](std::string reason) {
-    failure = FetchError{
-        fetch.requestID, FetchErrorCode::INTERNAL_ERROR, std::move(reason)};
-  };
-  for (size_t i = 0; i < upstreamProviders_.size(); ++i) {
-    auto sessionResult = co_await folly::coro::co_awaitTry(
-        upstreamProviders_[i]->getSession(
-            fetch.fullTrackName,
-            fetch.params,
-            i + 1 < upstreamProviders_.size()));
-    if (closed_) {
-      co_return folly::makeUnexpected(
-          FetchError{
-              fetch.requestID, FetchErrorCode::GOING_AWAY, "proxy is closed"});
-    }
-    if (sessionResult.hasException() || sessionResult->hasError()) {
-      setInternalFailure(
-          sessionResult.hasException()
-              ? sessionResult.exception().what().toStdString()
-              : sessionResult->error().message);
-      continue;
-    }
-
-    auto upstreamSession = std::move(sessionResult->value());
-    if (!upstreamSession) {
-      setInternalFailure("upstream provider returned a null session");
-      continue;
-    }
-    auto result = co_await folly::coro::co_awaitTry(
-        cache_->fetch(fetch, consumer, std::move(upstreamSession)));
-    if (result.hasException()) {
-      setInternalFailure(result.exception().what().toStdString());
-      continue;
-    }
-    if (result->hasValue()) {
-      co_return std::move(result->value());
-    }
-    failure = std::move(result->error());
-    failure.requestID = fetch.requestID;
-  }
-  co_return folly::makeUnexpected(std::move(failure));
+  co_return co_await tryUpstreams<std::shared_ptr<Publisher::FetchHandle>>(
+      fetch.requestID,
+      fetch.fullTrackName,
+      fetch.params,
+      [this, fetch, consumer](std::shared_ptr<MoQSession> upstreamSession) {
+        return cache_->fetch(fetch, consumer, std::move(upstreamSession));
+      });
 }
 
 std::shared_ptr<MoQProxyTrack> MoQProxy::getOrCreateTrack(
