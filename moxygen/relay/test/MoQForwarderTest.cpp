@@ -932,6 +932,63 @@ TEST_F(MoQForwarderTest, TombstonedSubgroupIgnoresSubsequentObjects) {
   subgroup->reset(ResetStreamErrorCode::SESSION_CLOSED);
 }
 
+// Test: a subscriber that renews its interest with forward=true is already
+// forwarding, so clearing its tombstones cannot wait for a false->true flip.
+TEST_F(MoQForwarderTest, ForwardUpdateClearsTombstoneWhileForwarding) {
+  auto subscriber = createMockSession();
+
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createMockConsumer();
+  std::shared_ptr<MockSubgroupConsumer> refused;
+  std::shared_ptr<MockSubgroupConsumer> renewed;
+
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(
+          [this, &refused](
+              uint64_t,
+              uint64_t,
+              uint8_t,
+              moxygen::TrackConsumer::BeginSubgroupOptions) {
+            refused = createMockSubgroupConsumer();
+            EXPECT_CALL(*refused, object(0, _, _, false))
+                .WillOnce(
+                    Return(folly::makeUnexpected(MoQPublishError(
+                        MoQPublishError::CANCELLED, "stop sending"))));
+            return folly::
+                makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                    refused);
+          })
+      .WillOnce(
+          [this, &renewed](
+              uint64_t,
+              uint64_t,
+              uint8_t,
+              moxygen::TrackConsumer::BeginSubgroupOptions) {
+            renewed = createMockSubgroupConsumer();
+            EXPECT_CALL(*renewed, object(1, _, _, false))
+                .WillOnce(Return(folly::unit));
+            return folly::
+                makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                    renewed);
+          });
+
+  auto subHandle =
+      addSubscriber(*forwarder, subscriber, consumer, RequestID(1));
+  ASSERT_NE(subHandle, nullptr);
+
+  auto subgroupRes = forwarder->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(subgroupRes.hasValue());
+  auto subgroup = *subgroupRes;
+
+  EXPECT_TRUE(subgroup->object(0, test::makeBuf(10)).hasValue());
+  EXPECT_TRUE(applyForwardUpdate(subHandle, RequestID(2), /*forward=*/true));
+
+  EXPECT_TRUE(subgroup->object(1, test::makeBuf(10)).hasValue());
+  EXPECT_NE(renewed, nullptr);
+
+  subgroup->reset(ResetStreamErrorCode::SESSION_CLOSED);
+}
+
 // Test: A subscriber whose only subgroup was tombstoned is removed by
 // publishDone.  The subgroup's stream is already gone, so nothing else would
 // ever close it and the subscriber would drain forever.

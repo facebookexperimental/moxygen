@@ -803,9 +803,10 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
   if (forwarder) {
     // Only update forward state if explicitly provided (per draft 15+)
     if (requestUpdate.forward.has_value()) {
-      const auto wasForwarding = shouldForward;
       updateForwardState(*requestUpdate.forward);
-      if (!wasForwarding && shouldForward) {
+      // A subscriber can ask for a refused subgroup again while it is still
+      // forwarding, so the clear cannot wait for a false->true flip.
+      if (shouldForward) {
         tombstonedSubgroups.clear();
       }
     }
