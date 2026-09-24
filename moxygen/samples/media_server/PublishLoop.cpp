@@ -9,9 +9,11 @@
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/MoQPublishError.h>
 
+#include <fmt/core.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/Sleep.h>
 #include <folly/coro/WithCancellation.h>
+#include <folly/io/IOBuf.h>
 #include <folly/logging/xlog.h>
 
 #include <algorithm>
@@ -24,6 +26,34 @@
 namespace moxygen::media_server {
 
 namespace {
+
+// Ad hoc object extension for exercising a test client's bandwidth-estimate
+// telemetry path end to end. It is not part of the MOQT extension registry.
+constexpr uint64_t kFakeBandwidthEstimateExtensionType = 0x31;
+
+constexpr uint64_t kFakeBandwidthBaselineBitsPerSec = 2'000'000;
+constexpr uint64_t kFakeBandwidthSwingBitsPerSec = 2'000'000;
+constexpr uint64_t kFakeBandwidthSwingPeriod = 10;
+constexpr uint64_t kFakeBandwidthSampleCount = 5;
+constexpr uint64_t kFakeBandwidthSrttMs = 40;
+
+Extension makeFakeBandwidthEstimateExtension(uint64_t sampleIndex) {
+  const uint64_t mean = kFakeBandwidthBaselineBitsPerSec +
+      (sampleIndex % kFakeBandwidthSwingPeriod) *
+          (kFakeBandwidthSwingBitsPerSec / kFakeBandwidthSwingPeriod);
+  const uint64_t p25 = mean * 3 / 4;
+  const uint64_t p75 = mean * 5 / 4;
+  auto value = fmt::format(
+      "p25:{};p50:{};p75:{};mean:{};samples:{};srtt:{};",
+      p25,
+      mean,
+      p75,
+      mean,
+      kFakeBandwidthSampleCount,
+      kFakeBandwidthSrttMs);
+  return Extension(
+      kFakeBandwidthEstimateExtensionType, folly::IOBuf::copyBuffer(value));
+}
 
 // Writes one object onto an open subgroup; on BLOCKED, waits for stream credit.
 // Returns false if the subgroup errored and should be dropped.
@@ -61,6 +91,7 @@ struct SubgroupBatch {
 
 struct PublishState {
   uint64_t published{0};
+  uint64_t fakeBandwidthSampleIndex{0};
   size_t pending{0};
   std::shared_ptr<folly::coro::Baton> drained;
 };
@@ -85,7 +116,8 @@ folly::coro::Task<void> sleepUntil(
 folly::coro::Task<uint64_t> publishSubgroup(
     SubgroupBatch batch,
     const std::shared_ptr<SegmentSource>& source,
-    const std::shared_ptr<MoQForwarder>& forwarder) {
+    const std::shared_ptr<MoQForwarder>& forwarder,
+    uint64_t fakeBandwidthSampleIndex) {
   const auto maxDelay = maxPublishDelay(batch);
   bool releaseStarted = false;
   const auto firstDelay = batch.objects.front().publishDelay;
@@ -114,6 +146,10 @@ folly::coro::Task<uint64_t> publishSubgroup(
       }
     }
     lastObjectId = object.object;
+    if (published == 0) {
+      object.extensions.insertMutableExtension(
+          makeFakeBandwidthEstimateExtension(fakeBandwidthSampleIndex));
+    }
     if (!co_await writeObject(*subgroup, std::move(object))) {
       source->onSubgroupPublished(batch.group, batch.subgroup, published);
       co_return published;
@@ -139,12 +175,16 @@ folly::coro::Task<void> publishDelayed(
     std::shared_ptr<SegmentSource> source,
     std::shared_ptr<MoQForwarder> forwarder,
     folly::CancellationToken cancellationToken,
-    std::shared_ptr<PublishState> state) {
+    std::shared_ptr<PublishState> state,
+    uint64_t fakeBandwidthSampleIndex) {
   auto result = co_await folly::coro::co_awaitTry(
       folly::coro::co_withCancellation(
           cancellationToken,
           publishSubgroup(
-              std::move(batch), std::move(source), std::move(forwarder))));
+              std::move(batch),
+              std::move(source),
+              std::move(forwarder),
+              fakeBandwidthSampleIndex)));
   if (result.hasValue()) {
     state->published += result.value();
   }
@@ -166,17 +206,23 @@ folly::coro::Task<void> dispatchSubgroup(
     forwarder->setLargest(AbsoluteLocation{last.group, last.object});
     co_return;
   }
+  const auto fakeBandwidthSampleIndex = state->fakeBandwidthSampleIndex++;
   if (maxPublishDelay(batch) > std::chrono::milliseconds::zero()) {
     ++state->pending;
     folly::coro::co_withExecutor(
         executor,
         publishDelayed(
-            std::move(batch), source, forwarder, cancellationToken, state))
+            std::move(batch),
+            source,
+            forwarder,
+            cancellationToken,
+            state,
+            fakeBandwidthSampleIndex))
         .start();
     co_return;
   }
-  state->published +=
-      co_await publishSubgroup(std::move(batch), source, forwarder);
+  state->published += co_await publishSubgroup(
+      std::move(batch), source, forwarder, fakeBandwidthSampleIndex);
 }
 
 } // namespace

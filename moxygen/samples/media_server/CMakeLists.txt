@@ -18,6 +18,7 @@ moxygen_add_library(moxygen_samples_media_server
   DEPS
     moxygen_moq_consumers
     moxygen_moq_publish_error
+    fmt::fmt
     Folly::folly_base64
     Folly::folly_dynamic
     Folly::folly_coro_sleep
