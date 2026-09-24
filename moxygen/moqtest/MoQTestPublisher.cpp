@@ -50,9 +50,8 @@ folly::coro::Task<void> MoQTestPublisher::ObjectPacer::awaitNextObject() {
   nextObject_ += period_;
   auto now = std::chrono::steady_clock::now();
   if (nextObject_ <= now) {
-    // Re-anchor to the last deadline that passed, not the next one: a hiccup
-    // must not shift the objects after it off the grid.
-    nextObject_ += period_ * ((now - nextObject_) / period_);
+    // Behind: send without sleeping until caught up, so a hiccup delays
+    // objects rather than dropping them.
     co_await folly::coro::co_reschedule_on_current_executor;
     co_return;
   }
