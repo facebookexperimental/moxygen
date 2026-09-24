@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "moxygen/Publisher.h"
+#include "moxygen/Subscriber.h"
 #include "moxygen/proxy/MoQProxyTrack.h"
 #include "moxygen/proxy/MoQUpstreamProvider.h"
 
@@ -19,6 +20,7 @@ namespace moxygen {
 class MoQCache;
 
 class MoQProxy : public Publisher,
+                 public Subscriber,
                  public std::enable_shared_from_this<MoQProxy>,
                  public MoQProxyTrack::Callback {
  public:
@@ -38,11 +40,25 @@ class MoQProxy : public Publisher,
       Fetch fetch,
       std::shared_ptr<FetchConsumer> consumer) override;
 
+  Subscriber::PublishResult publish(
+      PublishRequest publishRequest,
+      std::shared_ptr<Publisher::SubscriptionHandle> handle = nullptr) override;
+
   void close();
 
  private:
+  class LateBoundPublishConsumer;
+  using PublishReplyTask =
+      folly::coro::Task<folly::Expected<PublishOk, PublishError>>;
+
   explicit MoQProxy(
       std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders);
+
+  static PublishReplyTask forwardPublish(
+      std::shared_ptr<MoQProxy> self,
+      PublishRequest publishRequest,
+      std::shared_ptr<Publisher::SubscriptionHandle> handle,
+      std::shared_ptr<LateBoundPublishConsumer> consumer);
 
   template <typename Result, typename Operation>
   folly::coro::Task<folly::Expected<Result, RequestError>> tryUpstreams(

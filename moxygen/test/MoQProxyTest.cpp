@@ -5,12 +5,15 @@
  */
 
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Invoke.h>
 #include <folly/io/IOBuf.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 
 #include "moxygen/events/MoQFollyExecutorImpl.h"
@@ -25,6 +28,16 @@ using namespace testing;
 const FullTrackName kTrackName{TrackNamespace{{"live"}}, "video"};
 const FullTrackName kOtherTrackName{TrackNamespace{{"live"}}, "audio"};
 
+Subscriber::PublishResult acceptedPublish(
+    std::shared_ptr<TrackConsumer> consumer,
+    RequestID requestID) {
+  return Subscriber::PublishConsumerAndReplyTask{
+      std::move(consumer),
+      folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
+          PublishOk{.requestID = requestID}),
+      /*consumerReady=*/true};
+}
+
 class TestUpstreamProvider final : public MoQUpstreamProvider {
  public:
   explicit TestUpstreamProvider(std::shared_ptr<MoQSession> session)
@@ -37,12 +50,20 @@ class TestUpstreamProvider final : public MoQUpstreamProvider {
     ++calls;
     lastTrackName = fullTrackName;
     lastFallbackExists = fallbackExists;
+    if (beforeReturn) {
+      beforeReturn();
+    }
+    if (exception) {
+      throw std::runtime_error(*exception);
+    }
     co_return session_;
   }
 
   size_t calls{0};
   std::optional<FullTrackName> lastTrackName;
   std::optional<bool> lastFallbackExists;
+  std::function<void()> beforeReturn;
+  std::optional<std::string> exception;
 
  private:
   std::shared_ptr<MoQSession> session_;
@@ -94,6 +115,16 @@ class MoQProxyTest : public Test {
         AbsoluteLocation{1, 0},
         7,
         GroupOrder::OldestFirst);
+  }
+
+  PublishRequest makePublish(RequestID requestID) {
+    return PublishRequest{
+        .requestID = requestID,
+        .fullTrackName = kTrackName,
+        .trackAlias = TrackAlias(9),
+        .groupOrder = GroupOrder::OldestFirst,
+        .largest = AbsoluteLocation{10, 2},
+        .forward = true};
   }
 
   std::shared_ptr<NiceMock<MockSubscriptionHandle>> makeUpstreamHandle(
@@ -327,6 +358,117 @@ TEST_F(MoQProxyTest, CloseStopsTracksAndRejectsNewSubscriptions) {
   EXPECT_EQ(rejected.error().requestID, RequestID(2));
   EXPECT_EQ(rejected.error().errorCode, SubscribeErrorCode::GOING_AWAY);
   EXPECT_EQ(provider_->calls, 1);
+}
+
+TEST_F(MoQProxyTest, ForwardsPublish) {
+  auto upstreamConsumer = makeConsumer();
+  auto handle = makeUpstreamHandle(RequestID(1));
+  PublishRequest upstreamRequest;
+  std::shared_ptr<Publisher::SubscriptionHandle> upstreamHandle;
+  EXPECT_CALL(*upstreamSession_, publish(_, _))
+      .WillOnce(
+          [&](PublishRequest request,
+              std::shared_ptr<Publisher::SubscriptionHandle> publishHandle) {
+            upstreamRequest = std::move(request);
+            upstreamHandle = std::move(publishHandle);
+            return acceptedPublish(upstreamConsumer, RequestID(100));
+          });
+
+  auto result = proxy_->publish(makePublish(RequestID(7)), handle);
+
+  ASSERT_TRUE(result.hasValue());
+  EXPECT_FALSE(result->consumerReady);
+  auto reply = folly::coro::blockingWait(std::move(result->reply), &eventBase_);
+  ASSERT_TRUE(reply.hasValue());
+  EXPECT_EQ(reply->requestID, RequestID(7));
+  EXPECT_EQ(provider_->calls, 1);
+  EXPECT_EQ(provider_->lastTrackName, kTrackName);
+  EXPECT_EQ(upstreamRequest.requestID, RequestID(7));
+  EXPECT_EQ(upstreamRequest.fullTrackName, kTrackName);
+  EXPECT_EQ(upstreamHandle, handle);
+
+  EXPECT_CALL(*upstreamConsumer, setTrackAlias(_)).Times(0);
+  EXPECT_TRUE(result->consumer->setTrackAlias(TrackAlias(7)).hasValue());
+  EXPECT_CALL(*upstreamConsumer, datagram(_, _, true))
+      .WillOnce(Return(folly::unit));
+  EXPECT_TRUE(result->consumer
+                  ->datagram(
+                      ObjectHeader{},
+                      folly::IOBuf::copyBuffer("x"),
+                      /*lastInGroup=*/true)
+                  .hasValue());
+}
+
+TEST_F(MoQProxyTest, PublishProviderExceptionIsReturned) {
+  provider_->exception = "provider failed";
+
+  auto result = proxy_->publish(
+      makePublish(RequestID(9)), makeUpstreamHandle(RequestID(1)));
+  ASSERT_TRUE(result.hasValue());
+  auto reply = folly::coro::blockingWait(std::move(result->reply), &eventBase_);
+
+  ASSERT_TRUE(reply.hasError());
+  EXPECT_EQ(reply.error().requestID, RequestID(9));
+  EXPECT_EQ(reply.error().errorCode, PublishErrorCode::INTERNAL_ERROR);
+  EXPECT_THAT(reply.error().reasonPhrase, HasSubstr("provider failed"));
+}
+
+TEST_F(MoQProxyTest, CloseDuringPublishSessionLookupReturnsGoingAway) {
+  std::weak_ptr<MoQProxy> proxy = proxy_;
+  provider_->beforeReturn = [proxy] {
+    if (auto locked = proxy.lock()) {
+      locked->close();
+    }
+  };
+  EXPECT_CALL(*upstreamSession_, publish(_, _)).Times(0);
+
+  auto result = proxy_->publish(
+      makePublish(RequestID(10)), makeUpstreamHandle(RequestID(1)));
+  ASSERT_TRUE(result.hasValue());
+  auto reply = folly::coro::blockingWait(std::move(result->reply), &eventBase_);
+
+  ASSERT_TRUE(reply.hasError());
+  EXPECT_EQ(reply.error().requestID, RequestID(10));
+  EXPECT_EQ(reply.error().errorCode, PublishErrorCode::GOING_AWAY);
+}
+
+TEST_F(MoQProxyTest, CloseDuringPublishReplyReturnsGoingAway) {
+  auto upstreamConsumer = makeConsumer();
+  std::weak_ptr<MoQProxy> proxy = proxy_;
+  EXPECT_CALL(*upstreamSession_, publish(_, _))
+      .WillOnce([upstreamConsumer, proxy](const PublishRequest& request, auto) {
+        auto reply = folly::coro::co_invoke(
+            [proxy, requestID = request.requestID]()
+                -> folly::coro::Task<folly::Expected<PublishOk, PublishError>> {
+              if (auto locked = proxy.lock()) {
+                locked->close();
+              }
+              co_return PublishOk{.requestID = requestID};
+            });
+        return Subscriber::PublishConsumerAndReplyTask{
+            upstreamConsumer, std::move(reply), /*consumerReady=*/true};
+      });
+
+  auto result = proxy_->publish(
+      makePublish(RequestID(11)), makeUpstreamHandle(RequestID(1)));
+  ASSERT_TRUE(result.hasValue());
+  auto reply = folly::coro::blockingWait(std::move(result->reply), &eventBase_);
+
+  ASSERT_TRUE(reply.hasError());
+  EXPECT_EQ(reply.error().requestID, RequestID(11));
+  EXPECT_EQ(reply.error().errorCode, PublishErrorCode::GOING_AWAY);
+}
+
+TEST_F(MoQProxyTest, CloseRejectsPublish) {
+  proxy_->close();
+
+  auto result = proxy_->publish(
+      makePublish(RequestID(12)), makeUpstreamHandle(RequestID(1)));
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().requestID, RequestID(12));
+  EXPECT_EQ(result.error().errorCode, PublishErrorCode::GOING_AWAY);
+  EXPECT_EQ(provider_->calls, 0);
 }
 
 TEST_F(MoQProxyTest, ForwardsFetchThroughCache) {
