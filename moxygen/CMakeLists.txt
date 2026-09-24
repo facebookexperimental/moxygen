@@ -324,6 +324,11 @@ moxygen_add_library(moxygen_moq_obj_receiver
     Folly::folly_logging_logging
 )
 
+moxygen_add_library(moxygen_moq_streaming_obj_receiver
+  EXPORTED_DEPS
+    moxygen_moq_consumers
+)
+
 moxygen_add_library(moxygen_moq_queue_callback
   EXPORTED_DEPS
     moxygen_moq_obj_receiver

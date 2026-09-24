@@ -19,10 +19,12 @@
 #include <moxygen/MoQVersions.h>
 #include <moxygen/ObjectReceiver.h>
 #include <moxygen/Publisher.h>
+#include <moxygen/StreamingObjectReceiver.h>
 #include <moxygen/Subscriber.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
 
+#include <algorithm>
 #include <map>
 #include <set>
 
@@ -35,6 +37,7 @@ namespace {
 const std::string kTestEndpoint = "/test";
 const std::string kTestPayload = "hello-moq";
 const size_t kDefaultObjectCount = 3;
+const size_t kStreamingLargePayloadSize = 512 * 1024;
 const FullTrackName kIntegrationTestTrackName{
     TrackNamespace({{"integration-test"}}),
     "test-track"};
@@ -167,6 +170,123 @@ class TestObjectCallback : public ObjectReceiverCallback {
   folly::coro::Baton publishDoneBaton_;
   folly::coro::Baton allDataReceivedBaton_;
   folly::coro::Baton objectStatusBaton_;
+};
+
+struct StreamedObject {
+  uint64_t group{0};
+  uint64_t subgroup{0};
+  uint64_t id{0};
+  std::string payload;
+  size_t chunks{0};
+  bool endOfObject{false};
+  bool endOfSubgroup{false};
+  std::optional<ResetStreamErrorCode> error;
+};
+
+class TestStreamingCallback
+    : public StreamingObjectReceiverCallback,
+      public std::enable_shared_from_this<TestStreamingCallback> {
+ public:
+  folly::
+      Expected<std::shared_ptr<StreamingObjectPayloadConsumer>, MoQPublishError>
+      onObjectBegin(StreamingObjectContext context) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    objects_.push_back(
+        StreamedObject{
+            context.header.group, context.header.subgroup, context.header.id});
+    return std::make_shared<Consumer>(shared_from_this(), objects_.size() - 1);
+  }
+
+  void onObjectStatus(StreamingObjectContext context) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    statuses_.push_back(context.header);
+  }
+
+  void onEndOfStream(StreamingSubgroupContext context) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    endOfStreams_.emplace_back(context.groupID, context.subgroupID);
+  }
+
+  void onError(StreamingSubgroupContext /*context*/, ResetStreamErrorCode error)
+      override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    streamErrors_.push_back(error);
+  }
+
+  void onPublishDone(PublishDone /*done*/) override {}
+
+  void onAllDataReceived() override {
+    allDataReceivedBaton_.post();
+  }
+
+  folly::coro::Task<void> waitForAllDataReceived() {
+    co_await allDataReceivedBaton_;
+  }
+
+  void rejectPayloadsInGroup(uint64_t group) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    rejectedGroup_ = group;
+  }
+
+  std::vector<StreamedObject> getObjects() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return objects_;
+  }
+
+  std::vector<ObjectHeader> getStatuses() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return statuses_;
+  }
+
+  std::vector<std::pair<uint64_t, uint64_t>> getEndOfStreams() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return endOfStreams_;
+  }
+
+  std::vector<ResetStreamErrorCode> getStreamErrors() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return streamErrors_;
+  }
+
+ private:
+  class Consumer : public StreamingObjectPayloadConsumer {
+   public:
+    Consumer(std::shared_ptr<TestStreamingCallback> owner, size_t index)
+        : owner_(std::move(owner)), index_(index) {}
+
+    folly::Expected<folly::Unit, MoQPublishError> onPayload(
+        Payload payload,
+        StreamingObjectPayloadMetadata metadata) override {
+      std::lock_guard<std::mutex> lock(owner_->mutex_);
+      auto& object = owner_->objects_[index_];
+      if (owner_->rejectedGroup_ == object.group) {
+        return folly::makeUnexpected(MoQPublishError(
+            MoQPublishError::TOO_FAR_BEHIND, "Rejected by the test"));
+      }
+      object.payload += payloadToString(payload);
+      ++object.chunks;
+      object.endOfObject = metadata.endOfObject;
+      object.endOfSubgroup = metadata.endOfSubgroup;
+      return folly::unit;
+    }
+
+    void onError(ResetStreamErrorCode error) override {
+      std::lock_guard<std::mutex> lock(owner_->mutex_);
+      owner_->objects_[index_].error = error;
+    }
+
+   private:
+    std::shared_ptr<TestStreamingCallback> owner_;
+    size_t index_;
+  };
+
+  std::mutex mutex_;
+  std::vector<StreamedObject> objects_;
+  std::vector<ObjectHeader> statuses_;
+  std::vector<std::pair<uint64_t, uint64_t>> endOfStreams_;
+  std::vector<ResetStreamErrorCode> streamErrors_;
+  std::optional<uint64_t> rejectedGroup_;
+  folly::coro::Baton allDataReceivedBaton_;
 };
 
 class TestSubscriptionHandle : public Publisher::SubscriptionHandle {
@@ -556,6 +676,82 @@ class MoQIntegrationTest : public ::testing::TestWithParam<uint64_t> {
     }
 
     co_await client_->setupMoQSession(5s, 5s, nullptr, nullptr, ts, alpns);
+  }
+
+  // FETCH groups advance in the requested order, objects ascend within each
+  // group, and group 0's second object is large enough to arrive in chunks.
+  void runStreamingFetch(GroupOrder order) {
+    const std::string large(kStreamingLargePayloadSize, 'L');
+    std::vector<ReceivedObject> expected{
+        {0, 0, 0, "g0o0"}, {0, 0, 1, large}, {1, 0, 0, "g1o0"}};
+    if (order == GroupOrder::NewestFirst) {
+      std::rotate(expected.begin(), expected.begin() + 2, expected.end());
+    }
+
+    publisher_->setFetchHandler(
+        [expected](Fetch fetch, std::shared_ptr<FetchConsumer> fetchCallback)
+            -> folly::coro::Task<Publisher::FetchResult> {
+          FetchOk ok;
+          ok.requestID = fetch.requestID;
+          ok.groupOrder = fetch.groupOrder;
+          ok.endOfTrack = 0;
+          ok.endLocation = AbsoluteLocation{1, 0};
+
+          auto handle = std::make_shared<TestFetchHandle>(ok);
+          for (const auto& object : expected) {
+            fetchCallback->object(
+                object.group,
+                object.subgroup,
+                object.id,
+                makePayload(object.payload));
+          }
+          fetchCallback->endOfFetch();
+
+          co_return handle;
+        });
+
+    runTest(
+        folly::coro::co_invoke(
+            [this, order, expected]() -> folly::coro::Task<void> {
+              co_await connectClient();
+
+              auto callback = std::make_shared<TestStreamingCallback>();
+              auto receiver = std::make_shared<StreamingObjectReceiver>(
+                  StreamingObjectReceiver::FETCH, callback, order);
+              Fetch fetch(
+                  RequestID(0),
+                  kIntegrationTestTrackName,
+                  AbsoluteLocation{0, 0},
+                  AbsoluteLocation{1, 0},
+                  kDefaultPriority,
+                  order);
+
+              auto result = co_await client_->moqSession_->fetch(
+                  std::move(fetch), receiver);
+              EXPECT_FALSE(result.hasError());
+              if (result.hasError()) {
+                co_return;
+              }
+
+              co_await callback->waitForAllDataReceived();
+
+              auto objects = callback->getObjects();
+              EXPECT_EQ(objects.size(), expected.size());
+              for (size_t i = 0; i < std::min(objects.size(), expected.size());
+                   ++i) {
+                EXPECT_EQ(objects[i].group, expected[i].group);
+                EXPECT_EQ(objects[i].id, expected[i].id);
+                EXPECT_EQ(objects[i].payload, expected[i].payload);
+                EXPECT_TRUE(objects[i].endOfObject);
+                EXPECT_FALSE(objects[i].endOfSubgroup);
+                EXPECT_FALSE(objects[i].error.has_value());
+                if (expected[i].payload.size() == kStreamingLargePayloadSize) {
+                  EXPECT_GT(objects[i].chunks, 1u);
+                }
+              }
+              EXPECT_TRUE(callback->getEndOfStreams().empty());
+              EXPECT_TRUE(callback->getStreamErrors().empty());
+            }));
   }
 
   std::shared_ptr<TestPublisher> publisher_;
@@ -1509,6 +1705,172 @@ TEST_P(MoQIntegrationTest, PublishAndSubscribe_InOrderDelivery) {
               EXPECT_EQ(objects[i].payload.back(), expected);
             }
           }));
+}
+
+// ============================================================================
+// Streaming Receiver Tests
+// ============================================================================
+
+TEST_P(MoQIntegrationTest, StreamingSubscribe_ChunkedObjectsAndGroupEnd) {
+  publisher_->setSubscribeHandler(
+      [](SubscribeRequest sub, std::shared_ptr<TrackConsumer> callback)
+          -> folly::coro::Task<Publisher::SubscribeResult> {
+        co_return co_await acceptAndSendDelayed(
+            std::move(sub),
+            std::move(callback),
+            [](std::shared_ptr<TrackConsumer> cb, RequestID reqID) {
+              auto sg0 = cb->beginSubgroup(0, 0, kDefaultPriority);
+              if (sg0.hasError()) {
+                return;
+              }
+              for (uint64_t i = 0; i < 2; ++i) {
+                sg0.value()->object(
+                    i,
+                    makePayload(
+                        std::string(
+                            kStreamingLargePayloadSize,
+                            static_cast<char>('A' + i))));
+              }
+              sg0.value()->endOfSubgroup();
+
+              auto sg1 = cb->beginSubgroup(1, 0, kDefaultPriority);
+              if (sg1.hasError()) {
+                return;
+              }
+              sg1.value()->object(0, makePayload("tail"));
+              sg1.value()->endOfGroup(1);
+
+              sendPublishDone(cb, reqID);
+            });
+      });
+
+  runTest(folly::coro::co_invoke([this]() -> folly::coro::Task<void> {
+    co_await connectClient();
+
+    auto callback = std::make_shared<TestStreamingCallback>();
+    auto receiver = std::make_shared<StreamingObjectReceiver>(
+        StreamingObjectReceiver::SUBSCRIBE, callback);
+    auto result =
+        co_await client_->moqSession_->subscribe(makeSubscribe(), receiver);
+    EXPECT_FALSE(result.hasError());
+    if (result.hasError()) {
+      co_return;
+    }
+
+    co_await callback->waitForAllDataReceived();
+
+    auto objects = callback->getObjects();
+    EXPECT_EQ(objects.size(), 3u);
+    if (objects.size() != 3) {
+      co_return;
+    }
+    for (uint64_t i = 0; i < 2; ++i) {
+      EXPECT_EQ(objects[i].group, 0u);
+      EXPECT_EQ(objects[i].id, i);
+      EXPECT_EQ(
+          objects[i].payload,
+          std::string(kStreamingLargePayloadSize, static_cast<char>('A' + i)));
+      EXPECT_GT(objects[i].chunks, 1u);
+      EXPECT_TRUE(objects[i].endOfObject);
+      EXPECT_FALSE(objects[i].error.has_value());
+    }
+    EXPECT_EQ(objects[2].group, 1u);
+    EXPECT_EQ(objects[2].id, 0u);
+    EXPECT_EQ(objects[2].payload, "tail");
+    EXPECT_TRUE(objects[2].endOfObject);
+    EXPECT_FALSE(objects[2].error.has_value());
+
+    // Group 1's subgroup ends with END_OF_GROUP, which is not an end of stream.
+    const std::vector<std::pair<uint64_t, uint64_t>> expectedEndOfStreams{
+        {0, 0}};
+    EXPECT_EQ(callback->getEndOfStreams(), expectedEndOfStreams);
+    EXPECT_FALSE(objects[2].endOfSubgroup);
+
+    auto statuses = callback->getStatuses();
+    EXPECT_EQ(statuses.size(), 1u);
+    if (!statuses.empty()) {
+      EXPECT_EQ(statuses[0].group, 1u);
+      EXPECT_EQ(statuses[0].id, 1u);
+      EXPECT_EQ(statuses[0].status, ObjectStatus::END_OF_GROUP);
+    }
+    EXPECT_TRUE(callback->getStreamErrors().empty());
+  }));
+}
+
+TEST_P(
+    MoQIntegrationTest,
+    StreamingSubscribe_RejectedPayloadResetsItsSubgroup) {
+  publisher_->setSubscribeHandler(
+      [](SubscribeRequest sub, std::shared_ptr<TrackConsumer> callback)
+          -> folly::coro::Task<Publisher::SubscribeResult> {
+        co_return co_await acceptAndSendDelayed(
+            std::move(sub),
+            std::move(callback),
+            [](std::shared_ptr<TrackConsumer> cb, RequestID reqID) {
+              auto sg0 = cb->beginSubgroup(0, 0, kDefaultPriority);
+              if (sg0.hasError()) {
+                return;
+              }
+              sg0.value()->object(
+                  0, makePayload(std::string(kStreamingLargePayloadSize, 'A')));
+              sg0.value()->endOfSubgroup();
+
+              auto sg1 = cb->beginSubgroup(1, 0, kDefaultPriority);
+              if (sg1.hasError()) {
+                return;
+              }
+              sg1.value()->object(0, makePayload("tail"));
+              sg1.value()->endOfSubgroup();
+
+              sendPublishDone(cb, reqID);
+            });
+      });
+
+  runTest(folly::coro::co_invoke([this]() -> folly::coro::Task<void> {
+    co_await connectClient();
+
+    auto callback = std::make_shared<TestStreamingCallback>();
+    callback->rejectPayloadsInGroup(0);
+    auto receiver = std::make_shared<StreamingObjectReceiver>(
+        StreamingObjectReceiver::SUBSCRIBE, callback);
+    auto result =
+        co_await client_->moqSession_->subscribe(makeSubscribe(), receiver);
+    EXPECT_FALSE(result.hasError());
+    if (result.hasError()) {
+      co_return;
+    }
+
+    co_await callback->waitForAllDataReceived();
+
+    auto objects = callback->getObjects();
+    EXPECT_EQ(objects.size(), 2u);
+    if (objects.size() != 2) {
+      co_return;
+    }
+    std::sort(objects.begin(), objects.end(), [](const auto& a, const auto& b) {
+      return a.group < b.group;
+    });
+    EXPECT_EQ(objects[0].error, ResetStreamErrorCode::TOO_FAR_BEHIND);
+    EXPECT_EQ(objects[0].chunks, 0u);
+    EXPECT_EQ(objects[1].payload, "tail");
+    EXPECT_TRUE(objects[1].endOfObject);
+    EXPECT_FALSE(objects[1].error.has_value());
+
+    const std::vector<ResetStreamErrorCode> expectedErrors{
+        ResetStreamErrorCode::TOO_FAR_BEHIND};
+    EXPECT_EQ(callback->getStreamErrors(), expectedErrors);
+    const std::vector<std::pair<uint64_t, uint64_t>> expectedEndOfStreams{
+        {1, 0}};
+    EXPECT_EQ(callback->getEndOfStreams(), expectedEndOfStreams);
+  }));
+}
+
+TEST_P(MoQIntegrationTest, StreamingFetch_OldestFirst) {
+  runStreamingFetch(GroupOrder::OldestFirst);
+}
+
+TEST_P(MoQIntegrationTest, StreamingFetch_NewestFirst) {
+  runStreamingFetch(GroupOrder::NewestFirst);
 }
 
 namespace {
