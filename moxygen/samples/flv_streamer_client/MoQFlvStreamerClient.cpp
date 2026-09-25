@@ -68,7 +68,7 @@ class MoQFlvStreamerClient
         fullVideoTrackName_(std::move(fvtn)),
         fullAudioTrackName_(std::move(fatn)) {}
 
-  folly::coro::Task<void> run(PublishNamespace ann) noexcept {
+  folly::coro::Task<void> run(PublishNamespace pubNs) noexcept {
     XLOG(INFO) << __func__;
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
@@ -83,16 +83,16 @@ class MoQFlvStreamerClient
           quic::TransportSettings(),
           alpns);
       // PublishNamespace
-      auto annResp =
-          co_await moqClient_.getSession()->publishNamespace(std::move(ann));
-      if (annResp.hasValue()) {
-        publishNamespaceHandle_ = std::move(annResp.value());
+      auto pubNsResp =
+          co_await moqClient_.getSession()->publishNamespace(std::move(pubNs));
+      if (pubNsResp.hasValue()) {
+        publishNamespaceHandle_ = std::move(pubNsResp.value());
         folly::getGlobalIOExecutor()->add([this] { publishLoop(); });
       } else {
         XLOG(INFO) << "PublishNamespace error reqID="
-                   << annResp.error().requestID.value << " code="
-                   << folly::to_underlying(annResp.error().errorCode)
-                   << " reason=" << annResp.error().reasonPhrase;
+                   << pubNsResp.error().requestID.value << " code="
+                   << folly::to_underlying(pubNsResp.error().errorCode)
+                   << " reason=" << pubNsResp.error().reasonPhrase;
       }
     } catch (const std::exception& ex) {
       XLOG(ERR) << folly::exceptionStr(ex);

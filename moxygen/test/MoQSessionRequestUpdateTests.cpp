@@ -2013,12 +2013,12 @@ CO_TEST_P_X(Draft18Test, SubscribeNamespaceRequestUpdateFailureClosesBidi) {
   RequestID serverRequestID{0};
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
-          [&](auto subAnn, auto /*handler*/)
+          [&](auto subNs, auto /*handler*/)
               -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
-            serverRequestID = subAnn.requestID;
+            serverRequestID = subNs.requestID;
             serverHandle = std::make_shared<MockSubscribeNamespaceHandle>(
                 SubscribeNamespaceOk(
-                    {.requestID = subAnn.requestID,
+                    {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
             co_return serverHandle;
           });
@@ -2081,12 +2081,12 @@ CO_TEST_P_X(Draft18Test, SubscribeNamespaceRequestUpdatePrefixRoundTrip) {
   RequestID serverRequestID{0};
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
-          [&](auto subAnn, auto /*handler*/)
+          [&](auto subNs, auto /*handler*/)
               -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
-            serverRequestID = subAnn.requestID;
+            serverRequestID = subNs.requestID;
             serverHandle = std::make_shared<MockSubscribeNamespaceHandle>(
                 SubscribeNamespaceOk(
-                    {.requestID = subAnn.requestID,
+                    {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
             co_return serverHandle;
           });
@@ -2162,12 +2162,12 @@ CO_TEST_P_X(PreDraft18Test, SubscribeNamespaceRequestUpdateRoundTrip) {
   RequestID serverRequestID{0};
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
-          [&](auto subAnn, auto /*handler*/)
+          [&](auto subNs, auto /*handler*/)
               -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
-            serverRequestID = subAnn.requestID;
+            serverRequestID = subNs.requestID;
             serverHandle = std::make_shared<MockSubscribeNamespaceHandle>(
                 SubscribeNamespaceOk(
-                    {.requestID = subAnn.requestID,
+                    {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
             co_return serverHandle;
           });
@@ -2214,11 +2214,11 @@ CO_TEST_P_X(
 
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
-          [&](auto subAnn, auto /*handler*/)
+          [&](auto subNs, auto /*handler*/)
               -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
             co_return std::make_shared<MockSubscribeNamespaceHandle>(
                 SubscribeNamespaceOk(
-                    {.requestID = subAnn.requestID,
+                    {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
           });
 
@@ -2287,11 +2287,11 @@ CO_TEST_P_X(
 
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
-          [&](auto subAnn, auto /*handler*/)
+          [&](auto subNs, auto /*handler*/)
               -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
             co_return std::make_shared<MockSubscribeNamespaceHandle>(
                 SubscribeNamespaceOk(
-                    {.requestID = subAnn.requestID,
+                    {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
           });
 
@@ -2331,7 +2331,7 @@ CO_TEST_P_X(
 
 // A failed REQUEST_UPDATE for a PUBLISH_NAMESPACE must close the request's bidi
 // stream. The responder sends REQUEST_ERROR, FINs its write half, and tears
-// down the announcement (draft 18+).
+// down the published namespace (draft 18+).
 CO_TEST_P_X(Draft18Test, PublishNamespaceRequestUpdateFailureClosesBidi) {
   co_await setupMoQSession();
 
@@ -2339,18 +2339,19 @@ CO_TEST_P_X(Draft18Test, PublishNamespaceRequestUpdateFailureClosesBidi) {
   RequestID serverRequestID{0};
   EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
       .WillOnce(
-          [&](auto ann, auto /*cb*/)
+          [&](auto pubNs, auto /*cb*/)
               -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
-            serverRequestID = ann.requestID;
+            serverRequestID = pubNs.requestID;
             serverHandle =
                 std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
-                    {.requestID = ann.requestID, .requestSpecificParams = {}}));
+                    {.requestID = pubNs.requestID,
+                     .requestSpecificParams = {}}));
             co_return Subscriber::PublishNamespaceResult(serverHandle);
           });
 
-  auto annResult =
+  auto pubNsResult =
       co_await clientSession_->publishNamespace(getPublishNamespace());
-  EXPECT_FALSE(annResult.hasError());
+  EXPECT_FALSE(pubNsResult.hasError());
 
   // The PUBLISH_NAMESPACE bidi is the first client-initiated bidi (id 0).
   // Capture the responder's write half up front (see the SUBSCRIBE_NAMESPACE

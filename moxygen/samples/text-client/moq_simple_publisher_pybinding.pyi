@@ -20,7 +20,7 @@ class MoQPublisherError(Exception):
 class PyMoQSimplePublisher:
     """Python wrapper for MoQ simple publisher.
 
-    This publisher connects to a MoQ server, announces a track namespace,
+    This publisher connects to a MoQ server, publishes a track namespace,
     waits for a subscriber, and sends messages to that subscriber.
     """
 
@@ -70,7 +70,7 @@ class PyMoQSimplePublisher:
 
         This method:
         1. Connects to the server
-        2. Announces the track namespace
+        2. Publishes the track namespace
         3. Waits for a subscriber to connect
         4. Sends the specified number of messages
         5. Sends END_OF_TRACK and closes the connection

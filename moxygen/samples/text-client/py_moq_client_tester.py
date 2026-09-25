@@ -127,7 +127,7 @@ from ti.experimental.moxygen.samples.text_client.moq_client_pybinding import (
 @click.option(
     "--publish/--no-publish",
     default=False,
-    help="Publish mode - SubscribeAnnounces (C++ --publish)",
+    help="Publish mode - SubscribeNamespace (C++ --publish)",
 )
 @click.option(
     "--unsubscribe/--no-unsubscribe",

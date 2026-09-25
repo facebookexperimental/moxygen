@@ -87,10 +87,10 @@ class MoQRelayClient {
         co_return;
       }
       for (auto& ns : namespaces) {
-        PublishNamespace ann;
-        ann.trackNamespace = std::move(ns);
-        auto res =
-            co_await moqClient_->moqSession_->publishNamespace(std::move(ann));
+        PublishNamespace pubNs;
+        pubNs.trackNamespace = std::move(ns);
+        auto res = co_await moqClient_->moqSession_->publishNamespace(
+            std::move(pubNs));
         if (!res) {
           XLOG(ERR) << "PublishNamespaceError reqID="
                     << res.error().requestID.value
@@ -108,9 +108,10 @@ class MoQRelayClient {
           if (!moqClient_->moqSession_) {
             break;
           }
-          PublishNamespace ann;
-          ann.trackNamespace.trackNamespace.emplace_back("ping");
-          auto handle = co_await moqClient_->moqSession_->publishNamespace(ann);
+          PublishNamespace pubNs;
+          pubNs.trackNamespace.trackNamespace.emplace_back("ping");
+          auto handle =
+              co_await moqClient_->moqSession_->publishNamespace(pubNs);
           if (handle.hasError()) {
             break;
           }

@@ -241,10 +241,10 @@ class MoQRelayTest : public ::testing::Test {
       std::shared_ptr<MoQSession> session,
       const TrackNamespace& ns,
       bool addToState = true) {
-    PublishNamespace ann;
-    ann.trackNamespace = ns;
+    PublishNamespace pubNs;
+    pubNs.trackNamespace = ns;
     return withSessionContext(session, [&]() {
-      auto task = relay_->publishNamespace(std::move(ann), nullptr);
+      auto task = relay_->publishNamespace(std::move(pubNs), nullptr);
       auto res = folly::coro::blockingWait(std::move(task), exec_.get());
       EXPECT_TRUE(res.hasValue());
       if (res.hasValue()) {
@@ -933,10 +933,10 @@ TEST_F(MoQRelayTest, EmptyNamespacePublishNamespaceDone) {
 
   // This might fail or succeed depending on implementation
   // Just verify it doesn't crash
-  PublishNamespace ann;
-  ann.trackNamespace = emptyNs;
+  PublishNamespace pubNs;
+  pubNs.trackNamespace = emptyNs;
   withSessionContext(publisher, [&]() {
-    auto task = relay_->publishNamespace(std::move(ann), nullptr);
+    auto task = relay_->publishNamespace(std::move(pubNs), nullptr);
     auto res = folly::coro::blockingWait(std::move(task), exec_.get());
     // Don't assert on success/failure, just verify no crash
     if (res.hasValue()) {
@@ -968,7 +968,7 @@ TEST_F(MoQRelayTest, ActiveChildCountConsistency) {
   removeSession(pub1);
 
   // A should still exist (C is still active)
-  // Verify by announcing at test/A
+  // Verify by publishing the namespace test/A
   TrackNamespace nsA{{"test", "A"}};
   doPublishNamespace(pub2, nsA);
 
@@ -1631,20 +1631,20 @@ TEST_F(MoQRelayTest, ExactNamespaceSubscriberReceivesPublishNamespace) {
   doSubscribeNamespace(subscriber, kTestNamespace);
 
   // Expect the subscriber to receive a publishNamespace forwarding when
-  // the publisher announces the same exact namespace
+  // the publisher publishes the same exact namespace
   EXPECT_CALL(*subscriber, publishNamespace(_, _))
       .WillOnce(
-          [](PublishNamespace ann,
+          [](PublishNamespace pubNs,
              auto) -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
-            EXPECT_EQ(ann.trackNamespace, kTestNamespace);
+            EXPECT_EQ(pubNs.trackNamespace, kTestNamespace);
             co_return folly::makeUnexpected(
                 PublishNamespaceError{
-                    ann.requestID,
+                    pubNs.requestID,
                     PublishNamespaceErrorCode::UNINTERESTED,
                     "test"});
           });
 
-  // Publisher announces the same exact namespace
+  // Publisher publishes the same exact namespace
   doPublishNamespace(publisher, kTestNamespace);
 
   // Drive the executor so the async publishNamespace forwarding runs

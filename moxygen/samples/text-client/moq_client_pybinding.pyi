@@ -105,7 +105,7 @@ class PyMoQTestClient:
         - fetch=True: Fetch mode
         - jafetch=True: Joining absolute fetch mode
         - jrfetch=True: Joining relative fetch mode
-        - publish=True: Publish mode (SubscribeAnnounces)
+        - publish=True: Publish mode (SubscribeNamespace)
 
         Raises:
             MoQClientError: If operation fails. Check code and message for details.
@@ -115,7 +115,7 @@ class PyMoQTestClient:
                 - code=-4: Subscribe failed
                 - code=-5: Stream error
                 - code=-6: Other exception
-                - code=-7: SubscribeAnnounces failed
+                - code=-7: SubscribeNamespace failed
         """
         ...
 

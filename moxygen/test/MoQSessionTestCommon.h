@@ -75,15 +75,15 @@ TrackStatusOk makeTrackStatusOkResult(
     const std::optional<AbsoluteLocation>& largest = std::nullopt);
 
 inline Publisher::SubscribeNamespaceResult makeSubscribeNamespaceOkResult(
-    const auto& subAnn) {
+    const auto& subNs) {
   return std::make_shared<MockSubscribeNamespaceHandle>(
-      SubscribeNamespaceOk({RequestID(0), subAnn.trackNamespacePrefix}));
+      SubscribeNamespaceOk({RequestID(0), subNs.trackNamespacePrefix}));
 }
 
 inline Subscriber::PublishNamespaceResult makePublishNamespaceOkResult(
-    const auto& ann) {
+    const auto& pubNs) {
   return std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
-      {.requestID = ann.requestID, .requestSpecificParams = {}}));
+      {.requestID = pubNs.requestID, .requestSpecificParams = {}}));
 }
 
 inline Subscriber::PublishResult makePublishOkResult(

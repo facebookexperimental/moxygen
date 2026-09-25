@@ -73,12 +73,12 @@ class MoQRelaySession : public MoQSession {
 
   // Override publishNamespace methods with real implementations
   folly::coro::Task<Subscriber::PublishNamespaceResult> publishNamespace(
-      PublishNamespace ann,
+      PublishNamespace pubNs,
       std::shared_ptr<PublishNamespaceCallback> publishNamespaceCallback =
           nullptr) override;
 
   folly::coro::Task<Publisher::SubscribeNamespaceResult> subscribeNamespace(
-      SubscribeNamespace subAnn,
+      SubscribeNamespace subNs,
       std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) override;
 
   // Draft 18+
@@ -136,10 +136,10 @@ class MoQRelaySession : public MoQSession {
       RequestID existingRequestID,
       const SubscribeUpdateError& requestError) override;
 
-  // REQUEST_UPDATE handlers for announcement types - take handles directly
+  // REQUEST_UPDATE handlers for namespace requests - take handles directly
   void handlePublishNamespaceRequestUpdate(
       RequestUpdate requestUpdate,
-      std::shared_ptr<Subscriber::PublishNamespaceHandle> announceHandle);
+      std::shared_ptr<Subscriber::PublishNamespaceHandle> pubNsHandle);
   void handleSubscribeNamespaceRequestUpdate(
       RequestUpdate requestUpdate,
       std::shared_ptr<Publisher::SubscribeNamespaceHandle>
@@ -171,7 +171,7 @@ class MoQRelaySession : public MoQSession {
   void subscribeNamespaceOk(
       const SubscribeNamespaceOk& saOk,
       std::shared_ptr<SubNSReply>&& subNsReply);
-  void unsubscribeNamespace(const UnsubscribeNamespace& unsubAnn);
+  void unsubscribeNamespace(const UnsubscribeNamespace& unsubNs);
 
   // Draft 18+: SUBSCRIBE_TRACKS handling.
   folly::coro::Task<void> handleSubscribeTracks(
@@ -185,23 +185,23 @@ class MoQRelaySession : public MoQSession {
       PublishNamespace publishNamespace,
       std::shared_ptr<ReplyContext> replyContext);
   void publishNamespaceOk(
-      const PublishNamespaceOk& annOk,
+      const PublishNamespaceOk& pubNsOk,
       ReplyContext& replyContext);
   void publishNamespaceCancel(
-      const PublishNamespaceCancel& annCan,
+      const PublishNamespaceCancel& pubNsCancel,
       std::shared_ptr<ReplyContext> replyContext);
   void publishNamespaceDone(
       const PublishNamespaceDone& publishNamespaceDone,
       std::shared_ptr<ReplyContext> replyCtx);
 
   // Override all incoming publishNamespace message handlers
-  void onPublishNamespace(PublishNamespace ann) override;
+  void onPublishNamespace(PublishNamespace pubNs) override;
   void onPublishNamespaceImpl(
-      PublishNamespace ann,
+      PublishNamespace pubNs,
       std::shared_ptr<ReplyContext> replyContext) override;
   void onPublishNamespaceCancel(
       PublishNamespaceCancel publishNamespaceCancel) override;
-  void onPublishNamespaceDone(PublishNamespaceDone unAnn) override;
+  void onPublishNamespaceDone(PublishNamespaceDone pubNsDone) override;
   void onRequestOk(RequestOk ok, FrameType frameType) override;
   void onUnsubscribeNamespace(UnsubscribeNamespace unsub) override;
 

@@ -19,7 +19,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeNamespace) {
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
           testing::Invoke(
-              [&mockSubscribeNamespaceHandle](auto subAnn, auto handler)
+              [&mockSubscribeNamespaceHandle](auto subNs, auto handler)
                   -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
                 mockSubscribeNamespaceHandle =
                     std::make_shared<MockSubscribeNamespaceHandle>(
@@ -51,7 +51,7 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeNamespaceAfterSessionClosed) {
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
           testing::Invoke(
-              [](auto /*subAnn*/, auto /*handler*/)
+              [](auto /*subNs*/, auto /*handler*/)
                   -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
                 co_return std::make_shared<MockSubscribeNamespaceHandle>(
                     SubscribeNamespaceOk(
@@ -117,7 +117,7 @@ CO_TEST_P_X(V16PlusSubscribeNamespaceTest, NamespaceDoneDoesNotCloseStream) {
       .WillOnce(
           testing::Invoke(
               [&mockSubscribeNamespaceHandle, &serverPublishHandle](
-                  auto subAnn, auto handler)
+                  auto subNs, auto handler)
                   -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
                 serverPublishHandle = handler;
                 mockSubscribeNamespaceHandle =
@@ -165,7 +165,7 @@ CO_TEST_P_X(
       .WillOnce(
           testing::Invoke(
               [&mockSubscribeNamespaceHandle, &serverPublishHandle](
-                  auto subAnn, auto handler)
+                  auto subNs, auto handler)
                   -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
                 serverPublishHandle = handler;
                 // Send NAMESPACE + NAMESPACE_DONE before returning OK.
@@ -249,13 +249,13 @@ CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceError) {
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
           testing::Invoke(
-              [](auto subAnn, auto /*handler*/)
+              [](auto subNs, auto /*handler*/)
                   -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
-                SubscribeNamespaceError subAnnError{
-                    subAnn.requestID,
+                SubscribeNamespaceError subNsError{
+                    subNs.requestID,
                     SubscribeNamespaceErrorCode::NOT_SUPPORTED,
                     "not supported"};
-                co_return folly::makeUnexpected(subAnnError);
+                co_return folly::makeUnexpected(subNsError);
               }));
 
   EXPECT_CALL(
@@ -264,9 +264,9 @@ CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceError) {
   EXPECT_CALL(
       *serverPublisherStatsCallback_,
       onSubscribeNamespaceError(SubscribeNamespaceErrorCode::NOT_SUPPORTED));
-  auto subAnnResult = co_await clientSession_->subscribeNamespace(
+  auto subNsResult = co_await clientSession_->subscribeNamespace(
       getSubscribeNamespace(), nullptr);
-  EXPECT_TRUE(subAnnResult.hasError());
+  EXPECT_TRUE(subNsResult.hasError());
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

@@ -7053,7 +7053,7 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
             nullptr};
       case FrameType::PUBLISH_NAMESPACE:
         // Publisher (sender) closes the stream (FIN or RST) to withdraw
-        // the announce — both signal end-of-PUBLISH_NAMESPACE.
+        // the publish namespace — both signal end-of-PUBLISH_NAMESPACE.
         return BidiStreamConfig{
             {FrameType::PUBLISH_NAMESPACE, FrameType::REQUEST_UPDATE},
             [this](RequestID id, std::optional<ResetStreamErrorCode>) {

@@ -220,10 +220,10 @@ class PyMoQPublisher : public Subscriber,
   }
 
   folly::coro::Task<PublishNamespaceResult> publishNamespace(
-      PublishNamespace ann,
+      PublishNamespace pubNs,
       std::shared_ptr<PublishNamespaceCallback>) override {
     co_return std::make_shared<PublishNamespaceHandle>(PublishNamespaceOk{
-        .requestID = ann.requestID, .requestSpecificParams = {}});
+        .requestID = pubNs.requestID, .requestSpecificParams = {}});
   }
 
   void goaway(Goaway) override {

@@ -44,7 +44,7 @@ class MoQRelay : public Publisher,
       std::shared_ptr<FetchConsumer> consumer) override;
 
   folly::coro::Task<SubscribeNamespaceResult> subscribeNamespace(
-      SubscribeNamespace subAnn,
+      SubscribeNamespace subNs,
       std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) override;
 
   folly::coro::Task<SubscribeTracksResult> subscribeTracks(
@@ -53,7 +53,7 @@ class MoQRelay : public Publisher,
           nullptr) override;
 
   folly::coro::Task<Subscriber::PublishNamespaceResult> publishNamespace(
-      PublishNamespace ann,
+      PublishNamespace pubNs,
       std::shared_ptr<Subscriber::PublishNamespaceCallback>) override;
 
   PublishResult publish(
@@ -291,7 +291,7 @@ class MoQRelay : public Publisher,
 
   folly::coro::Task<void> publishNamespaceToSession(
       std::shared_ptr<MoQSession> session,
-      PublishNamespace ann,
+      PublishNamespace pubNs,
       std::shared_ptr<NamespaceNode> nodePtr);
 
   folly::coro::Task<void> publishToSession(

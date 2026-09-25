@@ -18,9 +18,9 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespace) {
   EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
       .WillOnce(
           testing::Invoke(
-              [](auto ann, auto /* publishNamespaceCallback */)
+              [](auto pubNs, auto /* publishNamespaceCallback */)
                   -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
-                co_return makePublishNamespaceOkResult(ann);
+                co_return makePublishNamespaceOkResult(pubNs);
               }));
 
   EXPECT_CALL(*clientPublisherStatsCallback_, onPublishNamespaceSuccess());
@@ -40,12 +40,12 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceDone) {
       .WillOnce(
           testing::Invoke(
               [&mockPublishNamespaceHandle](
-                  auto ann, auto /* publishNamespaceCallback */)
+                  auto pubNs, auto /* publishNamespaceCallback */)
                   -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
                 mockPublishNamespaceHandle =
                     std::make_shared<MockPublishNamespaceHandle>(
                         PublishNamespaceOk(
-                            {.requestID = ann.requestID,
+                            {.requestID = pubNs.requestID,
                              .requestSpecificParams = {}}));
                 Subscriber::PublishNamespaceResult publishNamespaceResult(
                     mockPublishNamespaceHandle);
@@ -78,13 +78,13 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceCancel) {
       .WillOnce(
           testing::Invoke(
               [&mockPublishNamespaceHandle, &publishNamespaceCallback](
-                  auto ann, auto publishNamespaceCallbackIn)
+                  auto pubNs, auto publishNamespaceCallbackIn)
                   -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
                 publishNamespaceCallback = publishNamespaceCallbackIn;
                 mockPublishNamespaceHandle =
                     std::make_shared<MockPublishNamespaceHandle>(
                         PublishNamespaceOk(
-                            {.requestID = ann.requestID,
+                            {.requestID = pubNs.requestID,
                              .requestSpecificParams = {}}));
                 Subscriber::PublishNamespaceResult publishNamespaceResult(
                     mockPublishNamespaceHandle);
@@ -125,11 +125,12 @@ CO_TEST_P_X(Draft18Test, SubscriberCancelsPublishNamespace) {
   EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
       .WillOnce(
           [&mockPublishNamespaceHandle](
-              auto ann, auto /* publishNamespaceCallback */)
+              auto pubNs, auto /* publishNamespaceCallback */)
               -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
             mockPublishNamespaceHandle =
                 std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
-                    {.requestID = ann.requestID, .requestSpecificParams = {}}));
+                    {.requestID = pubNs.requestID,
+                     .requestSpecificParams = {}}));
             co_return Subscriber::PublishNamespaceResult(
                 mockPublishNamespaceHandle);
           });
@@ -159,11 +160,11 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceError) {
   EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
       .WillOnce(
           testing::Invoke(
-              [](auto ann, auto /* publishNamespaceCallback */)
+              [](auto pubNs, auto /* publishNamespaceCallback */)
                   -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
                 co_return folly::makeUnexpected(
                     PublishNamespaceError{
-                        ann.requestID,
+                        pubNs.requestID,
                         PublishNamespaceErrorCode::UNAUTHORIZED,
                         "Unauthorized"});
               }));
@@ -190,15 +191,15 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceError) {
 CO_TEST_P_X(Draft18Test, PublishNamespaceFailsOnPeerFinWithoutReply) {
   co_await setupMoQSession();
 
-  folly::coro::Baton serverSawAnn;
+  folly::coro::Baton serverSawPubNs;
   folly::coro::Baton releaseHandler;
   EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
       .WillOnce(
-          [&](auto ann, auto /*cb*/)
+          [&](auto pubNs, auto /*cb*/)
               -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
-            serverSawAnn.post();
+            serverSawPubNs.post();
             co_await releaseHandler;
-            co_return makePublishNamespaceOkResult(ann);
+            co_return makePublishNamespaceOkResult(pubNs);
           });
 
   std::optional<PublishNamespaceErrorCode> errorCode;
@@ -215,7 +216,7 @@ CO_TEST_P_X(Draft18Test, PublishNamespaceFailsOnPeerFinWithoutReply) {
       }))
       .start();
 
-  co_await serverSawAnn;
+  co_await serverSawPubNs;
   // PUBLISH_NAMESPACE bidi is the client-initiated stream id 0.
   serverWt_->writeHandles.at(0)->writeStreamData(
       nullptr, /*fin=*/true, nullptr);

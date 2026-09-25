@@ -91,15 +91,15 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     uint64_t negotiatedVersion =
         *(moqClient_.getSession()->getNegotiatedVersion());
     // subscribe to the catalog track from the beginning of the largest group
-    SubscribeNamespace subAnn{
+    SubscribeNamespace subNs{
         .requestID = RequestID(0),
         .trackNamespacePrefix = TrackNamespace(chatPrefix()),
         .forward = true,
         .options = SubscribeNamespaceOptions::BOTH,
     };
-    subAnn.params.insertParam(getAuthParam(negotiatedVersion, username_));
+    subNs.params.insertParam(getAuthParam(negotiatedVersion, username_));
     auto sa = co_await moqClient_.getSession()->subscribeNamespace(
-        subAnn,
+        subNs,
         std::make_shared<ChatNamespacePublishHandle>(
             shared_from_this(), TrackNamespace(chatPrefix())));
     if (sa.hasValue()) {

@@ -280,16 +280,16 @@ folly::coro::Task<InteropTestResult> MoQInteropClient::testAnnounceOnly() {
     PublishNamespace pn;
     pn.trackNamespace = TrackNamespace({"moq-test"}, {"interop"});
 
-    auto annResult = co_await folly::coro::timeout(
+    auto pubNsResult = co_await folly::coro::timeout(
         moqClient->moqSession_->publishNamespace(std::move(pn)),
         transactionTimeout_);
 
-    if (annResult.hasValue()) {
+    if (pubNsResult.hasValue()) {
       result.passed = true;
       result.message = "PUBLISH_NAMESPACE completed successfully";
     } else {
       result.passed = false;
-      result.message = annResult.error().reasonPhrase;
+      result.message = pubNsResult.error().reasonPhrase;
     }
 
     if (moqClient->moqSession_) {
@@ -374,14 +374,14 @@ folly::coro::Task<InteropTestResult> MoQInteropClient::testAnnounceSubscribe() {
     PublishNamespace pn;
     pn.trackNamespace = TrackNamespace({"moq-interop-test"});
 
-    auto annResult = co_await folly::coro::timeout(
+    auto pubNsResult = co_await folly::coro::timeout(
         publisher->moqSession_->publishNamespace(std::move(pn)),
         transactionTimeout_);
 
-    if (annResult.hasError()) {
+    if (pubNsResult.hasError()) {
       result.passed = false;
       result.message =
-          "PUBLISH_NAMESPACE failed: " + annResult.error().reasonPhrase;
+          "PUBLISH_NAMESPACE failed: " + pubNsResult.error().reasonPhrase;
       if (publisher->moqSession_) {
         publisher->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
       }
@@ -392,7 +392,7 @@ folly::coro::Task<InteropTestResult> MoQInteropClient::testAnnounceSubscribe() {
     }
 
     // Store handle to keep the publish namespace active
-    publishNamespaceHandle = std::move(annResult.value());
+    publishNamespaceHandle = std::move(pubNsResult.value());
 
     // Set up subscriber and subscribe
     subscriber = co_await createAndSetupSession();
@@ -454,17 +454,17 @@ MoQInteropClient::testPublishNamespaceDone() {
     pn.trackNamespace =
         TrackNamespace(std::vector<std::string>{"moq-test", "interop"});
 
-    auto annResult = co_await folly::coro::timeout(
+    auto pubNsResult = co_await folly::coro::timeout(
         moqClient->moqSession_->publishNamespace(std::move(pn)),
         transactionTimeout_);
 
-    if (annResult.hasError()) {
+    if (pubNsResult.hasError()) {
       result.passed = false;
       result.message =
-          "PUBLISH_NAMESPACE failed: " + annResult.error().reasonPhrase;
+          "PUBLISH_NAMESPACE failed: " + pubNsResult.error().reasonPhrase;
     } else {
       // PUBLISH_NAMESPACE_OK received, now send PUBLISH_NAMESPACE_DONE
-      annResult.value()->publishNamespaceDone();
+      pubNsResult.value()->publishNamespaceDone();
       result.passed = true;
       result.message =
           "PUBLISH_NAMESPACE_OK received, PUBLISH_NAMESPACE_DONE sent";
@@ -524,15 +524,15 @@ MoQInteropClient::testSubscribeBeforeAnnounce() {
               PublishNamespace pn;
               pn.trackNamespace = TrackNamespace(
                   std::vector<std::string>{"moq-test", "interop"});
-              auto annResult =
+              auto pubNsResult =
                   co_await publisher->moqSession_->publishNamespace(
                       std::move(pn));
-              if (annResult.hasValue()) {
-                publishNamespaceHandle = std::move(annResult.value());
+              if (pubNsResult.hasValue()) {
+                publishNamespaceHandle = std::move(pubNsResult.value());
               } else {
                 throw std::runtime_error(
                     "PUBLISH_NAMESPACE failed: " +
-                    annResult.error().reasonPhrase);
+                    pubNsResult.error().reasonPhrase);
               }
             }()),
         overallTimeout);

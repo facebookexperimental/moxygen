@@ -202,7 +202,7 @@ For scenarios requiring direct QUIC transport without HTTP/3:
 - Supports hierarchical namespaces with prefix matching
 
 **Subscription Routing:**
-- Incoming `subscribe()` request looks up announcing session via namespace
+- Incoming `subscribe()` request looks up publishing session via namespace
 - Creates `MoQForwarder` to manage data flow
 - Forwards subscription upstream if needed
 - Returns consumer that writes to downstream subscribers

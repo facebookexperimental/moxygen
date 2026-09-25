@@ -47,8 +47,8 @@ class Subscriber {
   class PublishNamespaceHandle {
    public:
     PublishNamespaceHandle() = default;
-    explicit PublishNamespaceHandle(PublishNamespaceOk annOk)
-        : publishNamespaceOk_(std::move(annOk)) {}
+    explicit PublishNamespaceHandle(PublishNamespaceOk pubNsOk)
+        : publishNamespaceOk_(std::move(pubNsOk)) {}
     virtual ~PublishNamespaceHandle() = default;
     // Providing a default implementation of publishNamespaceDone, because it
     // can be an uninteresting message
@@ -92,11 +92,11 @@ class Subscriber {
   using PublishNamespaceResult = folly::
       Expected<std::shared_ptr<PublishNamespaceHandle>, PublishNamespaceError>;
   virtual folly::coro::Task<PublishNamespaceResult> publishNamespace(
-      PublishNamespace ann,
+      PublishNamespace pubNs,
       std::shared_ptr<PublishNamespaceCallback> = nullptr) {
     return folly::coro::makeTask<PublishNamespaceResult>(folly::makeUnexpected(
         PublishNamespaceError{
-            ann.requestID,
+            pubNs.requestID,
             PublishNamespaceErrorCode::NOT_SUPPORTED,
             "unimplemented"}));
   }

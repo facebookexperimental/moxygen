@@ -129,14 +129,14 @@ bool MoQRelay::hasOverlappingSubscription(
 
 folly::coro::Task<Subscriber::PublishNamespaceResult>
 MoQRelay::publishNamespace(
-    PublishNamespace ann,
+    PublishNamespace pubNs,
     std::shared_ptr<Subscriber::PublishNamespaceCallback> callback) {
-  XLOG(DBG1) << __func__ << " ns=" << ann.trackNamespace;
+  XLOG(DBG1) << __func__ << " ns=" << pubNs.trackNamespace;
   // check auth
-  if (!ann.trackNamespace.startsWith(allowedNamespacePrefix_)) {
+  if (!pubNs.trackNamespace.startsWith(allowedNamespacePrefix_)) {
     co_return folly::makeUnexpected(
         PublishNamespaceError{
-            ann.requestID,
+            pubNs.requestID,
             PublishNamespaceErrorCode::UNINTERESTED,
             "bad namespace"});
   }
@@ -145,14 +145,14 @@ MoQRelay::publishNamespace(
       NamespaceNode::NamespaceSubscriberInfo>>
       sessions;
   auto nodePtr = findNamespaceNode(
-      ann.trackNamespace, /*createMissingNodes=*/true, &sessions);
+      pubNs.trackNamespace, /*createMissingNodes=*/true, &sessions);
 
   // Log if there is already a session that has publishNamespace-d this track
   if (nodePtr->sourceSession) {
     XLOG(WARNING) << "PublishNamespace: Existing session ("
                   << nodePtr->sourceSession.get()
                   << ") has already published trackNamespace="
-                  << ann.trackNamespace;
+                  << pubNs.trackNamespace;
     // Since we don't fully support multiple publishers -- cancel the old
     // publishNamespace and remove ongoing subscriptions to this publisher
     // in that namespace.  Note: it could have publishNamespace-d a more
@@ -165,7 +165,7 @@ MoQRelay::publishNamespace(
     }
     for (auto it = subscriptions_.begin(); it != subscriptions_.end();) {
       // Check if the subscription's FullTrackName is in this namespace
-      if (it->first.trackNamespace.startsWith(ann.trackNamespace) &&
+      if (it->first.trackNamespace.startsWith(pubNs.trackNamespace) &&
           it->second.upstream == nodePtr->sourceSession) {
         XLOG(DBG4) << "Erasing subscription to " << it->first;
         it = subscriptions_.erase(it);
@@ -190,8 +190,8 @@ MoQRelay::publishNamespace(
   bool wasEmpty = !nodePtr->hasLocalSessions();
   nodePtr->sourceSession = session;
   nodePtr->publishNamespaceCallback = std::move(callback);
-  nodePtr->trackNamespace_ = ann.trackNamespace;
-  nodePtr->setPublishNamespaceOk({ann.requestID});
+  nodePtr->trackNamespace_ = pubNs.trackNamespace;
+  nodePtr->setPublishNamespaceOk({pubNs.requestID});
 
   // If this is the first content added to this node, notify parent
   if (wasEmpty && nodePtr->parent_) {
@@ -205,29 +205,29 @@ MoQRelay::publishNamespace(
         // Draft 16+: send NAMESPACE message on the bidi stream
         TrackNamespace suffix(
             std::vector<std::string>(
-                ann.trackNamespace.trackNamespace.begin() +
+                pubNs.trackNamespace.trackNamespace.begin() +
                     info.trackNamespacePrefix.size(),
-                ann.trackNamespace.trackNamespace.end()));
+                pubNs.trackNamespace.trackNamespace.end()));
         info.namespacePublishHandle->namespaceMsg(suffix);
       } else {
         // Draft <= 15: send PUBLISH_NAMESPACE on a new stream
         auto exec = outSession->getExecutor();
         co_withExecutor(
-            exec, publishNamespaceToSession(outSession, ann, nodePtr))
+            exec, publishNamespaceToSession(outSession, pubNs, nodePtr))
             .start();
       }
     }
   }
 
-  wakePendingRendezvousUnderNamespace(ann.trackNamespace);
+  wakePendingRendezvousUnderNamespace(pubNs.trackNamespace);
   co_return nodePtr;
 }
 
 folly::coro::Task<void> MoQRelay::publishNamespaceToSession(
     std::shared_ptr<MoQSession> session,
-    PublishNamespace ann,
+    PublishNamespace pubNs,
     std::shared_ptr<NamespaceNode> nodePtr) {
-  auto publishNamespaceHandle = co_await session->publishNamespace(ann);
+  auto publishNamespaceHandle = co_await session->publishNamespace(pubNs);
   if (publishNamespaceHandle.hasError()) {
     XLOG(ERR) << "PublishNamespace failed err="
               << publishNamespaceHandle.error().reasonPhrase;
@@ -311,7 +311,7 @@ void MoQRelay::publishNamespaceDone(
   // Node would be useful if there were back links
   auto nodePtr = findNamespaceNode(trackNamespace);
   if (!nodePtr) {
-    // Node was already pruned, nothing to do, maybe app called unannouce twice?
+    // Node was already pruned, nothing to do, maybe app called pubNsDone twice?
     XLOG(DBG1) << "Node already pruned for ns=" << trackNamespace;
     return;
   }

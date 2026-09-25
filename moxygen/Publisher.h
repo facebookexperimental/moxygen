@@ -178,13 +178,13 @@ class Publisher {
       std::shared_ptr<SubscribeNamespaceHandle>,
       SubscribeNamespaceError>;
   virtual folly::coro::Task<SubscribeNamespaceResult> subscribeNamespace(
-      SubscribeNamespace subAnn,
+      SubscribeNamespace subNs,
       std::shared_ptr<NamespacePublishHandle>
           namespacePublishHandle /* draft 16+ */) {
     return folly::coro::makeTask<SubscribeNamespaceResult>(
         folly::makeUnexpected(
             SubscribeNamespaceError{
-                subAnn.requestID,
+                subNs.requestID,
                 SubscribeNamespaceErrorCode::NOT_SUPPORTED,
                 "unimplemented"}));
   }
