@@ -215,7 +215,7 @@ class DatePublisher : public Publisher {
     consumer->setTrackAlias(alias);
     auto session = MoQSession::getRequestSession();
     if (!publisherEvb_) {
-      publisherEvb_ = session->getExecutor();
+      publisherEvb_ = MoQSession::getRequestContext().executor;
     }
 
     auto subscriber = forwarder_.addSubscriber(
@@ -244,6 +244,7 @@ class DatePublisher : public Publisher {
       Fetch fetch,
       std::shared_ptr<FetchConsumer> consumer) override {
     auto clientSession = MoQSession::getRequestSession();
+    const auto reqCtx = MoQSession::getRequestContext();
     XLOG(INFO) << "Fetch track ns=" << fetch.fullTrackName.trackNamespace
                << " name=" << fetch.fullTrackName.trackName
                << " requestID=" << fetch.requestID;
@@ -295,7 +296,7 @@ class DatePublisher : public Publisher {
         0, // not end of track
         largest});
     co_withExecutor(
-        clientSession->getExecutor(),
+        reqCtx.executor,
         folly::coro::co_withCancellation(
             fetchHandle->cancelSource.getToken(),
             catchup(std::move(consumer), {standalone->start, standalone->end})))

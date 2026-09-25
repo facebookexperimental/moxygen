@@ -158,6 +158,17 @@ class MoQSession : public Subscriber,
 
   static std::shared_ptr<MoQSession> getRequestSession();
 
+  // Facts about the peer serving the current request. A value, so a handler
+  // that only needs to know who is calling cannot call them back.
+  struct RequestContext {
+    SessionId sessionId;
+    uint64_t version{0};
+    MoQExecutor* executor{nullptr};
+  };
+
+  // Only valid while handling a request.
+  static RequestContext getRequestContext();
+
   SessionId sessionId() const {
     return id_;
   }

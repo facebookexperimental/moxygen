@@ -298,7 +298,6 @@ folly::coro::Task<Publisher::FetchResult> MoQBroadcast::fetch(
     Fetch fetch,
     std::shared_ptr<FetchConsumer> consumer) {
   const auto& ftn = fetch.fullTrackName;
-
   if (ftn.trackName != kCatalogTrackName) {
     co_return folly::makeUnexpected(
         FetchError{
@@ -308,6 +307,7 @@ folly::coro::Task<Publisher::FetchResult> MoQBroadcast::fetch(
   }
 
   auto session = MoQSession::getRequestSession();
+  const auto reqCtx = MoQSession::getRequestContext();
   auto stack = co_await getOrCreateTrack(ftn.trackName);
   if (!stack) {
     co_return folly::makeUnexpected(
@@ -344,7 +344,7 @@ folly::coro::Task<Publisher::FetchResult> MoQBroadcast::fetch(
       /*extensions=*/{}});
   auto serve = serveMediaFetch(std::move(consumer), std::move(source), range);
   folly::coro::co_withExecutor(
-      session->getExecutor(),
+      reqCtx.executor,
       folly::coro::co_withCancellation(
           handle->cancelSource.getToken(), std::move(serve)))
       .start();

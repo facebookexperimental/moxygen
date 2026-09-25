@@ -7785,6 +7785,17 @@ std::shared_ptr<MoQSession> MoQSession::getRequestSession() {
   return sessionData->session;
 }
 
+MoQSession::RequestContext MoQSession::getRequestContext() {
+  auto session = getRequestSession();
+  // The negotiated version is unset during teardown before SETUP completed.
+  // getDraftMajorVersion(0) is 0, so a version check denies rather than
+  // crashing.
+  return RequestContext{
+      session->sessionId(),
+      session->getNegotiatedVersion().value_or(0),
+      session->getExecutor()};
+}
+
 SessionId MoQSession::makeSessionId() {
   // Never returns 0, which is what kUnsetSessionId relies on.
   return SessionId(folly::processLocalUniqueId());

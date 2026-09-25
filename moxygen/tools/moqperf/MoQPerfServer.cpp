@@ -20,10 +20,11 @@ MoQPerfServer::MoQPerfServer(std::string cert, std::string key)
 folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
     SubscribeRequest subscribeRequest,
     std::shared_ptr<TrackConsumer> callback) {
-  auto session = MoQSession::getRequestSession();
   auto alias = TrackAlias(subscribeRequest.requestID.value);
   callback->setTrackAlias(alias);
-  co_withExecutor(session->getExecutor(), writeLoop(callback, subscribeRequest))
+  co_withExecutor(
+      MoQSession::getRequestContext().executor,
+      writeLoop(callback, subscribeRequest))
       .start();
   SubscribeOk ok{
       subscribeRequest.requestID,
@@ -40,10 +41,8 @@ folly::coro::Task<Publisher::FetchResult> MoQPerfServer::fetch(
     std::shared_ptr<FetchConsumer> callback) {
   XCHECK(!requestId_.has_value())
       << "Cannot get more than one fetch, as of now";
-  auto session = MoQSession::getRequestSession();
   co_withExecutor(
-      session->getExecutor(),
-
+      MoQSession::getRequestContext().executor,
       writeLoopFetch(callback, fetchRequest))
       .start();
   FetchOk ok{
