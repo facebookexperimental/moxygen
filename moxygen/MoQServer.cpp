@@ -85,7 +85,7 @@ MoQServer::MoQServer(
       fizzContext_(std::move(fizzContext)),
       useQuicWtSession_(std::move(options.useQuicWtSession)) {
   params_.serverThreads = 1;
-  params_.txnTimeout = std::chrono::seconds(60);
+  params_.txnTimeout = options.txnTimeout;
   params_.transportSettings = options.transportSettings
       ? *options.transportSettings
       : defaultTransportSettings();
