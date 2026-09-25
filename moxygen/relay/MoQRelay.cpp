@@ -588,7 +588,7 @@ folly::coro::Task<void> MoQRelay::publishToSession(
     TrackNamespace trackNamespacePrefix,
     std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle) {
   const auto fullTrackName = forwarder->fullTrackName();
-  auto subscriber = forwarder->addSubscriber(session, forward);
+  auto subscriber = forwarder->addSubscriber(session->sessionId(), forward);
   if (!subscriber) {
     XLOG(ERR) << "Subscribe failed: addSubscriber returned null for "
               << fullTrackName;
@@ -1397,6 +1397,12 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     SubscribeRequest subReq,
     std::shared_ptr<TrackConsumer> consumer) {
   auto session = MoQSession::getRequestSession();
+  if (!session) {
+    co_return folly::makeUnexpected(SubscribeError(
+        {subReq.requestID,
+         SubscribeErrorCode::INTERNAL_ERROR,
+         "session is gone"}));
+  }
 
   // check auth / get trackNamespace
   if (subReq.fullTrackName.trackNamespace.empty() && !emptyNamespaceAllowed()) {
@@ -1425,8 +1431,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
 
   // If we've reached this point, it means that the track isn't being PUBLISHed,
   // and there is no namespace being published that contains the track.
-  auto downstreamVersion =
-      session ? session->getNegotiatedVersion() : std::optional<uint64_t>{};
+  auto downstreamVersion = session->getNegotiatedVersion();
   const bool rendezvousEligible = downstreamVersion.has_value() &&
       getDraftMajorVersion(*downstreamVersion) >= 18;
   if (!rendezvousEligible) {
@@ -1651,7 +1656,7 @@ MoQRelay::subscribeToExistingRelaySubscription(
     // start may be in the past, it will get adjusted forward to largest
   }
   auto subscriber = forwarder->addSubscriber(
-      std::move(downstreamSession), subReq, std::move(consumer));
+      downstreamSession->sessionId(), subReq, std::move(consumer));
   if (!subscriber) {
     XLOG(ERR) << "addSubscriber returned null (draining?) for "
               << subReq.fullTrackName << " reqID=" << subReq.requestID;
@@ -1675,10 +1680,10 @@ MoQRelay::subscribeToFirstRelaySubscription(
   // First downstream subscriber for this track — set up forwarder and
   // subscribe upstream.
   XCHECK(upstreamSession) << "upstreamSession required for first subscriber";
+  XCHECK(downstreamSession)
+      << "downstreamSession required for first subscriber";
 
-  auto downstreamMaybeVersion = downstreamSession
-      ? downstreamSession->getNegotiatedVersion()
-      : std::optional<uint64_t>{};
+  auto downstreamMaybeVersion = downstreamSession->getNegotiatedVersion();
   auto upstreamMaybeVersion = upstreamSession->getNegotiatedVersion();
   const bool downstreamIsV18Plus = downstreamMaybeVersion.has_value() &&
       getDraftMajorVersion(*downstreamMaybeVersion) >= 18;
@@ -1719,7 +1724,7 @@ MoQRelay::subscribeToFirstRelaySubscription(
   // largest() until the SUBSCRIBE_OK below, so the subscription just ends once
   // largest is known instead of telling the subscriber to FETCH.
   auto subscriber = forwarder->addSubscriber(
-      std::move(downstreamSession), subReq, std::move(consumer));
+      downstreamSession->sessionId(), subReq, std::move(consumer));
   if (!subscriber) {
     XLOG(ERR) << "addSubscriber returned null (draining?) for "
               << subReq.fullTrackName << " reqID=" << subReq.requestID;
@@ -1801,7 +1806,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
            "No subscription for joining fetch"}));
     } else if (subscriptionIt->second.promise.isFulfilled()) {
       auto res = subscriptionIt->second.forwarder->resolveJoiningFetch(
-          session, *joining);
+          session->sessionId(), *joining);
       if (res.hasError()) {
         co_return folly::makeUnexpected(res.error());
       }

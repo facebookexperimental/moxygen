@@ -220,7 +220,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQAudioPublisher::subscribe(
     std::shared_ptr<TrackConsumer> callback) {
   if (sub.fullTrackName == audioForwarder_.fullTrackName()) {
     co_return audioForwarder_.addSubscriber(
-        MoQSession::getRequestSession(), sub, std::move(callback));
+        MoQSession::getRequestContext().sessionId, sub, std::move(callback));
   }
 
   XLOG(ERR) << "Unknown track " << sub.fullTrackName;

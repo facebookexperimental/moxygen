@@ -73,9 +73,7 @@ class MoQBroadcast : public std::enable_shared_from_this<MoQBroadcast> {
       Fetch fetch,
       std::shared_ptr<FetchConsumer> fetchCallback);
 
-  void removeSubscriber(
-      const std::shared_ptr<MoQSession>& session,
-      const std::string& reason);
+  void removeSubscriber(SessionId sessionId, const std::string& reason);
 
   // Forwarder lifecycle hooks (public so the per-forwarder Callback can reach
   // them). They only schedule work; the actual reap runs later on the executor.

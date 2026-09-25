@@ -1816,7 +1816,8 @@ TEST_F(MoQTrackServerTest, RequestUpdateTogglesForward) {
   sub.locType = moxygen::LocationType::LargestObject;
   sub.forward = true;
 
-  auto subscriber = forwarder->addSubscriber(session, sub, mockConsumer);
+  auto subscriber =
+      forwarder->addSubscriber(session->sessionId(), sub, mockConsumer);
   ASSERT_NE(subscriber, nullptr);
   EXPECT_TRUE(subscriber->shouldForward);
 

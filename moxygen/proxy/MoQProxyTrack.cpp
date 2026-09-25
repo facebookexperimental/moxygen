@@ -141,7 +141,7 @@ MoQProxyTrack::~MoQProxyTrack() {
 folly::coro::Task<Publisher::SubscribeResult> MoQProxyTrack::subscribe(
     SubscribeRequest subscribeRequest,
     std::shared_ptr<TrackConsumer> consumer,
-    std::shared_ptr<MoQSession> downstreamSession) {
+    DownstreamPeer downstream) {
   auto self = shared_from_this();
   if (subscribeRequest.fullTrackName != fullTrackName_) {
     co_return folly::makeUnexpected(
@@ -150,7 +150,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQProxyTrack::subscribe(
             SubscribeErrorCode::DOES_NOT_EXIST,
             "track name does not match proxy track"});
   }
-  if (!consumer || !downstreamSession) {
+  // Subscribers are keyed on the downstream id, so an unset one would collide
+  // with every other unset peer instead of naming this subscription.
+  if (!consumer || downstream.sessionId == kUnsetSessionId) {
     co_return folly::makeUnexpected(
         SubscribeError{
             subscribeRequest.requestID,
@@ -159,9 +161,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQProxyTrack::subscribe(
   }
   if (state_ == State::IDLE) {
     co_return co_await handleFirstSubscription(
-        std::move(subscribeRequest),
-        std::move(consumer),
-        std::move(downstreamSession));
+        std::move(subscribeRequest), std::move(consumer), downstream);
   }
 
   if (state_ == State::CONNECTING) {
@@ -180,18 +180,17 @@ folly::coro::Task<Publisher::SubscribeResult> MoQProxyTrack::subscribe(
             "upstream subscription is no longer available"});
   }
 
-  co_return addSubscriber(
-      subscribeRequest, std::move(consumer), std::move(downstreamSession));
+  co_return addSubscriber(subscribeRequest, std::move(consumer), downstream);
 }
 
 folly::coro::Task<Publisher::SubscribeResult>
 MoQProxyTrack::handleFirstSubscription(
     SubscribeRequest subscribeRequest,
     std::shared_ptr<TrackConsumer> consumer,
-    std::shared_ptr<MoQSession> downstreamSession) {
+    DownstreamPeer downstream) {
   state_ = State::CONNECTING;
   auto subscriberResult =
-      addSubscriber(subscribeRequest, std::move(consumer), downstreamSession);
+      addSubscriber(subscribeRequest, std::move(consumer), downstream);
   if (subscriberResult.hasError()) {
     // If the first subscriber failed, set the state to CLOSED and notify
     // the parent so that it can clean up this MoQProxyTrack (and potentially
@@ -207,8 +206,7 @@ MoQProxyTrack::handleFirstSubscription(
   }
 
   auto subscriber = subscriberResult.value();
-  auto failure =
-      co_await establishUpstream(subscribeRequest, downstreamSession);
+  auto failure = co_await establishUpstream(subscribeRequest, downstream);
   if (failure) {
     if (!upstreamSubscriptionFailure_) {
       completeUpstreamEstablishment(
@@ -240,7 +238,7 @@ MoQProxyTrack::handleFirstSubscription(
 Publisher::SubscribeResult MoQProxyTrack::addSubscriber(
     const SubscribeRequest& subscribeRequest,
     std::shared_ptr<TrackConsumer> consumer,
-    std::shared_ptr<MoQSession> downstreamSession) {
+    DownstreamPeer downstream) {
   if (forwarder_->largest() &&
       subscribeRequest.locType == LocationType::AbsoluteRange &&
       subscribeRequest.endGroup < forwarder_->largest()->group) {
@@ -252,7 +250,7 @@ Publisher::SubscribeResult MoQProxyTrack::addSubscriber(
   }
 
   auto subscriber = forwarder_->addSubscriber(
-      std::move(downstreamSession), subscribeRequest, std::move(consumer));
+      downstream.sessionId, subscribeRequest, std::move(consumer));
   if (!subscriber) {
     return folly::makeUnexpected(
         SubscribeError{
@@ -266,7 +264,7 @@ Publisher::SubscribeResult MoQProxyTrack::addSubscriber(
 folly::coro::Task<std::optional<SubscribeError>>
 MoQProxyTrack::establishUpstream(
     const SubscribeRequest& subscribeRequest,
-    const std::shared_ptr<MoQSession>& downstreamSession) {
+    DownstreamPeer downstream) {
   std::optional<SubscribeError> lastFailure;
   for (size_t providerIndex = 0; providerIndex < upstreamProviders_.size();
        ++providerIndex) {
@@ -274,10 +272,7 @@ MoQProxyTrack::establishUpstream(
     const bool hasFallbackProvider =
         providerIndex + 1 < upstreamProviders_.size();
     auto result = co_await establishWithProvider(
-        upstreamProvider,
-        subscribeRequest,
-        downstreamSession,
-        hasFallbackProvider);
+        upstreamProvider, subscribeRequest, downstream, hasFallbackProvider);
     if (result.hasError()) {
       if (state_ != State::CONNECTING) {
         co_return std::move(result.error());
@@ -304,7 +299,7 @@ folly::coro::Task<MoQProxyTrack::UpstreamEstablishmentResult>
 MoQProxyTrack::establishWithProvider(
     const std::shared_ptr<MoQUpstreamProvider>& upstreamProvider,
     const SubscribeRequest& subscribeRequest,
-    const std::shared_ptr<MoQSession>& downstreamSession,
+    DownstreamPeer downstream,
     bool hasFallbackProvider) {
   auto sessionResult =
       co_await folly::coro::co_awaitTry(upstreamProvider->getSession(
@@ -334,7 +329,7 @@ MoQProxyTrack::establishWithProvider(
     co_return makeUpstreamFailure(
         subscribeRequest, "upstream provider returned a null session");
   }
-  if (upstreamSession == downstreamSession) {
+  if (upstreamSession->sessionId() == downstream.sessionId) {
     co_return makeUpstreamFailure(
         subscribeRequest, "upstream and downstream sessions are the same");
   }
@@ -345,9 +340,8 @@ MoQProxyTrack::establishWithProvider(
   upstreamRequest.locType = LocationType::LargestObject;
   upstreamRequest.forward = forwarder_->numForwardingSubscribers() > 0;
 
-  auto downstreamVersion = downstreamSession->getNegotiatedVersion();
   auto upstreamVersion = upstreamSession->getNegotiatedVersion();
-  if ((downstreamVersion && getDraftMajorVersion(*downstreamVersion) >= 18) ||
+  if (getDraftMajorVersion(downstream.version) >= 18 ||
       (upstreamVersion && getDraftMajorVersion(*upstreamVersion) >= 18)) {
     // TrackRequestParamKey::RENDEZVOUS_TIMEOUT changes meaning across
     // versions. The rendezvous timeout was introduced in draft 18, and isn't

@@ -53,9 +53,7 @@ class MoQBroadcastDispatcher
       Fetch fetch,
       std::shared_ptr<FetchConsumer> fetchCallback) override;
 
-  void removeSubscriber(
-      const std::shared_ptr<MoQSession>& session,
-      const std::string& reason);
+  void removeSubscriber(SessionId sessionId, const std::string& reason);
 
  private:
   // Find or create the broadcast for `ns` (created empty; nothing resolved

@@ -86,7 +86,7 @@ folly::coro::Task<Publisher::FetchResult> MoQBroadcastDispatcher::fetch(
 }
 
 void MoQBroadcastDispatcher::removeSubscriber(
-    const std::shared_ptr<MoQSession>& session,
+    SessionId sessionId,
     const std::string& reason) {
   evb_.dcheckIsInEventBaseThread();
   XLOG(INFO) << "[MoQBroadcastDispatcher] subscriber went away reason="
@@ -94,7 +94,7 @@ void MoQBroadcastDispatcher::removeSubscriber(
   // A session may hold subscriptions across several broadcasts; drop it from
   // each. Emptied forwarders fire onEmpty -> deferred reap -> broadcast drop.
   for (auto& [ns, broadcast] : broadcasts_) {
-    broadcast->removeSubscriber(session, reason);
+    broadcast->removeSubscriber(sessionId, reason);
   }
 }
 

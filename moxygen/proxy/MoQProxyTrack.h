@@ -25,6 +25,13 @@ class TrackConsumer;
 
 class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
  public:
+  // The peer a subscription is served to. MoQProxyTrack never holds the
+  // session, so it is handed the facts it needs.
+  struct DownstreamPeer {
+    SessionId sessionId;
+    uint64_t version{0};
+  };
+
   class Callback {
    public:
     virtual ~Callback() = default;
@@ -51,7 +58,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   folly::coro::Task<Publisher::SubscribeResult> subscribe(
       SubscribeRequest subscribeRequest,
       std::shared_ptr<TrackConsumer> consumer,
-      std::shared_ptr<MoQSession> downstreamSession);
+      DownstreamPeer downstream);
 
   void close();
 
@@ -81,21 +88,21 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   folly::coro::Task<Publisher::SubscribeResult> handleFirstSubscription(
       SubscribeRequest subscribeRequest,
       std::shared_ptr<TrackConsumer> consumer,
-      std::shared_ptr<MoQSession> downstreamSession);
+      DownstreamPeer downstream);
 
   Publisher::SubscribeResult addSubscriber(
       const SubscribeRequest& subscribeRequest,
       std::shared_ptr<TrackConsumer> consumer,
-      std::shared_ptr<MoQSession> downstreamSession);
+      DownstreamPeer downstream);
 
   folly::coro::Task<std::optional<SubscribeError>> establishUpstream(
       const SubscribeRequest& subscribeRequest,
-      const std::shared_ptr<MoQSession>& downstreamSession);
+      DownstreamPeer downstream);
 
   folly::coro::Task<UpstreamEstablishmentResult> establishWithProvider(
       const std::shared_ptr<MoQUpstreamProvider>& upstreamProvider,
       const SubscribeRequest& subscribeRequest,
-      const std::shared_ptr<MoQSession>& downstreamSession,
+      DownstreamPeer downstream,
       bool hasFallbackProvider);
 
   SubscribeError makeSubscribeError(

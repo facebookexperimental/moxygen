@@ -75,7 +75,7 @@ class MoQForwarderTest : public ::testing::Test {
     sub.requestID = requestID;
     sub.locType = locType;
     return forwarder.addSubscriber(
-        std::move(session), sub, std::move(consumer));
+        session->sessionId(), sub, std::move(consumer));
   }
 
   AssertionResult applyForwardUpdate(
@@ -685,7 +685,8 @@ TEST_F(MoQForwarderTest, SubscribeUpdateStartLocationCanDecrease) {
   sub.start = AbsoluteLocation{10, 0};
   sub.endGroup = 0;
 
-  auto subscriber = forwarder->addSubscriber(subscriberSession, sub, consumer);
+  auto subscriber =
+      forwarder->addSubscriber(subscriberSession->sessionId(), sub, consumer);
   ASSERT_NE(subscriber, nullptr);
 
   EXPECT_EQ(subscriber->range.start, (AbsoluteLocation{10, 0}));
@@ -722,7 +723,7 @@ TEST_F(MoQForwarderTest, SubscribeUpdateEndBeforeStartLeavesRangeUnchanged) {
   sub.endGroup = 20;
 
   auto subscriber =
-      forwarder->addSubscriber(createMockSession(), sub, consumer);
+      forwarder->addSubscriber(createMockSession()->sessionId(), sub, consumer);
   ASSERT_NE(subscriber, nullptr);
   const auto originalRange = subscriber->range;
 
@@ -1447,7 +1448,7 @@ TEST_F(MoQForwarderTest, ResetDuringDrainingDoesNotCrash) {
   sub.fullTrackName = kFwdTestTrackName;
   sub.requestID = RequestID(1);
   sub.locType = LocationType::LargestGroup;
-  forwarder->addSubscriber(session, sub, consumer);
+  forwarder->addSubscriber(session->sessionId(), sub, consumer);
 
   auto subgroupRes = forwarder->beginSubgroup(0, 0, 0);
   ASSERT_TRUE(subgroupRes.hasValue());
@@ -1512,13 +1513,13 @@ TEST_F(MoQForwarderTest, ResetDuringDrainingMultipleSubscribersDoesNotCrash) {
   sub1.fullTrackName = kFwdTestTrackName;
   sub1.requestID = RequestID(1);
   sub1.locType = LocationType::LargestGroup;
-  forwarder->addSubscriber(session1, sub1, consumer1);
+  forwarder->addSubscriber(session1->sessionId(), sub1, consumer1);
 
   SubscribeRequest sub2;
   sub2.fullTrackName = kFwdTestTrackName;
   sub2.requestID = RequestID(2);
   sub2.locType = LocationType::LargestGroup;
-  forwarder->addSubscriber(session2, sub2, consumer2);
+  forwarder->addSubscriber(session2->sessionId(), sub2, consumer2);
 
   auto subgroupRes = forwarder->beginSubgroup(0, 0, 0);
   ASSERT_TRUE(subgroupRes.hasValue());
@@ -1596,7 +1597,8 @@ TEST_F(MoQForwarderTest, ExtensionsIncludedInSubscribeOkForSubscribers) {
   sub1.fullTrackName = kFwdTestTrackName;
   sub1.requestID = RequestID(1);
   sub1.locType = LocationType::LargestGroup;
-  auto subscriber1 = forwarder->addSubscriber(session1, sub1, consumer1);
+  auto subscriber1 =
+      forwarder->addSubscriber(session1->sessionId(), sub1, consumer1);
   ASSERT_NE(subscriber1, nullptr);
 
   EXPECT_EQ(
@@ -1611,7 +1613,8 @@ TEST_F(MoQForwarderTest, ExtensionsIncludedInSubscribeOkForSubscribers) {
   sub2.fullTrackName = kFwdTestTrackName;
   sub2.requestID = RequestID(2);
   sub2.locType = LocationType::LargestGroup;
-  auto subscriber2 = forwarder->addSubscriber(session2, sub2, consumer2);
+  auto subscriber2 =
+      forwarder->addSubscriber(session2->sessionId(), sub2, consumer2);
   ASSERT_NE(subscriber2, nullptr);
 
   EXPECT_EQ(
@@ -1622,7 +1625,8 @@ TEST_F(MoQForwarderTest, ExtensionsIncludedInSubscribeOkForSubscribers) {
       subscriber2->subscribeOk().extensions.getIntExtension(0xDEAD'0000), 123);
 
   auto session3 = createMockSession();
-  auto subscriber3 = forwarder->addSubscriber(session3, /*forward=*/false);
+  auto subscriber3 =
+      forwarder->addSubscriber(session3->sessionId(), /*forward=*/false);
   ASSERT_NE(subscriber3, nullptr);
 
   EXPECT_EQ(
@@ -1684,7 +1688,8 @@ TEST_F(MoQForwarderTest, PublishDoneWithForwardOnlySubscriber) {
 
   auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
 
-  auto subscriber = forwarder->addSubscriber(session, /*forward=*/true);
+  auto subscriber =
+      forwarder->addSubscriber(session->sessionId(), /*forward=*/true);
   ASSERT_NE(subscriber, nullptr);
   EXPECT_EQ(subscriber->trackConsumer, nullptr);
 
@@ -1706,12 +1711,13 @@ TEST_F(MoQForwarderTest, RemoveForwardOnlySubscriberWithPublishDone) {
 
   auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
 
-  auto subscriber = forwarder->addSubscriber(session, /*forward=*/true);
+  auto subscriber =
+      forwarder->addSubscriber(session->sessionId(), /*forward=*/true);
   ASSERT_NE(subscriber, nullptr);
   EXPECT_EQ(subscriber->trackConsumer, nullptr);
 
   forwarder->removeSubscriber(
-      session,
+      session->sessionId(),
       PublishDone{
           RequestID(0),
           PublishDoneStatusCode::SUBSCRIPTION_ENDED,
@@ -1903,12 +1909,12 @@ TEST_F(MoQForwarderTest, JoiningFetchNonForwardingSubscriptionIsRequestError) {
   sub.locType = LocationType::LargestObject;
   sub.forward = false;
   auto subscriber =
-      forwarder->addSubscriber(session, sub, createMockConsumer());
+      forwarder->addSubscriber(session->sessionId(), sub, createMockConsumer());
   ASSERT_NE(subscriber, nullptr);
   ASSERT_FALSE(subscriber->shouldForward);
 
   JoiningFetch joining(RequestID(2), 2, FetchType::RELATIVE_JOINING);
-  auto res = forwarder->resolveJoiningFetch(session, joining);
+  auto res = forwarder->resolveJoiningFetch(session->sessionId(), joining);
   ASSERT_TRUE(res.hasError());
   EXPECT_EQ(res.error().errorCode, FetchErrorCode::INVALID_RANGE);
 }
@@ -1940,6 +1946,30 @@ TEST_F(MoQForwarderTest, LastSubscriberRemovedDuringObjectStreamIteration) {
   EXPECT_TRUE(res.hasError());
 
   EXPECT_EQ(forwarder, nullptr);
+}
+
+// The deprecated session overloads are kept for out-of-tree callers during the
+// transition. They must reach the same subscriber as the SessionId ones.
+TEST_F(MoQForwarderTest, DeprecatedSessionOverloadsResolveToTheSameSubscriber) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto session = createMockSession();
+
+  SubscribeRequest sub;
+  sub.fullTrackName = kFwdTestTrackName;
+  sub.requestID = RequestID(1);
+  sub.locType = LocationType::LargestGroup;
+  auto viaSession =
+      forwarder->addSubscriber(session, sub, createMockConsumer());
+  ASSERT_NE(viaSession, nullptr);
+  EXPECT_EQ(viaSession->sessionId, session->sessionId());
+
+  // The SessionId overload finds the entry the session overload added.
+  auto viaId =
+      forwarder->addSubscriber(session->sessionId(), sub, createMockConsumer());
+  EXPECT_EQ(viaId.get(), viaSession.get());
+
+  forwarder->removeSubscriber(session, std::nullopt, "test");
+  EXPECT_TRUE(forwarder->empty());
 }
 
 } // namespace moxygen::test

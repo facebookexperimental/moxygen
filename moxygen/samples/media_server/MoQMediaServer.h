@@ -44,7 +44,8 @@ class MoQMediaServerImpl : public ServerBase {
   void terminateClientSession(std::shared_ptr<MoQSession> session) override {
     XLOG(INFO) << "[MoQMediaServer:" << kTransport
                << "] terminateClientSession sess=" << session.get();
-    publisher_->removeSubscriber(session, "terminateClientSession");
+    publisher_->removeSubscriber(
+        session->sessionId(), "terminateClientSession");
   }
 
  private:

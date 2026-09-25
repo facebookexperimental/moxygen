@@ -267,6 +267,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQBroadcast::subscribe(
     SubscribeRequest subReq,
     std::shared_ptr<TrackConsumer> consumer) {
   const auto& ftn = subReq.fullTrackName;
+  // Read before the first co_await, while the request context is this peer's.
+  const auto sessionId = MoQSession::getRequestContext().sessionId;
   auto stack = co_await getOrCreateTrack(ftn.trackName);
   if (!stack) {
     co_return folly::makeUnexpected(
@@ -275,9 +277,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQBroadcast::subscribe(
             SubscribeErrorCode::DOES_NOT_EXIST,
             "unknown track"});
   }
-  auto session = MoQSession::getRequestSession();
-  auto sub = stack->forwarder->addSubscriber(
-      std::move(session), subReq, std::move(consumer));
+  auto sub =
+      stack->forwarder->addSubscriber(sessionId, subReq, std::move(consumer));
   if (!sub) {
     co_return folly::makeUnexpected(
         SubscribeError{
@@ -306,7 +307,6 @@ folly::coro::Task<Publisher::FetchResult> MoQBroadcast::fetch(
             "media FETCH is not supported"});
   }
 
-  auto session = MoQSession::getRequestSession();
   const auto reqCtx = MoQSession::getRequestContext();
   auto stack = co_await getOrCreateTrack(ftn.trackName);
   if (!stack) {
@@ -320,7 +320,7 @@ folly::coro::Task<Publisher::FetchResult> MoQBroadcast::fetch(
   auto [standalone, joining] = fetchType(fetch);
   SubscribeRange range;
   if (joining) {
-    auto res = forwarder->resolveJoiningFetch(session, *joining);
+    auto res = forwarder->resolveJoiningFetch(reqCtx.sessionId, *joining);
     if (res.hasError()) {
       co_return folly::makeUnexpected(res.error());
     }
@@ -386,12 +386,12 @@ folly::coro::Task<void> MoQBroadcast::serveMediaFetch(
 }
 
 void MoQBroadcast::removeSubscriber(
-    const std::shared_ptr<MoQSession>& session,
+    SessionId sessionId,
     const std::string& reason) {
   // Drop the session from every forwarder (the catalog is just another track);
   // each forwarder that goes empty fires onEmpty -> deferred reap.
   for (auto& [name, stack] : mediaTracks_) {
-    stack->forwarder->removeSubscriber(session, std::nullopt, reason);
+    stack->forwarder->removeSubscriber(sessionId, std::nullopt, reason);
   }
 }
 

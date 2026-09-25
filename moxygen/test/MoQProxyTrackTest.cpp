@@ -89,11 +89,12 @@ class MoQProxyTrackTest : public Test {
     track_->setCallback(callback_);
   }
 
-  std::shared_ptr<NiceMock<test::MockMoQSession>> makeDownstreamSession() {
-    auto session = std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
-    ON_CALL(*session, getNegotiatedVersion())
-        .WillByDefault(Return(kVersionDraftCurrent));
-    return session;
+  // A real session supplies the id: the proxy rejects a subscribe whose
+  // downstream id matches the upstream session's.
+  MoQProxyTrack::DownstreamPeer makeDownstreamPeer() {
+    auto peer = std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
+    return MoQProxyTrack::DownstreamPeer{
+        peer->sessionId(), kVersionDraftCurrent};
   }
 
   std::shared_ptr<NiceMock<MockTrackConsumer>> makeConsumer() {
@@ -134,7 +135,7 @@ class MoQProxyTrackTest : public Test {
 };
 
 TEST_F(MoQProxyTrackTest, FirstSubscriberEstablishesUpstreamSubscription) {
-  auto downstreamSession = makeDownstreamSession();
+  auto downstreamPeer = makeDownstreamPeer();
   auto consumer = makeConsumer();
   auto upstreamHandle = makeUpstreamHandle();
   SubscribeRequest upstreamRequest;
@@ -150,7 +151,7 @@ TEST_F(MoQProxyTrackTest, FirstSubscriberEstablishesUpstreamSubscription) {
 
   auto result = folly::coro::blockingWait(
       track_->subscribe(
-          makeSubscribeRequest(RequestID(1)), consumer, downstreamSession),
+          makeSubscribeRequest(RequestID(1)), consumer, downstreamPeer),
       &eventBase_);
 
   ASSERT_TRUE(result.hasValue());
@@ -182,13 +183,13 @@ TEST_F(MoQProxyTrackTest, ConcurrentSubscribersShareUpstreamSubscription) {
 
   std::optional<Publisher::SubscribeResult> firstResult;
   std::optional<Publisher::SubscribeResult> secondResult;
-  auto firstSession = makeDownstreamSession();
-  auto secondSession = makeDownstreamSession();
+  auto firstPeer = makeDownstreamPeer();
+  auto secondPeer = makeDownstreamPeer();
   folly::coro::co_withExecutor(
       executor_.get(),
       saveSubscribeResult(
           track_->subscribe(
-              makeSubscribeRequest(RequestID(1)), makeConsumer(), firstSession),
+              makeSubscribeRequest(RequestID(1)), makeConsumer(), firstPeer),
           firstResult))
       .start();
   eventBase_.loopOnce();
@@ -196,9 +197,7 @@ TEST_F(MoQProxyTrackTest, ConcurrentSubscribersShareUpstreamSubscription) {
       executor_.get(),
       saveSubscribeResult(
           track_->subscribe(
-              makeSubscribeRequest(RequestID(2)),
-              makeConsumer(),
-              secondSession),
+              makeSubscribeRequest(RequestID(2)), makeConsumer(), secondPeer),
           secondResult))
       .start();
   eventBase_.loopOnce();
@@ -227,7 +226,7 @@ TEST_F(MoQProxyTrackTest, ProviderFailureIsReturnedDownstream) {
       track_->subscribe(
           makeSubscribeRequest(RequestID(4)),
           makeConsumer(),
-          makeDownstreamSession()),
+          makeDownstreamPeer()),
       &eventBase_);
 
   ASSERT_TRUE(result.hasError());
@@ -254,7 +253,7 @@ TEST_F(MoQProxyTrackTest, ProviderFailureFallsBackToNextProvider) {
       track_->subscribe(
           makeSubscribeRequest(RequestID(5)),
           makeConsumer(),
-          makeDownstreamSession()),
+          makeDownstreamPeer()),
       &eventBase_);
 
   ASSERT_TRUE(result.hasValue());
@@ -281,7 +280,7 @@ TEST_F(MoQProxyTrackTest, ClosingDuringProviderAttemptDoesNotTryFallback) {
           track_->subscribe(
               makeSubscribeRequest(RequestID(11)),
               makeConsumer(),
-              makeDownstreamSession()),
+              makeDownstreamPeer()),
           result))
       .start();
   eventBase_.loopOnce();
@@ -313,7 +312,7 @@ TEST_F(MoQProxyTrackTest, UpstreamSubscribeErrorIsReturnedDownstream) {
       track_->subscribe(
           makeSubscribeRequest(RequestID(9)),
           makeConsumer(),
-          makeDownstreamSession()),
+          makeDownstreamPeer()),
       &eventBase_);
 
   ASSERT_TRUE(result.hasError());
@@ -335,7 +334,7 @@ TEST_F(MoQProxyTrackTest, ReleasingDownstreamHandleRemovesSubscriber) {
       track_->subscribe(
           makeSubscribeRequest(RequestID(8)),
           makeConsumer(),
-          makeDownstreamSession()),
+          makeDownstreamPeer()),
       &eventBase_);
   ASSERT_TRUE(result.hasValue());
 
@@ -361,7 +360,7 @@ TEST_F(MoQProxyTrackTest, UpstreamPublishDoneDrainsDownstreamSubscriber) {
       track_->subscribe(
           makeSubscribeRequest(RequestID(5)),
           downstreamConsumer,
-          makeDownstreamSession()),
+          makeDownstreamPeer()),
       &eventBase_);
   ASSERT_TRUE(result.hasValue());
   ASSERT_NE(upstreamConsumer, nullptr);
@@ -407,7 +406,7 @@ TEST_F(MoQProxyTrackTest, UpstreamSubscribeErrorFallsBackToNextProvider) {
       track_->subscribe(
           makeSubscribeRequest(RequestID(10)),
           makeConsumer(),
-          makeDownstreamSession()),
+          makeDownstreamPeer()),
       &eventBase_);
 
   ASSERT_TRUE(result.hasValue());
@@ -429,7 +428,7 @@ TEST_F(MoQProxyTrackTest, DownstreamRequestUpdateIsNotSupported) {
       track_->subscribe(
           makeSubscribeRequest(RequestID(6)),
           makeConsumer(),
-          makeDownstreamSession()),
+          makeDownstreamPeer()),
       &eventBase_);
   ASSERT_TRUE(result.hasValue());
 

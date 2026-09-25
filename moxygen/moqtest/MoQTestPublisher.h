@@ -178,7 +178,8 @@ class MoQTestPublisher : public Publisher,
   // covers the track from the start.
   folly::Expected<StandaloneFetch, FetchError> resolveJoiningFetch(
       const Fetch& fetch,
-      const JoiningFetch& joining);
+      const JoiningFetch& joining,
+      SessionId sessionId);
 
   // Runs onFetch and drops the fetch's cancellation source from
   // activeFetches_ however it ends.
@@ -196,7 +197,7 @@ class MoQTestPublisher : public Publisher,
   // request ID as the alias, which is what keeps aliases unique per session.
   std::shared_ptr<MoQForwarder> makeForwarder(
       const FullTrackName& ftn,
-      MoQSession& session);
+      uint64_t version);
 
   // Generates the track and retires it from tracks_ however it ends.
   folly::coro::Task<void> runTrack(

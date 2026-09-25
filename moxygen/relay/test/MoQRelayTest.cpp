@@ -2523,7 +2523,7 @@ TEST_F(
   auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName, std::nullopt);
 
   // First add via the publishToSession path.
-  auto first = forwarder->addSubscriber(session, /*forward=*/true);
+  auto first = forwarder->addSubscriber(session->sessionId(), /*forward=*/true);
   ASSERT_NE(first, nullptr);
   EXPECT_FALSE(forwarder->empty());
   EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
@@ -2535,7 +2535,8 @@ TEST_F(
   subReq.forward = true;
   auto consumer = createMockConsumer();
 
-  auto second = forwarder->addSubscriber(session, subReq, std::move(consumer));
+  auto second = forwarder->addSubscriber(
+      session->sessionId(), subReq, std::move(consumer));
   ASSERT_NE(second, nullptr);
 
   // Must return the existing in-map entry, not a new orphaned subscriber.
@@ -2545,7 +2546,7 @@ TEST_F(
   EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
 
   // Exactly one subscriber is in the map — one removal empties the forwarder.
-  forwarder->removeSubscriber(session, std::nullopt, "test");
+  forwarder->removeSubscriber(session->sessionId(), std::nullopt, "test");
   EXPECT_TRUE(forwarder->empty());
   EXPECT_EQ(forwarder->numForwardingSubscribers(), 0);
 }
@@ -2558,18 +2559,19 @@ TEST_F(
   auto session = createMockSession();
   auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName, std::nullopt);
 
-  auto first = forwarder->addSubscriber(session, /*forward=*/true);
+  auto first = forwarder->addSubscriber(session->sessionId(), /*forward=*/true);
   ASSERT_NE(first, nullptr);
   EXPECT_FALSE(forwarder->empty());
   EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
 
-  auto second = forwarder->addSubscriber(session, /*forward=*/true);
+  auto second =
+      forwarder->addSubscriber(session->sessionId(), /*forward=*/true);
   ASSERT_NE(second, nullptr);
 
   EXPECT_EQ(first.get(), second.get());
   EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
 
-  forwarder->removeSubscriber(session, std::nullopt, "test");
+  forwarder->removeSubscriber(session->sessionId(), std::nullopt, "test");
   EXPECT_TRUE(forwarder->empty());
   EXPECT_EQ(forwarder->numForwardingSubscribers(), 0);
 }
@@ -2757,7 +2759,8 @@ TEST_F(MoQRelayTest, OnPublishOkUpdatesForwardingCount) {
   forwarder->setCallback(cb);
 
   // Adding a forwarding subscriber fires forwardChanged (0->1).
-  auto subscriber = forwarder->addSubscriber(session, /*forward=*/true);
+  auto subscriber =
+      forwarder->addSubscriber(session->sessionId(), /*forward=*/true);
   ASSERT_NE(subscriber, nullptr);
   EXPECT_EQ(forwarder->numForwardingSubscribers(), 1u);
   ASSERT_EQ(cb->calls.size(), 1u);

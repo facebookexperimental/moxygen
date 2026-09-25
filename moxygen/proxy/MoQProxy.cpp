@@ -128,12 +128,12 @@ folly::coro::Task<Publisher::SubscribeResult> MoQProxy::subscribe(
             "proxy is closed"});
   }
 
-  auto downstreamSession = MoQSession::getRequestSession();
+  const auto reqCtx = MoQSession::getRequestContext();
   auto track = getOrCreateTrack(subscribeRequest.fullTrackName);
   co_return co_await track->subscribe(
       std::move(subscribeRequest),
       std::move(consumer),
-      std::move(downstreamSession));
+      MoQProxyTrack::DownstreamPeer{reqCtx.sessionId, reqCtx.version});
 }
 
 folly::coro::Task<Publisher::FetchResult> MoQProxy::fetch(

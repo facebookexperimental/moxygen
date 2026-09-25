@@ -352,12 +352,12 @@ folly::coro::Task<Publisher::SubscribeResult> MoQVideoPublisher::subscribe(
     std::shared_ptr<TrackConsumer> callback) {
   if (sub.fullTrackName == videoForwarder_.fullTrackName()) {
     co_return videoForwarder_.addSubscriber(
-        MoQSession::getRequestSession(), sub, std::move(callback));
+        MoQSession::getRequestContext().sessionId, sub, std::move(callback));
   }
 
   if (sub.fullTrackName == audioForwarder_.fullTrackName()) {
     co_return audioForwarder_.addSubscriber(
-        MoQSession::getRequestSession(), sub, std::move(callback));
+        MoQSession::getRequestContext().sessionId, sub, std::move(callback));
   }
 
   if ((sub.fullTrackName != videoForwarder_.fullTrackName()) &&

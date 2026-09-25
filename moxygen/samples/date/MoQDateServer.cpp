@@ -116,7 +116,8 @@ class DatePublisher : public Publisher {
 
     // MoQForwarder::Subscriber is itself a SubscriptionHandle, so add it to
     // the forwarder first and pass it directly as the handle to publish().
-    auto subscriptionHandle = forwarder_.addSubscriber(session, req.forward);
+    auto subscriptionHandle =
+        forwarder_.addSubscriber(session->sessionId(), req.forward);
     if (!subscriptionHandle) {
       XLOG(ERR) << "Publish failed: addSubscriber returned null (draining?)";
       co_return req;
@@ -149,10 +150,10 @@ class DatePublisher : public Publisher {
   }
 
   void removeSubscriber(
-      std::shared_ptr<MoQSession> session,
+      SessionId sessionId,
       std::optional<PublishDone> pubDone,
       const std::string& reason) {
-    forwarder_.removeSubscriber(std::move(session), std::move(pubDone), reason);
+    forwarder_.removeSubscriber(sessionId, std::move(pubDone), reason);
   }
 
   std::pair<uint64_t, uint64_t> now() {
@@ -213,13 +214,13 @@ class DatePublisher : public Publisher {
 
     auto alias = TrackAlias(subReq.requestID.value);
     consumer->setTrackAlias(alias);
-    auto session = MoQSession::getRequestSession();
+    const auto reqCtx = MoQSession::getRequestContext();
     if (!publisherEvb_) {
-      publisherEvb_ = MoQSession::getRequestContext().executor;
+      publisherEvb_ = reqCtx.executor;
     }
 
-    auto subscriber = forwarder_.addSubscriber(
-        std::move(session), subReq, std::move(consumer));
+    auto subscriber =
+        forwarder_.addSubscriber(reqCtx.sessionId, subReq, std::move(consumer));
     co_return subscriber;
   }
 
@@ -243,7 +244,6 @@ class DatePublisher : public Publisher {
   folly::coro::Task<FetchResult> fetch(
       Fetch fetch,
       std::shared_ptr<FetchConsumer> consumer) override {
-    auto clientSession = MoQSession::getRequestSession();
     const auto reqCtx = MoQSession::getRequestContext();
     XLOG(INFO) << "Fetch track ns=" << fetch.fullTrackName.trackNamespace
                << " name=" << fetch.fullTrackName.trackName
@@ -259,7 +259,7 @@ class DatePublisher : public Publisher {
     auto [standalone, joining] = fetchType(fetch);
     StandaloneFetch sf;
     if (joining) {
-      auto res = forwarder_.resolveJoiningFetch(clientSession, *joining);
+      auto res = forwarder_.resolveJoiningFetch(reqCtx.sessionId, *joining);
       if (res.hasError()) {
         XLOG(ERR) << "Bad joining fetch id=" << fetch.requestID
                   << " err=" << res.error().reasonPhrase;
@@ -306,9 +306,9 @@ class DatePublisher : public Publisher {
 
   void goaway(Goaway goaway) override {
     XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
-    auto session = MoQSession::getRequestSession();
     // TODO: relay is going away
-    forwarder_.removeSubscriber(session, std::nullopt, "goaway");
+    forwarder_.removeSubscriber(
+        MoQSession::getRequestContext().sessionId, std::nullopt, "goaway");
   }
 
   Payload minutePayload(uint64_t group) {
@@ -530,7 +530,7 @@ class DateServerImpl : public ServerBase {
   void terminateClientSession(std::shared_ptr<MoQSession> session) override {
     XLOG(INFO) << __func__;
     publisher_->removeSubscriber(
-        std::move(session), std::nullopt, "terminateClientSession");
+        session->sessionId(), std::nullopt, "terminateClientSession");
   }
 
  private:
