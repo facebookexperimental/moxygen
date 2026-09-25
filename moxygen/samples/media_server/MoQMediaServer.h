@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <moxygen/MoQQmuxServer.h>
 #include <moxygen/MoQServer.h>
 #include <moxygen/samples/media_server/MoQBroadcastDispatcher.h>
 
@@ -17,16 +18,19 @@
 
 namespace moxygen::media_server {
 
-// A MoQ origin that accepts subscribers (WebTransport + raw QUIC) and serves
-// tracks via a MoQBroadcastDispatcher. The caller registers tracks on the
-// publisher and starts one runPublishLoop() per track (see the binary).
-class MoQMediaServer : public MoQServer {
+// A MoQ origin that accepts subscribers and serves tracks via a
+// MoQBroadcastDispatcher. ServerBase picks the transport: MoQServer
+// (WebTransport + raw QUIC) or MoQQmuxServer (QMUX-on-TCP). Listeners that
+// share a dispatcher must share its worker EventBase, since the dispatcher and
+// its forwarders are not thread-safe.
+template <typename ServerBase>
+class MoQMediaServerImpl : public ServerBase {
  public:
-  MoQMediaServer(
-      std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
-      std::string endpoint,
-      std::shared_ptr<MoQBroadcastDispatcher> publisher)
-      : MoQServer(std::move(fizzContext), std::move(endpoint)),
+  template <typename... BaseArgs>
+  explicit MoQMediaServerImpl(
+      std::shared_ptr<MoQBroadcastDispatcher> publisher,
+      BaseArgs&&... baseArgs)
+      : ServerBase(std::forward<BaseArgs>(baseArgs)...),
         publisher_(std::move(publisher)) {}
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
@@ -42,5 +46,8 @@ class MoQMediaServer : public MoQServer {
  private:
   std::shared_ptr<MoQBroadcastDispatcher> publisher_;
 };
+
+using MoQMediaServer = MoQMediaServerImpl<MoQServer>;
+using MoQMediaQmuxServer = MoQMediaServerImpl<MoQQmuxServer>;
 
 } // namespace moxygen::media_server

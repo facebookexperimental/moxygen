@@ -21,7 +21,11 @@ cmake --build build --target moq_media_server
 Flags:
 
 - `--input` (required): catalog JSON for the file-backed modes.
-- `--port` (default `9779`): QUIC/WebTransport listen port.
+- `--port` (default `9779`): listen port, UDP for QUIC/WebTransport and TCP
+  for QMUX.
+- `--quic` (default on): listen for QUIC/WebTransport.
+- `--qmux` (default on): listen for QMUX-on-TCP, the TCP fallback for MoQ. At
+  least one of `--quic` and `--qmux` must be on.
 - `--fragment_interval_ms` (default `1000`): media-time window width used to
   pace source fragments on the shared playback clock. Each source fragment is
   emitted as one MoQ group containing single-sample CMAF objects.
@@ -61,7 +65,7 @@ to that `file_pr` track and never affect the reliable `file` namespace.
 
 ## Layout
 
-- `MoQMediaServer` — MoQ transport (WebTransport + raw QUIC); hands each session to the dispatcher.
+- `MoQMediaServer` / `MoQMediaQmuxServer` — MoQ transport (WebTransport + raw QUIC / QMUX-on-TCP); hands each session to the shared dispatcher.
 - `MoQBroadcastDispatcher` — namespace registry; routes SUBSCRIBE/FETCH to a broadcast.
 - `MoQBroadcastFactory` — builds a broadcast per namespace; owns backend/resolver selection.
 - `MoQBroadcast` — per-namespace serving unit; per-track stacks (source + forwarder + publish loop).

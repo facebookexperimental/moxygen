@@ -27,6 +27,7 @@ moxygen_add_library(moxygen_samples_media_server
   EXPORTED_DEPS
     moxygen_msf_media_catalog
     moxygen_moq
+    moxygen_moq_qmux_server
     moxygen_moq_server
     moxygen_moq_types
     moxygen_relay_moq_forwarder
@@ -65,6 +66,7 @@ target_link_libraries(
   moxygen_samples_media_server
   moxygen_moq_server
   moxygen_moq_versions
+  moxygen_qmux_utils
   moxygen_util_signal_handler
   proxygen::proxygen_hq_server
   Folly::folly_coro_task

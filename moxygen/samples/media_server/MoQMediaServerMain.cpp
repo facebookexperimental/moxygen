@@ -5,6 +5,7 @@
  */
 
 #include <moxygen/MoQVersions.h>
+#include <moxygen/QmuxUtils.h>
 #include <moxygen/samples/media_server/FilePrControlServer.h>
 #include <moxygen/samples/media_server/MoQBroadcastDispatcher.h>
 #include <moxygen/samples/media_server/MoQBroadcastFactory.h>
@@ -24,7 +25,9 @@
 #include <string>
 #include <vector>
 
-DEFINE_int32(port, 9779, "Server port");
+DEFINE_int32(port, 9779, "Server port (UDP for QUIC, TCP for QMUX)");
+DEFINE_bool(quic, true, "Listen on QUIC/WebTransport (UDP)");
+DEFINE_bool(qmux, true, "Listen on QMUX-on-TCP (TLS via Fizz is mandatory)");
 DEFINE_string(cert, "", "Cert path");
 DEFINE_string(key, "", "Key path");
 DEFINE_bool(
@@ -51,11 +54,53 @@ namespace {
 using namespace moxygen;
 using namespace moxygen::media_server;
 
-std::vector<std::string> serverAlpns() {
+constexpr auto kEndpoint = "/moq-media";
+
+std::vector<std::string> quicAlpns() {
   std::vector<std::string> alpns = {"h3"};
   auto moqt = getMoqtProtocols("", true);
   alpns.insert(alpns.end(), moqt.begin(), moqt.end());
   return alpns;
+}
+
+quic::samples::FizzServerContextPtr makeFizzContext(
+    const std::vector<std::string>& alpns) {
+  return FLAGS_insecure
+      ? quic::samples::createFizzServerContextWithInsecureDefault(
+            alpns,
+            fizz::server::ClientAuthMode::None,
+            "" /* cert */,
+            "" /* key */)
+      : quic::samples::createFizzServerContext(
+            alpns, fizz::server::ClientAuthMode::None, FLAGS_cert, FLAGS_key);
+}
+
+std::shared_ptr<MoQMediaServer> startQuicServer(
+    std::shared_ptr<MoQBroadcastDispatcher> dispatcher,
+    const folly::SocketAddress& addr,
+    folly::EventBase* workerEvb) {
+  auto server = std::make_shared<MoQMediaServer>(
+      std::move(dispatcher), makeFizzContext(quicAlpns()), kEndpoint);
+  server->start(addr, {workerEvb});
+  server->waitUntilInitialized();
+  return server;
+}
+
+std::shared_ptr<MoQMediaQmuxServer> startQmuxServer(
+    std::shared_ptr<MoQBroadcastDispatcher> dispatcher,
+    const folly::SocketAddress& addr,
+    folly::EventBase* workerEvb) {
+  MoQMediaQmuxServer::Config config;
+  config.selfTransportParams =
+      qmuxParamsFromTransportSettings(MoQServer::defaultTransportSettings());
+  // QMUX runs straight on TCP+TLS with no HTTP/3 layer, so no "h3" ALPN.
+  auto server = std::make_shared<MoQMediaQmuxServer>(
+      std::move(dispatcher),
+      kEndpoint,
+      makeFizzContext(getMoqtProtocols("", true)),
+      std::move(config));
+  server->start(addr, {workerEvb});
+  return server;
 }
 } // namespace
 
@@ -63,6 +108,8 @@ int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
 
   XCHECK(!FLAGS_input.empty()) << "--input is required";
+  XCHECK(FLAGS_quic || FLAGS_qmux)
+      << "At least one of --quic or --qmux must be enabled";
   XCHECK_GT(FLAGS_fragment_interval_ms, 0);
   XCHECK_GT(FLAGS_catalog_update_interval, 0);
   XCHECK_GE(FLAGS_file_pr_control_port, 0);
@@ -85,22 +132,13 @@ int main(int argc, char* argv[]) {
           workerEvb),
       workerEvb);
 
-  const auto alpns = serverAlpns();
-  auto fizzContext = FLAGS_insecure
-      ? quic::samples::createFizzServerContextWithInsecureDefault(
-            alpns,
-            fizz::server::ClientAuthMode::None,
-            "" /* cert */,
-            "" /* key */)
-      : quic::samples::createFizzServerContext(
-            alpns, fizz::server::ClientAuthMode::None, FLAGS_cert, FLAGS_key);
-  auto server =
-      std::make_shared<MoQMediaServer>(fizzContext, "/moq-media", dispatcher);
-
   folly::SocketAddress addr("::", FLAGS_port);
-  server->start(addr, {workerEvb});
-  server->waitUntilInitialized();
+  auto quicServer =
+      FLAGS_quic ? startQuicServer(dispatcher, addr, workerEvb) : nullptr;
+  auto qmuxServer =
+      FLAGS_qmux ? startQmuxServer(dispatcher, addr, workerEvb) : nullptr;
   XLOG(INFO) << "[main] MoQMediaServer listening port=" << FLAGS_port
+             << " quic=" << FLAGS_quic << " qmux=" << FLAGS_qmux
              << " (namespaces resolved by prefix; file backend input="
              << FLAGS_input << ")";
 
@@ -119,7 +157,12 @@ int main(int argc, char* argv[]) {
   evb.loopForever();
 
   filePrControl.reset();
-  server->stop();
+  if (qmuxServer) {
+    qmuxServer->stop();
+  }
+  if (quicServer) {
+    quicServer->stop();
+  }
   XLOG(INFO) << "[main] stopped";
   return 0;
 }
