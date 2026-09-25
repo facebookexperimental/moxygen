@@ -10,8 +10,8 @@
 #include <moxygen/samples/media_server/BroadcastFactory.h>
 #include <moxygen/samples/media_server/MoQBroadcast.h>
 
-#include <folly/Executor.h>
 #include <folly/coro/Task.h>
+#include <folly/io/async/EventBase.h>
 
 #include <map>
 #include <memory>
@@ -26,7 +26,9 @@ namespace moxygen::media_server {
 // the broadcast reports it has no serving stacks left. All backend/media
 // concerns (which store, the resolver, per-track segment sources) live inside
 // the broadcast the factory builds; the dispatcher is pure registry +
-// lifecycle. One shared instance serves every session.
+// lifecycle. One shared instance serves every session, and every session must
+// run on the dispatcher's EventBase: neither it nor the broadcasts, forwarders
+// and publish loops beneath it are thread-safe.
 class MoQBroadcastDispatcher
     : public Publisher,
       public std::enable_shared_from_this<MoQBroadcastDispatcher> {
@@ -36,8 +38,12 @@ class MoQBroadcastDispatcher
   // selection. `main` wires it (see MoQMediaServerMain).
   MoQBroadcastDispatcher(
       std::shared_ptr<BroadcastFactory> factory,
-      folly::Executor* loopExecutor)
-      : factory_(std::move(factory)), loopExecutor_(loopExecutor) {}
+      folly::EventBase& evb)
+      : factory_(std::move(factory)), evb_(evb) {}
+
+  folly::EventBase* eventBase() const {
+    return &evb_;
+  }
 
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest subReq,
@@ -63,7 +69,7 @@ class MoQBroadcastDispatcher
   void dropBroadcast(const TrackNamespace& ns);
 
   std::shared_ptr<BroadcastFactory> factory_;
-  folly::Executor* loopExecutor_;
+  folly::EventBase& evb_;
   // Active broadcasts, keyed by namespace (one entry per live stream).
   std::map<TrackNamespace, std::shared_ptr<MoQBroadcast>> broadcasts_;
 };

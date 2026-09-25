@@ -36,7 +36,7 @@ void MoQBroadcastDispatcher::onBroadcastEmpty(const TrackNamespace& ns) {
   // it now would destroy it mid-call. Drop on the next turn if still empty.
   auto weakSelf = weak_from_this();
   const auto& nsCopy = ns;
-  loopExecutor_->add([weakSelf, nsCopy]() {
+  evb_.add([weakSelf, nsCopy]() {
     if (auto self = weakSelf.lock()) {
       self->dropBroadcast(nsCopy);
     }
@@ -54,6 +54,7 @@ void MoQBroadcastDispatcher::dropBroadcast(const TrackNamespace& ns) {
 folly::coro::Task<Publisher::SubscribeResult> MoQBroadcastDispatcher::subscribe(
     SubscribeRequest subReq,
     std::shared_ptr<TrackConsumer> consumer) {
+  evb_.dcheckIsInEventBaseThread();
   auto ns = subReq.fullTrackName.trackNamespace;
   XLOG(INFO) << "[MoQBroadcastDispatcher] SUBSCRIBE ftn="
              << subReq.fullTrackName << " requestID=" << subReq.requestID;
@@ -71,6 +72,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQBroadcastDispatcher::subscribe(
 folly::coro::Task<Publisher::FetchResult> MoQBroadcastDispatcher::fetch(
     Fetch fetch,
     std::shared_ptr<FetchConsumer> fetchCallback) {
+  evb_.dcheckIsInEventBaseThread();
   auto ns = fetch.fullTrackName.trackNamespace;
   XLOG(INFO) << "[MoQBroadcastDispatcher] FETCH ftn=" << fetch.fullTrackName
              << " requestID=" << fetch.requestID;
@@ -86,6 +88,7 @@ folly::coro::Task<Publisher::FetchResult> MoQBroadcastDispatcher::fetch(
 void MoQBroadcastDispatcher::removeSubscriber(
     const std::shared_ptr<MoQSession>& session,
     const std::string& reason) {
+  evb_.dcheckIsInEventBaseThread();
   XLOG(INFO) << "[MoQBroadcastDispatcher] subscriber went away reason="
              << reason;
   // A session may hold subscriptions across several broadcasts; drop it from

@@ -4,15 +4,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <moxygen/MoQVersions.h>
-#include <moxygen/QmuxUtils.h>
 #include <moxygen/samples/media_server/FilePrControlServer.h>
 #include <moxygen/samples/media_server/MoQBroadcastDispatcher.h>
 #include <moxygen/samples/media_server/MoQBroadcastFactory.h>
-#include <moxygen/samples/media_server/MoQMediaServer.h>
+#include <moxygen/samples/media_server/MoQMediaListeners.h>
 #include <moxygen/util/SignalHandler.h>
-
-#include <proxygen/httpserver/samples/hq/FizzContext.h>
 
 #include <folly/SocketAddress.h>
 #include <folly/init/Init.h>
@@ -23,7 +19,6 @@
 #include <chrono>
 #include <memory>
 #include <string>
-#include <vector>
 
 DEFINE_int32(port, 9779, "Server port (UDP for QUIC, TCP for QMUX)");
 DEFINE_bool(quic, true, "Listen on QUIC/WebTransport (UDP)");
@@ -53,55 +48,6 @@ DEFINE_int32(
 namespace {
 using namespace moxygen;
 using namespace moxygen::media_server;
-
-constexpr auto kEndpoint = "/moq-media";
-
-std::vector<std::string> quicAlpns() {
-  std::vector<std::string> alpns = {"h3"};
-  auto moqt = getMoqtProtocols("", true);
-  alpns.insert(alpns.end(), moqt.begin(), moqt.end());
-  return alpns;
-}
-
-quic::samples::FizzServerContextPtr makeFizzContext(
-    const std::vector<std::string>& alpns) {
-  return FLAGS_insecure
-      ? quic::samples::createFizzServerContextWithInsecureDefault(
-            alpns,
-            fizz::server::ClientAuthMode::None,
-            "" /* cert */,
-            "" /* key */)
-      : quic::samples::createFizzServerContext(
-            alpns, fizz::server::ClientAuthMode::None, FLAGS_cert, FLAGS_key);
-}
-
-std::shared_ptr<MoQMediaServer> startQuicServer(
-    std::shared_ptr<MoQBroadcastDispatcher> dispatcher,
-    const folly::SocketAddress& addr,
-    folly::EventBase* workerEvb) {
-  auto server = std::make_shared<MoQMediaServer>(
-      std::move(dispatcher), makeFizzContext(quicAlpns()), kEndpoint);
-  server->start(addr, {workerEvb});
-  server->waitUntilInitialized();
-  return server;
-}
-
-std::shared_ptr<MoQMediaQmuxServer> startQmuxServer(
-    std::shared_ptr<MoQBroadcastDispatcher> dispatcher,
-    const folly::SocketAddress& addr,
-    folly::EventBase* workerEvb) {
-  MoQMediaQmuxServer::Config config;
-  config.selfTransportParams =
-      qmuxParamsFromTransportSettings(MoQServer::defaultTransportSettings());
-  // QMUX runs straight on TCP+TLS with no HTTP/3 layer, so no "h3" ALPN.
-  auto server = std::make_shared<MoQMediaQmuxServer>(
-      std::move(dispatcher),
-      kEndpoint,
-      makeFizzContext(getMoqtProtocols("", true)),
-      std::move(config));
-  server->start(addr, {workerEvb});
-  return server;
-}
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -130,13 +76,17 @@ int main(int argc, char* argv[]) {
           std::chrono::seconds(FLAGS_catalog_update_interval),
           FLAGS_loop,
           workerEvb),
-      workerEvb);
+      *workerEvb);
 
-  folly::SocketAddress addr("::", FLAGS_port);
-  auto quicServer =
-      FLAGS_quic ? startQuicServer(dispatcher, addr, workerEvb) : nullptr;
-  auto qmuxServer =
-      FLAGS_qmux ? startQmuxServer(dispatcher, addr, workerEvb) : nullptr;
+  auto listeners = startMediaListeners(
+      dispatcher,
+      folly::SocketAddress("::", FLAGS_port),
+      MediaListenerOptions{
+          .quic = FLAGS_quic,
+          .qmux = FLAGS_qmux,
+          .cert = FLAGS_cert,
+          .key = FLAGS_key,
+          .insecure = FLAGS_insecure});
   XLOG(INFO) << "[main] MoQMediaServer listening port=" << FLAGS_port
              << " quic=" << FLAGS_quic << " qmux=" << FLAGS_qmux
              << " (namespaces resolved by prefix; file backend input="
@@ -157,12 +107,7 @@ int main(int argc, char* argv[]) {
   evb.loopForever();
 
   filePrControl.reset();
-  if (qmuxServer) {
-    qmuxServer->stop();
-  }
-  if (quicServer) {
-    quicServer->stop();
-  }
+  listeners.stop();
   XLOG(INFO) << "[main] stopped";
   return 0;
 }
