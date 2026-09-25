@@ -60,7 +60,16 @@ DEFINE_int32(
     "timeout");
 DEFINE_int32(connect_timeout, 1000, "Connect timeout (ms)");
 DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
-DEFINE_bool(quic_transport, true, "Use raw QUIC transport");
+DEFINE_string(
+    transport,
+    "quic",
+    "Client transport: 'quic' (raw QUIC, default), 'h3wt' (HTTP/3 + "
+    "WebTransport), 'qmux' (QMUX-on-TCP, TLS via Fizz mandatory).");
+DEFINE_bool(
+    quic_transport,
+    true,
+    "DEPRECATED: use --transport=quic (or --transport=h3wt) instead. "
+    "Selects raw QUIC vs WebTransport.");
 DEFINE_bool(insecure, true, "Skip certificate validation");
 DEFINE_string(versions, "", "Comma-separated MoQ draft versions; empty = all");
 
@@ -250,15 +259,14 @@ class MoQMp4Receiver {
   MoQMp4Receiver(
       std::shared_ptr<MoQFollyExecutorImpl> evb,
       proxygen::URL url,
-      std::shared_ptr<fizz::CertificateVerifier> verifier)
+      std::shared_ptr<fizz::CertificateVerifier> verifier,
+      samples::TransportType transportType)
       : moqClient_(
             samples::makeRelayClientTransport(
                 std::move(evb),
                 std::move(url),
                 std::move(verifier),
-                FLAGS_quic_transport ? samples::TransportType::QUIC
-                                     : samples::TransportType::WEB_TRANSPORT)) {
-  }
+                transportType)) {}
 
   folly::coro::Task<bool> run(TrackNamespace ns) noexcept {
     bool success = true;
@@ -476,9 +484,13 @@ class MoQMp4Receiver {
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, false);
 
+  const auto transportType =
+      samples::selectClientTransport("transport", "quic_transport");
+
   folly::EventBase eventBase;
   proxygen::URL url(FLAGS_connect_url);
-  const bool isValidMoqtUrl = FLAGS_quic_transport &&
+  const bool isValidMoqtUrl =
+      transportType != samples::TransportType::WEB_TRANSPORT &&
       url.getScheme() == "moqt" && !url.getHost().empty();
   if ((!url.isValid() || !url.hasHost()) && !isValidMoqtUrl) {
     XLOG(ERR) << "Invalid connect_url: " << FLAGS_connect_url;
@@ -494,7 +506,7 @@ int main(int argc, char* argv[]) {
   moxygen::TrackNamespace ns(
       FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
   auto client = std::make_shared<MoQMp4Receiver>(
-      moqEvb, std::move(url), std::move(verifier));
+      moqEvb, std::move(url), std::move(verifier), transportType);
   int exitCode = EXIT_FAILURE;
 
   // Graceful Ctrl-C: post the end-of-stream baton so run() writes and exits.
