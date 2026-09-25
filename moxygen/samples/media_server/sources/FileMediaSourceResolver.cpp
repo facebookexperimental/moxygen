@@ -25,17 +25,21 @@ FileMediaSourceResolver::FileMediaSourceResolver(
     std::string catalogPath,
     std::chrono::milliseconds fragmentInterval,
     std::chrono::milliseconds catalogUpdateInterval,
-    bool loop)
+    bool loop,
+    const std::vector<std::string>& fileAliases)
     : source_(std::move(catalogPath), fragmentInterval, loop),
-      catalogUpdateInterval_(catalogUpdateInterval) {
+      catalogUpdateInterval_(catalogUpdateInterval),
+      fileAliases_(fileAliases.begin(), fileAliases.end()) {
   XCHECK_GT(catalogUpdateInterval_.count(), 0);
 }
 
-bool FileMediaSourceResolver::isFileNamespace(const TrackNamespace& ns) {
-  return !ns.trackNamespace.empty() &&
-      (ns.trackNamespace.front() == "file" ||
-       ns.trackNamespace.front() == "file_pr" ||
-       ns.trackNamespace.front() == "file_abr");
+bool FileMediaSourceResolver::isFileNamespace(const TrackNamespace& ns) const {
+  if (ns.trackNamespace.empty()) {
+    return false;
+  }
+  const auto& prefix = ns.trackNamespace.front();
+  return prefix == "file" || prefix == "file_pr" || prefix == "file_abr" ||
+      fileAliases_.contains(prefix);
 }
 
 bool FileMediaSourceResolver::isPartiallyReliableNamespace(

@@ -11,6 +11,7 @@
 #include <moxygen/util/SignalHandler.h>
 
 #include <folly/SocketAddress.h>
+#include <folly/String.h>
 #include <folly/init/Init.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
@@ -21,6 +22,7 @@
 #include <exception>
 #include <memory>
 #include <string>
+#include <vector>
 
 DEFINE_int32(port, 9779, "Server port (UDP for QUIC, TCP for QMUX)");
 DEFINE_bool(quic, true, "Listen on QUIC/WebTransport (UDP)");
@@ -42,6 +44,12 @@ DEFINE_int32(
     10,
     "Seconds between file_abr catalog updates");
 DEFINE_bool(loop, false, "Loop the fMP4 source forever");
+DEFINE_string(
+    file_namespace_aliases,
+    "",
+    "Comma-separated first namespace fields served like 'file', e.g. "
+    "'moq-media' for clients that subscribe to [\"moq-media\"]; empty "
+    "disables");
 DEFINE_int32(
     file_pr_control_port,
     60101,
@@ -63,6 +71,13 @@ int main(int argc, char* argv[]) {
   XCHECK_GE(FLAGS_file_pr_control_port, 0);
   XCHECK_LE(FLAGS_file_pr_control_port, 65535);
 
+  std::vector<std::string> fileNamespaceAliases;
+  folly::split(
+      ',',
+      FLAGS_file_namespace_aliases,
+      fileNamespaceAliases,
+      /*ignoreEmpty=*/true);
+
   folly::ScopedEventBaseThread worker("MoQMediaWorker");
   auto* workerEvb = worker.getEventBase();
 
@@ -77,6 +92,7 @@ int main(int argc, char* argv[]) {
           std::chrono::milliseconds(FLAGS_fragment_interval_ms),
           std::chrono::seconds(FLAGS_catalog_update_interval),
           FLAGS_loop,
+          fileNamespaceAliases,
           workerEvb),
       *workerEvb);
 
@@ -95,14 +111,13 @@ int main(int argc, char* argv[]) {
     XLOG(ERR) << "[main] failed to start listeners: " << ex.what();
     return EXIT_FAILURE;
   }
-  XLOG(INFO) << "[main] MoQMediaServer listening quic="
-             << (listeners.quic ? listeners.quic->getAddress().describe()
-                                : "off")
-             << " qmux="
-             << (listeners.qmux ? listeners.qmux->getAddress().describe()
-                                : "off")
-             << " (namespaces resolved by prefix; file backend input="
-             << FLAGS_input << ")";
+  XLOG(INFO)
+      << "[main] MoQMediaServer listening quic="
+      << (listeners.quic ? listeners.quic->getAddress().describe() : "off")
+      << " qmux="
+      << (listeners.qmux ? listeners.qmux->getAddress().describe() : "off")
+      << " (namespaces resolved by prefix; file backend input=" << FLAGS_input
+      << " aliases=" << FLAGS_file_namespace_aliases << ")";
 
   std::unique_ptr<FilePrControlServer> filePrControl;
   if (FLAGS_file_pr_control_port > 0) {

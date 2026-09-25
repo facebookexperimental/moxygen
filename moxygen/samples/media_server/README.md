@@ -33,6 +33,9 @@ Flags:
   snapshots in `file_abr` mode.
 - `--loop` (default off): loop the source forever (live); omit for a finite
   one-shot that ends after one pass.
+- `--file_namespace_aliases` (default empty): comma-separated namespace first
+  fields served like `file`, e.g. `moq-media` for clients that subscribe to the
+  single-field namespace `["moq-media"]`.
 - `--file_pr_control_port` (default `60101`): HTTP port for the experimental
   `file_pr` fault-control UI; `0` disables it.
 

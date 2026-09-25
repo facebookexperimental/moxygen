@@ -16,6 +16,7 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace moxygen::media_server {
 
@@ -32,6 +33,7 @@ class MoQBroadcastFactory : public BroadcastFactory {
       std::chrono::milliseconds fragmentInterval,
       std::chrono::milliseconds catalogUpdateInterval,
       bool loop,
+      const std::vector<std::string>& fileNamespaceAliases,
       folly::Executor* loopExecutor);
 
   std::shared_ptr<MoQBroadcast> makeBroadcast(

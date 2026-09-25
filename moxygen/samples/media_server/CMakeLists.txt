@@ -78,6 +78,7 @@ target_link_libraries(
   Folly::folly_io_async_scoped_event_base_thread
   Folly::folly_logging_logging
   Folly::folly_network_address
+  Folly::folly_string
 )
 
 install(

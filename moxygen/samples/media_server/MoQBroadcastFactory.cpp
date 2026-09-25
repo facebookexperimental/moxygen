@@ -17,13 +17,15 @@ MoQBroadcastFactory::MoQBroadcastFactory(
     std::chrono::milliseconds fragmentInterval,
     std::chrono::milliseconds catalogUpdateInterval,
     bool loop,
+    const std::vector<std::string>& fileNamespaceAliases,
     folly::Executor* loopExecutor)
     : fileResolver_(
           std::make_shared<FileMediaSourceResolver>(
               std::move(fileInput),
               fragmentInterval,
               catalogUpdateInterval,
-              loop)),
+              loop,
+              fileNamespaceAliases)),
       loopExecutor_(loopExecutor) {}
 
 std::shared_ptr<MoQBroadcast> MoQBroadcastFactory::makeBroadcast(
