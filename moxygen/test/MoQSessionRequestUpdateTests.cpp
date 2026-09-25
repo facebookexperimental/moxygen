@@ -2568,4 +2568,79 @@ CO_TEST_P_X(Draft18Test, SubscribeTracksRequestUpdateFailureClosesBidi) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// The relay responder must stamp the peer's request ID onto an error the
+// application returned with some other ID. Pre-draft-18 the REQUEST_ERROR
+// carries that ID on the wire and the client correlates on it, so a leaked
+// application ID would strand this update instead of failing it.
+//
+// SUBSCRIBE_NAMESPACE is the only one of the three patched responders a test
+// can drive end to end. PUBLISH_NAMESPACE's client handle answers
+// REQUEST_UPDATE with NOT_SUPPORTED locally, so no update ever reaches the
+// responder, and SUBSCRIBE_TRACKS is draft-18-only, where the request ID is off
+// the wire and there is nothing to mis-correlate.
+CO_TEST_P_X(PreDraft18Test, SubscribeNamespaceRequestUpdateNormalizesErrorID) {
+  co_await setupMoQSession();
+  const auto version = *clientSession_->getNegotiatedVersion();
+  if (getDraftMajorVersion(version) < 16) {
+    // REQUEST_UPDATE for SUBSCRIBE_NAMESPACE only exists at draft 16+.
+    co_return;
+  }
+
+  std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          [&](auto subAnn, auto /*handler*/)
+              -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+            serverHandle = std::make_shared<MockSubscribeNamespaceHandle>(
+                SubscribeNamespaceOk(
+                    {.requestID = subAnn.requestID,
+                     .requestSpecificParams = {}}));
+            co_return serverHandle;
+          });
+
+  auto subNsResult = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), nullptr);
+  EXPECT_FALSE(subNsResult.hasError());
+  if (subNsResult.hasError()) {
+    co_return;
+  }
+  auto handle = subNsResult.value();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+
+  folly::coro::Baton updateHandled;
+  std::optional<RequestID> peerUpdateRequestID;
+  EXPECT_CALL(*serverHandle, requestUpdateCalled(_))
+      .WillOnce([&](const RequestUpdate& update) {
+        peerUpdateRequestID = update.requestID;
+        updateHandled.post();
+      });
+  EXPECT_CALL(*serverHandle, requestUpdateResult())
+      .WillOnce(
+          testing::Return(
+              folly::makeUnexpected(
+                  RequestError{
+                      RequestID(0xDEAD),
+                      RequestErrorCode::NOT_SUPPORTED,
+                      "rejected with the wrong ID"})));
+
+  RequestUpdate update;
+  update.params.setMajorVersion(getDraftMajorVersion(version));
+  update.priority = kDefaultPriority + 1;
+  update.forward = true;
+  auto updateResult = co_await handle->requestUpdate(std::move(update));
+  co_await updateHandled;
+
+  EXPECT_TRUE(updateResult.hasError());
+  EXPECT_TRUE(peerUpdateRequestID.has_value());
+  if (updateResult.hasError() && peerUpdateRequestID) {
+    EXPECT_EQ(updateResult.error().errorCode, RequestErrorCode::NOT_SUPPORTED);
+    // Correlating at all already proves the ID was rewritten, but assert it
+    // directly so the test names the thing it is guarding.
+    EXPECT_EQ(updateResult.error().requestID, *peerUpdateRequestID);
+  }
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 } // namespace

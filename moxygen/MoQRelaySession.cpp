@@ -575,6 +575,8 @@ void MoQRelaySession::handlePublishNamespaceRequestUpdate(
                         existingRequestID);
                   } else if (updateResult->hasError()) {
                     auto updateErr = updateResult->error();
+                    updateErr.requestID =
+                        updateRequestID; // In case app got it wrong
                     requestUpdateError(updateErr, existingRequestID);
                   } else {
                     RequestOk requestOk{
@@ -720,6 +722,8 @@ void MoQRelaySession::handleSubscribeNamespaceRequestUpdate(
                         existingRequestID);
                   } else if (updateResult->hasError()) {
                     auto updateErr = updateResult->error();
+                    updateErr.requestID =
+                        updateRequestID; // In case app got it wrong
                     requestUpdateError(updateErr, existingRequestID);
                   } else {
                     RequestOk requestOk{
@@ -816,6 +820,8 @@ void MoQRelaySession::handleSubscribeTracksRequestUpdate(
                         existingRequestID);
                   } else if (updateResult->hasError()) {
                     auto updateErr = updateResult->error();
+                    updateErr.requestID =
+                        updateRequestID; // In case app got it wrong
                     requestUpdateError(updateErr, existingRequestID);
                   } else {
                     RequestOk requestOk{
