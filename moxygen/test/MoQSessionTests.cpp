@@ -1808,6 +1808,111 @@ CO_TEST_P_X(MoQUniControlTest, UniControlDataStreamBeforeSetup) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// The peer resolves the alias and ends the subscription in one batch of control
+// messages, so the waiting read loop wakes to find the state gone again.
+CO_TEST_P_X(MoQUniControlTest, UnknownAliasResolvedThenRemovedAbandonsStream) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.unknownAliasTimeout = std::chrono::seconds(5);
+  clientSession_->setMoqSettings(moqSettings);
+
+  auto dataWh = CHECK_NOTNULL(serverWt_->createUniStream().value_or(nullptr));
+  folly::IOBufQueue dataBuf{folly::IOBufQueue::cacheChainLength()};
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  const TrackAlias trackAlias{0};
+  ObjectHeader objHeader(0, 0, 0, 0, ObjectStatus::NORMAL);
+  objHeader.length = 5;
+  writer.writeSubgroupHeader(
+      dataBuf, trackAlias, objHeader, SubgroupOptions{.hasExtensions = true});
+  writer.writeStreamObject(
+      dataBuf,
+      getSubgroupStreamType(
+          kVersionDraft18, SubgroupIDFormat::Present, true, false),
+      objHeader,
+      makeBuf(5));
+  dataWh->writeStreamData(dataBuf.move(), false, nullptr);
+
+  co_await rescheduleN(2);
+
+  // Hold the server's responses so that SUBSCRIBE_OK and PUBLISH_DONE arrive
+  // together and the client handles both before the waiting read loop runs.
+  auto serverControl = serverWt_->writeHandles.at(3);
+  EXPECT_NE(serverControl, nullptr);
+  serverControl->setImmediateDelivery(false);
+  folly::coro::Baton serverHandledSubscribe;
+  expectSubscribe([&](auto sub, auto pub) -> TaskSubscribeResult {
+    EXPECT_TRUE(
+        pub->publishDone(getTrackEndedPublishDone(sub.requestID)).hasValue());
+    serverHandledSubscribe.post();
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  folly::coro::Baton publishDoneReceived;
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(
+          testing::Invoke(
+              [&](PublishDone)
+                  -> folly::Expected<folly::Unit, MoQPublishError> {
+                publishDoneReceived.post();
+                return folly::unit;
+              }));
+
+  auto subscribeFuture =
+      folly::coro::co_withExecutor(
+          MoQExecutor_.get(),
+          folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+            auto result = co_await clientSession_->subscribe(
+                getSubscribe(kTestTrackName), subscribeCallback_);
+            EXPECT_TRUE(result.hasValue());
+          }))
+          .start();
+  co_await serverHandledSubscribe;
+  co_await rescheduleN(2);
+  serverControl->deliverInflightData();
+
+  co_await std::move(subscribeFuture);
+  co_await publishDoneReceived;
+  co_await rescheduleN(4);
+
+  // The read loop found the state gone on replay and stopped reading, which
+  // reaches the publisher as STOP_SENDING.
+  EXPECT_TRUE(
+      serverWt_->writeHandles.at(dataWh->getID())->getWriteErr().has_value());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Closing with a read loop still waiting destroys its frame.  Nothing to assert
+// beyond surviving it; the sanitizer builds are the real check.
+CO_TEST_P_X(MoQUniControlTest, UnknownAliasSessionTeardownDropsWaiter) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.unknownAliasTimeout = std::chrono::seconds(5);
+  clientSession_->setMoqSettings(moqSettings);
+
+  auto dataWh = CHECK_NOTNULL(serverWt_->createUniStream().value_or(nullptr));
+  folly::IOBufQueue dataBuf{folly::IOBufQueue::cacheChainLength()};
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  const TrackAlias trackAlias{0};
+  ObjectHeader objHeader(0, 0, 0, 0, ObjectStatus::NORMAL);
+  objHeader.length = 5;
+  writer.writeSubgroupHeader(
+      dataBuf, trackAlias, objHeader, SubgroupOptions{.hasExtensions = true});
+  writer.writeStreamObject(
+      dataBuf,
+      getSubgroupStreamType(
+          kVersionDraft18, SubgroupIDFormat::Present, true, false),
+      objHeader,
+      makeBuf(5));
+  dataWh->writeStreamData(dataBuf.move(), false, nullptr);
+
+  co_await rescheduleN(2);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+}
+
 // Drops everything the peer sends, so a test can drive one session in
 // isolation.
 class NullWebTransportHandler : public proxygen::WebTransportHandler {

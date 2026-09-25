@@ -3580,8 +3580,8 @@ std::shared_ptr<MoQSession::SubscribeTrackReceiveState>
 MoQSession::getSubscribeTrackReceiveState(TrackAlias trackAlias) {
   auto trackIt = subTracks_.find(trackAlias);
   if (trackIt == subTracks_.end()) {
-    // received an object for unknown track alias
-    XLOG(ERR) << "unknown track alias=" << trackAlias << " sess=" << this;
+    XLOG(DBG1) << "No subscription state for track alias=" << trackAlias
+               << " sess=" << this;
     return nullptr;
   }
   return trackIt->second;
@@ -4092,9 +4092,6 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
   MoQObjectStreamCodec codec(nullptr);
   codec.initializeVersion(*negotiatedVersion_);
 
-  // Baton for waiting on unknown alias
-  TimedBaton aliasBaton;
-
   // Lambda for onSubgroup
   TrackAlias deferredAlias{std::numeric_limits<uint64_t>::max()};
   uint64_t deferredGroup = 0;
@@ -4104,7 +4101,6 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto onSubgroupFunc = [this,
                          &token,
-                         &aliasBaton,
                          &deferredAlias,
                          &deferredGroup,
                          &deferredSubgroup,
@@ -4119,9 +4115,7 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
       -> std::shared_ptr<SubscribeTrackReceiveState> {
     auto state = getSubscribeTrackReceiveState(alias);
     if (!state) {
-      XLOG(DBG4) << "State not ready, adding baton to bufferedSubgroups_["
-                 << alias << "]";
-      bufferedSubgroups_[alias].push_back(&aliasBaton);
+      XLOG(DBG4) << "State not ready for alias=" << alias;
       deferredAlias = alias;
       deferredGroup = group;
       deferredSubgroup = subgroup;
@@ -4219,15 +4213,19 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
       // Handle BLOCKED state (subgroup alias not yet known)
       if (result == MoQCodec::ParseResult::BLOCKED) {
         XLOG(DBG4) << "Parser returned BLOCKED, waiting for signal id=" << id;
+        // Heap allocated so that a stream that does not block only costs the
+        // frame a pointer.  The destructor unlinks it however this loop exits.
+        auto waiter = std::make_unique<AliasWaiter>(*this, deferredAlias);
+        bufferedSubgroups_[deferredAlias].push_back(*waiter);
         // Merged token for baton waits (session + readHandle)
         auto batonWaitToken = folly::cancellation_token_merge(
             cancellationSource_.getToken(), readHandle.cancelToken());
         auto waitRes = co_await co_awaitTry(co_withCancellation(
-            batonWaitToken, aliasBaton.wait(moqSettings_.unknownAliasTimeout)));
+            batonWaitToken,
+            waiter->baton.wait(moqSettings_.unknownAliasTimeout)));
         if (waitRes.hasException()) {
           XLOG(ERR) << "Timed out waiting for subscription state id=" << id
                     << " sess=" << this;
-          removeBufferedSubgroupBaton(deferredAlias, &aliasBaton);
           break;
         }
         result = dcb.onSubgroup(
@@ -4849,27 +4847,37 @@ void MoQSession::deliverBufferedData(TrackAlias trackAlias) {
 
   auto subgroupsIt = bufferedSubgroups_.find(trackAlias);
   if (subgroupsIt != bufferedSubgroups_.end()) {
-    auto subgroups = std::move(subgroupsIt->second);
+    // Detach the whole list before signaling anything.
+    auto ready = std::move(subgroupsIt->second);
     bufferedSubgroups_.erase(subgroupsIt);
-    XLOG(DBG4) << "Signaling " << subgroups.size()
-               << " batons for alias=" << trackAlias;
-    for (auto* baton : subgroups) {
-      baton->signal();
+    XLOG(DBG4) << "Signaling " << ready.size()
+               << " waiters for alias=" << trackAlias;
+    while (!ready.empty()) {
+      ready.front().deliver();
     }
   }
 }
 
-// Helper to remove a particular alias/baton from bufferedSubgroups_
-void MoQSession::removeBufferedSubgroupBaton(
-    TrackAlias alias,
-    TimedBaton* baton) {
+MoQSession::AliasWaiter::~AliasWaiter() {
+  if (hook.is_linked()) {
+    // Unlink first; prune erases the entry only once the list is empty.
+    hook.unlink();
+    session_.pruneBufferedSubgroups(alias_);
+  }
+}
+
+// Leave the list before signaling; the signal can resume a waiter inline.
+void MoQSession::AliasWaiter::deliver() {
+  hook.unlink();
+  baton.signal();
+}
+
+// Erase the alias only once its last waiter unlinks; other streams may still be
+// waiting on the same alias.
+void MoQSession::pruneBufferedSubgroups(TrackAlias alias) {
   auto it = bufferedSubgroups_.find(alias);
-  if (it != bufferedSubgroups_.end()) {
-    auto& batonList = it->second;
-    batonList.remove(baton);
-    if (batonList.empty()) {
-      bufferedSubgroups_.erase(it);
-    }
+  if (it != bufferedSubgroups_.end() && it->second.empty()) {
+    bufferedSubgroups_.erase(it);
   }
 }
 
