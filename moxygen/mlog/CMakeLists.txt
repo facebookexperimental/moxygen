@@ -56,4 +56,13 @@ moxygen_add_library(moxygen_mlog_file_mlogger_factory
     Folly::folly_executor
 )
 
+moxygen_add_library(moxygen_mlog_sampling_mlogger_factory
+  SRCS
+    SamplingMLoggerFactory.cpp
+  DEPS
+    Folly::folly_random
+  EXPORTED_DEPS
+    moxygen_mlog_mlogger_factory
+)
+
 add_subdirectory(test)
