@@ -47,7 +47,9 @@ struct MediaListeners {
   folly::EventBase* evb{nullptr};
 };
 
-// Throws if a listener fails to start, after stopping any already started.
+// Both listeners bind the same port number (UDP for QUIC, TCP for QMUX). With
+// port 0 the number is picked to be free for both. Throws if a listener fails
+// to start, after stopping any already started.
 MediaListeners startMediaListeners(
     std::shared_ptr<MoQBroadcastDispatcher> dispatcher,
     const folly::SocketAddress& addr,

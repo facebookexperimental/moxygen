@@ -245,18 +245,20 @@ class MoQMediaListenersTest : public ::testing::Test {
 
 } // namespace
 
-TEST_F(MoQMediaListenersTest, QuicAndQmuxSubscribersShareOneBroadcast) {
+TEST_F(MoQMediaListenersTest, QuicAndQmuxShareOnePortAndOneBroadcast) {
   startListeners(/*quic=*/true, /*qmux=*/true);
   ASSERT_TRUE(listeners_.quic);
   ASSERT_TRUE(listeners_.qmux);
+  // Started with port 0; clients dial one host:port for both transports.
+  const auto serverAddr = listeners_.quic->getAddress();
+  ASSERT_NE(serverAddr.getPort(), 0);
+  ASSERT_EQ(listeners_.qmux->getAddress().getPort(), serverAddr.getPort());
 
   EXPECT_EQ(
-      subscribeToCatalog(
-          listeners_.quic->getAddress(), samples::TransportType::QUIC),
+      subscribeToCatalog(serverAddr, samples::TransportType::QUIC),
       kCatalogDoc);
   EXPECT_EQ(
-      subscribeToCatalog(
-          listeners_.qmux->getAddress(), samples::TransportType::QMUX),
+      subscribeToCatalog(serverAddr, samples::TransportType::QMUX),
       kCatalogDoc);
   EXPECT_EQ(factory_->broadcastsMade, 1);
 

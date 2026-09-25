@@ -13,6 +13,7 @@
 
 #include <folly/logging/xlog.h>
 
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,7 @@ namespace moxygen::media_server {
 namespace {
 
 constexpr auto kEndpoint = "/moq-media";
+constexpr int kPickPortAttempts = 10;
 
 std::vector<std::string> quicAlpns() {
   std::vector<std::string> alpns = {"h3"};
@@ -75,6 +77,25 @@ std::shared_ptr<MoQMediaQmuxServer> startQmuxServer(
   return server;
 }
 
+MediaListeners startOnce(
+    const std::shared_ptr<MoQBroadcastDispatcher>& dispatcher,
+    const folly::SocketAddress& addr,
+    const MediaListenerOptions& options) {
+  MediaListeners listeners;
+  listeners.evb = dispatcher->eventBase();
+  auto bindAddr = addr;
+  if (options.quic) {
+    listeners.quic = startQuicServer(dispatcher, bindAddr, options);
+    // Clients dial the same port for both transports, so with port 0 QMUX
+    // takes the port QUIC was assigned.
+    bindAddr.setPort(listeners.quic->getAddress().getPort());
+  }
+  if (options.qmux) {
+    listeners.qmux = startQmuxServer(dispatcher, bindAddr, options);
+  }
+  return listeners;
+}
+
 } // namespace
 
 MediaListeners& MediaListeners::operator=(MediaListeners&& other) {
@@ -107,15 +128,26 @@ MediaListeners startMediaListeners(
     std::shared_ptr<MoQBroadcastDispatcher> dispatcher,
     const folly::SocketAddress& addr,
     const MediaListenerOptions& options) {
-  MediaListeners listeners;
-  listeners.evb = dispatcher->eventBase();
-  if (options.quic) {
-    listeners.quic = startQuicServer(dispatcher, addr, options);
+  // The TCP port matching QUIC's ephemeral UDP port can already be in use;
+  // start over on a fresh port when it is.
+  const bool pickPort = addr.getPort() == 0 && options.quic && options.qmux;
+  for (int attempt = 1;; ++attempt) {
+    try {
+      return startOnce(dispatcher, addr, options);
+    } catch (const std::system_error& ex) {
+      if (!pickPort || ex.code() != std::errc::address_in_use) {
+        throw;
+      }
+      if (attempt == kPickPortAttempts) {
+        XLOG(ERR) << "[MediaListeners] no port free for both QUIC and QMUX "
+                  << "after " << kPickPortAttempts << " attempts";
+        throw;
+      }
+      XLOG(WARN) << "[MediaListeners] " << ex.what()
+                 << "; retrying on another port (attempt " << attempt << "/"
+                 << kPickPortAttempts << ")";
+    }
   }
-  if (options.qmux) {
-    listeners.qmux = startQmuxServer(dispatcher, addr, options);
-  }
-  return listeners;
 }
 
 } // namespace moxygen::media_server

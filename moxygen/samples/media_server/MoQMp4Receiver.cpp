@@ -493,7 +493,10 @@ int main(int argc, char* argv[]) {
       transportType != samples::TransportType::WEB_TRANSPORT &&
       url.getScheme() == "moqt" && !url.getHost().empty();
   if ((!url.isValid() || !url.hasHost()) && !isValidMoqtUrl) {
-    XLOG(ERR) << "Invalid connect_url: " << FLAGS_connect_url;
+    XLOG(ERR) << "Invalid connect_url: " << FLAGS_connect_url
+              << (transportType == samples::TransportType::WEB_TRANSPORT
+                      ? " (--transport h3wt needs https://host:port/moq-media)"
+                      : "");
     return EXIT_FAILURE;
   }
   auto moqEvb = std::make_shared<moxygen::MoQFollyExecutorImpl>(&eventBase);

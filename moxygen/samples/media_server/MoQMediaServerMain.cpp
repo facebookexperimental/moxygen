@@ -95,8 +95,12 @@ int main(int argc, char* argv[]) {
     XLOG(ERR) << "[main] failed to start listeners: " << ex.what();
     return EXIT_FAILURE;
   }
-  XLOG(INFO) << "[main] MoQMediaServer listening port=" << FLAGS_port
-             << " quic=" << FLAGS_quic << " qmux=" << FLAGS_qmux
+  XLOG(INFO) << "[main] MoQMediaServer listening quic="
+             << (listeners.quic ? listeners.quic->getAddress().describe()
+                                : "off")
+             << " qmux="
+             << (listeners.qmux ? listeners.qmux->getAddress().describe()
+                                : "off")
              << " (namespaces resolved by prefix; file backend input="
              << FLAGS_input << ")";
 

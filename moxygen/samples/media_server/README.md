@@ -49,8 +49,9 @@ and writes each track to disk:
 ```
 
 It writes `/tmp/moq_out.<track>.mp4` per track (e.g. `video0`, `audio0`).
-Add `--transport qmux` to receive over QMUX-on-TCP instead of raw QUIC
-(`--transport h3wt` selects WebTransport).
+Add `--transport qmux` to receive over QMUX-on-TCP instead of raw QUIC. For
+WebTransport, use `--transport h3wt` with an `https://` URL that includes the
+server's endpoint path, e.g. `--connect_url https://localhost:60100/moq-media`.
 Use `file_pr/moq-media` as the namespace to enable the fault-control UI.
 Use `file_abr/moq-media` to start with the first authored video track plus all
 non-video tracks, then advertise one additional video track per catalog group.
