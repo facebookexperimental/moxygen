@@ -7,6 +7,7 @@
 #include <moxygen/MoQQmuxServer.h>
 
 #include <fizz/server/AsyncFizzServer.h>
+#include <folly/ExceptionWrapper.h>
 #include <folly/ScopeGuard.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/CurrentExecutor.h>
@@ -158,25 +159,36 @@ void MoQQmuxServer::start(
     auto callback = std::make_unique<WorkerAcceptCallback>(
         *this, workerEvb, workerShutdownState_[i].get());
     std::shared_ptr<folly::AsyncServerSocket> socket;
+    folly::exception_wrapper bindError;
     // All AsyncServerSocket lifecycle (construct, bind, listen, callback
-    // registration, startAccepting) must run on the socket's owning evb.
+    // registration, startAccepting) must run on the socket's owning evb. The
+    // hop is noexcept, so a failure (e.g. the port is taken) is carried back
+    // and rethrown on this thread.
     workerEvb->runImmediatelyOrRunInEventBaseThreadAndWait(
         [&, callbackPtr = callback.get()] {
-          socket = folly::AsyncServerSocket::newSocket(workerEvb);
-          socket->setReusePortEnabled(true);
-          socket->bind(bindAddr);
-          socket->listen(/*backlog=*/128);
-          // nullptr eventBase => callback runs on the socket's own evb
-          // (== workerEvb)
-          socket->addAcceptCallback(callbackPtr, /*eventBase=*/nullptr);
-          socket->startAccepting();
-          if (bindAddr.getPort() == 0) {
-            // Resolve the kernel-assigned ephemeral port from the first
-            // bind so the rest of the workers can join the reuseport
-            // group on that exact port.
-            socket->getAddress(&bindAddr);
+          bindError = folly::try_and_catch([&] {
+            socket = folly::AsyncServerSocket::newSocket(workerEvb);
+            socket->setReusePortEnabled(true);
+            socket->bind(bindAddr);
+            socket->listen(/*backlog=*/128);
+            // nullptr eventBase => callback runs on the socket's own evb
+            // (== workerEvb)
+            socket->addAcceptCallback(callbackPtr, /*eventBase=*/nullptr);
+            socket->startAccepting();
+            if (bindAddr.getPort() == 0) {
+              // Resolve the kernel-assigned ephemeral port from the first
+              // bind so the rest of the workers can join the reuseport
+              // group on that exact port.
+              socket->getAddress(&bindAddr);
+            }
+          });
+          if (bindError) {
+            socket.reset();
           }
         });
+    if (bindError) {
+      bindError.throw_exception();
+    }
     serverSockets_.push_back(std::move(socket));
     workerCallbacks_.push_back(std::move(callback));
   }

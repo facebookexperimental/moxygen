@@ -67,6 +67,9 @@ class MoQQmuxServer : public MoQServerBase {
     start(addr, {});
   }
 
+  // Throws if a listening socket cannot be set up (e.g. the port is taken),
+  // after closing any it already opened. A server whose start() threw cannot
+  // be started again.
   void start(
       const folly::SocketAddress& addr,
       std::vector<folly::EventBase*> evbs);

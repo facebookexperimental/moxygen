@@ -47,6 +47,7 @@ struct MediaListeners {
   folly::EventBase* evb{nullptr};
 };
 
+// Throws if a listener fails to start, after stopping any already started.
 MediaListeners startMediaListeners(
     std::shared_ptr<MoQBroadcastDispatcher> dispatcher,
     const folly::SocketAddress& addr,

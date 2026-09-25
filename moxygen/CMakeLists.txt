@@ -270,6 +270,7 @@ moxygen_add_library(moxygen_moq_qmux_server
     Folly::folly_coro_error
     Folly::folly_coro_timeout
     Folly::folly_coro_with_cancellation
+    Folly::folly_exception_wrapper
     Folly::folly_futures_core
     Folly::folly_io_async_async_socket
     Folly::folly_io_async_event_base_manager

@@ -9,6 +9,7 @@
 #include <folly/io/async/AsyncTransport.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
+#include <folly/net/NetOps.h>
 #include <folly/portability/GTest.h>
 #include <folly/synchronization/Baton.h>
 #include <proxygen/httpserver/samples/hq/FizzContext.h>
@@ -16,6 +17,7 @@
 #include <moxygen/MoQVersions.h>
 
 #include <memory>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -78,6 +80,31 @@ class EofReadCallback : public folly::AsyncTransport::ReadCallback {
   folly::Baton<> baton;
   bool dataReceived{false};
   char buf[1024];
+};
+
+// Listens on a loopback TCP port without SO_REUSEPORT, so a reuseport listener
+// cannot bind the same port.
+class TakenTcpPort {
+ public:
+  TakenTcpPort() : fd_(folly::netops::socket(AF_INET, SOCK_STREAM, 0)) {
+    sockaddr_storage storage{};
+    const auto len = folly::SocketAddress("127.0.0.1", 0).getAddress(&storage);
+    CHECK_EQ(
+        folly::netops::bind(fd_, reinterpret_cast<sockaddr*>(&storage), len),
+        0);
+    CHECK_EQ(folly::netops::listen(fd_, 1), 0);
+    addr_.setFromLocalAddress(fd_);
+  }
+  ~TakenTcpPort() {
+    folly::netops::close(fd_);
+  }
+  const folly::SocketAddress& address() const {
+    return addr_;
+  }
+
+ private:
+  folly::NetworkSocket fd_;
+  folly::SocketAddress addr_;
 };
 
 // Run `server.stop()` on a helper thread with a test-failure deadline. If
@@ -188,6 +215,19 @@ TEST(MoQQmuxServerTest, StopDrainsParkedHandshake) {
       clientSocket.reset();
     }
   });
+}
+
+// A bind failure must reach the caller as an exception, with the internally
+// spawned workers torn down, rather than terminating on a worker thread.
+TEST(MoQQmuxServerTest, StartThrowsWhenPortIsTaken) {
+  TakenTcpPort taken;
+  MoQQmuxServer::Config config;
+  config.serverThreads = 2;
+  auto server = std::make_shared<NopMoQQmuxServer>(
+      "/test", makeTestFizzContext(), std::move(config));
+
+  EXPECT_THROW(server->start(taken.address()), std::system_error);
+  EXPECT_TRUE(server->getWorkerEvbs().empty());
 }
 
 } // namespace moxygen::test

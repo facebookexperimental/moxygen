@@ -17,6 +17,8 @@
 #include <folly/logging/xlog.h>
 
 #include <chrono>
+#include <cstdlib>
+#include <exception>
 #include <memory>
 #include <string>
 
@@ -78,15 +80,21 @@ int main(int argc, char* argv[]) {
           workerEvb),
       *workerEvb);
 
-  auto listeners = startMediaListeners(
-      dispatcher,
-      folly::SocketAddress("::", FLAGS_port),
-      MediaListenerOptions{
-          .quic = FLAGS_quic,
-          .qmux = FLAGS_qmux,
-          .cert = FLAGS_cert,
-          .key = FLAGS_key,
-          .insecure = FLAGS_insecure});
+  MediaListeners listeners;
+  try {
+    listeners = startMediaListeners(
+        dispatcher,
+        folly::SocketAddress("::", FLAGS_port),
+        MediaListenerOptions{
+            .quic = FLAGS_quic,
+            .qmux = FLAGS_qmux,
+            .cert = FLAGS_cert,
+            .key = FLAGS_key,
+            .insecure = FLAGS_insecure});
+  } catch (const std::exception& ex) {
+    XLOG(ERR) << "[main] failed to start listeners: " << ex.what();
+    return EXIT_FAILURE;
+  }
   XLOG(INFO) << "[main] MoQMediaServer listening port=" << FLAGS_port
              << " quic=" << FLAGS_quic << " qmux=" << FLAGS_qmux
              << " (namespaces resolved by prefix; file backend input="

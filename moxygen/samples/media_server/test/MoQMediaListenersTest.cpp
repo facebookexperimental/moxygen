@@ -21,11 +21,13 @@
 #include <folly/coro/Promise.h>
 #include <folly/coro/Timeout.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
+#include <folly/net/NetOps.h>
 #include <folly/portability/GTest.h>
 
 #include <atomic>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using namespace std::chrono_literals;
@@ -103,6 +105,20 @@ class CatalogCallback : public NopCallback {
  private:
   folly::coro::Promise<std::string> doc_;
 };
+
+// Binds `addr` without SO_REUSEPORT; returns the socket, which the caller must
+// close, or an invalid one if the bind failed.
+folly::NetworkSocket bindExclusive(const folly::SocketAddress& addr, int type) {
+  auto fd = folly::netops::socket(addr.getFamily(), type, 0);
+  sockaddr_storage storage{};
+  const auto len = addr.getAddress(&storage);
+  if (folly::netops::bind(fd, reinterpret_cast<sockaddr*>(&storage), len) !=
+      0) {
+    folly::netops::close(fd);
+    return folly::NetworkSocket();
+  }
+  return fd;
+}
 
 // A client session holding a catalog subscription open, so the broadcast it
 // joined stays alive while another client subscribes.
@@ -283,6 +299,29 @@ TEST_F(MoQMediaListenersTest, QuicOnlyServesOverQuic) {
       subscribeToCatalog(
           listeners_.quic->getAddress(), samples::TransportType::QUIC),
       kCatalogDoc);
+}
+
+TEST_F(MoQMediaListenersTest, QmuxBindFailureStopsQuicAndThrows) {
+  // Hold the TCP port so QMUX cannot bind it, while QUIC (UDP) still can.
+  auto tcp = bindExclusive(folly::SocketAddress("127.0.0.1", 0), SOCK_STREAM);
+  ASSERT_NE(tcp, folly::NetworkSocket());
+  ASSERT_EQ(folly::netops::listen(tcp, 1), 0);
+  folly::SocketAddress takenAddr;
+  takenAddr.setFromLocalAddress(tcp);
+
+  EXPECT_THROW(
+      startMediaListeners(
+          dispatcher_, takenAddr, MediaListenerOptions{.insecure = true}),
+      std::system_error);
+
+  // The QUIC listener that did start must have been stopped, freeing its UDP
+  // port for an exclusive bind.
+  auto udp = bindExclusive(takenAddr, SOCK_DGRAM);
+  EXPECT_NE(udp, folly::NetworkSocket());
+  if (udp != folly::NetworkSocket()) {
+    folly::netops::close(udp);
+  }
+  folly::netops::close(tcp);
 }
 
 } // namespace moxygen::media_server::test
