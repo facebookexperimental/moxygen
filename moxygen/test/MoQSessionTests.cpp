@@ -1676,6 +1676,27 @@ CO_TEST_P_X(MoQSessionTest, EmptyUnidirectionalStream) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// cleanup() erases the pubTracks_ entry before retiring the publisher, so the
+// PUBLISH_DONE it used to send could only miss its own lookup and never reached
+// the wire. The stat has to stay silent with it.
+CO_TEST_P_X(MoQSessionTest, SessionCloseRetiresPublisherWithoutPublishDone) {
+  co_await setupMoQSession();
+  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
+    EXPECT_FALSE(pub->beginSubgroup(0, 0, 0).hasError());
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  EXPECT_CALL(*serverPublisherStatsCallback_, onPublishDone(_)).Times(0);
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(2);
+}
+
 // === Uni Control Stream tests (draft-18-meta-00) ===
 
 class MoQUniControlTest : public MoQSessionTest {};
