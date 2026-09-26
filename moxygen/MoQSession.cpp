@@ -3091,6 +3091,11 @@ void MoQSession::initLocalMaxRequestID(uint64_t fromParam) {
 
 void MoQSession::initPeerMaxRequestID(const Parameters& peerParams) {
   if (negotiatedVersion_ && useBidiRequestStreams(*negotiatedVersion_)) {
+    if (getMaxRequestIDIfPresent(peerParams) != 0) {
+      XLOG(WARN) << "Ignoring MAX_REQUEST_ID setup param, removed in draft "
+                 << getDraftMajorVersion(*negotiatedVersion_)
+                 << " sess=" << this;
+    }
     peerMaxRequestID_ = std::numeric_limits<uint64_t>::max();
   } else {
     peerMaxRequestID_ = getMaxRequestIDIfPresent(peerParams);
@@ -7352,6 +7357,15 @@ bool MoQSession::closeSessionIfRequestIDInvalid(
       nextExpectedPeerRequestID_ += getRequestIDMultiplier();
     } // in draft 16+, request IDs can come out of order
     if (getDraftMajorVersion(*getNegotiatedVersion()) >= 18) {
+      // Draft 18 dropped MAX_REQUEST_ID, so nothing else keeps the cutoff
+      // from wrapping.
+      if (requestID.value >
+          std::numeric_limits<uint64_t>::max() - getRequestIDMultiplier()) {
+        XLOG(ERR) << "requestID exhausts the ID space: " << requestID
+                  << " sess=" << this;
+        close(SessionCloseErrorCode::INVALID_REQUEST_ID);
+        return true;
+      }
       nextPeerRequestIDForGoaway_ = std::max(
           nextPeerRequestIDForGoaway_,
           requestID.value + getRequestIDMultiplier());

@@ -1437,6 +1437,12 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
         parser_.parseClientSetup(cursor, frameLength(cursor));
     EXPECT_TRUE(parseClientSetupResult.hasValue())
         << "Failed to parse client setup for maxRequestID:" << maxRequestID;
+    if (getDraftMajorVersion(GetParam()) >= 18) {
+      // Draft 18 removed the option; the writer strips it.
+      EXPECT_TRUE(parseClientSetupResult->params.empty())
+          << "MAX_REQUEST_ID not stripped for maxRequestID:" << maxRequestID;
+      continue;
+    }
     EXPECT_EQ(parseClientSetupResult->params.size(), 1);
     EXPECT_EQ(
         parseClientSetupResult->params.at(0).key,
@@ -3499,7 +3505,7 @@ TEST(MoQFramerTest, ClientSetupRejectsUseAlias) {
 }
 
 TEST_P(MoQFramerTest, SetupRoundtripWithAuthToken) {
-  // The three setup options writeSetup actually puts on the wire
+  // The setup options writeSetup actually puts on the wire
   moxygen::Setup setup;
   setup.params.insertParam(
       Parameter(folly::to_underlying(SetupKey::PATH), std::string("/live")));
@@ -3518,18 +3524,24 @@ TEST_P(MoQFramerTest, SetupRoundtripWithAuthToken) {
   auto result = parser_.parseClientSetup(cursor, frameLength(cursor));
   ASSERT_TRUE(result.hasValue());
 
-  ASSERT_EQ(result->params.size(), 3);
+  const bool isDraft18 = getDraftMajorVersion(GetParam()) >= 18;
+  ASSERT_EQ(result->params.size(), isDraft18 ? 2 : 3);
   EXPECT_EQ(result->params.at(0).key, folly::to_underlying(SetupKey::PATH));
   EXPECT_EQ(result->params.at(0).asString, "/live");
-  EXPECT_EQ(
-      result->params.at(1).key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
-  EXPECT_EQ(result->params.at(1).asUint64, 64);
+  size_t tokenIndex = 1;
+  if (!isDraft18) {
+    EXPECT_EQ(
+        result->params.at(1).key,
+        folly::to_underlying(SetupKey::MAX_REQUEST_ID));
+    EXPECT_EQ(result->params.at(1).asUint64, 64);
+    tokenIndex = 2;
+  }
   // Written from the pre-encoded blob in asString, read back into asAuthToken.
   EXPECT_EQ(
-      result->params.at(2).key,
+      result->params.at(tokenIndex).key,
       folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN));
-  EXPECT_EQ(result->params.at(2).asAuthToken.tokenType, 0);
-  EXPECT_EQ(result->params.at(2).asAuthToken.tokenValue, "stampolli");
+  EXPECT_EQ(result->params.at(tokenIndex).asAuthToken.tokenType, 0);
+  EXPECT_EQ(result->params.at(tokenIndex).asAuthToken.tokenValue, "stampolli");
 }
 
 TEST_P(MoQFramerTest, SetupRoundtripWithAuthorityAndImplementation) {

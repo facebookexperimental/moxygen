@@ -1856,4 +1856,42 @@ INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
     ::testing::Values(kVersionDraft14, kVersionDraft15, kVersionDraft16));
+
+// Draft 18 dropped MAX_REQUEST_ID and REQUESTS_BLOCKED, so a peer that still
+// sends them is speaking an older draft on a draft 18 session.
+class MoQCodecV18Test : public ::testing::Test {
+ public:
+  void SetUp() override {
+    draft17Writer_.initializeVersion(kVersionDraft17);
+    controlCodec_.initializeVersion(kVersionDraft18);
+    // The codec rejects anything before SETUP.
+    folly::IOBufQueue setupBuf{folly::IOBufQueue::cacheChainLength()};
+    moxygen::Setup setup;
+    writeClientSetup(setupBuf, setup, kVersionDraft18);
+    controlCodec_.onIngress(setupBuf.move(), false);
+  }
+
+ protected:
+  MoQFrameWriter draft17Writer_;
+  testing::NiceMock<MockMoQCodecCallback> callback_;
+  MoQControlCodec controlCodec_{MoQControlCodec::Direction::SERVER, &callback_};
+};
+
+TEST_F(MoQCodecV18Test, MaxRequestIDRejected) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  draft17Writer_.writeMaxRequestID(writeBuf, {.requestID = 50000});
+
+  EXPECT_CALL(callback_, onMaxRequestID(testing::_)).Times(0);
+  EXPECT_CALL(callback_, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  controlCodec_.onIngress(writeBuf.move(), false);
+}
+
+TEST_F(MoQCodecV18Test, RequestsBlockedRejected) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  draft17Writer_.writeRequestsBlocked(writeBuf, {.maxRequestID = 50000});
+
+  EXPECT_CALL(callback_, onRequestsBlocked(testing::_)).Times(0);
+  EXPECT_CALL(callback_, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+  controlCodec_.onIngress(writeBuf.move(), false);
+}
 } // namespace moxygen::test

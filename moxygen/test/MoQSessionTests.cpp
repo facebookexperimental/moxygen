@@ -1618,6 +1618,18 @@ CO_TEST_P_X(MoQSessionTest, DatagramBeforeSetup) {
   EXPECT_TRUE(clientWt_->isSessionClosed());
   co_return;
 }
+CO_TEST_P_X(Draft18Test, PeerRequestIDAtEndOfSpaceClosesSession) {
+  co_await setupMoQSession();
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  subscribeRequest.requestID =
+      RequestID(std::numeric_limits<uint64_t>::max() - 1);
+  static_cast<MoQControlCodec::ControlCallback&>(*serverSession_)
+      .onSubscribe(subscribeRequest);
+
+  EXPECT_TRUE(serverWt_->isSessionClosed());
+}
+
 CO_TEST_P_X(Draft18Test, PaddingDatagramIsDiscarded) {
   co_await setupMoQSession();
   MoQFrameWriter writer;

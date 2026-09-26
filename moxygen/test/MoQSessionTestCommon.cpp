@@ -321,10 +321,10 @@ folly::Try<moxygen::Setup> MoQSessionTest::onClientSetup(
 
   EXPECT_EQ(setup.params.at(0).key, folly::to_underlying(SetupKey::PATH));
   EXPECT_EQ(setup.params.at(0).asString, "/foo");
-  EXPECT_EQ(
-      setup.params.at(1).key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
-  EXPECT_EQ(setup.params.at(1).asUint64, initialMaxRequestID_);
   if (!useBidiRequestStreams(getServerSelectedVersion())) {
+    EXPECT_EQ(
+        setup.params.at(1).key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
+    EXPECT_EQ(setup.params.at(1).asUint64, initialMaxRequestID_);
     EXPECT_EQ(
         setup.params.at(2).key,
         folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE));
@@ -376,10 +376,12 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSession() {
   auto serverSetup =
       co_await clientSession_->setup(getClientSetup(initialMaxRequestID_));
 
-  EXPECT_EQ(
-      serverSetup.params.at(0).key,
-      folly::to_underlying(SetupKey::MAX_REQUEST_ID));
-  EXPECT_EQ(serverSetup.params.at(0).asUint64, initialMaxRequestID_);
+  if (!useBidiRequestStreams(getServerSelectedVersion())) {
+    EXPECT_EQ(
+        serverSetup.params.at(0).key,
+        folly::to_underlying(SetupKey::MAX_REQUEST_ID));
+    EXPECT_EQ(serverSetup.params.at(0).asUint64, initialMaxRequestID_);
+  }
 }
 
 folly::coro::Task<void> MoQSessionTest::setupMoQSessionForPublish(
@@ -426,10 +428,12 @@ folly::coro::Task<void> MoQSessionTest::setupMoQSessionForPublish(
   auto serverSetup =
       co_await clientSession_->setup(getClientSetup(maxRequestID));
 
-  EXPECT_EQ(
-      serverSetup.params.at(0).key,
-      folly::to_underlying(SetupKey::MAX_REQUEST_ID));
-  EXPECT_EQ(serverSetup.params.at(0).asUint64, maxRequestID);
+  if (!useBidiRequestStreams(getServerSelectedVersion())) {
+    EXPECT_EQ(
+        serverSetup.params.at(0).key,
+        folly::to_underlying(SetupKey::MAX_REQUEST_ID));
+    EXPECT_EQ(serverSetup.params.at(0).asUint64, maxRequestID);
+  }
 }
 
 folly::coro::Task<void> MoQSessionTest::publishRequestUpdateRoundTrip(
