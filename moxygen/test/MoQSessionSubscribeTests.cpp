@@ -6,11 +6,123 @@
 
 #include "moxygen/test/MoQSessionTestCommon.h"
 
+#include <folly/coro/Timeout.h>
+
 using namespace moxygen;
 using namespace moxygen::test;
 using testing::_;
 
 // === SUBSCRIBE tests ===
+
+CO_TEST_P_X(MoQSessionTest, SubscribeOkDuplicateTrackAlias) {
+  co_await setupMoQSession();
+  const TrackAlias alias(100);
+  auto firstConsumer =
+      std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+  auto secondConsumer =
+      std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+  EXPECT_CALL(*firstConsumer, setTrackAlias(alias))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeSuccess()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionBegin()).Times(1);
+  expectSubscribe([alias](auto sub, auto) -> TaskSubscribeResult {
+    auto ok = makeSubscribeOkResult(sub)->subscribeOk();
+    ok.trackAlias = alias;
+    co_return std::make_shared<MockSubscriptionHandle>(std::move(ok));
+  });
+  auto first = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), firstConsumer);
+  EXPECT_TRUE(first.hasValue());
+  if (first.hasError()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+  EXPECT_FALSE(clientSession_->isClosed());
+
+  struct CloseCallback : MoQSession::MoQSessionCloseCallback {
+    void onMoQSessionClosed(
+        SessionCloseErrorCode error,
+        folly::Optional<uint32_t>) override {
+      EXPECT_EQ(error, SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS);
+      ++count;
+    }
+    size_t count{0};
+  } closeCallback;
+  clientSession_->setSessionCloseCallback(&closeCallback);
+  EXPECT_CALL(*firstConsumer, publishDone(_)).WillOnce([](PublishDone done) {
+    EXPECT_EQ(done.statusCode, PublishDoneStatusCode::SESSION_CLOSED);
+    return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+  });
+  ON_CALL(*secondConsumer, setTrackAlias(_))
+      .WillByDefault(testing::Return(folly::unit));
+  EXPECT_CALL(*secondConsumer, setTrackAlias(_)).Times(0);
+  EXPECT_CALL(*secondConsumer, beginSubgroup(_, _, _, _)).Times(0);
+  EXPECT_CALL(*secondConsumer, objectStream(_, _, _)).Times(0);
+  EXPECT_CALL(*secondConsumer, datagram(_, _, _)).Times(0);
+  EXPECT_CALL(*secondConsumer, publishDone(_)).Times(0);
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onSubscribeError(SubscribeErrorCode::INTERNAL_ERROR));
+  expectSubscribe([alias](auto sub, auto) -> TaskSubscribeResult {
+    auto ok = makeSubscribeOkResult(sub)->subscribeOk();
+    ok.trackAlias = alias;
+    co_return std::make_shared<MockSubscriptionHandle>(std::move(ok));
+  });
+  FullTrackName secondTrack{TrackNamespace{{"foo"}}, "other"};
+  auto second = co_await folly::coro::co_awaitTry(
+      folly::coro::timeout(
+          clientSession_->subscribe(getSubscribe(secondTrack), secondConsumer),
+          std::chrono::seconds(1)));
+  EXPECT_FALSE(second.hasException());
+  if (second.hasValue()) {
+    EXPECT_TRUE(second->hasError())
+        << "SUBSCRIBE_OK completed after close=" << clientSession_->isClosed();
+    if (second->hasError()) {
+      EXPECT_EQ(second->error().errorCode, SubscribeErrorCode::INTERNAL_ERROR);
+    }
+  }
+  EXPECT_TRUE(clientSession_->isClosed());
+  co_await rescheduleN(4);
+  EXPECT_EQ(closeCallback.count, 1);
+  clientSession_->setSessionCloseCallback(nullptr);
+}
+
+CO_TEST_P_X(MoQSessionTest, SubscribeOkDistinctTrackAliases) {
+  co_await setupMoQSession();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeSuccess()).Times(2);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionBegin()).Times(2);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeError(_)).Times(0);
+  for (uint64_t i = 0; i < 2; ++i) {
+    const TrackAlias alias(100 + i);
+    auto consumer = std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+    EXPECT_CALL(*consumer, setTrackAlias(alias))
+        .WillOnce(testing::Return(folly::unit));
+    EXPECT_CALL(*consumer, publishDone(_)).WillOnce([](PublishDone done) {
+      EXPECT_EQ(done.statusCode, PublishDoneStatusCode::SESSION_CLOSED);
+      return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+    });
+    expectSubscribe([alias](auto sub, auto) -> TaskSubscribeResult {
+      auto ok = makeSubscribeOkResult(sub)->subscribeOk();
+      ok.trackAlias = alias;
+      co_return std::make_shared<MockSubscriptionHandle>(std::move(ok));
+    });
+    FullTrackName track{TrackNamespace{{"foo"}}, i == 0 ? "first" : "second"};
+    auto result = co_await folly::coro::co_awaitTry(
+        folly::coro::timeout(
+            clientSession_->subscribe(getSubscribe(track), consumer),
+            std::chrono::seconds(1)));
+    EXPECT_FALSE(result.hasException());
+    if (result.hasValue()) {
+      EXPECT_TRUE(result->hasValue());
+      if (result->hasValue()) {
+        EXPECT_EQ(result->value()->subscribeOk().trackAlias, alias);
+      }
+    }
+    EXPECT_FALSE(clientSession_->isClosed());
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+}
 
 CO_TEST_P_X(MoQSessionTest, ServerInitiatedSubscribe) {
   co_await setupMoQSession();

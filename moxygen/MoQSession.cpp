@@ -4807,9 +4807,8 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto trackReceiveState = std::move(*trackPtr);
-  pendingRequests_.erase(it);
-  pendingSubscribeTracks_.erase(trackReceiveState->fullTrackName());
+  // Keep the pending request registered so close() can complete it on error.
+  auto trackReceiveState = *trackPtr;
 
   auto res = reqIdToTrackAlias_.try_emplace(subOk.requestID, subOk.trackAlias);
   if (!res.second) {
@@ -4824,7 +4823,10 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
     XLOG(ERR) << "TrackAlias already in use" << subOk.trackAlias
               << " sess=" << this;
     close(SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS);
+    return;
   }
+  pendingRequests_.erase(it);
+  pendingSubscribeTracks_.erase(trackReceiveState->fullTrackName());
   auto trackAlias = subOk.trackAlias;
   setPublisherPriorityFromParams(
       subOk.params, subOk.extensions, trackReceiveState);
