@@ -6846,8 +6846,8 @@ folly::coro::Task<MoQSession::JoinResult> MoQSession::join(
     std::shared_ptr<FetchConsumer> fetchCallback,
     FetchType fetchType) {
   Fetch fetchReq(
-      0,              // will be picked by fetch()
-      nextRequestID_, // this will be the ID for subscribe()
+      0,            // will be picked by fetch()
+      std::nullopt, // resolved by FullTrackName match in resolveJoiningFetch
       joiningStart,
       fetchType,
       fetchPri,

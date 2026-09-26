@@ -293,6 +293,79 @@ CO_TEST_P_X(MoQSessionTest, BadAbsoluteJoiningFetch) {
   EXPECT_TRUE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// Verify that join() resolves the joining FETCH's request ID through the
+// FullTrackName match rather than peeking at nextRequestID_.
+CO_TEST_P_X(MoQSessionTest, JoinFetchResolvesRequestIDByTrackName) {
+  co_await setupMoQSession();
+  // Both are captured rather than compared in the handlers: the handlers race
+  // under collectAll, and RequestID{} is 0, which is a real ID.
+  std::optional<RequestID> subscribeRequestID;
+  std::optional<RequestID> joiningRequestID;
+  expectSubscribe(
+      [&subscribeRequestID](auto sub, auto pub) -> TaskSubscribeResult {
+        subscribeRequestID = sub.requestID;
+        pub->datagram(
+            ObjectHeader(0, 0, 1, 0, 11),
+            folly::IOBuf::copyBuffer("hello world"));
+        pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+      });
+  expectFetch(
+      [&joiningRequestID](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+        auto joining = std::get_if<JoiningFetch>(&fetch.args);
+        EXPECT_NE(joining, nullptr);
+        if (joining) {
+          joiningRequestID = joining->joiningRequestID;
+        }
+        EXPECT_EQ(fetch.fullTrackName, FullTrackName(kTestTrackName));
+        auto objectPubResult = fetchPub->object(
+            /*groupID=*/0,
+            /*subgroupID=*/0,
+            /*objectID=*/0,
+            moxygen::test::makeBuf(100),
+            noExtensions(),
+            /*finFetch=*/true);
+        EXPECT_TRUE(objectPubResult.hasValue());
+        co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+      });
+  EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
+      .WillOnce([&](const auto& header, auto, bool) {
+        EXPECT_EQ(header.length, 11);
+        return folly::unit;
+      });
+  expectPublishDone();
+  folly::coro::Baton fetchBaton;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true, _))
+      .WillOnce([&] {
+        fetchBaton.post();
+        return folly::unit;
+      });
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamOpened())
+      .Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
+      .Times(0);
+  auto res = co_await clientSession_->join(
+      getSubscribe(kTestTrackName),
+      subscribeCallback_,
+      1,
+      129,
+      GroupOrder::Default,
+      {},
+      fetchCallback_,
+      FetchType::RELATIVE_JOINING);
+  EXPECT_FALSE(res.subscribeResult.hasError());
+  EXPECT_FALSE(res.fetchResult.hasError());
+  co_await publishDone_;
+  co_await fetchBaton;
+  // Both handlers have run by now. Requiring subscribeRequestID to be engaged
+  // keeps the comparison below from passing on two nullopts.
+  EXPECT_TRUE(subscribeRequestID.has_value());
+  EXPECT_EQ(joiningRequestID, subscribeRequestID);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, FetchCleanupFromStreamFin) {
   co_await setupMoQSession();
 
