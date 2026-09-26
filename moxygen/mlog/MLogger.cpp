@@ -904,9 +904,7 @@ void MLogger::logObjectDatagramCreated(
   if (header.status != ObjectStatus::NORMAL) {
     baseMsg.objectStatus = static_cast<uint64_t>(header.status);
   }
-  if (payload) {
-    baseMsg.objectPayload = payload->clone();
-  }
+  baseMsg.objectPayloadLength = payload ? payload->computeChainDataLength() : 0;
   baseMsg.endOfGroup = false; // TODO: Extract from datagram type when available
   addObjectDatagramCreatedLog(std::move(baseMsg));
 }
@@ -928,11 +926,7 @@ void MLogger::logObjectDatagramParsed(
   if (header.status != ObjectStatus::NORMAL) {
     baseMsg.objectStatus = static_cast<uint64_t>(header.status);
   }
-  if (payload) {
-    std::unique_ptr<folly::IOBuf> objPayload =
-        folly::IOBuf::copyBuffer({payload->data(), payload->length()});
-    baseMsg.objectPayload = std::move(objPayload);
-  }
+  baseMsg.objectPayloadLength = payload ? payload->computeChainDataLength() : 0;
   baseMsg.endOfGroup = false; // TODO: Extract from datagram type when available
   addObjectDatagramParsedLog(std::move(baseMsg));
 }
@@ -996,9 +990,8 @@ void MLogger::logSubgroupObjectCreated(
   baseMsg.extensionHeadersLength = objHeader.extensions.size();
   baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
       objHeader.extensions.getMutableExtensions());
-  baseMsg.objectPayloadLength = payload ? payload->length() : 0;
+  baseMsg.objectPayloadLength = payload ? payload->computeChainDataLength() : 0;
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
-  baseMsg.objectPayload = payload ? payload->clone() : nullptr;
   addSubgroupObjectCreatedLog(std::move(baseMsg));
 }
 
@@ -1015,9 +1008,8 @@ void MLogger::logSubgroupObjectParsed(
   baseMsg.extensionHeadersLength = objHeader.extensions.size();
   baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
       objHeader.extensions.getMutableExtensions());
-  baseMsg.objectPayloadLength = payload->length();
+  baseMsg.objectPayloadLength = payload->computeChainDataLength();
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
-  baseMsg.objectPayload = payload->clone();
   addSubgroupObjectParsedLog(std::move(baseMsg));
 }
 
@@ -1052,9 +1044,8 @@ void MLogger::logFetchObjectCreated(
   baseMsg.extensionHeadersLength = objHeader.extensions.size();
   baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
       objHeader.extensions.getMutableExtensions());
-  baseMsg.objectPayloadLength = payload ? payload->length() : 0;
+  baseMsg.objectPayloadLength = payload ? payload->computeChainDataLength() : 0;
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
-  baseMsg.objectPayload = payload ? payload->clone() : nullptr;
   addFetchObjectCreatedLog(std::move(baseMsg));
 }
 
@@ -1071,9 +1062,8 @@ void MLogger::logFetchObjectParsed(
   baseMsg.extensionHeadersLength = objHeader.extensions.size();
   baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
       objHeader.extensions.getMutableExtensions());
-  baseMsg.objectPayloadLength = payload->length();
+  baseMsg.objectPayloadLength = payload->computeChainDataLength();
   baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
-  baseMsg.objectPayload = payload->clone();
   addFetchObjectParsedLog(std::move(baseMsg));
 }
 
@@ -1110,24 +1100,17 @@ void MLogger::logControlMessage(
     ControlMessageType controlType,
     uint64_t streamId,
     const std::optional<uint64_t>& length,
-    std::unique_ptr<MOQTBaseControlMessage> message,
-    std::unique_ptr<folly::IOBuf> raw) {
+    std::unique_ptr<MOQTBaseControlMessage> message) {
   switch (controlType) {
     case ControlMessageType::CREATED: {
       MOQTControlMessageCreated req{
-          kFirstBidiStreamId,
-          length,
-          std::move(message),
-          (raw) ? std::move(raw) : nullptr};
+          kFirstBidiStreamId, length, std::move(message)};
       addControlMessageCreatedLog(std::move(req));
       break;
     }
     case ControlMessageType::PARSED: {
       MOQTControlMessageParsed req{
-          kFirstBidiStreamId,
-          length,
-          std::move(message),
-          (raw) ? std::move(raw) : nullptr};
+          kFirstBidiStreamId, length, std::move(message)};
       addControlMessageParsedLog(std::move(req));
       break;
     }

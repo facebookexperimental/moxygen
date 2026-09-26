@@ -8,18 +8,190 @@
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/ManualExecutor.h>
+#include <folly/json/json.h>
 #include <folly/portability/GTest.h>
 #include <quic/codec/QuicConnectionId.h>
 #include <stdlib.h>
+#include <array>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
 
 namespace moxygen {
+namespace {
+
+enum class ObjectEvent {
+  DATAGRAM_CREATED,
+  DATAGRAM_PARSED,
+  SUBGROUP_CREATED,
+  SUBGROUP_PARSED,
+  FETCH_CREATED,
+  FETCH_PARSED,
+};
+
+struct ObjectEventCase {
+  ObjectEvent event;
+  const char* name;
+  const char* payloadField;
+  bool datagram;
+  bool retainsBackingStorage;
+};
+
+constexpr std::array<ObjectEventCase, 6> kObjectEvents{{
+    {ObjectEvent::DATAGRAM_CREATED,
+     "moqt:object_datagram_created",
+     "object_payload",
+     true,
+     true},
+    {ObjectEvent::DATAGRAM_PARSED,
+     "moqt:object_datagram_parsed",
+     "object_payload",
+     true,
+     false},
+    {ObjectEvent::SUBGROUP_CREATED,
+     "moqt:subgroup_object_created",
+     "objectPayload",
+     false,
+     true},
+    {ObjectEvent::SUBGROUP_PARSED,
+     "moqt:subgroup_object_parsed",
+     "objectPayload",
+     false,
+     true},
+    {ObjectEvent::FETCH_CREATED,
+     "moqt:fetch_object_created",
+     "objectPayload",
+     false,
+     true},
+    {ObjectEvent::FETCH_PARSED,
+     "moqt:fetch_object_parsed",
+     "objectPayload",
+     false,
+     true},
+}};
+
+Payload makePayload(std::string_view head, std::string_view tail = {}) {
+  auto payload = folly::IOBuf::copyBuffer(head.data(), head.size());
+  if (!tail.empty()) {
+    payload->appendChain(folly::IOBuf::copyBuffer(tail.data(), tail.size()));
+  }
+  return payload;
+}
+
+void logObjectEvent(MLogger& logger, ObjectEvent event, Payload payload) {
+  ObjectHeader header(7, 8, 9, 10);
+  switch (event) {
+    case ObjectEvent::DATAGRAM_CREATED:
+      logger.logObjectDatagramCreated(TrackAlias(11), header, payload);
+      return;
+    case ObjectEvent::DATAGRAM_PARSED:
+      logger.logObjectDatagramParsed(TrackAlias(11), header, payload);
+      return;
+    case ObjectEvent::SUBGROUP_CREATED:
+      logger.logSubgroupObjectCreated(
+          17, TrackAlias(11), header, std::move(payload));
+      return;
+    case ObjectEvent::SUBGROUP_PARSED:
+      logger.logSubgroupObjectParsed(
+          17, TrackAlias(11), header, std::move(payload));
+      return;
+    case ObjectEvent::FETCH_CREATED:
+      logger.logFetchObjectCreated(17, header, std::move(payload));
+      return;
+    case ObjectEvent::FETCH_PARSED:
+      logger.logFetchObjectParsed(17, header, std::move(payload));
+      return;
+  }
+}
+
+folly::dynamic parseSingleEvent(const std::string& path) {
+  std::ifstream input(path);
+  return folly::parseJson(
+      std::string(std::istreambuf_iterator<char>(input), {}));
+}
+
+void expectEventControls(
+    const folly::dynamic& event,
+    const ObjectEventCase& testCase) {
+  ASSERT_TRUE(event.isObject());
+  EXPECT_EQ(event["name"].asString(), testCase.name);
+  EXPECT_EQ(event["vantagePoint"].asString(), "server");
+  const auto* data = event.get_ptr("data");
+  ASSERT_NE(data, nullptr);
+  const auto* objectId =
+      data->get_ptr(testCase.datagram ? "object_id" : "objectId");
+  ASSERT_NE(objectId, nullptr);
+  if (testCase.datagram) {
+    EXPECT_EQ(objectId->asInt(), 9);
+  } else {
+    EXPECT_EQ(objectId->asString(), "9");
+  }
+}
+
+// Datagram events keep a qlog RawInfo holding only the length; the other
+// events drop the payload field outright.
+bool payloadBytesExported(
+    const folly::dynamic& data,
+    const ObjectEventCase& testCase) {
+  const auto* payload = data.get_ptr(testCase.payloadField);
+  if (!payload) {
+    return false;
+  }
+  return !testCase.datagram || payload->get_ptr("data") != nullptr;
+}
+
+const folly::dynamic* payloadLength(
+    const folly::dynamic& data,
+    const ObjectEventCase& testCase) {
+  if (!testCase.datagram) {
+    return data.get_ptr("objectPayloadLength");
+  }
+  const auto* payload = data.get_ptr(testCase.payloadField);
+  return payload ? payload->get_ptr("length") : nullptr;
+}
+
+struct ReleaseCounter {
+  size_t count{0};
+};
+
+void releaseOwnedBuffer(void* buffer, void* userData) {
+  ++static_cast<ReleaseCounter*>(userData)->count;
+  delete[] static_cast<uint8_t*>(buffer);
+}
+
+Payload makeOwnedPayload(ReleaseCounter& counter) {
+  auto makeSegment = [&counter](std::string_view contents) {
+    auto* data = new uint8_t[contents.size()];
+    std::memcpy(data, contents.data(), contents.size());
+    return folly::IOBuf::takeOwnership(
+        data, contents.size(), contents.size(), releaseOwnedBuffer, &counter);
+  };
+  auto payload = makeSegment("owned-head");
+  payload->appendChain(makeSegment("owned-tail"));
+  return payload;
+}
+
+void appendViolation(
+    std::string& violations,
+    const ObjectEventCase& testCase,
+    std::string_view detail) {
+  if (!violations.empty()) {
+    violations += "; ";
+  }
+  violations += testCase.name;
+  violations += ":";
+  violations += detail;
+}
+
+} // namespace
 
 class FileMLoggerTest : public ::testing::Test {
  protected:
@@ -168,6 +340,86 @@ TEST_F(FileMLoggerTest, DerivePath_PathModeIgnoresDcid) {
 
   EXPECT_TRUE(fs::exists(path));
   EXPECT_FALSE(fs::exists(dir_ / "dcid_derived.mlog"));
+}
+
+TEST_F(FileMLoggerTest, ObjectBodiesAbsentFromFileOutput) {
+  std::string violations;
+  for (size_t i = 0; i < kObjectEvents.size(); ++i) {
+    const auto& testCase = kObjectEvents[i];
+    SCOPED_TRACE(testCase.name);
+    const auto canary = "file-object-body-" + std::to_string(i);
+    const auto path = (dir_ / (std::to_string(i) + ".mlog")).string();
+    FileMLogger logger(VantagePoint::SERVER, path);
+    logObjectEvent(logger, testCase.event, makePayload(canary));
+    logger.outputLogs();
+
+    const auto event = parseSingleEvent(path);
+    expectEventControls(event, testCase);
+    const auto& data = event["data"];
+    if (payloadBytesExported(data, testCase)) {
+      appendViolation(violations, testCase, "payload field exported");
+    }
+    if (folly::toJson(event).find(canary) != std::string::npos) {
+      appendViolation(violations, testCase, "canary exported");
+    }
+  }
+  EXPECT_TRUE(violations.empty()) << violations;
+}
+
+TEST_F(FileMLoggerTest, ObjectPayloadLengthUsesEntireSuppliedChain) {
+  constexpr std::string_view kHead = "length-head";
+  constexpr std::string_view kTail = "length-tail";
+  constexpr auto kExpectedLength = kHead.size() + kTail.size();
+  std::string violations;
+  for (size_t i = 0; i < kObjectEvents.size(); ++i) {
+    const auto& testCase = kObjectEvents[i];
+    SCOPED_TRACE(testCase.name);
+    const auto path =
+        (dir_ / ("length-" + std::to_string(i) + ".mlog")).string();
+    FileMLogger logger(VantagePoint::SERVER, path);
+    logObjectEvent(logger, testCase.event, makePayload(kHead, kTail));
+    logger.outputLogs();
+
+    const auto event = parseSingleEvent(path);
+    expectEventControls(event, testCase);
+    const auto& data = event["data"];
+    const auto* length = payloadLength(data, testCase);
+    if (!length) {
+      appendViolation(violations, testCase, "payload length missing");
+    } else if (testCase.datagram) {
+      if (length->asInt() != kExpectedLength) {
+        appendViolation(violations, testCase, "payload length mismatch");
+      }
+    } else if (length->asString() != std::to_string(kExpectedLength)) {
+      appendViolation(violations, testCase, "payload length mismatch");
+    }
+  }
+  EXPECT_TRUE(violations.empty()) << violations;
+}
+
+TEST_F(FileMLoggerTest, LoggerDoesNotRetainObjectBackingStorage) {
+  std::string violations;
+  for (size_t i = 0; i < kObjectEvents.size(); ++i) {
+    const auto& testCase = kObjectEvents[i];
+    if (!testCase.retainsBackingStorage) {
+      continue;
+    }
+    SCOPED_TRACE(testCase.name);
+    ReleaseCounter counter;
+    {
+      FileMLogger logger(
+          VantagePoint::SERVER,
+          (dir_ / ("retention-" + std::to_string(i) + ".mlog")).string());
+      logObjectEvent(logger, testCase.event, makeOwnedPayload(counter));
+      if (counter.count != 2) {
+        appendViolation(violations, testCase, "backing storage retained");
+      }
+    }
+    if (counter.count != 2) {
+      appendViolation(violations, testCase, "teardown did not release storage");
+    }
+  }
+  EXPECT_TRUE(violations.empty()) << violations;
 }
 
 } // namespace moxygen

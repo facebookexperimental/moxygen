@@ -725,9 +725,9 @@ folly::dynamic MOQTObjectDatagramCreated::toDynamic() const {
     obj["object_status"] = objectStatus.value();
   }
 
-  if (objectPayload) {
-    obj["object_payload"] = objectPayload->to<std::string>();
-  }
+  // qlog types object_payload as a RawInfo, so report the size without the
+  // bytes. Datagram headers have no payload length field to echo.
+  obj["object_payload"] = folly::dynamic::object("length", objectPayloadLength);
 
   obj["end_of_group"] = endOfGroup;
 
@@ -762,9 +762,9 @@ folly::dynamic MOQTObjectDatagramParsed::toDynamic() const {
     obj["object_status"] = objectStatus.value();
   }
 
-  if (objectPayload) {
-    obj["object_payload"] = objectPayload->to<std::string>();
-  }
+  // qlog types object_payload as a RawInfo, so report the size without the
+  // bytes. Datagram headers have no payload length field to echo.
+  obj["object_payload"] = folly::dynamic::object("length", objectPayloadLength);
 
   obj["end_of_group"] = endOfGroup;
 
@@ -828,9 +828,6 @@ folly::dynamic MOQTSubgroupObjectCreated::toDynamic() const {
   if (objectStatus.value()) {
     obj["objectStatus"] = std::to_string(objectStatus.value());
   }
-  if (objectPayload) {
-    obj["objectPayload"] = objectPayload->to<std::string>();
-  }
   return obj;
 }
 
@@ -856,9 +853,6 @@ folly::dynamic MOQTSubgroupObjectParsed::toDynamic() const {
   obj["objectPayloadLength"] = std::to_string(objectPayloadLength);
   if (objectStatus.has_value()) {
     obj["objectStatus"] = std::to_string(objectStatus.value());
-  }
-  if (objectPayload) {
-    obj["objectPayload"] = objectPayload->to<std::string>();
   }
   return obj;
 }
@@ -897,9 +891,6 @@ folly::dynamic MOQTFetchObjectCreated::toDynamic() const {
   if (objectStatus.has_value()) {
     obj["objectStatus"] = std::to_string(objectStatus.value());
   }
-  if (objectPayload) {
-    obj["objectPayload"] = objectPayload->to<std::string>();
-  }
   return obj;
 }
 
@@ -922,9 +913,6 @@ folly::dynamic MOQTFetchObjectParsed::toDynamic() const {
   obj["objectPayloadLength"] = std::to_string(objectPayloadLength);
   if (objectStatus.has_value()) {
     obj["objectStatus"] = std::to_string(objectStatus.value());
-  }
-  if (objectPayload) {
-    obj["objectPayload"] = objectPayload->to<std::string>();
   }
   return obj;
 }

@@ -591,7 +591,6 @@ struct MOQTControlMessageCreated {
   uint64_t streamId{0};
   std::optional<uint64_t> length;
   std::unique_ptr<MOQTBaseControlMessage> message;
-  std::unique_ptr<folly::IOBuf> raw;
 
   folly::dynamic toDynamic() const;
 };
@@ -600,7 +599,6 @@ struct MOQTControlMessageParsed {
   uint64_t streamId{0};
   std::optional<uint64_t> length;
   std::unique_ptr<MOQTBaseControlMessage> message;
-  std::unique_ptr<folly::IOBuf> raw;
 
   folly::dynamic toDynamic() const;
 };
@@ -621,7 +619,7 @@ struct MOQTObjectDatagramCreated {
   std::optional<uint64_t> extensionHeadersLength;
   std::vector<MOQTExtensionHeader> extensionHeaders;
   std::optional<uint64_t> objectStatus;
-  std::unique_ptr<folly::IOBuf> objectPayload;
+  uint64_t objectPayloadLength{0};
   bool endOfGroup{false};
 
   folly::dynamic toDynamic() const;
@@ -635,7 +633,7 @@ struct MOQTObjectDatagramParsed {
   std::optional<uint64_t> extensionHeadersLength;
   std::vector<MOQTExtensionHeader> extensionHeaders;
   std::optional<uint64_t> objectStatus;
-  std::unique_ptr<folly::IOBuf> objectPayload;
+  uint64_t objectPayloadLength{0};
   bool endOfGroup{false};
 
   folly::dynamic toDynamic() const;
@@ -674,7 +672,6 @@ struct MOQTSubgroupObjectCreated {
   std::vector<MOQTExtensionHeader> extensionHeaders;
   uint64_t objectPayloadLength{0};
   std::optional<uint64_t> objectStatus;
-  std::unique_ptr<folly::IOBuf> objectPayload;
 
   folly::dynamic toDynamic() const;
 };
@@ -688,7 +685,6 @@ struct MOQTSubgroupObjectParsed {
   std::vector<MOQTExtensionHeader> extensionHeaders;
   uint64_t objectPayloadLength{0};
   std::optional<uint64_t> objectStatus;
-  std::unique_ptr<folly::IOBuf> objectPayload;
 
   folly::dynamic toDynamic() const;
 };
@@ -717,7 +713,6 @@ struct MOQTFetchObjectCreated {
   std::vector<MOQTExtensionHeader> extensionHeaders;
   uint64_t objectPayloadLength{0};
   std::optional<uint64_t> objectStatus;
-  std::unique_ptr<folly::IOBuf> objectPayload;
 
   folly::dynamic toDynamic() const;
 };
@@ -732,7 +727,6 @@ struct MOQTFetchObjectParsed {
   std::vector<MOQTExtensionHeader> extensionHeaders;
   uint64_t objectPayloadLength{0};
   std::optional<uint64_t> objectStatus;
-  std::unique_ptr<folly::IOBuf> objectPayload;
 
   folly::dynamic toDynamic() const;
 };

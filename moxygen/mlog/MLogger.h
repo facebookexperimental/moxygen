@@ -259,8 +259,7 @@ class MLogger {
       ControlMessageType controlType,
       uint64_t streamId,
       const std::optional<uint64_t>& length,
-      std::unique_ptr<MOQTBaseControlMessage> message,
-      std::unique_ptr<folly::IOBuf> raw = nullptr);
+      std::unique_ptr<MOQTBaseControlMessage> message);
   std::vector<MOQTExtensionHeader> convertExtensionToMoQTExtensionHeaders(
       std::vector<Extension> extensions);
 };
