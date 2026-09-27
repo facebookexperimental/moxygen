@@ -7867,12 +7867,35 @@ void MoQSession::setMoqSettings(MoQSettings settings) {
   moqSettings_ = settings;
 }
 
+void SessionScoped::bind(const std::shared_ptr<MoQSession>& session) {
+  XCHECK(session);
+  if (bound_) {
+    XCHECK(sessionId_ == session->sessionId())
+        << "SessionScoped handler registered on more than one session";
+    return;
+  }
+  session_ = session;
+  sessionId_ = session->sessionId();
+  bound_ = true;
+}
+
+std::shared_ptr<MoQSession> SessionScoped::getSession() const {
+  XCHECK(bound_) << "SessionScoped handler used before it was registered";
+  return session_.lock();
+}
+
 void MoQSession::setPublishHandler(std::shared_ptr<Publisher> publishHandler) {
+  if (auto* scoped = dynamic_cast<SessionScoped*>(publishHandler.get())) {
+    scoped->bind(shared_from_this());
+  }
   publishHandler_ = std::move(publishHandler);
 }
 
 void MoQSession::setSubscribeHandler(
     std::shared_ptr<Subscriber> subscribeHandler) {
+  if (auto* scoped = dynamic_cast<SessionScoped*>(subscribeHandler.get())) {
+    scoped->bind(shared_from_this());
+  }
   subscribeHandler_ = std::move(subscribeHandler);
 }
 

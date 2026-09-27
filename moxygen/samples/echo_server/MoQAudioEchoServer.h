@@ -8,7 +8,6 @@
 
 #include <memory>
 
-#include <folly/container/F14Map.h>
 #include <folly/logging/xlog.h>
 
 #include <moxygen/MoQServer.h>
@@ -24,17 +23,15 @@ class MoQAudioEchoServer : public MoQServer {
   MoQAudioEchoServer(std::string cert, std::string key, std::string endpoint);
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override;
-  void terminateClientSession(std::shared_ptr<MoQSession> session) override;
 
  private:
   // Echo handler implements publish+publish refactor: accept inbound
   // PUBLISH(ns/audio0) and republish back to the same session as ns/echo0.
+  // One per session, so the peer to echo to is the one it is bound to.
   class EchoHandler : public Publisher,
                       public Subscriber,
-                      public std::enable_shared_from_this<EchoHandler> {
+                      public SessionScoped {
    public:
-    EchoHandler() = default;
-
     // Subscriber overrides
     // NEW: publish+publish echo path
     Subscriber::PublishResult publish(
@@ -43,14 +40,10 @@ class MoQAudioEchoServer : public MoQServer {
 
     void goaway(Goaway) override {}
 
-    void removeSession(const std::shared_ptr<MoQSession>& session);
-
    private:
     static constexpr const char* kUpstreamTrackName = "audio0";
     static constexpr const char* kEchoTrackName = "echo0";
   };
-
-  std::shared_ptr<EchoHandler> handler_{std::make_shared<EchoHandler>()};
 };
 
 } // namespace moxygen

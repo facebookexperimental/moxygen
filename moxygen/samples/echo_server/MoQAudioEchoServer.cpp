@@ -26,13 +26,9 @@ void MoQAudioEchoServer::onNewSession(
   // stampServerTimestamps.
   clientSession->setMoqSettings(settings);
 
-  clientSession->setPublishHandler(handler_);
-  clientSession->setSubscribeHandler(handler_);
-}
-
-void MoQAudioEchoServer::terminateClientSession(
-    std::shared_ptr<MoQSession> /*session*/) {
-  // No-op: no legacy per-session state to clean up in publish+publish mode.
+  auto handler = std::make_shared<EchoHandler>();
+  clientSession->setPublishHandler(handler);
+  clientSession->setSubscribeHandler(handler);
 }
 
 // ---- EchoHandler ----
@@ -46,15 +42,17 @@ Subscriber::PublishResult MoQAudioEchoServer::EchoHandler::publish(
         PublishError{
             pub.requestID, PublishErrorCode::NOT_SUPPORTED, "Unknown track"});
   }
-  // Republish as echo0 within the same namespace back to current session
+  auto peer = getSession();
+  if (!peer) {
+    return folly::makeUnexpected(
+        PublishError{
+            pub.requestID,
+            PublishErrorCode::INTERNAL_ERROR,
+            "session is gone"});
+  }
+  // Republish as echo0 within the same namespace back to the peer
   pub.fullTrackName.trackName = kEchoTrackName;
-  auto session = MoQSession::getRequestSession();
-  return session->publish(std::move(pub), std::move(handle));
-}
-
-void MoQAudioEchoServer::EchoHandler::removeSession(
-    const std::shared_ptr<MoQSession>& /*session*/) {
-  // No-op: no per-session forwarding state to remove in publish+publish mode.
+  return peer->publish(std::move(pub), std::move(handle));
 }
 
 } // namespace moxygen

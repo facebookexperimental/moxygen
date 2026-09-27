@@ -284,6 +284,10 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent}));
 namespace {
+class ScopedTestHandler : public Publisher,
+                          public Subscriber,
+                          public SessionScoped {};
+
 std::shared_ptr<MoQRelaySession> makeBareSession(
     const std::shared_ptr<MoQFollyExecutorImpl>& exec,
     proxygen::WebTransport* wt) {
@@ -314,6 +318,74 @@ TEST(MoQSessionTest, SessionIdsAreDistinct) {
   auto third = makeBareSession(exec, clientWt.get());
   EXPECT_NE(third->sessionId(), firstId);
   EXPECT_NE(third->sessionId(), second->sessionId());
+}
+
+// Registering a SessionScoped handler binds it to that session, so the handler
+// can reach its peer without going through the request context.
+TEST(MoQSessionTest, SessionScopedHandlerIsBoundOnRegistration) {
+  folly::EventBase eventBase;
+  auto exec = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  auto session = makeBareSession(exec, clientWt.get());
+
+  auto handler = std::make_shared<ScopedTestHandler>();
+  session->setSubscribeHandler(handler);
+
+  EXPECT_EQ(handler->boundSessionId(), session->sessionId());
+  EXPECT_EQ(handler->getSession(), session);
+
+  // Registering the same handler for the other role on the same session is
+  // how a handler that implements both is wired up, and must be accepted.
+  session->setPublishHandler(handler);
+  EXPECT_EQ(handler->getSession(), session);
+
+  // The publish setter binds on its own: it casts from Publisher*, which is a
+  // different subobject than the subscribe setter casts from.
+  auto publishOnly = std::make_shared<ScopedTestHandler>();
+  session->setPublishHandler(publishOnly);
+  EXPECT_EQ(publishOnly->boundSessionId(), session->sessionId());
+  EXPECT_EQ(publishOnly->getSession(), session);
+}
+
+// A SessionScoped handler serves exactly one peer. Registering it on a second
+// session would silently make it answer for the wrong one.
+TEST(MoQSessionTest, SessionScopedHandlerRejectsASecondSession) {
+  folly::EventBase eventBase;
+  auto exec = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  auto first = makeBareSession(exec, clientWt.get());
+  auto second = makeBareSession(exec, clientWt.get());
+
+  auto handler = std::make_shared<ScopedTestHandler>();
+  first->setSubscribeHandler(handler);
+
+  EXPECT_DEATH(second->setSubscribeHandler(handler), "more than one session");
+}
+
+// The peer is held weakly, so a handler that outlives its session gets null
+// back instead of a dangling one. Both samples that use this API turn that
+// into an error reply, so it has to be reachable.
+TEST(MoQSessionTest, SessionScopedHandlerLosesItsPeerWhenTheSessionGoes) {
+  folly::EventBase eventBase;
+  auto exec = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  auto session = makeBareSession(exec, clientWt.get());
+  auto sessionId = session->sessionId();
+
+  auto handler = std::make_shared<ScopedTestHandler>();
+  session->setSubscribeHandler(handler);
+  ASSERT_NE(handler->getSession(), nullptr);
+
+  // The handler is registered on the session, so drop the handler's own owner
+  // first to break the cycle, then the session.
+  session->setSubscribeHandler(nullptr);
+  session.reset();
+
+  EXPECT_EQ(handler->getSession(), nullptr);
+  EXPECT_EQ(handler->boundSessionId(), sessionId);
 }
 
 TEST(MoQSessionTest, SetVersionFromAlpnLegacy) {

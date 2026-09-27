@@ -137,6 +137,37 @@ class SubscribeTracksReply : public MessageReply,
   bool errorSent_{false};
 };
 
+class MoQSession;
+
+// Mixin for a Publisher or Subscriber that serves exactly one peer, which it
+// reaches through getSession(). Construct one per session and register it;
+// MoQSession binds it on the way in. The peer is held weakly, because the
+// session owns the handler.
+class SessionScoped {
+ public:
+  // Null once the session is gone. Invalid to call before the handler has been
+  // registered on a session.
+  std::shared_ptr<MoQSession> getSession() const;
+
+  SessionId boundSessionId() const {
+    return sessionId_;
+  }
+
+ protected:
+  SessionScoped() = default;
+  ~SessionScoped() = default;
+
+ private:
+  friend class MoQSession;
+  // Registering the same handler on a second session is a programming error:
+  // the handler would silently start answering for the wrong peer.
+  void bind(const std::shared_ptr<MoQSession>& session);
+
+  std::weak_ptr<MoQSession> session_;
+  SessionId sessionId_;
+  bool bound_{false};
+};
+
 class MoQSession : public Subscriber,
                    public Publisher,
                    public MoQControlCodec::ControlCallback,
