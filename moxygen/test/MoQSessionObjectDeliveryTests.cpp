@@ -855,7 +855,7 @@ CO_TEST_P_X(MoQSessionTest, TestOnObjectPayload) {
         receivedObjectPayload.post();
         return ObjectPublishStatus::DONE;
       }));
-  EXPECT_CALL(*sg, endOfSubgroup());
+  EXPECT_CALL(*sg, endOfSubgroup()).WillOnce(testing::Return(folly::unit));
   co_await receivedObjectPayload;
 
   expectPublishDone();
@@ -1534,6 +1534,102 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeInObjectCallbackSuppressesNextObject) {
   EXPECT_FALSE(obj2Delivered)
       << "object 2 must not be delivered after unsubscribe()";
 
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// After a cancel, reset() is the only callback an open subgroup consumer gets.
+// The FIN lands in the same event loop pass as the unsubscribe, so the read
+// loop resumes with the FIN after the subscription is cancelled.
+CO_TEST_P_X(MoQSessionTest, FinAfterUnsubscribeResetsOpenSubgroup) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<SubgroupConsumer> sgConsumer;
+  std::shared_ptr<MockSubscriptionHandle> mockHandle;
+  expectSubscribe([&](auto sub, auto pub) -> TaskSubscribeResult {
+    sgConsumer = pub->beginSubgroup(0, 0, 0).value();
+    sgConsumer->object(0, moxygen::test::makeBuf(10));
+    mockHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return mockHandle;
+  });
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton obj0Delivered;
+  folly::coro::Baton resetBaton;
+  std::shared_ptr<Subscriber::SubscriptionHandle> subHandle;
+
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, false)).WillOnce([&](auto...) {
+    obj0Delivered.post();
+    return folly::unit;
+  });
+  EXPECT_CALL(*sg1, endOfSubgroup()).Times(0);
+  EXPECT_CALL(*sg1, reset(ResetStreamErrorCode::CANCELLED)).WillOnce([&](auto) {
+    resetBaton.post();
+  });
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  subHandle = res.value();
+
+  EXPECT_CALL(*mockHandle, unsubscribe()).WillRepeatedly(testing::Return());
+
+  co_await obj0Delivered;
+  eventBase_.runInEventBaseThread([sgConsumer, subHandle] {
+    subHandle->unsubscribe();
+    sgConsumer->endOfSubgroup();
+  });
+
+  co_await resetBaton;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Same contract when the read loop exits at its cancellation check. The last
+// object's callback unsubscribes, and the stream stays open.
+CO_TEST_P_X(MoQSessionTest, UnsubscribeInLastObjectCallbackResetsSubgroup) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<SubgroupConsumer> sgConsumer;
+  std::shared_ptr<MockSubscriptionHandle> mockHandle;
+  expectSubscribe([&](auto sub, auto pub) -> TaskSubscribeResult {
+    sgConsumer = pub->beginSubgroup(0, 0, 0).value();
+    sgConsumer->object(0, moxygen::test::makeBuf(10));
+    mockHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return mockHandle;
+  });
+
+  auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton obj0Delivered;
+  folly::coro::Baton resetBaton;
+  std::shared_ptr<Subscriber::SubscriptionHandle> subHandle;
+
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg1));
+  EXPECT_CALL(*sg1, object(0, _, _, false)).WillOnce([&](auto...) {
+    obj0Delivered.post();
+    return folly::unit;
+  });
+  EXPECT_CALL(*sg1, object(1, _, _, false)).WillOnce([&](auto...) {
+    subHandle->unsubscribe();
+    return folly::unit;
+  });
+  EXPECT_CALL(*sg1, reset(ResetStreamErrorCode::CANCELLED)).WillOnce([&](auto) {
+    resetBaton.post();
+  });
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  subHandle = res.value();
+
+  EXPECT_CALL(*mockHandle, unsubscribe()).WillRepeatedly(testing::Return());
+
+  co_await obj0Delivered;
+  eventBase_.runInEventBaseThread(
+      [sgConsumer] { sgConsumer->object(1, moxygen::test::makeBuf(10)); });
+
+  co_await resetBaton;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

@@ -4279,6 +4279,8 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
       break;
     }
   }
+  // A consumer left open after a cancel still gets its one terminal callback.
+  dcb.reset(ResetStreamErrorCode::CANCELLED);
   // ~ReadHandleRef sends STOP_SENDING if the handle is still live.
 }
 
