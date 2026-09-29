@@ -6184,7 +6184,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   };
   if (draining_ || closed_) {
     SubscribeError subscribeError = {
-        std::numeric_limits<uint64_t>::max(),
+        failedLocalRequestID(),
         SubscribeErrorCode::INTERNAL_ERROR,
         "draining/closed session"};
     MOQ_SUBSCRIBER_STATS(
@@ -6702,7 +6702,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
   if (draining_ || closed_) {
     FetchError fetchError = {
-        std::numeric_limits<uint64_t>::max(),
+        failedLocalRequestID(),
         FetchErrorCode::INTERNAL_ERROR,
         "draining/closed session"};
     MOQ_SUBSCRIBER_STATS(

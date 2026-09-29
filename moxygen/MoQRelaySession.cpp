@@ -597,7 +597,7 @@ MoQRelaySession::sendRequestUpdateOnBidi(
   if (isClosed()) {
     co_return folly::makeUnexpected(
         RequestError{
-            reqUpdate.requestID,
+            failedLocalRequestID(),
             RequestErrorCode::INTERNAL_ERROR,
             "Session closed"});
   }
@@ -612,7 +612,7 @@ MoQRelaySession::sendRequestUpdateOnBidi(
   if (!version) {
     co_return folly::makeUnexpected(
         RequestError{
-            reqUpdate.requestID,
+            failedLocalRequestID(),
             RequestErrorCode::INTERNAL_ERROR,
             "No negotiated version"});
   }
@@ -633,7 +633,7 @@ MoQRelaySession::sendRequestUpdateOnBidi(
   if (onBidi && (!writeHandle || control->readLoopExited())) {
     co_return folly::makeUnexpected(
         RequestError{
-            reqUpdate.requestID,
+            failedLocalRequestID(),
             RequestErrorCode::INTERNAL_ERROR,
             "No request stream for REQUEST_UPDATE"});
   }
