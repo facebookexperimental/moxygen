@@ -50,6 +50,29 @@ TEST_P(MoQVersionNegotiationTest, Setup) {
   folly::coro::blockingWait(setupMoQSession(), getExecutor());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// start() hands the control loops to the executor, and the owner may close
+// and release the session before the executor runs them. ASan reports a loop
+// that reads the session after that. No weak_ptr here: one would keep the
+// make_shared allocation alive and hide the read.
+TEST_P(MoQVersionNegotiationTest, ReleasedBeforeControlLoopsRun) {
+  clientSession_->start();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  clientSession_.reset();
+  for (int i = 0; i < 10; ++i) {
+    eventBase_.loopOnce(EVLOOP_NONBLOCK);
+  }
+}
+
+TEST_P(MoQVersionNegotiationTest, ReleasedWithoutCloseBeforeControlLoopsRun) {
+  clientSession_->start();
+  // serverWt_ would otherwise report the session end to the freed client.
+  serverWt_->setPeerHandler(nullptr);
+  clientSession_.reset();
+  for (int i = 0; i < 10; ++i) {
+    eventBase_.loopOnce(EVLOOP_NONBLOCK);
+  }
+}
 using CurrentVersionOnly = MoQSessionTest;
 
 class SetupTokenCacheTest : public MoQSessionTest {
