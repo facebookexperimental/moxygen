@@ -10,6 +10,7 @@
 #include <folly/logging/xlog.h>
 #include <signal.h>
 #include <functional>
+#include <utility>
 
 namespace moxygen {
 
@@ -17,17 +18,28 @@ namespace moxygen {
  * SignalHandler - Signal handler for MoQ servers
  *
  * Handles SIGINT and SIGTERM signals, executing an optional cleanup callback
- * and terminating the event loop. Always restores default signal handlers
- * to allow forced termination with a second signal.
+ * and terminating the event loop if terminateLoop is set. Always restores
+ * default signal handlers to allow forced termination with a second signal.
  */
 class SignalHandler : public folly::AsyncSignalHandler {
  public:
   explicit SignalHandler(
       folly::EventBase* evb,
-      std::function<void(int)> cleanup_fn = nullptr)
-      : AsyncSignalHandler(evb), cleanup_fn_(std::move(cleanup_fn)) {
+      std::function<void(int)> cleanup_fn = nullptr,
+      bool terminateLoop = true)
+      : AsyncSignalHandler(evb),
+        cleanup_fn_(std::move(cleanup_fn)),
+        terminateLoop_(terminateLoop) {
     registerSignalHandler(SIGINT);
     registerSignalHandler(SIGTERM);
+  }
+
+  // Stops handling signals. While registered, this keeps evb.loop() running.
+  void unregister() {
+    if (std::exchange(registered_, false)) {
+      unregisterSignalHandler(SIGINT);
+      unregisterSignalHandler(SIGTERM);
+    }
   }
 
   void signalReceived(int signum) noexcept override {
@@ -41,12 +53,11 @@ class SignalHandler : public folly::AsyncSignalHandler {
         cleanup_fn_(signum);
       }
 
-      // Terminate event loop
-      getEventBase()->terminateLoopSoon();
+      if (terminateLoop_) {
+        getEventBase()->terminateLoopSoon();
+      }
 
-      // Unregister handlers
-      unregisterSignalHandler(SIGINT);
-      unregisterSignalHandler(SIGTERM);
+      unregister();
 
       // Restore defaults (allows Ctrl-C twice to force quit)
       signal(SIGINT, SIG_DFL);
@@ -56,7 +67,9 @@ class SignalHandler : public folly::AsyncSignalHandler {
 
  private:
   std::function<void(int)> cleanup_fn_;
+  bool terminateLoop_;
   bool stopped_{false};
+  bool registered_{true};
 };
 
 } // namespace moxygen
