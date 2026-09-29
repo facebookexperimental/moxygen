@@ -109,7 +109,8 @@ class MoQPerfTestClient {
       uint32_t firstObjectSize,
       uint32_t otherObjectSize,
       uint32_t deliveryTimeoutMs,
-      uint32_t objectsPerGroup);
+      uint32_t objectsPerGroup,
+      uint32_t objectIntervalMs);
 
   ~MoQPerfTestClient() = default;
 

@@ -5,6 +5,7 @@
  */
 
 #include <folly/portability/GTest.h>
+#include <algorithm>
 #include "folly/Expected.h"
 #include "folly/coro/Baton.h"
 #include "folly/coro/BlockingWait.h"
@@ -1446,10 +1447,7 @@ CO_TEST_F(MoQTrackServerTest, FetchOfADatagramTrackFlagsEachObject) {
 
 CO_TEST_F(MoQTrackServerTest, CancelAllStopsAnInFlightFetch) {
   MoQTrackServerTest::CreateDefaultTrackNamespace();
-  // Groups 0-2 of two objects at 50ms each, so the whole track is ~300ms and
-  // the wait below is comfortably longer than the tail we expect not to get.
   track_.trackNamespace[4] = "2";
-  track_.trackNamespace[9] = "50";
   moxygen::Fetch req;
   req.requestID = 0;
   req.fullTrackName.trackNamespace = track_;
@@ -1457,8 +1455,8 @@ CO_TEST_F(MoQTrackServerTest, CancelAllStopsAnInFlightFetch) {
 
   auto mockConsumer =
       std::make_shared<testing::NiceMock<moxygen::MockFetchConsumer>>();
-  // Posted on the second object so the cancel lands mid-track rather than at a
-  // point the clock happens to pick.
+  // A FETCH is unpaced, so consumer backpressure is what holds it mid-track:
+  // report BLOCKED on the second object and drain only after cancelling.
   auto midTrack = std::make_shared<folly::coro::Baton>();
   constexpr int kObjectsBeforeCancel = 2;
   int objects = 0;
@@ -1472,13 +1470,20 @@ CO_TEST_F(MoQTrackServerTest, CancelAllStopsAnInFlightFetch) {
           testing::_,
           testing::_,
           testing::_))
-      .WillByDefault([&objects, midTrack] {
-        if (++objects == kObjectsBeforeCancel) {
-          midTrack->post();
-        }
-        return folly::Expected<folly::Unit, moxygen::MoQPublishError>(
-            folly::unit);
-      });
+      .WillByDefault(
+          [&objects, midTrack]()
+              -> folly::Expected<folly::Unit, moxygen::MoQPublishError> {
+            if (++objects == kObjectsBeforeCancel) {
+              midTrack->post();
+              return folly::makeUnexpected(
+                  moxygen::MoQPublishError(moxygen::MoQPublishError::BLOCKED));
+            }
+            return folly::unit;
+          });
+  folly::Promise<uint64_t> drained;
+  ON_CALL(*mockConsumer, awaitReadyToConsume()).WillByDefault([&drained] {
+    return drained.getSemiFuture();
+  });
   // A cancelled fetch unwinds without completing, so endOfFetch never fires.
   EXPECT_CALL(*mockConsumer, endOfFetch()).Times(0);
 
@@ -1487,9 +1492,11 @@ CO_TEST_F(MoQTrackServerTest, CancelAllStopsAnInFlightFetch) {
   co_await *midTrack;
   publisher_->cancelAll();
 
-  // The rest of the track would have landed inside this wait, so a count that
-  // has not moved is the generator having stopped, not the clock being slow.
-  co_await folly::coro::sleep(std::chrono::milliseconds(300));
+  // Waking the generator after the cancel proves it stopped on the token rather
+  // than on the block: it resumes, rechecks, and unwinds without another
+  // object.
+  drained.setValue(0);
+  co_await folly::coro::sleep(std::chrono::milliseconds(100));
   EXPECT_EQ(objects, kObjectsBeforeCancel);
 }
 
@@ -2262,4 +2269,136 @@ TEST_F(MoQTrackServerTest, DatagramEndOfGroupMarkerIsAnEmptyStatusObject) {
           {0, moxygen::ObjectStatus::NORMAL, false, true},
           {2, moxygen::ObjectStatus::END_OF_GROUP, false, false}};
   EXPECT_EQ(sent, expected);
+}
+
+// A cadence regression here surfaces as unexplained drift in a moqperf run, not
+// as a failure.  The property under test is that producing an object is
+// deducted from the period rather than added to it: sleeping the frequency
+// after each object made the real period "frequency plus however long the
+// object took".  The other half of the fix -- that timers no longer quantize to
+// the 10ms libevent jiffy -- is deliberately not asserted: it is a sub-10ms
+// effect, and seeing it needs a period small enough that CI timer slack swamps
+// the signal.
+TEST_F(MoQTrackServerTest, DeductsObjectWorkFromTheObjectPeriod) {
+  using namespace std::chrono;
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  constexpr uint64_t kPeriodMs = 40;
+  constexpr uint64_t kWorkMs = 20;
+  constexpr uint64_t kObjects = 20;
+  params_.lastGroupInTrack = 0;
+  params_.objectsPerGroup = kObjects;
+  params_.lastObjectInTrack = kObjects - 1;
+  params_.objectFrequency = kPeriodMs;
+
+  auto ok = folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
+  std::vector<steady_clock::time_point> times;
+  auto subgroup =
+      std::make_shared<testing::NiceMock<moxygen::MockSubgroupConsumer>>();
+  ON_CALL(*subgroup, object(testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault([&times, ok, kWorkMs](auto, auto, const auto&, auto) {
+        times.push_back(steady_clock::now());
+        // Spin rather than sleep: producing an object has to cost real time on
+        // the generator's thread, and a spin can only ever overrun, which is
+        // the direction both assertions below tolerate.
+        auto until = times.back() + milliseconds(kWorkMs);
+        while (steady_clock::now() < until) {
+        }
+        return ok;
+      });
+  ON_CALL(*subgroup, endOfSubgroup()).WillByDefault(testing::Return(ok));
+
+  auto consumer =
+      std::make_shared<testing::NiceMock<moxygen::MockTrackConsumer>>();
+  ON_CALL(
+      *consumer, beginSubgroup(testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault(
+          testing::Return(
+              folly::makeExpected<moxygen::MoQPublishError>(
+                  std::shared_ptr<moxygen::SubgroupConsumer>(subgroup))));
+
+  folly::coro::blockingWait(
+      publisher_->sendOneSubgroupPerGroup(params_, consumer));
+
+  ASSERT_EQ(times.size(), kObjects);
+  std::vector<double> intervals;
+  for (size_t i = 1; i < times.size(); ++i) {
+    intervals.push_back(
+        duration<double, std::milli>(times[i] - times[i - 1]).count());
+  }
+  auto elapsedMs =
+      duration<double, std::milli>(times.back() - times.front()).count();
+  std::sort(intervals.begin(), intervals.end());
+  auto median = intervals[intervals.size() / 2];
+
+  // Both bounds are one-sided in the direction a slow or contended machine
+  // pushes.  A CI hiccup inflates intervals, so the upper bound reads the
+  // median, which a handful of long intervals cannot move; catching up after
+  // one shortens the intervals that follow, so the lower bound reads the total,
+  // which no amount of slowness can shrink.
+  constexpr double kMaxMedianMs = kPeriodMs + kWorkMs / 2.0;
+  EXPECT_LT(median, kMaxMedianMs)
+      << "a " << kPeriodMs << "ms period with " << kWorkMs
+      << "ms of work per object produced a typical interval of " << median
+      << "ms, close to the " << kPeriodMs + kWorkMs
+      << "ms of a generator that sleeps the period after each object instead of"
+         " to a deadline";
+  constexpr double kMinElapsedMs = (kObjects - 1) * (kPeriodMs * 0.8);
+  EXPECT_GT(elapsedMs, kMinElapsedMs)
+      << kObjects << " objects took " << elapsedMs << "ms, short of the "
+      << (kObjects - 1) * kPeriodMs << "ms a " << kPeriodMs
+      << "ms period calls for";
+}
+
+// A generator that stalls past several deadlines sends the objects it owes
+// back to back, then returns to the original grid.
+TEST_F(MoQTrackServerTest, CatchesUpAfterAStall) {
+  using namespace std::chrono;
+  MoQTrackServerTest::CreateDefaultMoQTestParameters();
+  constexpr uint64_t kPeriodMs = 40;
+  constexpr uint64_t kStallMs = kPeriodMs * 7 / 2;
+  constexpr uint64_t kObjects = 6;
+  params_.lastGroupInTrack = 0;
+  params_.objectsPerGroup = kObjects;
+  params_.lastObjectInTrack = kObjects - 1;
+  params_.objectFrequency = kPeriodMs;
+
+  auto ok = folly::makeExpected<moxygen::MoQPublishError>(folly::unit);
+  std::vector<steady_clock::time_point> times;
+  auto subgroup =
+      std::make_shared<testing::NiceMock<moxygen::MockSubgroupConsumer>>();
+  ON_CALL(*subgroup, object(testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault([&times, ok, kStallMs](auto, auto, const auto&, auto) {
+        times.push_back(steady_clock::now());
+        if (times.size() == 1) {
+          auto until = times.back() + milliseconds(kStallMs);
+          while (steady_clock::now() < until) {
+          }
+        }
+        return ok;
+      });
+  ON_CALL(*subgroup, endOfSubgroup()).WillByDefault(testing::Return(ok));
+
+  auto consumer =
+      std::make_shared<testing::NiceMock<moxygen::MockTrackConsumer>>();
+  ON_CALL(
+      *consumer, beginSubgroup(testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault(
+          testing::Return(
+              folly::makeExpected<moxygen::MoQPublishError>(
+                  std::shared_ptr<moxygen::SubgroupConsumer>(subgroup))));
+
+  folly::coro::blockingWait(
+      publisher_->sendOneSubgroupPerGroup(params_, consumer));
+
+  ASSERT_EQ(times.size(), kObjects);
+  auto sinceStart = [&](size_t i) {
+    return duration<double, std::milli>(times[i] - times.front()).count();
+  };
+  // Objects 1-3 were due at 40, 80 and 120ms, all before the stall ended.
+  EXPECT_LT(sinceStart(3) - sinceStart(1), kPeriodMs)
+      << "objects owed after a stall were spaced out instead of sent back to "
+         "back";
+  // Object 4 was due at 160ms, after the stall ended at 140ms, so the
+  // generator waits for it.
+  EXPECT_GT(sinceStart(4), kStallMs + kPeriodMs / 4);
 }
