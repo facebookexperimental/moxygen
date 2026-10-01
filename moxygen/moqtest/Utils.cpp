@@ -80,6 +80,14 @@ convertMoqTestParamToTrackNamespace(const MoQTestParameters& params) {
     return folly::makeUnexpected(validateResult.error());
   }
 
+  // Only asked of a track we are about to request: our deadlines scale with
+  // the frequency, so an unbounded one is an unbounded run.  A peer asking us
+  // to publish one is still conformant, so this is not in the validator.
+  if (params.objectFrequency > kMaxObjectFrequencyMs) {
+    return folly::makeUnexpected(
+        std::runtime_error("Object Frequency Exceeds One Minute"));
+  }
+
   TrackNamespace trackNamespace({
       kField0,
       std::to_string(static_cast<int>(params.forwardingPreference)),

@@ -117,8 +117,9 @@ class MoQTestClient : public Subscriber,
       PublishRequest pub,
       std::shared_ptr<SubscriptionHandle> handle) override;
 
-  // Drains the session so the peer sees a clean close; the event loop exits
-  // once the session finishes closing.
+  // Ends the run, from a verdict or from a signal.  Drains so the peer sees a
+  // clean close, or closes outright when the verdict was a failure and the
+  // peer may never wind the track down.
   void shutdown();
 
   // Completes when the track finishes, validation fails, or shutdown() runs.
@@ -190,7 +191,9 @@ class MoQTestClient : public Subscriber,
       client_.onError(state_, code);
     }
 
-    void onPublishDone(PublishDone /* done */) override {}
+    void onPublishDone(PublishDone /* done */) override {
+      client_.onPublishDone();
+    }
 
     void onAllDataReceived() override {
       client_.onAllDataReceived(state_);
@@ -253,7 +256,70 @@ class MoQTestClient : public Subscriber,
       const ObjectHeader& objHeader);
   void onEndOfStream();
   void onError(ReceiveState& state, ResetStreamErrorCode);
+  void onPublishDone();
   void onAllDataReceived(ReceiveState& state);
+
+  class ObjectDeadline : public quic::QuicTimerCallback {
+   public:
+    ObjectDeadline(
+        MoQTestClient& client,
+        uint64_t group,
+        uint64_t id,
+        std::chrono::milliseconds timeout)
+        : client_(client), group_(group), id_(id), timeout_(timeout) {}
+    void timeoutExpired() noexcept override {
+      expired_ = true;
+      client_.objectDeadlineExpired(group_, id_);
+    }
+    // Tearing the timer wheel down cancels every callback on it; that is not a
+    // missed deadline.
+    void callbackCanceled() noexcept override {}
+    [[nodiscard]] bool expired() const {
+      return expired_;
+    }
+    // Fixed when the scoreboard is built, from the object's place in the whole
+    // track: one that arrives before the deadlines are armed must not shift the
+    // survivors' deadlines earlier.
+    [[nodiscard]] std::chrono::milliseconds timeout() const {
+      return timeout_;
+    }
+
+   private:
+    MoQTestClient& client_;
+    uint64_t group_;
+    uint64_t id_;
+    std::chrono::milliseconds timeout_;
+    bool expired_{false};
+  };
+
+  // Backstop for the stalls no per-object deadline sees: a track that never
+  // starts, or one that delivers everything but never closes its streams.
+  class RequestDeadline : public quic::QuicTimerCallback {
+   public:
+    explicit RequestDeadline(MoQTestClient& client) : client_(client) {}
+    void timeoutExpired() noexcept override {
+      client_.requestDeadlineExpired();
+    }
+    void callbackCanceled() noexcept override {}
+
+   private:
+    MoQTestClient& client_;
+  };
+
+  void armObjectDeadlines();
+  ForwardingPreference deadlineForwardingPreference(uint64_t group) const;
+  std::chrono::milliseconds objectInterval() const;
+  void cancelDeadlines();
+  void objectDeadlineExpired(uint64_t group, uint64_t id);
+  void requestDeadlineExpired();
+  void finishRequest();
+
+  RequestDeadline requestDeadline_{*this};
+  // Last group the joining FETCH half covers; unset when there is no join.
+  std::optional<uint64_t> fetchHalfLastGroup_;
+  bool publishDoneReceived_{false};
+  // A datagram that arrives after its deadline is as good as dropped.
+  uint64_t datagramDrops_{0};
 
   ReceiveState subState_;
   ReceiveState fetchState_;
@@ -281,13 +347,24 @@ class MoQTestClient : public Subscriber,
   // The slice of the track the current request covers
   MoQTestFetchWindow window_;
 
-  // Scoreboard of expected (group, objectId) pairs
+  // Scoreboard of expected (group, objectId) pairs, each owning the deadline it
+  // must arrive by, so scoring an object off also cancels its timer.
   // When receiving: if present, erase; if absent, it's a duplicate
-  // At end: success == scoreboard.empty() (or within drop limit for datagrams)
-  std::set<std::pair<uint64_t, uint64_t>> expectedObjects_;
+  // At end: success == scoreboard.empty(), or within the drop budget for
+  // datagrams
+  std::map<std::pair<uint64_t, uint64_t>, std::unique_ptr<ObjectDeadline>>
+      expectedObjects_;
+
+  // What the scoreboard started with; it drains as objects arrive, and the drop
+  // budget and request deadline are both fractions of the whole track.
+  uint64_t totalExpected_{0};
 
   // Set when a delivery-semantics check fails; suppresses the final SUCCESS
   bool semanticsFailed_{false};
+
+  // Whether the run reached a FAILURE verdict, which decides whether shutdown
+  // drains the session or closes it.
+  bool verdictFailed_{false};
 
   // Set once we cancel the request ourselves; the peer answers with a stream
   // reset that must not count against the track
