@@ -21,7 +21,10 @@ namespace moxygen::test {
 TEST(MoQWebTransportBootstrapHandlerTest, CreatesSessionAndOwnsTransport) {
   folly::EventBase eventBase;
   auto executor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
-  auto pendingSession = makeMoQWebTransportSession(std::move(executor));
+  auto keepalive = std::make_shared<int>();
+  std::weak_ptr<void> keepaliveObserver = keepalive;
+  auto pendingSession =
+      makeMoQWebTransportSession(std::move(executor), std::move(keepalive));
   auto [clientTransport, serverTransport] =
       proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
   auto transport = std::shared_ptr<proxygen::test::FakeSharedWebTransport>(
@@ -32,8 +35,10 @@ TEST(MoQWebTransportBootstrapHandlerTest, CreatesSessionAndOwnsTransport) {
       folly::coro::blockingWait(std::move(pendingSession.session), &eventBase);
 
   ASSERT_NE(session, nullptr);
+  EXPECT_FALSE(keepaliveObserver.expired());
   EXPECT_FALSE(transport->isSessionClosed());
   session.reset();
+  EXPECT_TRUE(keepaliveObserver.expired());
   EXPECT_TRUE(transport->isSessionClosed());
 }
 

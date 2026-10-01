@@ -14,14 +14,26 @@
 namespace moxygen {
 namespace {
 
+Setup makeClientSetup() {
+  Setup setup;
+  setup.params.insertParam(Parameter(
+      folly::to_underlying(SetupKey::MAX_REQUEST_ID), kDefaultMaxRequestID));
+  setup.params.insertParam(Parameter(
+      folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE),
+      kDefaultMaxAuthTokenCacheSize));
+  return setup;
+}
+
 class MoQWebTransportBootstrapHandler final
     : public proxygen::WebTransportHandler {
  public:
   MoQWebTransportBootstrapHandler(
       std::shared_ptr<MoQExecutor> executor,
-      folly::coro::Promise<std::shared_ptr<MoQSession>> sessionPromise)
+      folly::coro::Promise<std::shared_ptr<MoQSession>> sessionPromise,
+      std::shared_ptr<void> keepalive)
       : executor_(std::move(executor)),
-        sessionPromise_(std::move(sessionPromise)) {}
+        sessionPromise_(std::move(sessionPromise)),
+        keepalive_(std::move(keepalive)) {}
 
   MoQWebTransportBootstrapHandler(const MoQWebTransportBootstrapHandler&) =
       delete;
@@ -81,11 +93,13 @@ class MoQWebTransportBootstrapHandler final
           new MoQSession(
               folly::MaybeManagedPtr<proxygen::WebTransport>(webTransportPtr),
               executor_),
-          [webTransport =
-               std::move(webTransport)](MoQSession* sessionToDelete) mutable {
+          [webTransport = std::move(webTransport),
+           keepalive =
+               std::move(keepalive_)](MoQSession* sessionToDelete) mutable {
             sessionToDelete->close(SessionCloseErrorCode::NO_ERROR);
             delete sessionToDelete;
             webTransport.reset();
+            keepalive.reset();
           });
       session_ = session;
       sessionPromise_.setValue(std::move(session));
@@ -106,12 +120,14 @@ class MoQWebTransportBootstrapHandler final
   std::shared_ptr<MoQExecutor> executor_;
   std::weak_ptr<MoQSession> session_;
   folly::coro::Promise<std::shared_ptr<MoQSession>> sessionPromise_;
+  std::shared_ptr<void> keepalive_;
 };
 
 } // namespace
 
 PendingMoQWebTransportSession makeMoQWebTransportSession(
-    std::shared_ptr<MoQExecutor> executor) {
+    std::shared_ptr<MoQExecutor> executor,
+    std::shared_ptr<void> keepalive) {
   if (!executor) {
     throw std::invalid_argument("executor must not be null");
   }
@@ -120,9 +136,36 @@ PendingMoQWebTransportSession makeMoQWebTransportSession(
       folly::coro::makePromiseContract<std::shared_ptr<MoQSession>>();
   return {
       .handler = std::make_unique<MoQWebTransportBootstrapHandler>(
-          std::move(executor), std::move(sessionPromise)),
+          std::move(executor), std::move(sessionPromise), std::move(keepalive)),
       .session = std::move(sessionFuture),
   };
+}
+
+folly::coro::Task<std::shared_ptr<MoQSession>> establishMoQWebTransportSession(
+    std::shared_ptr<MoQSession> session,
+    std::string authority,
+    std::string path,
+    std::optional<std::string> negotiatedProtocol) {
+  session->setAuthority(std::move(authority));
+  session->setPath(std::move(path));
+  if (negotiatedProtocol) {
+    session->validateAndSetVersionFromAlpn(*negotiatedProtocol);
+  }
+  session->start();
+
+  const auto sendResult = session->sendSetup(makeClientSetup());
+  if (sendResult.hasError()) {
+    session->close(SessionCloseErrorCode::INTERNAL_ERROR);
+    throw std::runtime_error("failed to send MoQ CLIENT_SETUP");
+  }
+
+  try {
+    co_await session->awaitPeerSetup();
+  } catch (...) {
+    session->close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
+    throw;
+  }
+  co_return session;
 }
 
 } // namespace moxygen

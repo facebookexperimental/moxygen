@@ -13,6 +13,18 @@ moxygen_add_library(moxygen_proxy_moq_upstream_provider
     Folly::folly_expected
 )
 
+moxygen_add_library(moxygen_proxy_moq_webtransport_bootstrap_handler
+  SRCS
+    MoQWebTransportBootstrapHandler.cpp
+  DEPS
+    Folly::folly_maybe_managed_ptr
+  EXPORTED_DEPS
+    moxygen_moq
+    proxygen::proxygen_http_webtransport
+    Folly::folly_coro_promise
+    Folly::folly_coro_task
+)
+
 moxygen_add_library(moxygen_proxy_moq_proxy_track
   SRCS
     MoQProxyTrack.cpp
@@ -23,6 +35,17 @@ moxygen_add_library(moxygen_proxy_moq_proxy_track
   EXPORTED_DEPS
     moxygen_moq
     moxygen_proxy_moq_upstream_provider
+    Folly::folly_coro_shared_promise
     Folly::folly_coro_task
     Folly::folly_expected
+)
+
+moxygen_add_library(moxygen_proxy_moq_proxy
+  SRCS
+    MoQProxy.cpp
+  EXPORTED_DEPS
+    moxygen_moq
+    moxygen_proxy_moq_proxy_track
+    moxygen_proxy_moq_upstream_provider
+    Folly::folly_container_f14_hash
 )
