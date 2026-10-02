@@ -205,6 +205,7 @@ void MoQServer::createMoQQuicSession(
   auto localAddress = quic::toFollySocketAddress(quicSocket->getLocalAddress());
 
   auto qevb = quicSocket->getEventBase();
+  auto* socket = quicSocket.get();
   const bool useQuicWtSession = useQuicWtSession_ && useQuicWtSession_();
   std::shared_ptr<proxygen::WebTransport> wt;
   if (useQuicWtSession) {
@@ -242,6 +243,8 @@ void MoQServer::createMoQQuicSession(
     static_cast<proxygen::QuicWebTransport*>(wtPtr)->setHandler(
         moqSession.get());
   }
+  QuicTransportObservers observers(*socket);
+  onSessionTransportReady(moqSession, observers);
   // the handleClientSession coro this session moqSession
   co_withExecutor(evb, handleClientSession(std::move(moqSession))).start();
 }
@@ -342,6 +345,8 @@ void MoQServer::Handler::onHeadersComplete(
       } else {
         XLOG(DBG4) << "Failed to negotiate WebTransport protocol";
         resp.setStatusCode(400);
+        txn_->sendHeadersWithEOM(resp);
+        return;
       }
     }
   }
@@ -356,30 +361,30 @@ void MoQServer::Handler::onHeadersComplete(
   clientSession_ = server_.createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport>(wt),
       server_.getOrCreateExecutor(evb));
+  quic::QuicSocket* quicSocket = nullptr;
+  auto& transport = txn_->getTransport();
+  if (transport.getSessionType() ==
+      proxygen::HTTPTransaction::Transport::Type::QUIC) {
+    auto* hqSession =
+        static_cast<proxygen::HQSession*>(transport.getHTTPSessionBase());
+    quicSocket = hqSession->getQuicSocket();
+  }
   clientSession_->setAuthority(
       std::string(req->getHeaders().getSingleOrEmpty(HTTP_HEADER_HOST)));
   clientSession_->setPath(std::string(req->getPathAsStringPiece()));
   if (server_.mLoggerFactory_) {
     auto logger = server_.createLogger();
-    // Set QUIC connection IDs and addresses on the logger from the underlying
-    // transaction
-    auto& transport = txn_->getTransport();
-    if (transport.getSessionType() ==
-        proxygen::HTTPTransaction::Transport::Type::QUIC) {
-      auto* hqSession =
-          static_cast<proxygen::HQSession*>(transport.getHTTPSessionBase());
-      if (auto* quicSocket = hqSession->getQuicSocket()) {
-        if (auto clientCid = quicSocket->getClientConnectionId()) {
-          logger->setDcid(*clientCid);
-        }
-        if (auto serverCid = quicSocket->getServerConnectionId()) {
-          logger->setSrcCid(*serverCid);
-        }
-        logger->setPeerAddress(
-            quic::toFollySocketAddress(quicSocket->getPeerAddress()));
-        logger->setLocalAddress(
-            quic::toFollySocketAddress(quicSocket->getLocalAddress()));
+    if (quicSocket) {
+      if (auto clientCid = quicSocket->getClientConnectionId()) {
+        logger->setDcid(*clientCid);
       }
+      if (auto serverCid = quicSocket->getServerConnectionId()) {
+        logger->setSrcCid(*serverCid);
+      }
+      logger->setPeerAddress(
+          quic::toFollySocketAddress(quicSocket->getPeerAddress()));
+      logger->setLocalAddress(
+          quic::toFollySocketAddress(quicSocket->getLocalAddress()));
     }
     clientSession_->setLogger(logger);
   }
@@ -389,6 +394,10 @@ void MoQServer::Handler::onHeadersComplete(
     clientSession_->validateAndSetVersionFromAlpn(*negotiatedProtocol);
   }
 
+  if (quicSocket) {
+    QuicTransportObservers observers(*quicSocket);
+    server_.onSessionTransportReady(clientSession_, observers);
+  }
   co_withExecutor(evb, server_.handleClientSession(clientSession_)).start();
 }
 

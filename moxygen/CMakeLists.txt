@@ -161,6 +161,7 @@ moxygen_add_library(moxygen_moq_server
     moxygen_moq_early_data_handler
     moxygen_moq_server_base
     proxygen::proxygen_hq_server
+    mvfst::mvfst_api_transport
     mvfst::mvfst_logging_qlogger
     Folly::folly_init_init
     Folly::folly_io_async_async_base

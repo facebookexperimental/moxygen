@@ -7,6 +7,7 @@
 #pragma once
 
 #include <proxygen/httpserver/samples/hq/HQServer.h>
+#include <quic/api/QuicSocket.h>
 #include <quic/logging/QLogger.h>
 #include <moxygen/MoQEarlyDataHandler.h>
 #include <moxygen/MoQServerBase.h>
@@ -16,7 +17,9 @@
 #include <folly/io/async/EventBaseManager.h>
 
 #include <chrono>
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include "moxygen/MoQSession.h"
 
@@ -24,6 +27,30 @@ namespace moxygen {
 
 const std::string kDefaultFilePath =
     "ti/experimental/moxygen/moqtest/mlog_server.txt";
+
+// Observer access to the QUIC connection behind a MoQ session, valid only for
+// the duration of MoQServer::onSessionTransportReady.
+class QuicTransportObservers {
+ public:
+  explicit QuicTransportObservers(quic::QuicSocket& socket) : socket_(socket) {}
+  QuicTransportObservers(const QuicTransportObservers&) = delete;
+  QuicTransportObservers(QuicTransportObservers&&) = delete;
+  QuicTransportObservers& operator=(const QuicTransportObservers&) = delete;
+  QuicTransportObservers& operator=(QuicTransportObservers&&) = delete;
+  ~QuicTransportObservers() = default;
+
+  bool addObserver(std::shared_ptr<quic::QuicSocket::Observer> observer) {
+    return socket_.addObserver(std::move(observer));
+  }
+
+  template <typename T>
+  std::vector<T*> findObservers() {
+    return socket_.findObservers<T>();
+  }
+
+ private:
+  quic::QuicSocket& socket_;
+};
 
 class MoQServer : public MoQServerBase {
  public:
@@ -152,6 +179,16 @@ class MoQServer : public MoQServerBase {
   }
 
  protected:
+  // Called on the connection's event base once per accepted session, after
+  // the session is configured from its transport and before onNewSession.
+  // A direct QUIC connection carries one session; over HTTP/3 this runs for
+  // each accepted WebTransport session, and they share the connection's
+  // observers. Only sessions backed by a QUIC connection get this call. Must
+  // not throw: it is called from noexcept transport callbacks.
+  virtual void onSessionTransportReady(
+      const std::shared_ptr<MoQSession>& /*session*/,
+      QuicTransportObservers& /*observers*/) {}
+
   // Register ALPN handlers for direct QUIC connections (internal use)
   void registerAlpnHandler(const std::vector<std::string>& alpns);
 
