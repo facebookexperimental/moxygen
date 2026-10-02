@@ -48,8 +48,15 @@ class MoQProxy : public Publisher,
 
  private:
   class LateBoundPublishConsumer;
+  struct PublishAttempt {
+    PublishOk ok;
+    std::shared_ptr<TrackConsumer> consumer;
+    std::shared_ptr<MoQSession> session;
+  };
+
   using PublishReplyTask =
       folly::coro::Task<folly::Expected<PublishOk, PublishError>>;
+  using PublishAttemptResult = folly::Expected<PublishAttempt, RequestError>;
 
   explicit MoQProxy(
       std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders);
@@ -58,14 +65,28 @@ class MoQProxy : public Publisher,
       std::shared_ptr<MoQProxy> self,
       PublishRequest publishRequest,
       std::shared_ptr<Publisher::SubscriptionHandle> handle,
-      std::shared_ptr<LateBoundPublishConsumer> consumer);
+      std::shared_ptr<LateBoundPublishConsumer> consumer,
+      SessionId downstreamSessionId);
 
-  template <typename Result, typename Operation>
+  static folly::coro::Task<PublishAttemptResult> publishToUpstream(
+      std::shared_ptr<MoQSession> upstreamSession,
+      SessionId downstreamSessionId,
+      PublishRequest publishRequest,
+      std::shared_ptr<Publisher::SubscriptionHandle> handle);
+  static void cancelPublishAttempt(PublishAttempt& attempt);
+
+  template <
+      typename Result,
+      typename Operation,
+      typename Cleanup,
+      typename... Args>
   folly::coro::Task<folly::Expected<Result, RequestError>> tryUpstreams(
       RequestID requestID,
       const FullTrackName& fullTrackName,
       const TrackRequestParameters& params,
-      Operation operation);
+      Operation operation,
+      Cleanup cleanup,
+      Args... args);
 
   std::shared_ptr<MoQProxyTrack> getOrCreateTrack(
       const FullTrackName& fullTrackName);

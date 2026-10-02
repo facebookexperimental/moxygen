@@ -18,12 +18,18 @@
 
 namespace moxygen {
 
-template <typename Result, typename Operation>
+template <
+    typename Result,
+    typename Operation,
+    typename Cleanup,
+    typename... Args>
 folly::coro::Task<folly::Expected<Result, RequestError>> MoQProxy::tryUpstreams(
     RequestID requestID,
     const FullTrackName& fullTrackName,
     const TrackRequestParameters& params,
-    Operation operation) {
+    Operation operation,
+    Cleanup cleanup,
+    Args... args) {
   RequestError failure{
       requestID, RequestErrorCode::INTERNAL_ERROR, "no upstream available"};
   auto setInternalFailure = [&](std::string reason) {
@@ -54,7 +60,15 @@ folly::coro::Task<folly::Expected<Result, RequestError>> MoQProxy::tryUpstreams(
       continue;
     }
     auto result = co_await folly::coro::co_awaitTry(
-        operation(std::move(upstreamSession)));
+        operation(std::move(upstreamSession), args...));
+    if (closed_) {
+      if (result.hasValue() && result->hasValue()) {
+        cleanup(result->value());
+      }
+      co_return folly::makeUnexpected(
+          RequestError{
+              requestID, RequestErrorCode::GOING_AWAY, "proxy is closed"});
+    }
     if (result.hasException()) {
       setInternalFailure(result.exception().what().toStdString());
       continue;
@@ -159,6 +173,11 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::fetch(
       fetch.params,
       [this, fetch, consumer](std::shared_ptr<MoQSession> upstreamSession) {
         return cache_->fetch(fetch, consumer, std::move(upstreamSession));
+      },
+      [](std::shared_ptr<Publisher::FetchHandle>& handle) {
+        if (handle) {
+          handle->fetchCancel();
+        }
       });
 }
 
@@ -172,13 +191,22 @@ Subscriber::PublishResult MoQProxy::publish(
             PublishErrorCode::GOING_AWAY,
             "proxy is closed"});
   }
+  if (!handle) {
+    return folly::makeUnexpected(
+        PublishError{
+            publishRequest.requestID,
+            PublishErrorCode::INTERNAL_ERROR,
+            "publish handle is required"});
+  }
 
+  auto downstreamSessionId = MoQSession::getRequestContext().sessionId;
   auto consumer = std::make_shared<LateBoundPublishConsumer>();
   auto reply = forwardPublish(
       shared_from_this(),
       std::move(publishRequest),
       std::move(handle),
-      consumer);
+      consumer,
+      downstreamSessionId);
 
   return Subscriber::PublishConsumerAndReplyTask{
       std::move(consumer), std::move(reply), /*consumerReady=*/false};
@@ -188,71 +216,87 @@ MoQProxy::PublishReplyTask MoQProxy::forwardPublish(
     std::shared_ptr<MoQProxy> self,
     PublishRequest publishRequest,
     std::shared_ptr<Publisher::SubscriptionHandle> handle,
-    std::shared_ptr<LateBoundPublishConsumer> consumer) {
+    std::shared_ptr<LateBoundPublishConsumer> consumer,
+    SessionId downstreamSessionId) {
   auto requestID = publishRequest.requestID;
-  auto sessionResult = co_await folly::coro::co_awaitTry(
-      self->upstreamProviders_.front()->getSession(
-          publishRequest.fullTrackName,
-          publishRequest.params,
-          /*hasFallbackProvider=*/false));
+  auto attemptResult = co_await self->tryUpstreams<PublishAttempt>(
+      requestID,
+      publishRequest.fullTrackName,
+      publishRequest.params,
+      &MoQProxy::publishToUpstream,
+      &MoQProxy::cancelPublishAttempt,
+      downstreamSessionId,
+      publishRequest,
+      handle);
+  if (attemptResult.hasError()) {
+    co_return folly::makeUnexpected(std::move(attemptResult.error()));
+  }
+
+  auto attempt = std::move(attemptResult.value());
   if (self->closed_) {
+    cancelPublishAttempt(attempt);
     co_return folly::makeUnexpected(
         PublishError{
             requestID, PublishErrorCode::GOING_AWAY, "proxy is closed"});
   }
-  if (sessionResult.hasException() || sessionResult->hasError()) {
-    auto reason = sessionResult.hasException()
-        ? sessionResult.exception().what().toStdString()
-        : std::move(sessionResult->error().message);
+  consumer->bind(std::move(attempt.consumer), std::move(attempt.session));
+  auto ok = std::move(attempt.ok);
+  ok.requestID = requestID;
+  co_return ok;
+}
+
+folly::coro::Task<MoQProxy::PublishAttemptResult> MoQProxy::publishToUpstream(
+    std::shared_ptr<MoQSession> upstreamSession,
+    SessionId downstreamSessionId,
+    PublishRequest publishRequest,
+    std::shared_ptr<Publisher::SubscriptionHandle> handle) {
+  if (upstreamSession->sessionId() == downstreamSessionId) {
     co_return folly::makeUnexpected(
-        PublishError{
-            requestID, PublishErrorCode::INTERNAL_ERROR, std::move(reason)});
-  }
-  auto upstreamSession = std::move(sessionResult->value());
-  if (!upstreamSession) {
-    co_return folly::makeUnexpected(
-        PublishError{
-            requestID,
-            PublishErrorCode::INTERNAL_ERROR,
-            "upstream provider returned a null session"});
+        RequestError{
+            publishRequest.requestID,
+            RequestErrorCode::INTERNAL_ERROR,
+            "upstream and downstream sessions are the same"});
   }
 
-  auto publishResult = upstreamSession->publish(publishRequest, handle);
-  if (publishResult.hasError()) {
-    auto error = std::move(publishResult.error());
-    error.requestID = requestID;
-    co_return folly::makeUnexpected(std::move(error));
+  auto result = upstreamSession->publish(publishRequest, handle);
+  if (result.hasError()) {
+    co_return folly::makeUnexpected(std::move(result.error()));
   }
-  if (!publishResult->consumer) {
+  if (!result->consumer) {
     co_return folly::makeUnexpected(
-        PublishError{
-            requestID,
-            PublishErrorCode::INTERNAL_ERROR,
+        RequestError{
+            publishRequest.requestID,
+            RequestErrorCode::INTERNAL_ERROR,
             "upstream returned a null publish consumer"});
   }
-  auto response = std::move(publishResult.value());
-  consumer->bind(std::move(response.consumer), std::move(upstreamSession));
-
+  auto response = std::move(result.value());
   auto replyResult =
       co_await folly::coro::co_awaitTry(std::move(response.reply));
-  if (self->closed_) {
-    co_return folly::makeUnexpected(
-        PublishError{
-            requestID, PublishErrorCode::GOING_AWAY, "proxy is closed"});
-  }
   if (replyResult.hasException() || replyResult->hasError()) {
     auto error = replyResult.hasException()
         ? PublishError{
-              requestID,
+              publishRequest.requestID,
               PublishErrorCode::INTERNAL_ERROR,
               replyResult.exception().what().toStdString()}
         : std::move(replyResult->error());
-    error.requestID = requestID;
+    error.requestID = publishRequest.requestID;
     co_return folly::makeUnexpected(std::move(error));
   }
-  auto ok = std::move(replyResult->value());
-  ok.requestID = requestID;
-  co_return ok;
+  co_return PublishAttempt{
+      std::move(replyResult->value()),
+      std::move(response.consumer),
+      std::move(upstreamSession)};
+}
+
+void MoQProxy::cancelPublishAttempt(PublishAttempt& attempt) {
+  if (attempt.consumer) {
+    (void)attempt.consumer->publishDone(
+        PublishDone{
+            attempt.ok.requestID,
+            PublishDoneStatusCode::GOING_AWAY,
+            0,
+            "proxy is closed"});
+  }
 }
 
 std::shared_ptr<MoQProxyTrack> MoQProxy::getOrCreateTrack(

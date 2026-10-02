@@ -185,6 +185,15 @@ class MoQProxyTest : public Test {
     });
   }
 
+  Subscriber::PublishResult publish(
+      std::shared_ptr<MoQSession> session,
+      PublishRequest request,
+      std::shared_ptr<Publisher::SubscriptionHandle> handle) {
+    return withSessionContext(std::move(session), [&]() {
+      return proxy_->publish(std::move(request), std::move(handle));
+    });
+  }
+
   static const folly::RequestToken& sessionRequestToken() {
     static folly::RequestToken token("moq_session");
     return token;
@@ -374,7 +383,8 @@ TEST_F(MoQProxyTest, ForwardsPublish) {
             return acceptedPublish(upstreamConsumer, RequestID(100));
           });
 
-  auto result = proxy_->publish(makePublish(RequestID(7)), handle);
+  auto result =
+      publish(makeDownstreamSession(), makePublish(RequestID(7)), handle);
 
   ASSERT_TRUE(result.hasValue());
   EXPECT_FALSE(result->consumerReady);
@@ -399,11 +409,121 @@ TEST_F(MoQProxyTest, ForwardsPublish) {
                   .hasValue());
 }
 
+TEST_F(MoQProxyTest, PublishFallsBackToNextProvider) {
+  auto fallbackSession =
+      std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
+  auto fallbackProvider =
+      std::make_shared<TestUpstreamProvider>(fallbackSession);
+  proxy_ = MoQProxy::create({provider_, fallbackProvider});
+
+  EXPECT_CALL(*upstreamSession_, publish(_, _))
+      .WillOnce([](const PublishRequest& request, auto) {
+        return Subscriber::PublishResult(
+            folly::makeUnexpected(
+                PublishError{
+                    request.requestID,
+                    PublishErrorCode::INTERNAL_ERROR,
+                    "unavailable"}));
+      });
+  auto upstreamConsumer = makeConsumer();
+  EXPECT_CALL(*fallbackSession, publish(_, _))
+      .WillOnce([upstreamConsumer](const PublishRequest&, auto) {
+        return acceptedPublish(upstreamConsumer, RequestID(101));
+      });
+
+  auto result = publish(
+      makeDownstreamSession(),
+      makePublish(RequestID(8)),
+      makeUpstreamHandle(RequestID(1)));
+  ASSERT_TRUE(result.hasValue());
+  auto reply = folly::coro::blockingWait(std::move(result->reply), &eventBase_);
+
+  ASSERT_TRUE(reply.hasValue());
+  EXPECT_EQ(reply->requestID, RequestID(8));
+  EXPECT_EQ(provider_->lastFallbackExists, true);
+  EXPECT_EQ(fallbackProvider->lastFallbackExists, false);
+}
+
+TEST_F(MoQProxyTest, PublishReplyErrorFallsBackToNextProvider) {
+  auto fallbackSession =
+      std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
+  auto fallbackProvider =
+      std::make_shared<TestUpstreamProvider>(fallbackSession);
+  proxy_ = MoQProxy::create({provider_, fallbackProvider});
+
+  auto rejectedConsumer = makeConsumer();
+  EXPECT_CALL(*upstreamSession_, publish(_, _))
+      .WillOnce([rejectedConsumer](const PublishRequest& request, auto) {
+        return Subscriber::PublishConsumerAndReplyTask{
+            rejectedConsumer,
+            folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
+                folly::makeUnexpected(
+                    PublishError{
+                        request.requestID,
+                        PublishErrorCode::INTERNAL_ERROR,
+                        "rejected"})),
+            /*consumerReady=*/true};
+      });
+  auto fallbackConsumer = makeConsumer();
+  EXPECT_CALL(*fallbackSession, publish(_, _))
+      .WillOnce([fallbackConsumer](const PublishRequest&, auto) {
+        return acceptedPublish(fallbackConsumer, RequestID(101));
+      });
+
+  auto result = publish(
+      makeDownstreamSession(),
+      makePublish(RequestID(9)),
+      makeUpstreamHandle(RequestID(1)));
+  ASSERT_TRUE(result.hasValue());
+  auto reply = folly::coro::blockingWait(std::move(result->reply), &eventBase_);
+
+  ASSERT_TRUE(reply.hasValue());
+  EXPECT_EQ(reply->requestID, RequestID(9));
+  EXPECT_CALL(*rejectedConsumer, datagram(_, _, _)).Times(0);
+  EXPECT_CALL(*fallbackConsumer, datagram(_, _, true))
+      .WillOnce(Return(folly::unit));
+  EXPECT_TRUE(result->consumer
+                  ->datagram(
+                      ObjectHeader{},
+                      folly::IOBuf::copyBuffer("x"),
+                      /*lastInGroup=*/true)
+                  .hasValue());
+}
+
+TEST_F(MoQProxyTest, PublishSkipsDownstreamSession) {
+  auto fallbackSession =
+      std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
+  auto fallbackProvider =
+      std::make_shared<TestUpstreamProvider>(fallbackSession);
+  proxy_ = MoQProxy::create({provider_, fallbackProvider});
+
+  EXPECT_CALL(*upstreamSession_, publish(_, _)).Times(0);
+  auto fallbackConsumer = makeConsumer();
+  EXPECT_CALL(*fallbackSession, publish(_, _))
+      .WillOnce([fallbackConsumer](const PublishRequest&, auto) {
+        return acceptedPublish(fallbackConsumer, RequestID(101));
+      });
+
+  auto result = publish(
+      upstreamSession_,
+      makePublish(RequestID(10)),
+      makeUpstreamHandle(RequestID(1)));
+  ASSERT_TRUE(result.hasValue());
+  auto reply = folly::coro::blockingWait(std::move(result->reply), &eventBase_);
+
+  ASSERT_TRUE(reply.hasValue());
+  EXPECT_EQ(reply->requestID, RequestID(10));
+  EXPECT_EQ(provider_->lastFallbackExists, true);
+  EXPECT_EQ(fallbackProvider->lastFallbackExists, false);
+}
+
 TEST_F(MoQProxyTest, PublishProviderExceptionIsReturned) {
   provider_->exception = "provider failed";
 
-  auto result = proxy_->publish(
-      makePublish(RequestID(9)), makeUpstreamHandle(RequestID(1)));
+  auto result = publish(
+      makeDownstreamSession(),
+      makePublish(RequestID(9)),
+      makeUpstreamHandle(RequestID(1)));
   ASSERT_TRUE(result.hasValue());
   auto reply = folly::coro::blockingWait(std::move(result->reply), &eventBase_);
 
@@ -422,8 +542,10 @@ TEST_F(MoQProxyTest, CloseDuringPublishSessionLookupReturnsGoingAway) {
   };
   EXPECT_CALL(*upstreamSession_, publish(_, _)).Times(0);
 
-  auto result = proxy_->publish(
-      makePublish(RequestID(10)), makeUpstreamHandle(RequestID(1)));
+  auto result = publish(
+      makeDownstreamSession(),
+      makePublish(RequestID(10)),
+      makeUpstreamHandle(RequestID(1)));
   ASSERT_TRUE(result.hasValue());
   auto reply = folly::coro::blockingWait(std::move(result->reply), &eventBase_);
 
@@ -435,6 +557,8 @@ TEST_F(MoQProxyTest, CloseDuringPublishSessionLookupReturnsGoingAway) {
 TEST_F(MoQProxyTest, CloseDuringPublishReplyReturnsGoingAway) {
   auto upstreamConsumer = makeConsumer();
   std::weak_ptr<MoQProxy> proxy = proxy_;
+  EXPECT_CALL(*upstreamConsumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
   EXPECT_CALL(*upstreamSession_, publish(_, _))
       .WillOnce([upstreamConsumer, proxy](const PublishRequest& request, auto) {
         auto reply = folly::coro::co_invoke(
@@ -449,8 +573,10 @@ TEST_F(MoQProxyTest, CloseDuringPublishReplyReturnsGoingAway) {
             upstreamConsumer, std::move(reply), /*consumerReady=*/true};
       });
 
-  auto result = proxy_->publish(
-      makePublish(RequestID(11)), makeUpstreamHandle(RequestID(1)));
+  auto result = publish(
+      makeDownstreamSession(),
+      makePublish(RequestID(11)),
+      makeUpstreamHandle(RequestID(1)));
   ASSERT_TRUE(result.hasValue());
   auto reply = folly::coro::blockingWait(std::move(result->reply), &eventBase_);
 
@@ -462,8 +588,10 @@ TEST_F(MoQProxyTest, CloseDuringPublishReplyReturnsGoingAway) {
 TEST_F(MoQProxyTest, CloseRejectsPublish) {
   proxy_->close();
 
-  auto result = proxy_->publish(
-      makePublish(RequestID(12)), makeUpstreamHandle(RequestID(1)));
+  auto result = publish(
+      makeDownstreamSession(),
+      makePublish(RequestID(12)),
+      makeUpstreamHandle(RequestID(1)));
 
   ASSERT_TRUE(result.hasError());
   EXPECT_EQ(result.error().requestID, RequestID(12));
@@ -564,6 +692,27 @@ TEST_F(MoQProxyTest, FetchFallsBackToNextProvider) {
   EXPECT_EQ(result.value()->fetchOk().requestID, RequestID(8));
   EXPECT_EQ(provider_->lastFallbackExists, true);
   EXPECT_EQ(fallbackProvider->lastFallbackExists, false);
+}
+
+TEST_F(MoQProxyTest, CloseDuringFetchCancelsUpstream) {
+  auto upstreamHandle = makeFetchHandle(RequestID(101));
+  std::weak_ptr<MoQProxy> proxy = proxy_;
+  EXPECT_CALL(*upstreamHandle, fetchCancel());
+  EXPECT_CALL(*upstreamSession_, fetch(_, _))
+      .WillOnce(
+          [upstreamHandle, proxy](Fetch, std::shared_ptr<FetchConsumer>)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            if (auto locked = proxy.lock()) {
+              locked->close();
+            }
+            co_return upstreamHandle;
+          });
+
+  auto result = fetch(makeDownstreamSession(), makeFetch(RequestID(9)));
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().requestID, RequestID(9));
+  EXPECT_EQ(result.error().errorCode, FetchErrorCode::GOING_AWAY);
 }
 
 TEST_F(MoQProxyTest, RejectsJoiningFetch) {
