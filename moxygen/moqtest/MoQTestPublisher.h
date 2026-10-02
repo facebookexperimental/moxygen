@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <atomic>
+
 #include <folly/container/F14Map.h>
 #include <folly/coro/SharedPromise.h>
 #include <folly/futures/HeapTimekeeper.h>
@@ -42,8 +44,25 @@ class MoQTestFetchHandle : public Publisher::FetchHandle {
 class MoQTestPublisher : public Publisher,
                          public std::enable_shared_from_this<MoQTestPublisher> {
  public:
+  // What the paced generators handed to their consumers; FETCH is not counted.
+  // Readable from any thread.
+  struct SendStats {
+    std::atomic<uint64_t> objects{0};
+    std::atomic<uint64_t> bytes{0};
+    // Sends made without sleeping, because the generator was already past the
+    // next deadline.
+    std::atomic<uint64_t> behind{0};
+  };
+
   void setIncludeTimestampExtension(bool include) {
     includeTimestampExtension_ = include;
+  }
+
+  const SendStats& datagramStats() const {
+    return datagramStats_;
+  }
+  const SendStats& subgroupStats() const {
+    return subgroupStats_;
   }
 
   // Cancels in-flight send and fetch coroutines so they stop co_await'ing on
@@ -194,16 +213,26 @@ class MoQTestPublisher : public Publisher,
   // object took".
   class ObjectPacer {
    public:
-    ObjectPacer(std::chrono::nanoseconds period, folly::Timekeeper* timekeeper)
+    ObjectPacer(
+        std::chrono::nanoseconds period,
+        folly::Timekeeper* timekeeper,
+        SendStats* stats)
         : period_(period),
           timekeeper_(timekeeper),
+          stats_(stats),
           nextObject_(std::chrono::steady_clock::now()) {}
+
+    void recordSent(uint64_t bytes) {
+      stats_->objects.fetch_add(1, std::memory_order_relaxed);
+      stats_->bytes.fetch_add(bytes, std::memory_order_relaxed);
+    }
 
     folly::coro::Task<void> awaitNextObject();
 
    private:
     std::chrono::nanoseconds period_;
     folly::Timekeeper* timekeeper_;
+    SendStats* stats_;
     std::chrono::steady_clock::time_point nextObject_;
   };
 
@@ -245,6 +274,8 @@ class MoQTestPublisher : public Publisher,
   // a wheel: wheels arm through libevent, whose timeouts are jiffy granular.
   folly::HeapTimekeeper timekeeper_;
   bool includeTimestampExtension_{false};
+  SendStats datagramStats_;
+  SendStats subgroupStats_;
 };
 
 } // namespace moxygen

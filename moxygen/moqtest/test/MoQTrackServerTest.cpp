@@ -2401,4 +2401,8 @@ TEST_F(MoQTrackServerTest, CatchesUpAfterAStall) {
   // Object 4 was due at 160ms, after the stall ended at 140ms, so the
   // generator waits for it.
   EXPECT_GT(sinceStart(4), kStallMs + kPeriodMs / 4);
+
+  const auto& stats = publisher_->subgroupStats();
+  EXPECT_EQ(stats.objects.load(), kObjects);
+  EXPECT_GE(stats.behind.load(), 3u);
 }
