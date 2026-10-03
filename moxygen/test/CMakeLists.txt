@@ -97,6 +97,7 @@ moxygen_add_test(TARGET MoQSessionTests
     MoQSessionPublishTests.cpp
     MoQSessionSubscribeNamespaceTests.cpp
     MoQSessionSubscribeTests.cpp
+    MoQSessionSubscribeTracksTests.cpp
     MoQSessionTests.cpp
     MoQSessionTrackStatusTests.cpp
   DEPENDS
