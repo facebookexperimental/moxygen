@@ -6,10 +6,12 @@
 
 #include <moxygen/util/QuicConnector.h>
 
+#include <fizz/protocol/DefaultCertificateVerifier.h>
 #include <folly/coro/Promise.h>
 #include <folly/coro/Timeout.h>
 #include <folly/futures/ThreadWheelTimekeeper.h>
 #include <folly/logging/xlog.h>
+#include <proxygen/lib/http/coro/client/ProxygenCertVerifier.h>
 #include <quic/client/QuicClientTransport.h>
 #include <quic/common/address/QuicSocketAddressBridge.h>
 #include <quic/common/events/FollyQuicEventBase.h>
@@ -78,6 +80,41 @@ class QuicConnectCB : public quic::QuicSocket::ConnectionSetupCallback {
 
 namespace moxygen {
 
+namespace {
+
+std::shared_ptr<const fizz::CertificateVerifier> makePeerVerifier(
+    std::shared_ptr<fizz::CertificateVerifier> verifier,
+    const folly::SocketAddress& connectAddr,
+    const std::string& hostname) {
+  if (!verifier) {
+    std::unique_ptr<fizz::DefaultCertificateVerifier> defaultVerifier;
+    fizz::Error err;
+    FIZZ_THROW_ON_ERROR(
+        fizz::DefaultCertificateVerifier::create(
+            defaultVerifier, err, fizz::VerificationContext::Client),
+        err);
+    verifier = std::move(defaultVerifier);
+  }
+
+  proxygen::coro::ExpectedIdentity expectedIdentity = [&] {
+    if (hostname.empty()) {
+      return proxygen::coro::ExpectedIdentity::expectIP(
+          connectAddr.getIPAddress());
+    }
+    if (auto ip = folly::IPAddress::tryFromString(hostname)) {
+      return proxygen::coro::ExpectedIdentity::expectIP(std::move(*ip));
+    }
+    return proxygen::coro::ExpectedIdentity::expectDNS(hostname);
+  }();
+  return proxygen::coro::makeVerifier(
+      std::move(verifier),
+      std::move(expectedIdentity),
+      proxygen::coro::ValidationPolicy::Enforcing,
+      nullptr);
+}
+
+} // namespace
+
 folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
 QuicConnector::connectQuic(
     folly::EventBase* eventBase,
@@ -100,9 +137,11 @@ QuicConnector::connectQuic(
   if (earlyDataHandler) {
     fizzContext->setSendEarlyData(true);
   }
-  auto handshakeCtxBuilder = quic::FizzClientQuicHandshakeContext::Builder()
-                                 .setFizzClientContext(fizzContext)
-                                 .setCertificateVerifier(std::move(verifier));
+  auto handshakeCtxBuilder =
+      quic::FizzClientQuicHandshakeContext::Builder()
+          .setFizzClientContext(fizzContext)
+          .setCertificateVerifier(
+              makePeerVerifier(std::move(verifier), connectAddr, hostname));
   if (pskCache) {
     handshakeCtxBuilder =
         std::move(handshakeCtxBuilder).setPskCache(std::move(pskCache));

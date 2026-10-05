@@ -14,24 +14,10 @@ namespace moxygen::test {
 // used in production. Using it in production would mean that this will
 // leave everyone insecure.
 class InsecureVerifierDangerousDoNotUseInProduction
-    : public fizz::CertificateVerifier {
+    : public fizz::InsecureCertificateVerifier {
  public:
-  ~InsecureVerifierDangerousDoNotUseInProduction() override = default;
-
-  fizz::Status verify(
-      std::shared_ptr<const fizz::Cert>& ret,
-      fizz::Error& /* err */,
-      const std::vector<std::shared_ptr<const fizz::PeerCert>>& certs)
-      const override {
-    ret = certs.front();
-    return fizz::Status::Success;
-  }
-
-  fizz::Status getCertificateRequestExtensions(
-      std::vector<fizz::Extension>& /* ret */,
-      fizz::Error& /* err */) const override {
-    return fizz::Status::Success;
-  }
+  InsecureVerifierDangerousDoNotUseInProduction()
+      : fizz::InsecureCertificateVerifier(fizz::VerificationContext::Client) {}
 };
 
 } // namespace moxygen::test

@@ -5,6 +5,9 @@
  */
 
 #include <fizz/client/FizzClientContext.h>
+#include <fizz/protocol/DefaultCertificateVerifier.h>
+#include <fizz/protocol/test/CertUtil.h>
+#include <folly/FileUtil.h>
 #include <folly/ScopeGuard.h>
 #include <folly/Singleton.h>
 #include <folly/Synchronized.h>
@@ -14,6 +17,9 @@
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/portability/GTest.h>
+#include <folly/ssl/OpenSSLCertUtils.h>
+#include <folly/ssl/OpenSSLKeyUtils.h>
+#include <folly/testing/TestUtil.h>
 #include <proxygen/httpserver/samples/hq/FizzContext.h>
 #include <proxygen/lib/http/HQConnector.h>
 #include <proxygen/lib/http/HeaderConstants.h>
@@ -595,19 +601,23 @@ class TestServer : public MoQServer {
   TestServer(
       std::shared_ptr<TestPublisher> publisher,
       std::shared_ptr<TestSubscriber> subscriber,
-      bool rejectSetup = false)
+      bool rejectSetup = false,
+      const std::string& certPath = "",
+      const std::string& keyPath = "")
       : MoQServer(
-            quic::samples::createFizzServerContextWithInsecureDefault(
-                []() {
-                  std::vector<std::string> alpns = {"h3"};
-                  auto moqt = getDefaultMoqtProtocols(true);
-                  alpns.insert(alpns.end(), moqt.begin(), moqt.end());
-                  alpns.emplace_back(kAlpnMoqtDraft18Latest);
-                  return alpns;
-                }(),
-                fizz::server::ClientAuthMode::None,
-                "",
-                ""),
+            [&] {
+              std::vector<std::string> alpns = {"h3"};
+              auto moqt = getDefaultMoqtProtocols(true);
+              alpns.insert(alpns.end(), moqt.begin(), moqt.end());
+              alpns.emplace_back(kAlpnMoqtDraft18Latest);
+              if (certPath.empty()) {
+                return quic::samples::
+                    createFizzServerContextWithInsecureDefault(
+                        alpns, fizz::server::ClientAuthMode::None, "", "");
+              }
+              return quic::samples::createFizzServerContext(
+                  alpns, fizz::server::ClientAuthMode::None, certPath, keyPath);
+            }(),
             kTestEndpoint),
         publisher_(std::move(publisher)),
         subscriber_(std::move(subscriber)),
@@ -765,14 +775,22 @@ class MoQIntegrationTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   folly::coro::Task<void> connectClient(bool webTransport = false) {
+    co_return co_await connectClientWithVerifier(
+        std::make_shared<InsecureVerifierDangerousDoNotUseInProduction>(),
+        "localhost",
+        webTransport);
+  }
+
+  folly::coro::Task<void> connectClientWithVerifier(
+      std::shared_ptr<fizz::CertificateVerifier> verifier,
+      std::string hostname = "localhost",
+      bool webTransport = false) {
     auto evb = clientEvbThread_.getEventBase();
     auto exec = std::make_shared<MoQFollyExecutorImpl>(evb);
 
     auto url = proxygen::URL(
-        fmt::format("https://localhost:{}{}", serverPort_, kTestEndpoint));
+        fmt::format("https://{}:{}{}", hostname, serverPort_, kTestEndpoint));
 
-    auto verifier =
-        std::make_shared<InsecureVerifierDangerousDoNotUseInProduction>();
     if (webTransport) {
       client_ = std::make_unique<MoQWebTransportClient>(
           exec, std::move(url), std::move(verifier));
@@ -915,13 +933,150 @@ class MoQIntegrationTest : public ::testing::TestWithParam<uint64_t> {
             }));
   }
 
+  void restartServerWithCertificate(
+      const std::string& certPath,
+      const std::string& keyPath) {
+    server_->stop();
+    server_.reset();
+    server_ = std::make_shared<TestServer>(
+        publisher_, subscriber_, /*rejectSetup=*/false, certPath, keyPath);
+    server_->start(folly::SocketAddress("::", 0));
+    server_->waitUntilInitialized();
+
+    auto fds = server_->getAllListeningSocketFDs();
+    ASSERT_FALSE(fds.empty());
+    folly::SocketAddress boundAddr;
+    boundAddr.setFromLocalAddress(folly::NetworkSocket::fromFd(fds[0]));
+    serverPort_ = boundAddr.getPort();
+  }
+
+  std::shared_ptr<fizz::CertificateVerifier> useServerCertificate(
+      const std::string& serverIdentity,
+      bool trustServerIssuer,
+      bool ipIdentity = false) {
+    auto trustedCa = fizz::test::createCert(
+        "Trusted Root CA",
+        /*ca=*/true,
+        /*issuer=*/nullptr,
+        fizz::KeyType::P256);
+    auto untrustedCa = fizz::test::createCert(
+        "Untrusted Root CA",
+        /*ca=*/true,
+        /*issuer=*/nullptr,
+        fizz::KeyType::P256);
+    auto* serverCa = trustServerIssuer ? &trustedCa : &untrustedCa;
+    auto leaf = fizz::test::createCert(
+        {.cn = serverIdentity,
+         .sans = ipIdentity ? std::vector<std::string>{}
+                            : std::vector<std::string>{serverIdentity},
+         .ipSans = ipIdentity ? std::vector<std::string>{serverIdentity}
+                              : std::vector<std::string>{},
+         .ca = false,
+         .issuer = serverCa,
+         .keyType = fizz::KeyType::P256});
+
+    certificateDir_ = std::make_unique<folly::test::TemporaryDirectory>();
+    auto caPath = (certificateDir_->path() / "ca.pem").string();
+    auto leafCertPath = (certificateDir_->path() / "leaf.pem").string();
+    auto leafKeyPath = (certificateDir_->path() / "leaf_key.pem").string();
+    EXPECT_TRUE(
+        folly::writeFile(
+            folly::ssl::OpenSSLCertUtils::pemEncode(*trustedCa.cert),
+            caPath.c_str()));
+    EXPECT_TRUE(
+        folly::writeFile(
+            folly::ssl::OpenSSLCertUtils::pemEncode(*leaf.cert),
+            leafCertPath.c_str()));
+    EXPECT_TRUE(
+        folly::writeFile(
+            folly::ssl::OpenSSLKeyUtils::encodePrivateKeyAsPEM(leaf.key.get()),
+            leafKeyPath.c_str()));
+
+    restartServerWithCertificate(leafCertPath, leafKeyPath);
+    std::unique_ptr<fizz::DefaultCertificateVerifier> verifier;
+    fizz::Error err;
+    EXPECT_EQ(
+        fizz::DefaultCertificateVerifier::createFromCAFile(
+            verifier, err, fizz::VerificationContext::Client, caPath.c_str()),
+        fizz::Status::Success);
+    return verifier;
+  }
+
   std::shared_ptr<TestPublisher> publisher_;
   std::shared_ptr<TestSubscriber> subscriber_;
   std::shared_ptr<TestServer> server_;
   std::unique_ptr<MoQClient> client_;
+  std::unique_ptr<folly::test::TemporaryDirectory> certificateDir_;
   uint16_t serverPort_{0};
   folly::ScopedEventBaseThread clientEvbThread_{"MoQIntegrationTestClient"};
 };
+
+TEST_P(MoQIntegrationTest, RejectsWrongTlsIdentity) {
+  auto verifier =
+      useServerCertificate("wrong.example.com", /*trustServerIssuer=*/true);
+
+  runTest(
+      folly::coro::co_invoke(
+          [this, verifier = std::move(verifier)]() mutable
+              -> folly::coro::Task<void> {
+            auto result = co_await folly::coro::co_awaitTry(
+                connectClientWithVerifier(std::move(verifier)));
+            EXPECT_TRUE(result.hasException())
+                << "a trusted certificate for the wrong host must be rejected";
+          }));
+}
+
+TEST_P(MoQIntegrationTest, AcceptsMatchingTlsIdentity) {
+  auto verifier = useServerCertificate("localhost", /*trustServerIssuer=*/true);
+
+  runTest(
+      folly::coro::co_invoke(
+          [this, verifier = std::move(verifier)]() mutable
+              -> folly::coro::Task<void> {
+            co_await connectClientWithVerifier(std::move(verifier));
+          }));
+}
+
+TEST_P(MoQIntegrationTest, RejectsUntrustedTlsCertificate) {
+  auto verifier =
+      useServerCertificate("localhost", /*trustServerIssuer=*/false);
+
+  runTest(
+      folly::coro::co_invoke(
+          [this, verifier = std::move(verifier)]() mutable
+              -> folly::coro::Task<void> {
+            auto result = co_await folly::coro::co_awaitTry(
+                connectClientWithVerifier(std::move(verifier)));
+            EXPECT_TRUE(result.hasException());
+          }));
+}
+
+TEST_P(MoQIntegrationTest, AcceptsMatchingIpTlsIdentity) {
+  auto verifier = useServerCertificate(
+      "127.0.0.1", /*trustServerIssuer=*/true, /*ipIdentity=*/true);
+
+  runTest(
+      folly::coro::co_invoke(
+          [this, verifier = std::move(verifier)]() mutable
+              -> folly::coro::Task<void> {
+            co_await connectClientWithVerifier(
+                std::move(verifier), "127.0.0.1");
+          }));
+}
+
+TEST_P(MoQIntegrationTest, RejectsWrongIpTlsIdentity) {
+  auto verifier = useServerCertificate(
+      "127.0.0.2", /*trustServerIssuer=*/true, /*ipIdentity=*/true);
+
+  runTest(
+      folly::coro::co_invoke(
+          [this, verifier = std::move(verifier)]() mutable
+              -> folly::coro::Task<void> {
+            auto result = co_await folly::coro::co_awaitTry(
+                connectClientWithVerifier(std::move(verifier), "127.0.0.1"));
+            EXPECT_TRUE(result.hasException());
+          }));
+}
 
 // ============================================================================
 // Core Publish/Subscribe Flow Tests

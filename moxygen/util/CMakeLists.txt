@@ -8,6 +8,7 @@ moxygen_add_library(moxygen_util_quic_connector
   SRCS
     QuicConnector.cpp
   DEPS
+    proxygen::proxygen_cert_verifier
     mvfst::mvfst_client
     mvfst::mvfst_common_address_quic_socket_address_bridge
     mvfst::mvfst_common_events_folly_eventbase
