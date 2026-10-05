@@ -345,6 +345,9 @@ folly::dynamic MOQTPublishNamespaceCancel::toDynamic() const {
   auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
   obj["track_namespace"] =
       folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
+  if (requestId.has_value()) {
+    obj["request_id"] = requestId.value();
+  }
   obj["error_code"] = errorCode;
   if (reason.has_value()) {
     obj["reason"] = reason.value();
@@ -548,6 +551,9 @@ folly::dynamic MOQTPublishNamespaceDone::toDynamic() const {
   auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
   obj["trackNamespace"] =
       folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
+  if (requestId.has_value()) {
+    obj["request_id"] = requestId.value();
+  }
   return obj;
 }
 
@@ -612,6 +618,9 @@ folly::dynamic MOQTSubscribeNamespaceError::toDynamic() const {
 std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
     const std::vector<MOQTByteString>& trackNamespace) const {
   std::vector<std::string> track;
+  if (trackNamespace.empty()) {
+    return track;
+  }
   // Check If TrackNamespace is string or value Bytes
 
   switch (trackNamespace[0].type) {
