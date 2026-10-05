@@ -3550,6 +3550,11 @@ MoQSession::SendRequestResult MoQSession::sendRequest(
     folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
         onPeerTermination) {
   if (getDraftMajorVersion(*negotiatedVersion_) >= minBidiDraftVersion) {
+    if (!wt_) {
+      return folly::makeUnexpected(SendRequestError{
+          proxygen::WebTransport::ErrorCode::SESSION_TERMINATED,
+          "closed session"});
+    }
     auto bidiStream = wt_->createBidiStream();
     if (!bidiStream) {
       XLOG(ERR) << "Failed to create bidi stream sess=" << this;
