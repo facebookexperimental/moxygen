@@ -1347,17 +1347,27 @@ class SubNsStreamCallback : public MoQControlCodec::ControlCallback {
       std::shared_ptr<Publisher::NamespacePublishHandle> namespacePublishHandle)
       : session_(session), namespacePublishHandle_(namespacePublishHandle) {}
 
+  // The read loop that holds this callback runs until the peer closes its half.
+  void releaseHandleOnCancel(const folly::CancellationToken& readCancelToken) {
+    releaseHandle_.emplace(
+        readCancelToken, [this] { namespacePublishHandle_.reset(); });
+  }
+
   void onConnectionError(ErrorCode error) override {
     session_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
   }
 
   void onNamespace(Namespace ns) override {
-    namespacePublishHandle_->namespaceMsg(ns.trackNamespaceSuffix);
+    if (namespacePublishHandle_) {
+      namespacePublishHandle_->namespaceMsg(ns.trackNamespaceSuffix);
+    }
   }
 
   void onNamespaceDone(NamespaceDone namespaceDone) override {
-    namespacePublishHandle_->namespaceDoneMsg(
-        namespaceDone.trackNamespaceSuffix);
+    if (namespacePublishHandle_) {
+      namespacePublishHandle_->namespaceDoneMsg(
+          namespaceDone.trackNamespaceSuffix);
+    }
   }
 
   void onRequestOk(RequestOk ok, FrameType frameType) override {
@@ -1371,6 +1381,8 @@ class SubNsStreamCallback : public MoQControlCodec::ControlCallback {
  private:
   MoQSession* session_;
   std::shared_ptr<Publisher::NamespacePublishHandle> namespacePublishHandle_;
+  // Declared last so the callback unregisters before the handle is destroyed.
+  std::optional<folly::CancellationCallback> releaseHandle_;
 };
 
 class SubTracksStreamCallback : public MoQControlCodec::ControlCallback {
@@ -1380,6 +1392,11 @@ class SubTracksStreamCallback : public MoQControlCodec::ControlCallback {
       std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle)
       : session_(session),
         publishBlockedHandle_(std::move(publishBlockedHandle)) {}
+
+  void releaseHandleOnCancel(const folly::CancellationToken& readCancelToken) {
+    releaseHandle_.emplace(
+        readCancelToken, [this] { publishBlockedHandle_.reset(); });
+  }
 
   void onConnectionError(ErrorCode error) override {
     session_->close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
@@ -1403,6 +1420,7 @@ class SubTracksStreamCallback : public MoQControlCodec::ControlCallback {
  private:
   MoQSession* session_;
   std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle_;
+  std::optional<folly::CancellationCallback> releaseHandle_;
 };
 
 // SubscribeNamespace subscriber methods
@@ -1421,6 +1439,10 @@ MoQRelaySession::subscribeNamespace(
   }
   aliasifyAuthTokens(sa.params);
   sa.requestID = getNextRequestID();
+  auto streamCallback =
+      std::make_unique<SubNsStreamCallback>(this, namespacePublishHandle);
+  // The read loop that owns it only starts once this coroutine suspends.
+  auto* streamCallbackPtr = streamCallback.get();
 
   folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubscribeNamespace(buf, sa);
@@ -1441,12 +1463,15 @@ MoQRelaySession::subscribeNamespace(
        FrameType::REQUEST_ERROR},
       sa.requestID,
       /*minBidiDraftVersion=*/16,
-      std::make_unique<SubNsStreamCallback>(this, namespacePublishHandle));
+      std::move(streamCallback));
   if (sendResult.hasError()) {
     co_return folly::makeUnexpected(SubscribeNamespaceError(
         {RequestID(0),
          SubscribeNamespaceErrorCode::INTERNAL_ERROR,
          std::move(sendResult.error().reasonPhrase)}));
+  }
+  if (const auto& control = sendResult.value()) {
+    streamCallbackPtr->releaseHandleOnCancel(control->getReadCancelToken());
   }
 
   if (logger_) {
@@ -1782,6 +1807,10 @@ MoQRelaySession::subscribeTracks(
   }
   aliasifyAuthTokens(subTracks.params);
   subTracks.requestID = getNextRequestID();
+  auto streamCallback = std::make_unique<SubTracksStreamCallback>(
+      this, std::move(publishBlockedHandle));
+  // The read loop that owns it only starts once this coroutine suspends.
+  auto* streamCallbackPtr = streamCallback.get();
 
   folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter_.writeSubscribeTracks(buf, subTracks);
@@ -1801,13 +1830,15 @@ MoQRelaySession::subscribeTracks(
        FrameType::PUBLISH_BLOCKED},
       subTracks.requestID,
       /*minBidiDraftVersion=*/18,
-      std::make_unique<SubTracksStreamCallback>(
-          this, std::move(publishBlockedHandle)));
+      std::move(streamCallback));
   if (sendResult.hasError()) {
     co_return folly::makeUnexpected(SubscribeTracksError(
         {RequestID(0),
          SubscribeTracksErrorCode::INTERNAL_ERROR,
          std::move(sendResult.error().reasonPhrase)}));
+  }
+  if (const auto& control = sendResult.value()) {
+    streamCallbackPtr->releaseHandleOnCancel(control->getReadCancelToken());
   }
 
   auto contract = folly::coro::makePromiseContract<

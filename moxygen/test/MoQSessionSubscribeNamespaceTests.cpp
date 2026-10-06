@@ -45,6 +45,43 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeNamespace) {
   co_await barricade;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+// Unsubscribing must release the caller's NamespacePublishHandle without
+// waiting for the peer to close its half of the stream.
+CO_TEST_P_X(MoQSessionTest, UnsubscribeNamespaceReleasesPublishHandle) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawUnsubscribe;
+  std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          [&](auto subNs, auto /* handler */)
+              -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+            serverHandle = std::make_shared<MockSubscribeNamespaceHandle>(
+                SubscribeNamespaceOk(
+                    {.requestID = subNs.requestID,
+                     .requestSpecificParams = {}}));
+            EXPECT_CALL(*serverHandle, unsubscribeNamespace()).WillOnce([&] {
+              serverSawUnsubscribe.post();
+            });
+            co_return serverHandle;
+          });
+
+  auto clientHandle =
+      std::make_shared<testing::StrictMock<MockNamespacePublishHandle>>();
+  std::weak_ptr<Publisher::NamespacePublishHandle> weakClientHandle =
+      clientHandle;
+  auto result = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), std::move(clientHandle));
+  EXPECT_FALSE(result.hasError());
+  if (result.hasValue()) {
+    result.value()->unsubscribeNamespace();
+  }
+  co_await serverSawUnsubscribe;
+  co_await folly::coro::sleep(std::chrono::milliseconds(200));
+
+  EXPECT_TRUE(weakClientHandle.expired());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, UnsubscribeNamespaceAfterSessionClosed) {
   co_await setupMoQSession();
 

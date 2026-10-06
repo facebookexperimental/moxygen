@@ -170,6 +170,55 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeAndUnsubscribeTracks) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+class MockPublishBlockedHandle : public Publisher::PublishBlockedHandle {
+ public:
+  MOCK_METHOD(
+      void,
+      publishBlocked,
+      (const TrackNamespace&, const std::string&),
+      (override));
+};
+
+// Unsubscribing must release the caller's PublishBlockedHandle without
+// waiting for the peer to close its half of the stream.
+CO_TEST_P_X(
+    V18PlusSubscribeTracksTest,
+    UnsubscribeTracksReleasesPublishBlockedHandle) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawUnsubscribe;
+  std::shared_ptr<MockSubscribeTracksHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
+      .WillOnce(
+          [&](auto subTracks, auto /* publishBlockedHandle */)
+              -> folly::coro::Task<Publisher::SubscribeTracksResult> {
+            serverHandle =
+                std::make_shared<MockSubscribeTracksHandle>(SubscribeTracksOk(
+                    {.requestID = subTracks.requestID,
+                     .requestSpecificParams = {}}));
+            EXPECT_CALL(*serverHandle, unsubscribeTracks()).WillOnce([&] {
+              serverSawUnsubscribe.post();
+            });
+            co_return serverHandle;
+          });
+
+  auto clientHandle =
+      std::make_shared<testing::StrictMock<MockPublishBlockedHandle>>();
+  std::weak_ptr<Publisher::PublishBlockedHandle> weakClientHandle =
+      clientHandle;
+  auto result = co_await clientSession_->subscribeTracks(
+      getSubscribeTracks(), std::move(clientHandle));
+  EXPECT_FALSE(result.hasError());
+  if (result.hasValue()) {
+    result.value()->unsubscribeTracks();
+  }
+  co_await serverSawUnsubscribe;
+  co_await folly::coro::sleep(std::chrono::milliseconds(200));
+
+  EXPECT_TRUE(weakClientHandle.expired());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(
     V18PlusSubscribeTracksTest,
     SubscribeTracksNotSupportedNoPublisher) {
