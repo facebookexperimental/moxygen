@@ -727,8 +727,8 @@ class MoQSession : public Subscriber,
     std::vector<FrameType> allowedFrames;
     folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
         onPeerTermination;
-    // If true, peer FIN fires onPeerTermination (FIN-cancels-the-request, per
-    // SUBSCRIBE_NAMESPACE spec). If false, only peer RST fires it.
+    // Drafts 16-17 let a peer FIN unsubscribe from a namespace. Draft 18
+    // cancels only by RST or STOP_SENDING.
     bool finIsCancellation{false};
   };
   std::optional<BidiStreamConfig> getBidiStreamConfig(FrameType frameType);
@@ -1180,14 +1180,14 @@ class MoQSession : public Subscriber,
   void requestUpdateError(
       const SubscribeUpdateError& requestError,
       RequestID existingRequestID,
-      bool terminateExistingRequest = true);
+      bool terminateExisting = true);
 
   // Tear down the request whose REQUEST_UPDATE failed. For SUBSCRIBE/PUBLISH
   // tracks this terminates the subscription with PUBLISH_DONE(UPDATE_FAILED)
   // and resets its subgroups; for FETCH it resets the FETCH data stream.
   // MoQRelaySession overrides this to close the bidi stream of a failed
   // SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE update.
-  virtual void terminateRequestUpdateOnError(
+  virtual void terminateExistingRequest(
       RequestID existingRequestID,
       const SubscribeUpdateError& requestError);
 

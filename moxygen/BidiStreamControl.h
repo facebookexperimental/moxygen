@@ -27,13 +27,12 @@ namespace moxygen {
 class BidiStreamControl {
  public:
   // finIsCancellation: true => peer FIN also fires the peer-termination
-  // callback (responder semantics, e.g. SUBSCRIBE_NAMESPACE). False => only
-  // peer RST.
+  // callback. False => only peer RST or STOP_SENDING.
   explicit BidiStreamControl(
       proxygen::WebTransport::StreamWriteHandle* writeHandle,
       folly::CancellationToken sessionShutdownToken,
       uint64_t negotiatedVersion,
-      bool finIsCancellation = true);
+      bool finIsCancellation);
 
   ~BidiStreamControl() = default;
   BidiStreamControl(const BidiStreamControl&) = delete;
@@ -159,7 +158,7 @@ class BidiStreamControl {
   std::optional<folly::CancellationCallback> writeCancelCb_;
   std::deque<RequestID> responseIDQueue_;
   PeerClose peerClose_{PeerClose::None};
-  bool finIsCancellation_{true};
+  bool finIsCancellation_{false};
   bool readLoopExited_{false};
 };
 

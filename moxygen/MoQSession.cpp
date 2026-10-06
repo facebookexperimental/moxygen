@@ -6597,7 +6597,7 @@ void MoQSession::requestUpdateOk(
 void MoQSession::requestUpdateError(
     const SubscribeUpdateError& requestError,
     RequestID existingRequestID,
-    bool terminateExistingRequest) {
+    bool terminateExisting) {
   XLOG(DBG1) << __func__ << " reqID=" << requestError.requestID
              << " existingReqID=" << existingRequestID << " sess=" << this;
 
@@ -6614,13 +6614,13 @@ void MoQSession::requestUpdateError(
               << existingRequestID << " sess=" << this;
   }
 
-  if (terminateExistingRequest) {
+  if (terminateExisting) {
     // Tear down the failed request (regardless of REQUEST_ERROR write success).
-    terminateRequestUpdateOnError(existingRequestID, requestError);
+    terminateExistingRequest(existingRequestID, requestError);
   }
 }
 
-void MoQSession::terminateRequestUpdateOnError(
+void MoQSession::terminateExistingRequest(
     RequestID existingRequestID,
     const SubscribeUpdateError& requestError) {
   // Terminate subscription with PUBLISH_DONE (UPDATE_FAILED) and clean up
@@ -7218,15 +7218,15 @@ void MoQSession::handleClientSetup(
 std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
     FrameType frameType) {
   const auto major = getDraftMajorVersion(*negotiatedVersion_);
-  // SUBSCRIBE_NAMESPACE response stream: FIN-or-RST cancels per draft-16+.
-  auto subscribeNamespaceConfig = [this](FrameType wireType) {
-    return BidiStreamConfig{
-        {wireType, FrameType::REQUEST_UPDATE},
-        [this](RequestID id, std::optional<ResetStreamErrorCode>) {
-          onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
-        },
-        /*finIsCancellation=*/true};
-  };
+  auto subscribeNamespaceConfig =
+      [this](FrameType wireType, bool finIsCancellation) {
+        return BidiStreamConfig{
+            {wireType, FrameType::REQUEST_UPDATE},
+            [this](RequestID id, std::optional<ResetStreamErrorCode>) {
+              onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
+            },
+            finIsCancellation};
+      };
   if (major >= 18) {
     switch (frameType) {
       case FrameType::SUBSCRIBE:
@@ -7250,25 +7250,23 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
              FrameType::REQUEST_ERROR},
             nullptr};
       case FrameType::PUBLISH_NAMESPACE:
-        // Publisher (sender) closes the stream (FIN or RST) to withdraw
-        // the publish namespace — both signal end-of-PUBLISH_NAMESPACE.
+        // The publisher withdraws by cancelling this stream.
         return BidiStreamConfig{
             {FrameType::PUBLISH_NAMESPACE, FrameType::REQUEST_UPDATE},
             [this](RequestID id, std::optional<ResetStreamErrorCode>) {
               PublishNamespaceDone done;
               done.requestID = id;
               onPublishNamespaceDone(std::move(done));
-            },
-            /*finIsCancellation=*/true};
+            }};
       case FrameType::TRACK_STATUS:
         return BidiStreamConfig{{FrameType::TRACK_STATUS}, nullptr};
       case FrameType::SUBSCRIBE_NAMESPACE:
         // v18 wire enumerator (0x50). The legacy 0x11 wire type is a
         // protocol violation on v18 and falls through to nullopt below.
-        return subscribeNamespaceConfig(FrameType::SUBSCRIBE_NAMESPACE);
+        return subscribeNamespaceConfig(
+            FrameType::SUBSCRIBE_NAMESPACE, /*finIsCancellation=*/false);
       case FrameType::SUBSCRIBE_TRACKS:
-        // FIN here means "no more REQUEST_UPDATE" — cancel is RST only, which
-        // surfaces via exceptionalExit regardless of finIsCancellation.
+        // FIN here means "no more REQUEST_UPDATE"; RST and STOP_SENDING cancel.
         return BidiStreamConfig{
             {FrameType::SUBSCRIBE_TRACKS, FrameType::REQUEST_UPDATE},
             [this](RequestID id, std::optional<ResetStreamErrorCode>) {
@@ -7283,7 +7281,8 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
   // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
   switch (frameType) {
     case FrameType::LEGACY_SUBSCRIBE_NAMESPACE:
-      return subscribeNamespaceConfig(FrameType::LEGACY_SUBSCRIBE_NAMESPACE);
+      return subscribeNamespaceConfig(
+          FrameType::LEGACY_SUBSCRIBE_NAMESPACE, /*finIsCancellation=*/true);
     default:
       return std::nullopt;
   }

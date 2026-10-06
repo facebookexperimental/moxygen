@@ -154,6 +154,56 @@ CO_TEST_P_X(Draft18Test, SubscriberCancelsPublishNamespace) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A bare FIN says the publisher will send no more REQUEST_UPDATEs. Only a
+// cancel withdraws the announcement.
+CO_TEST_P_X(Draft18Test, PublishNamespaceSurvivesPeerFin) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<MockPublishNamespaceHandle> mockPublishNamespaceHandle;
+  EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
+      .WillOnce(
+          [&mockPublishNamespaceHandle](
+              auto ann, auto /* publishNamespaceCallback */)
+              -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
+            mockPublishNamespaceHandle =
+                std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
+                    {.requestID = ann.requestID, .requestSpecificParams = {}}));
+            co_return Subscriber::PublishNamespaceResult(
+                mockPublishNamespaceHandle);
+          });
+
+  EXPECT_CALL(*clientPublisherStatsCallback_, onPublishNamespaceSuccess());
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceSuccess());
+  auto publishNamespaceResult =
+      co_await clientSession_->publishNamespace(getPublishNamespace());
+  EXPECT_FALSE(publishNamespaceResult.hasError());
+
+  bool doneCalled = false;
+  folly::coro::Baton doneBaton;
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceDone());
+  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone())
+      .WillOnce([&] {
+        doneCalled = true;
+        doneBaton.post();
+      });
+
+  // PUBLISH_NAMESPACE bidi is the client-initiated stream id 0.
+  clientWt_->writeHandles.at(0)->writeStreamData(
+      nullptr, /*fin=*/true, nullptr);
+  for (int i = 0; i < 5; i++) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+  EXPECT_FALSE(doneCalled);
+
+  // The FIN closed the request direction, so the withdrawal has to arrive as
+  // STOP_SENDING on the response direction.
+  clientWt_->readHandles.at(0)->stopSending(
+      folly::to_underlying(ResetStreamErrorCode::CANCELLED));
+  co_await doneBaton;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, PublishNamespaceError) {
   co_await setupMoQSession();
 

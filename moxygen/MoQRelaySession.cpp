@@ -748,7 +748,7 @@ ReplyContext* MoQRelaySession::getRequestUpdateReplyContext(
   return MoQSession::getRequestUpdateReplyContext(existingRequestID);
 }
 
-void MoQRelaySession::terminateRequestUpdateOnError(
+void MoQRelaySession::terminateExistingRequest(
     RequestID existingRequestID,
     const SubscribeUpdateError& requestError) {
   const bool isSubNs = subscribeNamespaceHandles_.contains(existingRequestID);
@@ -756,7 +756,7 @@ void MoQRelaySession::terminateRequestUpdateOnError(
   const bool isSubTracks = subscribeTracksHandles_.contains(existingRequestID);
   if (!isSubNs && !isPubNs && !isSubTracks) {
     // SUBSCRIBE / PUBLISH / FETCH: PUBLISH_DONE(UPDATE_FAILED) or stream reset.
-    MoQSession::terminateRequestUpdateOnError(existingRequestID, requestError);
+    MoQSession::terminateExistingRequest(existingRequestID, requestError);
     return;
   }
 
@@ -1167,8 +1167,8 @@ void MoQRelaySession::publishNamespaceDone(
     }
     replyCtx->flushFinal();
   } else {
-    // Draft 18+: signal "no more PUBLISH_NAMESPACE" by FINing our half.
-    replyCtx->flushFinal();
+    // Draft 18+ has no PUBLISH_NAMESPACE_DONE; withdrawing cancels the stream.
+    replyCtx->cancel(ResetStreamErrorCode::CANCELLED);
   }
 }
 

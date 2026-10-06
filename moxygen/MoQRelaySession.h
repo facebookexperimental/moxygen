@@ -132,7 +132,7 @@ class MoQRelaySession : public MoQSession {
 
   // A failed SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE update closes the
   // request's bidi stream; other request types fall back to the base.
-  void terminateRequestUpdateOnError(
+  void terminateExistingRequest(
       RequestID existingRequestID,
       const SubscribeUpdateError& requestError) override;
 

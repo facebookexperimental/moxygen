@@ -280,6 +280,51 @@ INSTANTIATE_TEST_SUITE_P(
         VersionParams{{kVersionDraft16}, kVersionDraft16},
         VersionParams{{kVersionDraft18}, kVersionDraft18}));
 
+using V16SubscribeNamespaceTest = MoQSessionTest;
+
+// Drafts 16-17 accept a FIN as the unsubscribe signal. Draft 18 does not --
+// see Draft18Test.PublishNamespaceSurvivesPeerFin for the other half.
+CO_TEST_P_X(V16SubscribeNamespaceTest, PeerFinUnsubscribesNamespace) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<MockSubscribeNamespaceHandle> mockSubscribeNamespaceHandle;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          testing::Invoke(
+              [&mockSubscribeNamespaceHandle](auto /*subAnn*/, auto /*handler*/)
+                  -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+                mockSubscribeNamespaceHandle =
+                    std::make_shared<MockSubscribeNamespaceHandle>(
+                        SubscribeNamespaceOk(
+                            {.requestID = RequestID(0),
+                             .requestSpecificParams = {}}));
+                co_return mockSubscribeNamespaceHandle;
+              }));
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeNamespaceSuccess());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeNamespaceSuccess());
+  auto subscribeNamespaceResult = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), nullptr);
+  EXPECT_FALSE(subscribeNamespaceResult.hasError());
+
+  folly::coro::Baton unsubBaton;
+  EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribeNamespace());
+  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace())
+      .WillOnce(testing::Invoke([&unsubBaton]() { unsubBaton.post(); }));
+
+  // Control stream is the client's first bidi, so SUBSCRIBE_NAMESPACE is id 4.
+  clientWt_->writeHandles.at(4)->writeStreamData(
+      nullptr, /*fin=*/true, nullptr);
+  co_await unsubBaton;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    V16SubscribeNamespaceTest,
+    V16SubscribeNamespaceTest,
+    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}));
+
 CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceError) {
   co_await setupMoQSession();
 
