@@ -3379,9 +3379,9 @@ bool MoQSession::BidiRequestCallback::handleFirstFrame(RequestID reqId) {
   }
   requestID_ = reqId;
   control_->setRequestID(reqId);
-  if (onPeerTerminationFn_) {
-    control_->setOnPeerTermination(std::move(onPeerTerminationFn_));
-  }
+  // A config with no teardown of its own still needs the close to fail the
+  // REQUEST_UPDATEs this end sends on the stream.
+  session_->setOnPeerTermination(control_, std::move(onPeerTerminationFn_));
   replyContext_ = std::make_shared<BidiStreamReplyContext>(
       control_,
       folly::cancellation_token_merge(
@@ -3524,24 +3524,15 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   if (control && !token.isCancellationRequested() &&
       !cancellationSource_.isCancellationRequested() &&
       (exceptionalExit || fin)) {
+    control->setPeerClose(
+        exceptionalExit ? BidiStreamControl::PeerClose::Reset
+                        : BidiStreamControl::PeerClose::Fin);
     if (exceptionalExit || control->finIsCancellation()) {
       control->firePeerTermination(peerTerminationError);
     }
-    if (control->requestID().has_value()) {
-      // No-op if the terminal reply already resolved + erased the pending.
-      failPendingRequestOnEarlyClose(*control->requestID(), exceptionalExit);
-    }
-    // Draft 18+: REQUEST_UPDATEs sent on this stream are tracked in
-    // pendingRequests_ under their own request IDs (queued in
-    // responseIDQueue_), not the stream's primary request ID, so the fail above
-    // does not cover them. Fail each still-pending update so a requestUpdate()
-    // awaiting its REQUEST_OK / REQUEST_ERROR does not hang when the peer
-    // closes the stream first.
-    auto& responseIDQueue = control->responseIDQueue();
-    while (!responseIDQueue.empty()) {
-      failPendingRequestOnEarlyClose(responseIDQueue.front(), exceptionalExit);
-      responseIDQueue.pop_front();
-    }
+    // Also reached from the peer-termination callback on STOP_SENDING, where
+    // this loop exits under cancellation and skips the block.
+    failRequestsOnStreamClose(*control);
     // Sender (bidiCallback==null) mirrors peer FIN with our FIN: "done
     // updating the request". No-op if write half already closed.
     if (!bidiCallback && fin) {
@@ -3555,9 +3546,66 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   }
 }
 
+static std::string_view peerCloseReason(BidiStreamControl::PeerClose type) {
+  switch (type) {
+    case BidiStreamControl::PeerClose::Fin:
+      return "peer FINed without terminal reply";
+    case BidiStreamControl::PeerClose::Reset:
+      return "peer reset request stream";
+    case BidiStreamControl::PeerClose::StopSending:
+      return "peer stopped reading the request stream";
+    case BidiStreamControl::PeerClose::None:
+      break;
+  }
+  return "request stream closed";
+}
+
+void MoQSession::setOnPeerTermination(
+    const std::shared_ptr<BidiStreamControl>& control,
+    folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
+        appTeardown) {
+  // STOP_SENDING cancels the read loop, so this callback is its only path.
+  control->setOnPeerTermination(
+      [this,
+       weakSession = weak_from_this(),
+       weakControl = std::weak_ptr<BidiStreamControl>(control),
+       appTeardown = std::move(appTeardown)](
+          RequestID id,
+          std::optional<ResetStreamErrorCode> resetError) mutable {
+        // The control can outlive the session inside an application handle.
+        auto sessionGuard = weakSession.lock();
+        if (!sessionGuard) {
+          return;
+        }
+        if (appTeardown) {
+          appTeardown(id, resetError);
+        }
+        if (auto controlGuard = weakControl.lock()) {
+          failRequestsOnStreamClose(*controlGuard);
+        }
+      });
+}
+
+void MoQSession::failRequestsOnStreamClose(BidiStreamControl& control) {
+  auto reason = peerCloseReason(control.peerClose());
+  if (control.requestID().has_value()) {
+    // No-op if the terminal reply already resolved + erased the pending.
+    failPendingRequestOnEarlyClose(*control.requestID(), reason);
+  }
+  // Draft 18+: each REQUEST_UPDATE sent on this stream is pending under its own
+  // request ID, so the fail above does not cover it.
+  auto& responseIDQueue = control.responseIDQueue();
+  while (!responseIDQueue.empty()) {
+    failPendingRequestOnEarlyClose(responseIDQueue.front(), reason);
+    responseIDQueue.pop_front();
+  }
+  // These may have been the last requests holding a draining session open.
+  checkForCloseOnDrain();
+}
+
 void MoQSession::failPendingRequestOnEarlyClose(
     RequestID requestID,
-    bool wasReset) {
+    std::string_view reason) {
   auto it = pendingRequests_.find(requestID);
   if (it == pendingRequests_.end()) {
     return;
@@ -3565,19 +3613,49 @@ void MoQSession::failPendingRequestOnEarlyClose(
   auto pendingState = std::move(it->second);
   pendingRequests_.erase(it);
   auto frameType = pendingState->getErrorFrameType();
-  XLOG(DBG1) << "Failing pending request id=" << requestID
-             << (wasReset ? " peer reset request stream"
-                          : " peer FINed without terminal reply")
+  XLOG(DBG1) << "Failing pending request id=" << requestID << " " << reason
              << " sess=" << this;
   auto res = pendingState->setError(
       RequestError{
-          requestID,
-          RequestErrorCode::INTERNAL_ERROR,
-          wasReset ? "peer reset request stream"
-                   : "peer FINed without terminal reply"},
+          requestID, RequestErrorCode::INTERNAL_ERROR, std::string(reason)},
       frameType);
   if (res.hasError()) {
     XLOG(ERR) << "setError failure id=" << requestID << " sess=" << this;
+  }
+  cleanupUnansweredRequest(*pendingState, requestID);
+}
+
+void MoQSession::cleanupUnansweredRequest(
+    PendingRequestState& pendingState,
+    RequestID requestID) {
+  switch (pendingState.type()) {
+    case PendingRequestState::Type::SUBSCRIBE_TRACK: {
+      if (auto* trackPtr = pendingState.tryGetSubscribeTrack()) {
+        pendingSubscribeTracks_.erase((*trackPtr)->fullTrackName());
+      }
+      auto aliasIt = reqIdToTrackAlias_.find(requestID);
+      if (aliasIt != reqIdToTrackAlias_.end()) {
+        removeSubscriptionState(aliasIt->second, requestID);
+      }
+      // TODO: bufferedSubgroups_ cleanup not required - batons will timeout
+      // but we should clear them proactively
+      break;
+    }
+    case PendingRequestState::Type::PUBLISH: {
+      auto pubIt = pubTracks_.find(requestID);
+      if (pubIt != pubTracks_.end()) {
+        pendingPublishTracks_.erase(pubIt->second->fullTrackName());
+        pubIt->second->setSession(nullptr);
+        pubTracks_.erase(pubIt);
+      }
+      break;
+    }
+    case PendingRequestState::Type::FETCH: {
+      fetches_.erase(requestID);
+      break;
+    }
+    default:
+      break;
   }
 }
 
@@ -3601,8 +3679,6 @@ MoQSession::SendRequestResult MoQSession::sendRequest(
     bidiStream->writeHandle->writeStreamData(
         writeBuf.move(), /*fin=*/false, nullptr);
     auto* cb = senderCallback ? senderCallback.get() : this;
-    // Any peer close (FIN or RST) before the terminal reply also fails the
-    // pending request via failPendingRequestOnEarlyClose in controlReadLoop.
     auto control = std::make_shared<BidiStreamControl>(
         bidiStream->writeHandle,
         cancellationSource_.getToken(),
@@ -3615,9 +3691,7 @@ MoQSession::SendRequestResult MoQSession::sendRequest(
         requestID,
         okType,
         &control->responseIDQueue());
-    if (onPeerTermination) {
-      control->setOnPeerTermination(std::move(onPeerTermination));
-    }
+    setOnPeerTermination(control, std::move(onPeerTermination));
     auto mergedToken = folly::cancellation_token_merge(
         cancellationSource_.getToken(), control->getReadCancelToken());
     co_withExecutor(
@@ -4756,11 +4830,6 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
       control->disarmOnPeerTermination();
       control->writeFin();
     }
-    // Remove from pending subscribe tracks if this was a subscribe
-    auto* trackPtr = pendingState->tryGetSubscribeTrack();
-    if (trackPtr) {
-      pendingSubscribeTracks_.erase((*trackPtr)->fullTrackName());
-    }
     if (getDraftMajorVersion(*getNegotiatedVersion()) > 14) {
       // determine real frame type from pendingRequest
       frameType = pendingState->getErrorFrameType();
@@ -4810,6 +4879,7 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
       close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
       return;
     }
+    cleanupUnansweredRequest(*pendingState, error.requestID);
   } else {
     if (isLocallyIssuedRequestID(error.requestID)) {
       XLOG(DBG1) << "Error for cancelled request id=" << error.requestID
@@ -4821,40 +4891,6 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
     return;
   }
 
-  // Additional cleanup for specific error types if needed
-  switch (frameType) {
-    case FrameType::SUBSCRIBE_ERROR: {
-      auto aliasIt = reqIdToTrackAlias_.find(error.requestID);
-      if (aliasIt != reqIdToTrackAlias_.end()) {
-        removeSubscriptionState(aliasIt->second, error.requestID);
-      }
-      // TODO: bufferedSubgroups_ cleanup not required - batons will timeout
-      // but we should clear them proactively
-      break;
-    }
-    case FrameType::PUBLISH_ERROR: {
-      auto pubIt = pubTracks_.find(error.requestID);
-      if (pubIt != pubTracks_.end()) {
-        pendingPublishTracks_.erase(pubIt->second->fullTrackName());
-        pubIt->second->setSession(nullptr);
-        pubTracks_.erase(pubIt);
-      }
-      break;
-    }
-    case FrameType::FETCH_ERROR: {
-      auto fetchIt = fetches_.find(error.requestID);
-      if (fetchIt != fetches_.end()) {
-        fetches_.erase(fetchIt);
-      }
-      break;
-    }
-    case FrameType::PUBLISH_NAMESPACE_ERROR:
-    case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
-      break;
-    default:
-      // Unknown or unsupported error type
-      break;
-  }
   checkForCloseOnDrain();
 }
 
@@ -5509,6 +5545,8 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
   if (control) {
     control->disarmOnPeerTermination();
   }
+  // The request is answered; fetches_ owns the state from here.
+  pendingRequests_.erase(fetchOk.requestID);
   trackReceiveState->fetchOK(std::move(fetchOk));
   if (trackReceiveState->fetchOkAndAllDataReceived()) {
     // The data path already ran resetFetchCallback() before FETCH_OK arrived,
@@ -6304,6 +6342,11 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
       /*senderCallback=*/nullptr,
       // streamCount=max so in-flight subgroups flush; timeout delivers done.
       [this](RequestID id, std::optional<ResetStreamErrorCode> resetError) {
+        if (!reqIdToTrackAlias_.contains(id)) {
+          // No SUBSCRIBE_OK yet, so there is no subscription to end. The
+          // stream teardown fails the pending SUBSCRIBE instead.
+          return;
+        }
         PublishDone pd;
         pd.requestID = id;
         pd.statusCode = resetError == ResetStreamErrorCode::GOING_AWAY
@@ -6496,6 +6539,10 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
   // reporting through the session, so the write-side entry outlives the
   // protocol request; onStreamComplete retires it when the last one ends.
   SCOPE_EXIT {
+    // A PUBLISH torn down before its PUBLISH_OK never cleared this. Keyed by
+    // track name, so this also clears a concurrent PUBLISH's marker -- revisit
+    // when the draft allows multiple subscriptions per track.
+    pendingPublishTracks_.erase(pubTrack->fullTrackName());
     if (!pubTrack->hasOpenDataStreams()) {
       publisherDrained(pubDone.requestID);
     }
@@ -6923,7 +6970,7 @@ void MoQSession::cancelLocalRequest(RequestID requestID) {
     case PendingRequestState::Type::SUBSCRIBE_TRACK: {
       const auto& trackReceiveState = *pending->tryGetSubscribeTrack();
       trackReceiveState->cancel();
-      pendingSubscribeTracks_.erase(trackReceiveState->fullTrackName());
+      cleanupUnansweredRequest(*pending, requestID);
       if (!control &&
           moqFrameWriter_.writeUnsubscribe(
               controlWriteBuf_, Unsubscribe{requestID})) {

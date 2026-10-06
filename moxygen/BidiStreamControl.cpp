@@ -38,6 +38,7 @@ void BidiStreamControl::onPeerStopSending() {
              << writeHandle_->getID() << " code=" << code;
   writeHandle_->resetStream(code);
   writeHandle_ = nullptr;
+  setPeerClose(PeerClose::StopSending);
   readCancelSource_.requestCancellation();
   // Skip during shutdown: cleanup() delivers the canonical error, and
   // post-OK controls (e.g. PUBLISH_NAMESPACE) live only in user handles

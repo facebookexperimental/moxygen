@@ -1343,9 +1343,8 @@ CO_TEST_P_X(MoQSessionTest, SubscriptionEndStatFiredOnAbandonedPublisher) {
 
 // === Draft 18+ bidi early-close coverage ===
 
-// Sender-side: when a request's bidi closes (FIN or RST) before the peer
-// sends its terminal reply, the pending request must fail with
-// INTERNAL_ERROR rather than strand the coroutine forever.
+// A request whose bidi closes before the terminal reply must fail with
+// INTERNAL_ERROR, and the error text names how the peer closed it.
 CO_TEST_P_X(Draft18Test, SubscribeFailsOnPeerFinWithoutReply) {
   co_await setupMoQSession();
 
@@ -1358,7 +1357,7 @@ CO_TEST_P_X(Draft18Test, SubscribeFailsOnPeerFinWithoutReply) {
         co_return makeSubscribeOkResult(sub);
       });
 
-  std::optional<RequestErrorCode> errorCode;
+  std::optional<RequestError> error;
   folly::coro::Baton done;
   folly::coro::co_withExecutor(
       MoQExecutor_.get(),
@@ -1366,7 +1365,7 @@ CO_TEST_P_X(Draft18Test, SubscribeFailsOnPeerFinWithoutReply) {
         auto result = co_await clientSession_->subscribe(
             getSubscribe(kTestTrackName), subscribeCallback_);
         if (result.hasError()) {
-          errorCode = result.error().errorCode;
+          error = result.error();
         }
         done.post();
       }))
@@ -1379,9 +1378,100 @@ CO_TEST_P_X(Draft18Test, SubscribeFailsOnPeerFinWithoutReply) {
       nullptr, /*fin=*/true, nullptr);
 
   co_await done;
-  EXPECT_TRUE(errorCode.has_value());
-  if (errorCode.has_value()) {
-    EXPECT_EQ(*errorCode, RequestErrorCode::INTERNAL_ERROR);
+  EXPECT_TRUE(error.has_value());
+  if (error.has_value()) {
+    EXPECT_EQ(error->errorCode, RequestErrorCode::INTERNAL_ERROR);
+    EXPECT_EQ(error->reasonPhrase, "peer FINed without terminal reply");
+  }
+
+  releaseHandler.post();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Same as above, but the peer RESETs its write half (the exceptionalExit path
+// out of controlReadLoop) rather than FINing it cleanly.
+CO_TEST_P_X(Draft18Test, SubscribeFailsOnPeerResetWithoutReply) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawSubscribe;
+  folly::coro::Baton releaseHandler;
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .WillOnce([&](auto sub, auto /* pub */) -> TaskSubscribeResult {
+        serverSawSubscribe.post();
+        co_await releaseHandler;
+        co_return makeSubscribeOkResult(sub);
+      });
+
+  std::optional<RequestError> error;
+  folly::coro::Baton done;
+  folly::coro::co_withExecutor(
+      MoQExecutor_.get(),
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        auto result = co_await clientSession_->subscribe(
+            getSubscribe(kTestTrackName), subscribeCallback_);
+        if (result.hasError()) {
+          error = result.error();
+        }
+        done.post();
+      }))
+      .start();
+
+  co_await serverSawSubscribe;
+
+  serverWt_->writeHandles.at(0)->resetStream(
+      folly::to_underlying(ResetStreamErrorCode::CANCELLED));
+
+  co_await done;
+  EXPECT_TRUE(error.has_value());
+  if (error.has_value()) {
+    EXPECT_EQ(error->errorCode, RequestErrorCode::INTERNAL_ERROR);
+    EXPECT_EQ(error->reasonPhrase, "peer reset request stream");
+  }
+
+  releaseHandler.post();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Same as above, but the peer STOP_SENDINGs our write half, which cancels the
+// read loop before it can fail the pending subscribe.
+CO_TEST_P_X(Draft18Test, SubscribeFailsOnPeerStopSendingWithoutReply) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawSubscribe;
+  folly::coro::Baton releaseHandler;
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .WillOnce([&](auto sub, auto /* pub */) -> TaskSubscribeResult {
+        serverSawSubscribe.post();
+        co_await releaseHandler;
+        co_return makeSubscribeOkResult(sub);
+      });
+
+  std::optional<RequestError> error;
+  folly::coro::Baton done;
+  folly::coro::co_withExecutor(
+      MoQExecutor_.get(),
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        auto result = co_await clientSession_->subscribe(
+            getSubscribe(kTestTrackName), subscribeCallback_);
+        if (result.hasError()) {
+          error = result.error();
+        }
+        done.post();
+      }))
+      .start();
+
+  co_await serverSawSubscribe;
+
+  // Server STOP_SENDINGs the subscribe bidi (stream id 0, client-initiated)
+  // with no reply, cancelling the client's write half.
+  serverWt_->readHandles.at(0)->stopSending(
+      folly::to_underlying(ResetStreamErrorCode::CANCELLED));
+
+  co_await done;
+  EXPECT_TRUE(error.has_value());
+  if (error.has_value()) {
+    EXPECT_EQ(error->errorCode, RequestErrorCode::INTERNAL_ERROR);
+    EXPECT_EQ(error->reasonPhrase, "peer stopped reading the request stream");
   }
 
   releaseHandler.post();

@@ -1269,6 +1269,159 @@ CO_TEST_P_X(Draft18Test, SubscribeRequestUpdateInFlightDoesNotFlushLaterBurst) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A REQUEST_UPDATE is pending on the subscribe bidi under its own request ID.
+// When the peer STOP_SENDINGs that stream, nothing can ever deliver its
+// REQUEST_OK, so the update must fail instead of hanging.
+CO_TEST_P_X(Draft18Test, SubscribeRequestUpdateFailsOnPeerStopSending) {
+  co_await setupMoQSession();
+  std::shared_ptr<BlockingRequestUpdateHandle> handle;
+  expectSubscribe([&handle](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+    SubscribeOk ok;
+    ok.requestID = sub.requestID;
+    ok.trackAlias = TrackAlias(sub.requestID.value);
+    ok.expires = std::chrono::milliseconds(0);
+    ok.groupOrder = GroupOrder::OldestFirst;
+    ok.largest = AbsoluteLocation{0, 0};
+    handle = std::make_shared<BlockingRequestUpdateHandle>(std::move(ok));
+    co_return handle;
+  });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandler = res.value();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*handle, requestUpdateCalled).Times(1);
+  EXPECT_CALL(*handle, requestUpdateResult)
+      .WillRepeatedly(
+          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+
+  // Fire the update and wait until the peer's handler is holding it, so no
+  // REQUEST_OK can be on the wire.
+  std::optional<folly::Expected<RequestOk, RequestError>> updateResult;
+  folly::coro::Baton updateDone;
+  folly::coro::co_withExecutor(
+      MoQExecutor_.get(),
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        RequestUpdate update;
+        update.priority = kDefaultPriority + 1;
+        update.forward = true;
+        update.params.setMajorVersion(
+            getDraftMajorVersion(getServerSelectedVersion()));
+        updateResult =
+            co_await subscribeHandler->requestUpdate(std::move(update));
+        updateDone.post();
+      }))
+      .start();
+  co_await handle->invoked[0];
+
+  // Losing the stream also ends the subscription itself.
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+
+  // Server STOP_SENDINGs the subscribe bidi (stream id 0, client-initiated),
+  // cancelling the client's write half with the update unanswered.
+  serverWt_->readHandles.at(0)->stopSending(
+      folly::to_underlying(ResetStreamErrorCode::CANCELLED));
+
+  co_await updateDone;
+  EXPECT_TRUE(updateResult.has_value() && updateResult->hasError());
+
+  // Let the peer's held handler unwind before `handle` goes out of scope.
+  handle->release[0].post();
+  co_await rescheduleN(4);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Same early close on a stream the peer opened: the client PUBLISHes, so the
+// server's REQUEST_UPDATE rides a client-initiated bidi. STOP_SENDING cancels
+// the server's read loop, the one close the responder side never saw.
+CO_TEST_P_X(Draft18Test, PublishRequestUpdateFailsOnPeerStopSending) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  std::shared_ptr<SubscriptionHandle> serverHandle;
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&](const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle> subHandle)
+              -> Subscriber::PublishResult {
+            serverHandle = std::move(subHandle);
+            return makePublishOkResult(actualPub);
+          });
+
+  auto handle = std::make_shared<BlockingRequestUpdateHandle>(SubscribeOk{
+      RequestID(0),
+      TrackAlias(100),
+      std::chrono::milliseconds(0),
+      GroupOrder::Default,
+      std::nullopt,
+  });
+  auto publishResult = clientSession_->publish(
+      PublishRequest{
+          RequestID(0),
+          FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+          TrackAlias(100),
+          GroupOrder::Default,
+          AbsoluteLocation{0, 100},
+          true,
+      },
+      handle);
+  EXPECT_TRUE(publishResult.hasValue());
+  if (!publishResult.hasValue()) {
+    co_return;
+  }
+  auto replyRes = co_await std::move(publishResult.value().reply);
+  EXPECT_TRUE(replyRes.hasValue());
+  if (!replyRes.hasValue()) {
+    co_return;
+  }
+
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*clientPublisherStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*handle, requestUpdateCalled).Times(1);
+  EXPECT_CALL(*handle, requestUpdateResult)
+      .WillRepeatedly(testing::Return(RequestOk{.requestID = RequestID(0)}));
+
+  // Fire the update and wait until the peer's handler is holding it, so no
+  // REQUEST_OK can be on the wire.
+  std::optional<folly::Expected<RequestOk, RequestError>> updateResult;
+  folly::coro::Baton updateDone;
+  folly::coro::co_withExecutor(
+      MoQExecutor_.get(),
+      folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        updateResult = co_await serverHandle->requestUpdate(
+            SubscribeUpdate{
+                RequestID(0),
+                RequestID(0),
+                AbsoluteLocation{0, 0},
+                10,
+                kDefaultPriority + 1,
+                true});
+        updateDone.post();
+      }))
+      .start();
+  co_await handle->invoked[0];
+
+  // Client STOP_SENDINGs the PUBLISH bidi (stream id 0, client-initiated),
+  // cancelling the server's write half with the update unanswered.
+  clientWt_->readHandles.at(0)->stopSending(
+      folly::to_underlying(ResetStreamErrorCode::CANCELLED));
+
+  co_await updateDone;
+  EXPECT_TRUE(updateResult.has_value() && updateResult->hasError());
+
+  // Let the peer's held handler unwind before `handle` goes out of scope.
+  handle->release[0].post();
+  co_await rescheduleN(4);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // =============================================================================
 // FETCH REQUEST_UPDATE tests
 //

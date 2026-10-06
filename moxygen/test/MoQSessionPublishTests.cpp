@@ -1416,6 +1416,73 @@ CO_TEST_P_X(MoQSessionTest, PublishDuplicatesPendingSubscribe) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A subscribe that died with its request stream must leave no bookkeeping
+// behind: a PUBLISH for the same track afterwards is not a duplicate.
+CO_TEST_P_X(Draft18Test, PublishAfterSubscribeStreamCloseIsNotDuplicate) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  FullTrackName ftn{TrackNamespace{{"test"}}, "test-track"};
+
+  folly::coro::Baton serverSawSubscribe;
+  folly::coro::Baton releaseHandler;
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .WillOnce([&](auto sub, auto /* pub */) -> TaskSubscribeResult {
+        serverSawSubscribe.post();
+        co_await releaseHandler;
+        co_return makeSubscribeOkResult(sub);
+      });
+
+  auto subscribeConsumer =
+      std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+  ON_CALL(*subscribeConsumer, setTrackAlias(_))
+      .WillByDefault(
+          testing::Return(
+              folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+  ON_CALL(*subscribeConsumer, publishDone(_))
+      .WillByDefault(testing::Return(folly::unit));
+  auto subscribeSf =
+      co_withExecutor(
+          &eventBase_,
+          clientSession_->subscribe(getSubscribe(ftn), subscribeConsumer))
+          .start();
+  co_await serverSawSubscribe;
+
+  // Kill the subscribe request stream before it is answered.
+  serverWt_->readHandles.at(0)->stopSending(
+      folly::to_underlying(ResetStreamErrorCode::CANCELLED));
+  auto subRes = co_await std::move(subscribeSf).via(&eventBase_);
+  EXPECT_TRUE(subRes.hasError());
+
+  // The client must accept a PUBLISH for that same track.
+  EXPECT_CALL(*clientSubscriber, publish(_, _))
+      .WillOnce(
+          [](const PublishRequest& actualPub,
+             std::shared_ptr<SubscriptionHandle>) -> Subscriber::PublishResult {
+            return makePublishOkResult(actualPub);
+          });
+  auto publishResult = serverSession_->publish(
+      PublishRequest{
+          RequestID(0),
+          ftn,
+          TrackAlias(100),
+          GroupOrder::Default,
+          AbsoluteLocation{0, 100},
+          true,
+      },
+      makePublishHandle());
+  EXPECT_TRUE(publishResult.hasValue());
+  if (!publishResult.hasValue()) {
+    co_return;
+  }
+  auto replyRes = co_await std::move(publishResult.value().reply);
+  EXPECT_TRUE(replyRes.hasValue())
+      << "PUBLISH rejected after the pending subscribe died: "
+      << (replyRes.hasError() ? replyRes.error().reasonPhrase : "");
+
+  releaseHandler.post();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Regression: a PUBLISH still awaiting PUBLISH_OK is in pubTracks_ but was
 // never counted, so session close must not decrement the active gauge.
 CO_TEST_P_X(MoQSessionTest, NoSubscriptionEndForPublishPendingOkAtClose) {
@@ -1473,4 +1540,70 @@ CO_TEST_P_X(MoQSessionTest, NoSubscriptionEndForPublishPendingOkAtClose) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
   replyBlocked.post();
+}
+
+// Sender-side bidi early close: the peer STOP_SENDINGs the PUBLISH request
+// stream before replying. The pending PUBLISH must fail rather than strand
+// the reply task forever.
+CO_TEST_P_X(Draft18Test, PublishFailsOnPeerStopSendingWithoutReply) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  folly::coro::Baton serverSawPublish;
+  folly::coro::Baton replyBlocked;
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&](const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle>)
+              -> Subscriber::PublishResult {
+            auto consumer = std::make_shared<MockTrackConsumer>();
+            EXPECT_CALL(*consumer, setTrackAlias(_))
+                .WillRepeatedly(
+                    testing::Return(
+                        folly::Expected<folly::Unit, MoQPublishError>(
+                            folly::unit)));
+            EXPECT_CALL(*consumer, publishDone(_))
+                .WillRepeatedly(testing::Return(folly::unit));
+            auto requestID = actualPub.requestID;
+            serverSawPublish.post();
+            return Subscriber::PublishConsumerAndReplyTask{
+                std::static_pointer_cast<TrackConsumer>(consumer),
+                folly::coro::co_invoke(
+                    [&replyBlocked, requestID]()
+                        -> folly::coro::Task<
+                            folly::Expected<PublishOk, PublishError>> {
+                      co_await replyBlocked;
+                      co_return folly::makeUnexpected(
+                          PublishError{
+                              requestID,
+                              PublishErrorCode::INTERNAL_ERROR,
+                              "never accepted"});
+                    })};
+          });
+
+  auto result = clientSession_->publish(
+      PublishRequest{
+          RequestID(0),
+          FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+          TrackAlias(100),
+          GroupOrder::Default,
+          AbsoluteLocation{0, 100},
+          true,
+      },
+      makePublishHandle());
+  EXPECT_TRUE(result.hasValue());
+  if (!result.hasValue()) {
+    co_return;
+  }
+  co_await serverSawPublish;
+
+  // Server STOP_SENDINGs the PUBLISH bidi (stream id 0, client-initiated),
+  // cancelling the client's write half with no reply sent.
+  serverWt_->readHandles.at(0)->stopSending(
+      folly::to_underlying(ResetStreamErrorCode::CANCELLED));
+
+  auto replyRes = co_await std::move(result.value().reply);
+  EXPECT_TRUE(replyRes.hasError());
+
+  replyBlocked.post();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

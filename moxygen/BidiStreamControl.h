@@ -84,6 +84,19 @@ class BidiStreamControl {
   void firePeerTermination(
       std::optional<ResetStreamErrorCode> errorCode = std::nullopt);
 
+  // How the peer closed the request stream. The first close wins.
+  enum class PeerClose : uint8_t { None, Fin, Reset, StopSending };
+
+  void setPeerClose(PeerClose type) {
+    if (peerClose_ == PeerClose::None) {
+      peerClose_ = type;
+    }
+  }
+
+  PeerClose peerClose() const {
+    return peerClose_;
+  }
+
   // Local cancel: RST our write half, cancel the read source (the read
   // loop's exit guard STOP_SENDINGs the read half), and clear the
   // peer-termination callback.
@@ -145,6 +158,7 @@ class BidiStreamControl {
   std::optional<RequestID> requestID_;
   std::optional<folly::CancellationCallback> writeCancelCb_;
   std::deque<RequestID> responseIDQueue_;
+  PeerClose peerClose_{PeerClose::None};
   bool finIsCancellation_{true};
   bool readLoopExited_{false};
 };

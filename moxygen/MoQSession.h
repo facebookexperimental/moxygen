@@ -27,6 +27,7 @@
 #include <moxygen/stats/MoQStats.h>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include "moxygen/mlog/MLogger.h"
 #include "moxygen/util/TimedBaton.h"
 
@@ -842,9 +843,24 @@ class MoQSession : public Subscriber,
       folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
           onPeerTermination = nullptr);
 
+  // For a request stream opened at either end: appTeardown (may be null) runs
+  // first, then every request that can only be answered on the stream fails.
+  void setOnPeerTermination(
+      const std::shared_ptr<BidiStreamControl>& control,
+      folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
+          appTeardown);
+
+  // Fail every request that can only be answered on this bidi -- the stream's
+  // own request plus any REQUEST_UPDATE queued for a response on it. Called
+  // for each peer-initiated close (FIN, RST, STOP_SENDING); repeat calls for
+  // the same stream are no-ops. The error text comes from control.peerClose().
+  void failRequestsOnStreamClose(BidiStreamControl& control);
+
   // Fail a pending sender request when its bidi closes before the terminal
   // reply. No-op if the entry is already gone.
-  void failPendingRequestOnEarlyClose(RequestID requestID, bool wasReset);
+  void failPendingRequestOnEarlyClose(
+      RequestID requestID,
+      std::string_view reason);
 
  private:
   static const folly::RequestToken& sessionRequestToken();
@@ -1422,6 +1438,13 @@ class MoQSession : public Subscriber,
       RequestID,
       std::unique_ptr<PendingRequestState>,
       RequestID::hash>::iterator;
+
+  // Drop the per-request bookkeeping (track maps, pending-track sets) for a
+  // request that ended without an OK: an error reply, an early stream close,
+  // or a local cancel.
+  void cleanupUnansweredRequest(
+      PendingRequestState& pendingState,
+      RequestID requestID);
 
   void handleTrackStatusOkFromRequestOk(const RequestOk& requestOk);
   void handlePublishOkFromRequestOk(const RequestOk& requestOk);
