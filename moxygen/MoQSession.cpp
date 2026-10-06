@@ -2194,9 +2194,10 @@ class MoQSession::SubscribeTrackReceiveState
     pendingPublishDone_.reset();
   }
 
-  void processSubscribeOK(SubscribeOk subscribeOK) {
+  // Returns false if the subscribe was already cancelled.
+  bool processSubscribeOK(SubscribeOk subscribeOK) {
     alias_ = subscribeOK.trackAlias;
-    subscribePromise_.setValue(std::move(subscribeOK));
+    return subscribePromise_.trySetValue(std::move(subscribeOK));
   }
 
   void subscribeError(SubscribeError subErr) {
@@ -4768,6 +4769,11 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
       return;
     }
   } else {
+    if (isLocallyIssuedRequestID(error.requestID)) {
+      XLOG(DBG1) << "Error for cancelled request id=" << error.requestID
+                 << " sess=" << this;
+      return;
+    }
     XLOG(ERR) << "Request not found id=" << error.requestID << " sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
@@ -4819,6 +4825,11 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
 
   auto it = pendingRequests_.find(subOk.requestID);
   if (it == pendingRequests_.end()) {
+    if (isLocallyIssuedRequestID(subOk.requestID)) {
+      XLOG(DBG1) << "SUBSCRIBE_OK for cancelled subscribe ID="
+                 << subOk.requestID << " sess=" << this;
+      return;
+    }
     XLOG(ERR) << "No matching subscribe ID=" << subOk.requestID
               << " sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
@@ -4834,27 +4845,33 @@ void MoQSession::onSubscribeOk(SubscribeOk subOk) {
   // Keep the pending request registered so close() can complete it on error.
   auto trackReceiveState = *trackPtr;
 
-  auto res = reqIdToTrackAlias_.try_emplace(subOk.requestID, subOk.trackAlias);
-  if (!res.second) {
+  if (reqIdToTrackAlias_.contains(subOk.requestID)) {
     XLOG(ERR) << "Request ID already mapped to alias reqID=" << subOk.requestID
               << " sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-
-  auto emplaceRes = subTracks_.try_emplace(subOk.trackAlias, trackReceiveState);
-  if (!emplaceRes.second) {
+  if (subTracks_.contains(subOk.trackAlias)) {
     XLOG(ERR) << "TrackAlias already in use" << subOk.trackAlias
               << " sess=" << this;
     close(SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS);
     return;
   }
-  pendingRequests_.erase(it);
-  pendingSubscribeTracks_.erase(trackReceiveState->fullTrackName());
+
+  auto requestID = subOk.requestID;
   auto trackAlias = subOk.trackAlias;
   setPublisherPriorityFromParams(
       subOk.params, subOk.extensions, trackReceiveState);
-  trackReceiveState->processSubscribeOK(std::move(subOk));
+  // If cancellation won, the caller's guard cancels the pending request.
+  if (!trackReceiveState->processSubscribeOK(std::move(subOk))) {
+    XLOG(DBG1) << "SUBSCRIBE_OK for cancelled subscribe ID=" << requestID
+               << " sess=" << this;
+    return;
+  }
+  reqIdToTrackAlias_.emplace(requestID, trackAlias);
+  subTracks_.emplace(trackAlias, trackReceiveState);
+  pendingRequests_.erase(it);
+  pendingSubscribeTracks_.erase(trackReceiveState->fullTrackName());
   if (trackReceiveState->getSubscribeCallback()) {
     trackReceiveState->getSubscribeCallback()->setTrackAlias(trackAlias);
   }
@@ -4960,7 +4977,12 @@ class MoQSession::ReceiverSubscriptionHandle
       session_->requestUpdate(requestUpdate, control_);
 
       // Wait for REQUEST_OK or REQUEST_ERROR response
-      co_return co_await std::move(contract.second);
+      // unsubscribe() can reset session_ while this waits.
+      auto session = session_;
+      auto cancelGuard = session->cancelOnExit(requestUpdate.requestID);
+      auto result = co_await std::move(contract.second);
+      cancelGuard.dismiss();
+      co_return result;
     } else {
       session_->requestUpdate(requestUpdate, control_);
 
@@ -5728,7 +5750,10 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
       PendingRequestState::makeTrackStatus(std::move(contract.first));
   pending->setBidiControl(std::move(control));
   pendingRequests_.emplace(reqID, std::move(pending));
-  co_return co_await std::move(contract.second);
+  auto cancelGuard = cancelOnExit(reqID);
+  auto result = co_await std::move(contract.second);
+  cancelGuard.dismiss();
+  co_return result;
 }
 
 void MoQSession::onTrackStatusOk(TrackStatusOk trackStatusOk) {
@@ -6256,6 +6281,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   pendingRequests_.emplace(
       reqID, PendingRequestState::makeSubscribeTrack(trackReceiveState));
   pendingSubscribeTracks_.insert(fullTrackName);
+  auto cancelGuard = cancelOnExit(reqID);
   auto subscribeResultTry =
       co_await co_awaitTry(trackReceiveState->subscribeFuture());
   if (subscribeResultTry.hasException()) {
@@ -6265,9 +6291,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
         subscriberStatsCallback_,
         onSubscribeError,
         SubscribeErrorCode::INTERNAL_ERROR);
-    trackReceiveState->cancel();
     co_yield folly::coro::co_error(subscribeResultTry.exception());
   }
+  cancelGuard.dismiss();
   auto subscribeResult = subscribeResultTry.value();
   XLOG(DBG1) << "Subscribe ready trackReceiveState=" << trackReceiveState
              << " requestID=" << reqID;
@@ -6777,7 +6803,9 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   pendingRequests_.emplace(
       trackReceiveState->getRequestID(),
       PendingRequestState::makeFetch(trackReceiveState));
+  auto cancelGuard = cancelOnExit(reqID);
   auto fetchResult = co_await trackReceiveState->fetchFuture();
+  cancelGuard.dismiss();
   XLOG(DBG1) << __func__
              << " fetchReady trackReceiveState=" << trackReceiveState;
   if (fetchResult.hasError()) {
@@ -6828,6 +6856,47 @@ void MoQSession::fetchError(const FetchError& fetchErr, ReplyContext& ctx) {
     return;
   }
   ctx.flushFinal();
+}
+
+void MoQSession::cancelLocalRequest(RequestID requestID) {
+  auto it = pendingRequests_.find(requestID);
+  if (it == pendingRequests_.end()) {
+    return;
+  }
+  auto pending = std::move(it->second);
+  pendingRequests_.erase(it);
+  const auto& control = pending->bidiControl();
+  // Sending the cancel can re-enter and close the session, so local state is
+  // cleared first.
+  switch (pending->type()) {
+    case PendingRequestState::Type::FETCH:
+      fetchCancel({requestID}, control);
+      return;
+    case PendingRequestState::Type::SUBSCRIBE_TRACK: {
+      const auto& trackReceiveState = *pending->tryGetSubscribeTrack();
+      trackReceiveState->cancel();
+      pendingSubscribeTracks_.erase(trackReceiveState->fullTrackName());
+      if (!control &&
+          moqFrameWriter_.writeUnsubscribe(
+              controlWriteBuf_, Unsubscribe{requestID})) {
+        controlWriteEvent_.signal();
+      }
+      break;
+    }
+    case PendingRequestState::Type::PUBLISH:
+    case PendingRequestState::Type::REQUEST_UPDATE:
+      // A REQUEST_UPDATE has no stream of its own. A PUBLISH ends through the
+      // consumer returned to its caller.
+      return;
+    case PendingRequestState::Type::TRACK_STATUS:
+    case PendingRequestState::Type::PUBLISH_NAMESPACE:
+    case PendingRequestState::Type::SUBSCRIBE_NAMESPACE:
+    case PendingRequestState::Type::SUBSCRIBE_TRACKS:
+      break;
+  }
+  if (control) {
+    control->cancel(ResetStreamErrorCode::CANCELLED);
+  }
 }
 
 void MoQSession::fetchCancel(
@@ -7598,6 +7667,11 @@ void MoQSession::onRequestOk(RequestOk requestOk, FrameType frameType) {
   auto reqIt = pendingRequests_.find(reqId);
 
   if (reqIt == pendingRequests_.end()) {
+    if (isLocallyIssuedRequestID(reqId)) {
+      XLOG(DBG1) << "REQUEST_OK for cancelled reqID=" << reqId
+                 << " sess=" << this;
+      return;
+    }
     XLOG(ERR) << "No matching request for reqID=" << reqId << " sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;

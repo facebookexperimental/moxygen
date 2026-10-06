@@ -307,3 +307,127 @@ CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceError) {
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// A subscribeNamespace whose caller is cancelled before the reply must release
+// the caller's handle.
+CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceCallerCancelledBeforeOk) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawSubscribeNamespace;
+  folly::coro::Baton releaseHandler;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          [&](auto subNs, auto /* handler */)
+              -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+            serverSawSubscribeNamespace.post();
+            co_await releaseHandler;
+            co_return std::make_shared<MockSubscribeNamespaceHandle>(
+                SubscribeNamespaceOk(
+                    {.requestID = subNs.requestID,
+                     .requestSpecificParams = {}}));
+          });
+
+  auto clientHandle =
+      std::make_shared<testing::StrictMock<MockNamespacePublishHandle>>();
+  std::weak_ptr<Publisher::NamespacePublishHandle> weakClientHandle =
+      clientHandle;
+  folly::CancellationSource cancelSource;
+  auto subscribeNamespaceFut =
+      folly::coro::co_withExecutor(
+          &eventBase_,
+          folly::coro::co_withCancellation(
+              cancelSource.getToken(),
+              clientSession_->subscribeNamespace(
+                  getSubscribeNamespace(), std::move(clientHandle))))
+          .start()
+          .via(&eventBase_);
+  co_await serverSawSubscribeNamespace;
+
+  cancelSource.requestCancellation();
+  EXPECT_THROW(
+      co_await std::move(subscribeNamespaceFut), folly::OperationCancelled);
+  releaseHandler.post();
+  co_await folly::coro::sleep(std::chrono::milliseconds(200));
+
+  EXPECT_TRUE(weakClientHandle.expired());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// The SUBSCRIBE_NAMESPACE reply is read in the same event-loop turn in which
+// the caller is cancelled, so it is processed before the caller resumes. The
+// cancellation must still release the caller's handle and end the
+// subscription at the peer.
+CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceCancelledWhileOkQueued) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawSubscribeNamespace;
+  folly::coro::Baton releaseHandler;
+  bool serverSawUnsubscribe = false;
+  std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          [&](auto subNs, auto /* handler */)
+              -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+            serverSawSubscribeNamespace.post();
+            co_await releaseHandler;
+            serverHandle = std::make_shared<MockSubscribeNamespaceHandle>(
+                SubscribeNamespaceOk(
+                    {.requestID = subNs.requestID,
+                     .requestSpecificParams = {}}));
+            EXPECT_CALL(*serverHandle, unsubscribeNamespace())
+                .WillRepeatedly([&] { serverSawUnsubscribe = true; });
+            co_return serverHandle;
+          });
+
+  auto clientHandle =
+      std::make_shared<testing::StrictMock<MockNamespacePublishHandle>>();
+  std::weak_ptr<Publisher::NamespacePublishHandle> weakClientHandle =
+      clientHandle;
+  folly::CancellationSource cancelSource;
+  auto subscribeNamespaceFut =
+      folly::coro::co_withExecutor(
+          &eventBase_,
+          folly::coro::co_withCancellation(
+              cancelSource.getToken(),
+              clientSession_->subscribeNamespace(
+                  getSubscribeNamespace(), std::move(clientHandle))))
+          .start()
+          .via(&eventBase_);
+  co_await serverSawSubscribeNamespace;
+
+  // The reply arrives on the newest client-initiated bidi: the request's own
+  // stream, or the control stream before draft 16.
+  std::shared_ptr<proxygen::test::FakeStreamHandle> replyStream;
+  for (const auto& [id, handle] : serverWt_->writeHandles) {
+    if (id % 4 == 0) {
+      replyStream = handle;
+    }
+  }
+  EXPECT_NE(replyStream, nullptr);
+  if (!replyStream) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+  replyStream->setImmediateDelivery(false);
+  releaseHandler.post();
+  for (int i = 0; i < 10 && replyStream->inflightBuf_.empty(); ++i) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+  EXPECT_FALSE(replyStream->inflightBuf_.empty());
+  replyStream->setImmediateDelivery(true);
+  replyStream->deliverInflightData();
+  cancelSource.requestCancellation();
+  EXPECT_THROW(
+      co_await std::move(subscribeNamespaceFut), folly::OperationCancelled);
+  co_await folly::coro::sleep(std::chrono::milliseconds(200));
+
+  EXPECT_TRUE(weakClientHandle.expired());
+  // Before draft 16 the request does not have its own stream to cancel.
+  if (getDraftMajorVersion(getServerSelectedVersion()) >= 16) {
+    EXPECT_TRUE(serverSawUnsubscribe);
+  }
+  if (serverHandle) {
+    testing::Mock::VerifyAndClearExpectations(serverHandle.get());
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

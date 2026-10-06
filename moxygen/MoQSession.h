@@ -15,6 +15,7 @@
 
 #include <folly/CancellationToken.h>
 #include <folly/MaybeManagedPtr.h>
+#include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/IntrusiveList.h>
 #include <folly/coro/Promise.h>
@@ -1095,6 +1096,20 @@ class MoQSession : public Subscriber,
       Parameters& params,
       const std::optional<uint64_t>& forceVersion = std::nullopt);
   RequestID getNextRequestID();
+  // Cancels the request unless dismissed once its reply arrives. It runs where
+  // the awaiting coroutine resumes, on the session executor.
+  auto cancelOnExit(RequestID requestID) {
+    return folly::makeGuard(
+        [this, requestID] { cancelLocalRequest(requestID); });
+  }
+  // Drops a pending request we sent and cancels it at the peer.
+  virtual void cancelLocalRequest(RequestID requestID);
+  // A reply can still arrive for a request that was cancelled and erased.
+  bool isLocallyIssuedRequestID(RequestID requestID) const {
+    return requestID.value < nextRequestID_ &&
+        requestID.value % getRequestIDMultiplier() ==
+        nextRequestID_ % getRequestIDMultiplier();
+  }
   // Resolves joining.joiningRequestID (including the std::nullopt auto-resolve
   // case) and validates the resulting state against fullTrackName.  Sets
   // joining.joiningRequestID to the resolved value when std::nullopt is passed.

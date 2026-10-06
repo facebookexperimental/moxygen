@@ -227,3 +227,122 @@ CO_TEST_P_X(Draft18Test, PublishNamespaceFailsOnPeerFinWithoutReply) {
   releaseHandler.post();
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// A publishNamespace whose caller is cancelled before the reply must release
+// the caller's callback.
+CO_TEST_P_X(MoQSessionTest, PublishNamespaceCallerCancelledBeforeOk) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawPublishNamespace;
+  folly::coro::Baton releaseHandler;
+  EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
+      .WillOnce(
+          [&](auto pubNs, auto /* publishNamespaceCallback */)
+              -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
+            serverSawPublishNamespace.post();
+            co_await releaseHandler;
+            co_return makePublishNamespaceOkResult(pubNs);
+          });
+
+  auto callback =
+      std::make_shared<testing::StrictMock<MockPublishNamespaceCallback>>();
+  std::weak_ptr<Subscriber::PublishNamespaceCallback> weakCallback = callback;
+  folly::CancellationSource cancelSource;
+  auto publishNamespaceFut =
+      folly::coro::co_withExecutor(
+          &eventBase_,
+          folly::coro::co_withCancellation(
+              cancelSource.getToken(),
+              clientSession_->publishNamespace(
+                  getPublishNamespace(), std::move(callback))))
+          .start()
+          .via(&eventBase_);
+  co_await serverSawPublishNamespace;
+
+  cancelSource.requestCancellation();
+  EXPECT_THROW(
+      co_await std::move(publishNamespaceFut), folly::OperationCancelled);
+  releaseHandler.post();
+  co_await folly::coro::sleep(std::chrono::milliseconds(200));
+
+  EXPECT_TRUE(weakCallback.expired());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// The PUBLISH_NAMESPACE reply is read in the same event-loop turn in which the
+// caller is cancelled, so it is processed before the caller resumes. The
+// cancellation must still release the caller's callback and withdraw the
+// namespace at the peer.
+CO_TEST_P_X(MoQSessionTest, PublishNamespaceCancelledWhileOkQueued) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawPublishNamespace;
+  folly::coro::Baton releaseHandler;
+  bool serverSawDone = false;
+  std::shared_ptr<MockPublishNamespaceHandle> serverHandle;
+  EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
+      .WillOnce(
+          [&](auto pubNs, auto /* publishNamespaceCallback */)
+              -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
+            serverSawPublishNamespace.post();
+            co_await releaseHandler;
+            serverHandle =
+                std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
+                    {.requestID = pubNs.requestID,
+                     .requestSpecificParams = {}}));
+            EXPECT_CALL(*serverHandle, publishNamespaceDone())
+                .WillRepeatedly([&] { serverSawDone = true; });
+            co_return serverHandle;
+          });
+
+  auto callback =
+      std::make_shared<testing::StrictMock<MockPublishNamespaceCallback>>();
+  std::weak_ptr<Subscriber::PublishNamespaceCallback> weakCallback = callback;
+  folly::CancellationSource cancelSource;
+  auto publishNamespaceFut =
+      folly::coro::co_withExecutor(
+          &eventBase_,
+          folly::coro::co_withCancellation(
+              cancelSource.getToken(),
+              clientSession_->publishNamespace(
+                  getPublishNamespace(), std::move(callback))))
+          .start()
+          .via(&eventBase_);
+  co_await serverSawPublishNamespace;
+
+  // The reply arrives on the newest client-initiated bidi: the control stream
+  // before draft 18, the request's own stream from draft 18.
+  std::shared_ptr<proxygen::test::FakeStreamHandle> replyStream;
+  for (const auto& [id, handle] : serverWt_->writeHandles) {
+    if (id % 4 == 0) {
+      replyStream = handle;
+    }
+  }
+  EXPECT_NE(replyStream, nullptr);
+  if (!replyStream) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+  replyStream->setImmediateDelivery(false);
+  releaseHandler.post();
+  for (int i = 0; i < 10 && replyStream->inflightBuf_.empty(); ++i) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+  EXPECT_FALSE(replyStream->inflightBuf_.empty());
+  replyStream->setImmediateDelivery(true);
+  replyStream->deliverInflightData();
+  cancelSource.requestCancellation();
+  EXPECT_THROW(
+      co_await std::move(publishNamespaceFut), folly::OperationCancelled);
+  co_await folly::coro::sleep(std::chrono::milliseconds(200));
+
+  EXPECT_TRUE(weakCallback.expired());
+  // Before draft 16, PUBLISH_NAMESPACE_DONE does not carry a request ID.
+  if (getDraftMajorVersion(getServerSelectedVersion()) >= 16) {
+    EXPECT_TRUE(serverSawDone);
+  }
+  if (serverHandle) {
+    testing::Mock::VerifyAndClearExpectations(serverHandle.get());
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

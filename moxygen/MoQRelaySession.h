@@ -204,16 +204,19 @@ class MoQRelaySession : public MoQSession {
   void onPublishNamespaceDone(PublishNamespaceDone pubNsDone) override;
   void onRequestOk(RequestOk ok, FrameType frameType) override;
   void onUnsubscribeNamespace(UnsubscribeNamespace unsub) override;
+  void cancelLocalRequest(RequestID requestID) override;
 
-  // Helper methods for handling RequestOk for different request types
-  void handlePublishNamespaceOkFromRequestOk(
+  // Helper methods for handling RequestOk for different request types. Each
+  // returns false if the request was already cancelled, which leaves the
+  // pending request for the caller to cancel.
+  bool handlePublishNamespaceOkFromRequestOk(
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);
-  void handleSubscribeNamespaceOkFromRequestOk(
+  bool handleSubscribeNamespaceOkFromRequestOk(
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);
   // Draft 18+
-  void handleSubscribeTracksOkFromRequestOk(
+  bool handleSubscribeTracksOkFromRequestOk(
       const RequestOk& requestOk,
       PendingRequestIterator reqIt);
 
