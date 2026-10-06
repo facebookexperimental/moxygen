@@ -4,8 +4,14 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/CancellationToken.h>
+#include <folly/coro/Baton.h>
 #include <folly/coro/Collect.h>
+#include <folly/coro/Error.h>
 #include <folly/coro/GtestHelpers.h>
+#include <folly/coro/Promise.h>
+#include <folly/coro/ViaIfAsync.h>
+#include <folly/coro/WithCancellation.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/logging/xlog.h>
@@ -309,6 +315,23 @@ class MoQCacheTest : public ::testing::Test {
           return folly::coro::makeTask<Publisher::FetchResult>(
               folly::makeUnexpected(err));
         });
+  }
+
+  // Like MoQSession, the upstream resets the consumer of a fetch cancelled
+  // before its reply, then fails with OperationCancelled.
+  void expectUpstreamFetchUntilCancelled(folly::coro::Baton& entered) {
+    EXPECT_CALL(*upstream_, fetch(_, _))
+        .WillOnce(
+            [this, &entered](Fetch, std::shared_ptr<FetchConsumer> consumer)
+                -> folly::coro::Task<Publisher::FetchResult> {
+              upstreamFetchConsumer_ = consumer;
+              entered.post();
+              auto [neverReplied, reply] =
+                  folly::coro::makePromiseContract<void>();
+              (void)co_await folly::coro::co_awaitTry(std::move(reply));
+              consumer->reset(ResetStreamErrorCode::CANCELLED);
+              co_yield folly::coro::co_stopped_may_throw;
+            });
   }
 
   void expectUpstreamFetch(const FetchOk& ok) {
@@ -1063,6 +1086,99 @@ CO_TEST_F(MoQCacheTest, TestFetchCancel) {
   EXPECT_TRUE(res.hasValue());
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 0}));
 }
+
+// A fetch cancelled while the cache waits on upstream must reset its consumer
+// exactly once, although the cancelled upstream also resets the writeback.
+CO_TEST_F(MoQCacheTest, FetchCancelledDuringUpstreamFetchResetsOnce) {
+  populateCacheRange({0, 0}, {0, 1});
+  folly::coro::Baton upstreamEntered;
+  expectUpstreamFetchUntilCancelled(upstreamEntered);
+  expectFetchObjects({0, 0}, {0, 1}, false);
+  EXPECT_CALL(*consumer_, reset(ResetStreamErrorCode::CANCELLED)).Times(1);
+
+  folly::CancellationSource cancelSource;
+  auto fetchFut =
+      folly::coro::co_withExecutor(
+          co_await folly::coro::co_current_executor,
+          folly::coro::co_withCancellation(
+              cancelSource.getToken(),
+              cache_.fetch(
+                  getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_)))
+          .start();
+  co_await upstreamEntered;
+  cancelSource.requestCancellation();
+  auto res = co_await folly::coro::co_awaitTry(std::move(fetchFut));
+  EXPECT_TRUE(res.hasException<folly::OperationCancelled>());
+  co_await folly::coro::co_reschedule_on_current_executor;
+}
+
+// fetchCancel() on the cache's handle while an upstream interval is streaming
+// must reset the consumer exactly once, although the upstream handle's cancel
+// also resets the writeback.
+CO_TEST_F(MoQCacheTest, FetchHandleCancelDuringUpstreamIntervalResetsOnce) {
+  populateCacheRange({0, 0}, {0, 1});
+  populateCacheRange({0, 5}, {0, 6});
+  auto exec = co_await folly::coro::co_current_executor;
+  folly::coro::Baton upstreamStreaming;
+  expectUpstreamFetch({0, 1}, {0, 5}, false, AbsoluteLocation{0, 5})
+      .via(exec)
+      .thenTry([this, &upstreamStreaming](const auto&) {
+        EXPECT_CALL(*upstreamFetchHandle_, fetchCancel()).WillOnce([this] {
+          upstreamFetchConsumer_->reset(ResetStreamErrorCode::CANCELLED);
+        });
+        upstreamStreaming.post();
+      });
+  expectFetchObjects({0, 0}, {0, 1}, false);
+  EXPECT_CALL(*consumer_, reset(ResetStreamErrorCode::CANCELLED)).Times(1);
+
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 6}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  co_await upstreamStreaming;
+  co_await folly::coro::co_reschedule_on_current_executor;
+  if (res.hasValue()) {
+    res.value()->fetchCancel();
+  }
+  co_await folly::coro::co_reschedule_on_current_executor;
+  co_await folly::coro::co_reschedule_on_current_executor;
+}
+
+// A fetch cancelled while it waits on another fetch's writeback must stop
+// there: no second upstream fetch and no endOfFetch() after its reset.
+CO_TEST_F(MoQCacheTest, FetchCancelledWhileWaitingForWritebackStops) {
+  auto exec = co_await folly::coro::co_current_executor;
+  folly::coro::Baton firstEntered;
+  expectUpstreamFetchUntilCancelled(firstEntered);
+  folly::CancellationSource firstCancel;
+  auto first =
+      folly::coro::co_withExecutor(
+          exec,
+          folly::coro::co_withCancellation(
+              firstCancel.getToken(),
+              cache_.fetch(
+                  getFetch({0, 0}, {0, 10}), trackingConsumer_, upstream_)))
+          .start();
+  co_await firstEntered;
+
+  auto consumer2 = std::make_shared<StrictMock<MockFetchConsumer>>();
+  EXPECT_CALL(*consumer2, reset(ResetStreamErrorCode::CANCELLED)).Times(1);
+  folly::CancellationSource secondCancel;
+  auto second =
+      folly::coro::co_withExecutor(
+          exec,
+          folly::coro::co_withCancellation(
+              secondCancel.getToken(),
+              cache_.fetch(getFetch({0, 0}, {0, 10}), consumer2, upstream_)))
+          .start();
+  co_await folly::coro::co_reschedule_on_current_executor;
+  secondCancel.requestCancellation();
+
+  EXPECT_CALL(*consumer_, reset(ResetStreamErrorCode::CANCELLED)).Times(1);
+  firstCancel.requestCancellation();
+  (void)co_await folly::coro::co_awaitTry(std::move(first));
+  (void)co_await folly::coro::co_awaitTry(std::move(second));
+}
+
 CO_TEST_F(MoQCacheTest, TestFetchPopulatesNotExistObjectsAndGroups) {
   // Test case for fetch populating OBJECT_NOT_EXIST via Prior Object ID Gap
   // extension, and GROUP_NOT_EXIST via Prior Group ID Gap extension

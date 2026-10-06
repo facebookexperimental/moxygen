@@ -1317,6 +1317,7 @@ CO_TEST_P_X(
 
   folly::coro::Baton cancelBaton;
   EXPECT_CALL(*pubHandle, fetchCancel()).WillOnce([&] { cancelBaton.post(); });
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
   res.value()->fetchCancel();
   co_await cancelBaton;
 

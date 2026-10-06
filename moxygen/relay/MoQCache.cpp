@@ -1217,9 +1217,16 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     return folly::unit;
   }
 
+  // The cache already reset the consumer when it cancelled this upstream fetch.
+  void stopForwardingReset() {
+    forwardReset_ = false;
+  }
+
   void reset(ResetStreamErrorCode error) override {
     XLOG(DBG1) << "FetchWriteback reset=" << uint32_t(error);
-    consumer_->reset(error);
+    if (std::exchange(forwardReset_, false)) {
+      consumer_->reset(error);
+    }
     wasReset_ = true;
     complete_.post();
     fetchRangeIt_.invalidate();
@@ -1327,6 +1334,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
   uint64_t currentLength_{0};
   bool beginObjectAccepted_{false};
   bool wasReset_{false};
+  bool forwardReset_{true};
   folly::CancellationSource cancelSource_;
   FetchRangeIterator fetchRangeIt_;
   MoQCache& cache_;
@@ -1637,6 +1645,11 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
     } // else publish success
     servedOneObject = true;
   }
+  // The cancel callback already reset the consumer.
+  if (token.isCancellationRequested()) {
+    co_return folly::makeUnexpected(
+        FetchError{fetch.requestID, FetchErrorCode::CANCELLED, "cancelled"});
+  }
   if (fetchStart) {
     auto intervals = getFetchIntervals(
         fetchRangeIt.minLocation,
@@ -1769,6 +1782,11 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
   // makes concurrent lookups wait until endOfFetch.
   auto writeback = std::make_shared<FetchWriteback>(
       lastObject, consumer, fetchRangeIt, *this, fetch.fullTrackName);
+  // fetchImpl resets the consumer on cancel, and cancelling this fetch also
+  // makes the upstream reset the writeback.
+  folly::CancellationCallback stopForwardingReset(
+      co_await folly::coro::co_current_cancellation_token,
+      [writeback] { writeback->stopForwardingReset(); });
   auto res = co_await upstream->fetch(
       Fetch(
           0,

@@ -463,9 +463,7 @@ CO_TEST_P_X(MoQSessionTest, FetchCancel) {
   EXPECT_CALL(
       *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, false, _))
       .WillOnce(testing::Return(folly::unit));
-  // TODO: fetchCancel removes the callback - should it also deliver a
-  // reset() call to the callback?
-  // EXPECT_CALL(*fetchCallback, reset(ResetStreamErrorCode::CANCELLED));
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
   expectFetchSuccess();
   auto res =
       co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
@@ -497,7 +495,7 @@ CO_TEST_P_X(MoQSessionTest, FetchEarlyCancel) {
   auto res =
       co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
   EXPECT_FALSE(res.hasError());
-  // TODO: this no-ops right now so there's nothing to verify
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
   res.value()->fetchCancel();
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
@@ -850,6 +848,7 @@ CO_TEST_P_X(Draft18Test, FetchCancelStopsDataStream) {
         }
       });
 
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
   res.value()->fetchCancel();
   EXPECT_EQ(stopSendingCode, 0);
 
@@ -873,6 +872,7 @@ CO_TEST_P_X(Draft18Test, FetchBidiStreamFetchCancel) {
 
   folly::coro::Baton cancelBaton;
   EXPECT_CALL(*pubHandle, fetchCancel()).WillOnce([&] { cancelBaton.post(); });
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
 
   res.value()->fetchCancel();
   co_await cancelBaton;
@@ -1024,8 +1024,8 @@ CO_TEST_P_X(MoQSessionTest, NoSubscriptionEndForInFlightFetchAtClose) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// A fetch whose caller is cancelled before FETCH_OK must release its consumer
-// without a terminal call, and call fetchCancel() on the publisher's handle.
+// A fetch whose caller is cancelled before FETCH_OK must reset and release its
+// consumer, and call fetchCancel() on the publisher's handle.
 CO_TEST_P_X(MoQSessionTest, FetchCallerCancelledBeforeFetchOk) {
   co_await setupMoQSession();
 
@@ -1045,6 +1045,7 @@ CO_TEST_P_X(MoQSessionTest, FetchCallerCancelledBeforeFetchOk) {
       });
 
   auto consumer = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+  EXPECT_CALL(*consumer, reset(ResetStreamErrorCode::CANCELLED));
   std::weak_ptr<FetchConsumer> weakConsumer = consumer;
   folly::CancellationSource cancelSource;
   auto fetchFut = folly::coro::co_withExecutor(

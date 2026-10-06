@@ -2403,7 +2403,11 @@ class MoQSession::FetchTrackReceiveState
       bidiControl_->cancel(ResetStreamErrorCode::CANCELLED);
     }
     fetchError({requestID_, FetchErrorCode::CANCELLED, "cancelled"});
+    auto callback = callback_;
     resetFetchCallback(session);
+    if (callback) {
+      callback->reset(ResetStreamErrorCode::CANCELLED);
+    }
   }
 
   void sessionClosed() {
