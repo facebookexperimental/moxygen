@@ -309,22 +309,27 @@ CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceError) {
 }
 
 // A subscribeNamespace whose caller is cancelled before the reply must release
-// the caller's handle.
+// the caller's handle and end the subscription at the peer.
 CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceCallerCancelledBeforeOk) {
   co_await setupMoQSession();
 
   folly::coro::Baton serverSawSubscribeNamespace;
   folly::coro::Baton releaseHandler;
+  bool serverSawUnsubscribe = false;
+  std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
       .WillOnce(
           [&](auto subNs, auto /* handler */)
               -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
             serverSawSubscribeNamespace.post();
             co_await releaseHandler;
-            co_return std::make_shared<MockSubscribeNamespaceHandle>(
+            serverHandle = std::make_shared<MockSubscribeNamespaceHandle>(
                 SubscribeNamespaceOk(
                     {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
+            EXPECT_CALL(*serverHandle, unsubscribeNamespace())
+                .WillRepeatedly([&] { serverSawUnsubscribe = true; });
+            co_return serverHandle;
           });
 
   auto clientHandle =
@@ -350,6 +355,13 @@ CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceCallerCancelledBeforeOk) {
   co_await folly::coro::sleep(std::chrono::milliseconds(200));
 
   EXPECT_TRUE(weakClientHandle.expired());
+  // Before draft 16 the request has no stream of its own to cancel.
+  if (getDraftMajorVersion(getServerSelectedVersion()) >= 16) {
+    EXPECT_TRUE(serverSawUnsubscribe);
+  }
+  if (serverHandle) {
+    testing::Mock::VerifyAndClearExpectations(serverHandle.get());
+  }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

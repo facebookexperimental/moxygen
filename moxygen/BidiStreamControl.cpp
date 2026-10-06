@@ -49,6 +49,7 @@ void BidiStreamControl::onPeerStopSending() {
 
 void BidiStreamControl::firePeerTermination(
     std::optional<ResetStreamErrorCode> errorCode) {
+  peerCancelSource_.requestCancellation();
   if (!onPeerTerminationFn_ || !requestID_) {
     return;
   }

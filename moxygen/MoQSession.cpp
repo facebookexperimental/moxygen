@@ -1441,9 +1441,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   void unsubscribe() {
     cancelGoawayResetTimer();
     if (!subscriptionHandle_) {
-      XLOG(ERR) << "Received Unsubscribe before sending SUBSCRIBE_OK id="
-                << requestID_ << " trackPub=" << this;
-      // TODO: cancel handleSubscribe?
+      XLOG(DBG1) << "Received Unsubscribe before sending SUBSCRIBE_OK id="
+                 << requestID_ << " trackPub=" << this;
     } else {
       subscriptionHandle_->unsubscribe();
     }
@@ -2656,6 +2655,9 @@ void MoQSession::cleanup() {
     XLOG(DBG1) << "requestCancellation from cleanup sess=" << this;
     cancellationSource_.requestCancellation();
   }
+  for (auto& [_, source] : std::exchange(inboundRequests_, {})) {
+    source.requestCancellation();
+  }
   bufferedDatagrams_.clear();
   // Break any shared_ptr cycle between the session and its handlers.  A
   // handler that holds a shared_ptr<MoQSession> back to this session would
@@ -2663,6 +2665,37 @@ void MoQSession::cleanup() {
   // references are released.
   publishHandler_.reset();
   subscribeHandler_.reset();
+}
+
+void MoQSession::spawnInboundHandler(
+    RequestID requestID,
+    folly::coro::Task<void> handler) {
+  // cleanup() cancels every registered source. A source registered after
+  // cleanup() starts out cancelled.
+  auto& source = inboundRequests_[requestID];
+  if (cancellationSource_.isCancellationRequested()) {
+    source.requestCancellation();
+  }
+  co_withExecutor(
+      exec_.get(), co_withCancellation(source.getToken(), std::move(handler)))
+      // Weak, so that a queued handler does not keep an abandoned session
+      // alive past the destructor's cancellation.
+      .start([weakSelf = weak_from_this(), requestID](folly::Try<void>&&) {
+        if (auto self = weakSelf.lock()) {
+          self->inboundRequests_.erase(requestID);
+        }
+      });
+}
+
+bool MoQSession::cancelInboundRequest(RequestID requestID) {
+  auto it = inboundRequests_.find(requestID);
+  if (it == inboundRequests_.end()) {
+    return false;
+  }
+  auto source = std::move(it->second);
+  inboundRequests_.erase(it);
+  source.requestCancellation();
+  return true;
 }
 
 const folly::RequestToken& MoQSession::sessionRequestToken() {
@@ -3346,7 +3379,10 @@ bool MoQSession::BidiRequestCallback::handleFirstFrame(RequestID reqId) {
     control_->setOnPeerTermination(std::move(onPeerTerminationFn_));
   }
   replyContext_ = std::make_shared<BidiStreamReplyContext>(
-      control_, session_->cancellationSource_.getToken());
+      control_,
+      folly::cancellation_token_merge(
+          session_->cancellationSource_.getToken(),
+          control_->getPeerCancelToken()));
   return true;
 }
 
@@ -4389,15 +4425,12 @@ void MoQSession::onSubscribeImpl(
 
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error
-  co_withExecutor(
-      exec_.get(),
-      co_withCancellation(
-          cancellationSource_.getToken(),
-          handleSubscribe(
-              std::move(subscribeRequest),
-              std::move(trackPublisher),
-              std::move(replyContext))))
-      .start();
+  spawnInboundHandler(
+      requestID,
+      handleSubscribe(
+          std::move(subscribeRequest),
+          std::move(trackPublisher),
+          std::move(replyContext)));
 }
 
 folly::coro::Task<void> MoQSession::handleSubscribe(
@@ -4417,14 +4450,18 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
   //// publishHandler_
   params.eraseAllParamsOfType(TrackRequestParamKey::DELIVERY_TIMEOUT);
 
-  auto subscribeResult = co_await co_awaitTry(co_withCancellation(
-      cancellationSource_.getToken(),
-      publishHandler_->subscribe(
-          std::move(sub),
-          std::static_pointer_cast<TrackConsumer>(trackPublisher))));
-  auto publisherIt = pubTracks_.find(requestID);
-  if (publisherIt == pubTracks_.end() ||
-      publisherIt->second.get() != trackPublisher.get()) {
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  auto subscribeResult = co_await co_awaitTry(publishHandler_->subscribe(
+      std::move(sub), std::static_pointer_cast<TrackConsumer>(trackPublisher)));
+  // The publisher can also leave pubTracks_ without a cancel, for example when
+  // publishDone() runs before the handler answers.
+  if (token.isCancellationRequested() ||
+      pubTracks_.find(requestID) == pubTracks_.end() ||
+      pubTracks_.find(requestID)->second.get() != trackPublisher.get()) {
+    // The subscriber cancelled before this handle was installed.
+    if (subscribeResult.hasValue() && subscribeResult->hasValue()) {
+      subscribeResult->value()->unsubscribe();
+    }
     co_return;
   }
   if (subscribeResult.hasException()) {
@@ -4644,6 +4681,7 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
     XLOG(ERR) << "RequestID in Unsubscribe is for a FETCH, id="
               << unsubscribe.requestID << " sess=" << this;
   } else {
+    cancelInboundRequest(unsubscribe.requestID);
     trackPublisher->unsubscribe();
     // A publisher whose subgroups are still draining is in pubTracks_ even
     // though PUBLISH_DONE already went out and retired the request, so ask the
@@ -5065,15 +5103,13 @@ void MoQSession::onPublishImpl(
       std::move(control));
 
   // Use single coroutine pattern like working onPublishNamespace
-  co_withExecutor(
-      exec_.get(),
-      co_withCancellation(
-          cancellationSource_.getToken(),
-          handlePublish(
-              std::move(publish),
-              std::move(publishHandle),
-              std::move(replyContext))))
-      .start();
+  auto requestID = publish.requestID;
+  spawnInboundHandler(
+      requestID,
+      handlePublish(
+          std::move(publish),
+          std::move(publishHandle),
+          std::move(replyContext)));
 }
 
 bool MoQSession::installPublishReceiveState(
@@ -5114,6 +5150,7 @@ folly::coro::Task<void> MoQSession::handlePublish(
   // PubError if error occurs
   auto publishErr =
       PublishError{requestID, PublishErrorCode::INTERNAL_ERROR, ""};
+  auto token = co_await folly::coro::co_current_cancellation_token;
 
   try {
     // Call publish handler synchronously (now returns PublishResult)
@@ -5138,6 +5175,9 @@ folly::coro::Task<void> MoQSession::handlePublish(
       // Process the async reply - this is the only async part
       auto replyResult =
           co_await folly::coro::co_awaitTry(std::move(initiator.reply));
+      if (token.isCancellationRequested()) {
+        co_return;
+      }
       if (replyResult.hasException()) {
         XLOG(ERR) << "Exception in publish reply ex="
                   << replyResult.exception().what().toStdString();
@@ -5345,15 +5385,12 @@ void MoQSession::onFetchImpl(
   // Kept for draft-18+ REQUEST_UPDATE replies on the FETCH bidi.
   fetchPublisher->setReplyContext(replyContext);
   pubTracks_.emplace(fetch.requestID, fetchPublisher);
-  co_withExecutor(
-      exec_.get(),
-      co_withCancellation(
-          cancellationSource_.getToken(),
-          handleFetch(
-              std::move(fetch),
-              std::move(fetchPublisher),
-              std::move(replyContext))))
-      .start();
+  spawnInboundHandler(
+      requestID,
+      handleFetch(
+          std::move(fetch),
+          std::move(fetchPublisher),
+          std::move(replyContext)));
 }
 
 folly::coro::Task<void> MoQSession::handleFetch(
@@ -5371,10 +5408,16 @@ folly::coro::Task<void> MoQSession::handleFetch(
         *replyContext);
     co_return;
   }
-  auto fetchResult = co_await co_awaitTry(co_withCancellation(
-      cancellationSource_.getToken(),
-      publishHandler_->fetch(
-          std::move(fetch), fetchPublisher->getStreamPublisher())));
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  auto fetchResult = co_await co_awaitTry(publishHandler_->fetch(
+      std::move(fetch), fetchPublisher->getStreamPublisher()));
+  if (token.isCancellationRequested()) {
+    // The fetch was cancelled before this handle was installed.
+    if (fetchResult.hasValue() && fetchResult->hasValue()) {
+      fetchResult->value()->fetchCancel();
+    }
+    co_return;
+  }
   if (fetchResult.hasException() || fetchResult->hasError()) {
     // We need to call reset() in order to ensure that the
     // StreamPublisherImpl is destructed, otherwise there could be memory
@@ -5402,14 +5445,13 @@ folly::coro::Task<void> MoQSession::handleFetch(
     auto fetchErr = std::move(fetchResult->error());
     fetchErr.requestID = requestID; // In case app got it wrong
     fetchError(fetchErr, *replyContext);
-  } else if (!fetchPublisher->isCancelled()) {
+  } else {
     auto fetchHandle = std::move(fetchResult->value());
     auto fetchOkMsg = fetchHandle->fetchOk();
     fetchOkMsg.requestID = requestID;
     fetchOk(fetchOkMsg, *replyContext);
     fetchPublisher->setFetchHandle(std::move(fetchHandle));
-  } // else, no need to fetchError, state has been removed on both sides
-    // already
+  }
 }
 
 void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
@@ -5438,6 +5480,7 @@ void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
       XLOG(ERR) << "FETCH_CANCEL on SUBSCRIBE id=" << fetchCancel.requestID;
       return;
     }
+    cancelInboundRequest(fetchCancel.requestID);
     fetchPublisher->cancel();
   }
 }
@@ -5511,12 +5554,10 @@ void MoQSession::onTrackStatusImpl(
          "No publisher callback set"},
         *replyContext);
   } else {
-    co_withExecutor(
-        exec_.get(),
-        co_withCancellation(
-            cancellationSource_.getToken(),
-            handleTrackStatus(std::move(trackStatus), std::move(replyContext))))
-        .start();
+    auto requestID = trackStatus.requestID;
+    spawnInboundHandler(
+        requestID,
+        handleTrackStatus(std::move(trackStatus), std::move(replyContext)));
   }
 }
 
@@ -5526,9 +5567,12 @@ folly::coro::Task<void> MoQSession::handleTrackStatus(
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
-  auto trackStatusResult = co_await co_awaitTry(co_withCancellation(
-      cancellationSource_.getToken(),
-      publishHandler_->trackStatus(trackStatus)));
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  auto trackStatusResult =
+      co_await co_awaitTry(publishHandler_->trackStatus(trackStatus));
+  if (token.isCancellationRequested()) {
+    co_return;
+  }
   if (trackStatusResult.hasException()) {
     XLOG(ERR) << "Exception in Publisher callback ex="
               << trackStatusResult.exception().what().toStdString();
@@ -7985,8 +8029,10 @@ std::shared_ptr<ReplyContext> MoQSession::makeReplyContext(
     XCHECK(control->writeHandle())
         << "BidiStreamControl handed to makeReplyContext must have a live "
            "write handle";
+    auto token = folly::cancellation_token_merge(
+        cancellationSource_.getToken(), control->getPeerCancelToken());
     return std::make_shared<BidiStreamReplyContext>(
-        std::move(control), cancellationSource_.getToken());
+        std::move(control), std::move(token));
   }
   return controlStreamReplyContext();
 }

@@ -1025,17 +1025,23 @@ CO_TEST_P_X(MoQSessionTest, NoSubscriptionEndForInFlightFetchAtClose) {
 }
 
 // A fetch whose caller is cancelled before FETCH_OK must release its consumer
-// without a terminal call.
+// without a terminal call, and call fetchCancel() on the publisher's handle.
 CO_TEST_P_X(MoQSessionTest, FetchCallerCancelledBeforeFetchOk) {
   co_await setupMoQSession();
 
   folly::coro::Baton serverSawFetch;
   folly::coro::Baton releaseHandler;
+  bool serverSawFetchCancel = false;
+  std::shared_ptr<MockFetchHandle> serverHandle;
   EXPECT_CALL(*serverPublisher, fetch(_, _))
       .WillOnce([&](Fetch fetch, auto /*pub*/) -> TaskFetchResult {
         serverSawFetch.post();
         co_await releaseHandler;
-        co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+        serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+        EXPECT_CALL(*serverHandle, fetchCancel()).WillRepeatedly([&] {
+          serverSawFetchCancel = true;
+        });
+        co_return serverHandle;
       });
 
   auto consumer = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
@@ -1057,5 +1063,9 @@ CO_TEST_P_X(MoQSessionTest, FetchCallerCancelledBeforeFetchOk) {
   co_await folly::coro::sleep(std::chrono::milliseconds(200));
 
   EXPECT_TRUE(weakConsumer.expired());
+  EXPECT_TRUE(serverSawFetchCancel);
+  if (serverHandle) {
+    testing::Mock::VerifyAndClearExpectations(serverHandle.get());
+  }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

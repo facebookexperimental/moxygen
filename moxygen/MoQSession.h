@@ -1102,6 +1102,15 @@ class MoQSession : public Subscriber,
     return folly::makeGuard(
         [this, requestID] { cancelLocalRequest(requestID); });
   }
+  // Runs the handler for a peer's request. Its cancellation token fires when
+  // the peer cancels the request or the session closes, and the request stays
+  // registered until the handler returns, whichever path it takes.
+  void spawnInboundHandler(
+      RequestID requestID,
+      folly::coro::Task<void> handler);
+  // Returns whether a handler was still running.
+  bool cancelInboundRequest(RequestID requestID);
+
   // Drops a pending request we sent and cancels it at the peer.
   virtual void cancelLocalRequest(RequestID requestID);
   // A reply can still arrive for a request that was cancelled and erased.
@@ -1196,6 +1205,8 @@ class MoQSession : public Subscriber,
 
   // Handlers and cancellation needed by MoQRelaySession
   folly::CancellationSource cancellationSource_;
+  folly::F14FastMap<RequestID, folly::CancellationSource, RequestID::hash>
+      inboundRequests_;
   std::shared_ptr<Subscriber> subscribeHandler_;
   std::shared_ptr<Publisher> publishHandler_;
 

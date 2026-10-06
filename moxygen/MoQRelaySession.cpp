@@ -1212,12 +1212,10 @@ void MoQRelaySession::onPublishNamespaceImpl(
         *replyContext);
     return;
   }
-  co_withExecutor(
-      exec_.get(),
-      co_withCancellation(
-          cancellationSource_.getToken(),
-          handlePublishNamespace(std::move(pubNs), std::move(replyContext))))
-      .start();
+  auto requestID = pubNs.requestID;
+  spawnInboundHandler(
+      requestID,
+      handlePublishNamespace(std::move(pubNs), std::move(replyContext)));
 }
 
 folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
@@ -1231,10 +1229,18 @@ folly::coro::Task<void> MoQRelaySession::handlePublishNamespace(
       publishNamespace.trackNamespace,
       publishNamespace.requestID,
       replyContext);
-  auto publishNamespaceResult = co_await co_awaitTry(co_withCancellation(
-      cancellationSource_.getToken(),
-      subscribeHandler_->publishNamespace(
-          publishNamespace, std::move(pubNsCb))));
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  auto publishNamespaceResult =
+      co_await co_awaitTry(subscribeHandler_->publishNamespace(
+          publishNamespace, std::move(pubNsCb)));
+  if (token.isCancellationRequested()) {
+    // The publisher withdrew before this handle was installed.
+    if (publishNamespaceResult.hasValue() &&
+        publishNamespaceResult->hasValue()) {
+      publishNamespaceResult->value()->publishNamespaceDone();
+    }
+    co_return;
+  }
   if (publishNamespaceResult.hasException()) {
     XLOG(ERR) << "Exception in Subscriber callback ex="
               << publishNamespaceResult.exception().what().toStdString();
@@ -1361,6 +1367,11 @@ void MoQRelaySession::onPublishNamespaceDone(PublishNamespaceDone pubNsDone) {
 
   auto it = publishNamespaceHandles_.find(reqId);
   if (it == publishNamespaceHandles_.end()) {
+    // The publisher withdrew while the handler was still answering.
+    if (cancelInboundRequest(reqId)) {
+      retireRequestID(/*signalWriteLoop=*/true);
+      return;
+    }
     XLOG(ERR) << "PublishNamespaceDone for unknown requestID=" << reqId;
     return;
   }
@@ -1597,12 +1608,7 @@ void MoQRelaySession::onSubscribeNamespaceImpl(
         std::move(subNsReply));
     return;
   }
-  co_withExecutor(
-      exec_.get(),
-      co_withCancellation(
-          cancellationSource_.getToken(),
-          handleSubscribeNamespace(sa, subNsReply)))
-      .start();
+  spawnInboundHandler(sa.requestID, handleSubscribeNamespace(sa, subNsReply));
 }
 
 class MoQNamespacePublishHandle : public Publisher::NamespacePublishHandle {
@@ -1650,9 +1656,16 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
     publishHandle = std::make_shared<MoQNamespacePublishHandle>(
         subNsReply, *negotiatedVersion_);
   }
-  auto subNsResult = co_await co_awaitTry(co_withCancellation(
-      cancellationSource_.getToken(),
-      publishHandler_->subscribeNamespace(subNs, publishHandle)));
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  auto subNsResult = co_await co_awaitTry(
+      publishHandler_->subscribeNamespace(subNs, publishHandle));
+  if (token.isCancellationRequested()) {
+    // The subscriber left before this handle was installed.
+    if (subNsResult.hasValue() && subNsResult->hasValue()) {
+      subNsResult->value()->unsubscribeNamespace();
+    }
+    co_return;
+  }
   if (subNsResult.hasException()) {
     XLOG(ERR) << "Exception in Publisher callback ex="
               << subNsResult.exception().what().toStdString();
@@ -1754,6 +1767,11 @@ void MoQRelaySession::onUnsubscribeNamespace(UnsubscribeNamespace unsub) {
 
   auto saIt = subscribeNamespaceHandles_.find(requestID);
   if (saIt == subscribeNamespaceHandles_.end()) {
+    // The subscriber left while the handler was still answering.
+    if (cancelInboundRequest(requestID)) {
+      retireRequestID(/*signalWriteLoop=*/true);
+      return;
+    }
     XLOG(ERR) << "Invalid unsub publishNamespace requestID=" << requestID;
     return;
   }
@@ -1934,12 +1952,9 @@ void MoQRelaySession::onSubscribeTracksImpl(
         std::move(subTracksReply));
     return;
   }
-  co_withExecutor(
-      exec_.get(),
-      co_withCancellation(
-          cancellationSource_.getToken(),
-          handleSubscribeTracks(subTracks, std::move(subTracksReply))))
-      .start();
+  spawnInboundHandler(
+      subTracks.requestID,
+      handleSubscribeTracks(subTracks, std::move(subTracksReply)));
 }
 
 folly::coro::Task<void> MoQRelaySession::handleSubscribeTracks(
@@ -1950,10 +1965,17 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeTracks(
   setRequestSession();
   std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle =
       subTracksReply;
-  auto subTracksResult = co_await co_awaitTry(co_withCancellation(
-      cancellationSource_.getToken(),
-      publishHandler_->subscribeTracks(
-          subTracks, std::move(publishBlockedHandle))));
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  auto subTracksResult = co_await co_awaitTry(publishHandler_->subscribeTracks(
+      subTracks, std::move(publishBlockedHandle)));
+  if (token.isCancellationRequested()) {
+    // The subscriber left before this handle was installed.
+    // onSubscribeTracksStreamClosed already retired the request.
+    if (subTracksResult.hasValue() && subTracksResult->hasValue()) {
+      subTracksResult->value()->unsubscribeTracks();
+    }
+    co_return;
+  }
   if (subTracksResult.hasException()) {
     XLOG(ERR) << "Exception in subscribeTracks publisher callback ex="
               << subTracksResult.exception().what().toStdString();
@@ -2000,6 +2022,7 @@ void MoQRelaySession::onSubscribeTracksStreamClosed(RequestID requestID) {
   // NOT_SUPPORTED, app errors, exceptions) never insert a handle, and
   // without retiring the credit here the peer's request-ID budget would
   // leak by one for every rejected SUBSCRIBE_TRACKS.
+  cancelInboundRequest(requestID);
   requestUpdateReplyContexts_.erase(requestID);
   auto it = subscribeTracksHandles_.find(requestID);
   if (it != subscribeTracksHandles_.end()) {

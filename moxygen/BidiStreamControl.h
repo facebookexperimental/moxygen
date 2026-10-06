@@ -50,6 +50,12 @@ class BidiStreamControl {
     return readCancelSource_.getToken();
   }
 
+  // Cancelled by the peer's RESET_STREAM, STOP_SENDING, or a FIN when
+  // finIsCancellation. It is never disarmed.
+  folly::CancellationToken getPeerCancelToken() const {
+    return peerCancelSource_.getToken();
+  }
+
   // Set once per stream (sender: before read loop; responder: on first
   // frame). Required before firePeerTermination() can dispatch.
   void setRequestID(RequestID id) {
@@ -128,6 +134,7 @@ class BidiStreamControl {
 
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
   folly::CancellationSource readCancelSource_;
+  folly::CancellationSource peerCancelSource_;
   // Used to suppress firePeerTermination() during shutdown; cleanup() can't
   // always reach this control to clear it directly.
   folly::CancellationToken sessionShutdownToken_;

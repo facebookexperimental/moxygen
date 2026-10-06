@@ -39,6 +39,10 @@ class ReplyContext {
     return cancelToken_.isCancellationRequested();
   }
 
+  const folly::CancellationToken& cancelToken() const {
+    return cancelToken_;
+  }
+
  protected:
   folly::CancellationToken cancelToken_;
 };

@@ -1476,19 +1476,26 @@ CO_TEST_P_X(Draft18Test, NoUnsubscribeAfterPublishDone) {
 }
 
 // A subscribe whose caller is cancelled before SUBSCRIBE_OK must end the
-// subscription at the peer, so the publisher stops accepting new data for it.
+// subscription at the peer: the publisher stops accepting new data for it and
+// its subscription handle is unsubscribed.
 CO_TEST_P_X(MoQSessionTest, SubscribeCallerCancelledBeforeSubscribeOk) {
   co_await setupMoQSession();
 
   folly::coro::Baton serverSawSubscribe;
   folly::coro::Baton releaseHandler;
   std::shared_ptr<TrackConsumer> serverPub;
+  bool serverSawUnsubscribe = false;
+  std::shared_ptr<MockSubscriptionHandle> serverHandle;
   EXPECT_CALL(*serverPublisher, subscribe(_, _))
       .WillOnce([&](auto sub, auto pub) -> TaskSubscribeResult {
         serverPub = std::move(pub);
         serverSawSubscribe.post();
         co_await releaseHandler;
-        co_return makeSubscribeOkResult(sub);
+        serverHandle = makeSubscribeOkResult(sub);
+        EXPECT_CALL(*serverHandle, unsubscribe()).WillRepeatedly([&] {
+          serverSawUnsubscribe = true;
+        });
+        co_return serverHandle;
       });
 
   folly::CancellationSource cancelSource;
@@ -1511,6 +1518,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeCallerCancelledBeforeSubscribeOk) {
   EXPECT_NE(serverPub, nullptr);
   if (serverPub) {
     EXPECT_TRUE(serverPub->beginSubgroup(0, 0, 0).hasError());
+  }
+  EXPECT_TRUE(serverSawUnsubscribe);
+  if (serverHandle) {
+    testing::Mock::VerifyAndClearExpectations(serverHandle.get());
   }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
