@@ -131,4 +131,43 @@ TEST(MediaCatalogTest, ParseRejectsMalformedJson) {
   EXPECT_FALSE(parseCatalog(asByteRange(json)).has_value());
 }
 
+TEST(MediaCatalogTest, SerializesDeterministicallyAndInSpecOrder) {
+  MediaCatalog catalog;
+  catalog.generatedAt = 1720000000;
+  catalog.tracks.push_back(
+      CatalogTrack{
+          .name = "audio-main",
+          .role = "audio",
+          .packaging = "cmaf",
+          .initRef = "audio-init",
+          .codec = "mp4a.40.2",
+      });
+  catalog.tracks.push_back(
+      CatalogTrack{
+          .name = "video-main",
+          .role = "video",
+          .packaging = "cmaf",
+          .initRef = "video-init",
+          .codec = "avc1.640028",
+      });
+  catalog.initDataList.push_back({"audio-init", "inline", "YXVkaW8="});
+  catalog.initDataList.push_back({"video-init", "inline", "dmlkZW8="});
+
+  const auto first = serializeCatalog(catalog);
+  EXPECT_EQ(first, serializeCatalog(catalog))
+      << "identical catalogs must serialize to identical bytes";
+
+  // MSF 5.1.7: the initDataList "MUST be located after the tracks array".
+  const auto tracksAt = first.find("\"tracks\"");
+  const auto initAt = first.find("\"initDataList\"");
+  ASSERT_NE(tracksAt, std::string::npos);
+  ASSERT_NE(initAt, std::string::npos);
+  EXPECT_LT(tracksAt, initAt);
+
+  // Still a catalog after the reordering.
+  const auto parsed = parseCatalog(asByteRange(first));
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(serializeCatalog(*parsed), first);
+}
+
 }} // namespace moxygen

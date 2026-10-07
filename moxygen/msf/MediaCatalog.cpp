@@ -18,6 +18,42 @@ void putIfSet(folly::dynamic& obj, const char* key, const std::string& v) {
     obj[key] = v;
   }
 }
+
+// A folly::dynamic object iterates in neither insertion nor sorted order, and
+// not even stably between two calls on equal input, so the document has to say
+// what order it wants. Root keys are ranked to satisfy MSF 5.1.7 -- the
+// initDataList "MUST be located after the tracks array" -- and everything else
+// falls back to lexicographic, which the spec leaves free and which makes an
+// unchanged catalog serialize to identical bytes. folly applies this to every
+// object; only the root uses the ranked names.
+int keyRank(folly::StringPiece key) {
+  if (key == "version") {
+    return 0;
+  }
+  if (key == "generatedAt") {
+    return 1;
+  }
+  if (key == "tracks") {
+    return 2;
+  }
+  if (key == "initDataList") {
+    return 3;
+  }
+  return 4;
+}
+
+folly::json::serialization_opts catalogSerializationOpts() {
+  folly::json::serialization_opts opts;
+  opts.sort_keys_by = [](const folly::dynamic& a, const folly::dynamic& b) {
+    const auto rankA = keyRank(a.stringPiece());
+    const auto rankB = keyRank(b.stringPiece());
+    if (rankA != rankB) {
+      return rankA < rankB;
+    }
+    return a.stringPiece() < b.stringPiece();
+  };
+  return opts;
+}
 } // namespace
 
 std::string serializeCatalog(const MediaCatalog& catalog) {
@@ -77,7 +113,7 @@ std::string serializeCatalog(const MediaCatalog& catalog) {
   if (!catalog.initDataList.empty()) {
     root["initDataList"] = std::move(initList);
   }
-  return folly::toJson(root);
+  return folly::json::serialize(root, catalogSerializationOpts());
 }
 
 std::optional<MediaCatalog> parseCatalog(folly::ByteRange json) {
