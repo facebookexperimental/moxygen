@@ -2733,6 +2733,21 @@ TEST(MoQFramerTestUtils, GetMoqtProtocols) {
   EXPECT_EQ(meta16[0], kAlpnMoqtDraft16Latest);
 }
 
+// The default prefers draft 16 and keeps moq-00 last, so a peer that has not
+// moved to draft 16 still shares an ALPN.
+TEST(MoQFramerTestUtils, GetDefaultMoqtProtocols) {
+  EXPECT_EQ(
+      getDefaultMoqtProtocols(false),
+      (std::vector<std::string>{
+          std::string(kAlpnMoqtDraft16Latest), std::string(kAlpnMoqtLegacy)}));
+  EXPECT_EQ(
+      getDefaultMoqtProtocols(false, /*useStandard=*/true),
+      (std::vector<std::string>{"moqt-16", "moq-00"}));
+  EXPECT_EQ(
+      getDefaultMoqtProtocols(true, /*useStandard=*/true),
+      (std::vector<std::string>{"moqt-18", "moqt-16", "moqt-15", "moq-00"}));
+}
+
 // Test class for immutable extensions feature (draft 14+)
 class MoQImmutableExtensionsTest : public ::testing::TestWithParam<uint64_t> {
  public:

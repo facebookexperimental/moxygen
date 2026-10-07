@@ -92,13 +92,15 @@ std::optional<std::string> getAlpnFromVersion(
 std::vector<std::string> getDefaultMoqtProtocols(
     bool includeExperimental,
     bool useStandard) {
+  // Highest version first so TLS ALPN negotiation prefers it. moq-00 (draft
+  // 14) stays last as a fallback for peers that have not moved to draft 16.
   std::vector<std::string> protocols;
   if (includeExperimental) {
-    // Highest version first so TLS ALPN negotiation prefers it
     protocols.push_back(
         getAlpnFromVersion(kVersionDraft18, useStandard).value());
-    protocols.push_back(
-        getAlpnFromVersion(kVersionDraft16, useStandard).value());
+  }
+  protocols.push_back(getAlpnFromVersion(kVersionDraft16, useStandard).value());
+  if (includeExperimental) {
     protocols.push_back(
         getAlpnFromVersion(kVersionDraft15, useStandard).value());
   }
