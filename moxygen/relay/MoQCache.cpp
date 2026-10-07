@@ -1784,9 +1784,10 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchUpstream(
       lastObject, consumer, fetchRangeIt, *this, fetch.fullTrackName);
   // fetchImpl resets the consumer on cancel, and cancelling this fetch also
   // makes the upstream reset the writeback.
+  // GCC 11 miscompiles a co_await inside this constructor's arguments.
+  auto token = co_await folly::coro::co_current_cancellation_token;
   folly::CancellationCallback stopForwardingReset(
-      co_await folly::coro::co_current_cancellation_token,
-      [writeback] { writeback->stopForwardingReset(); });
+      token, [writeback] { writeback->stopForwardingReset(); });
   auto res = co_await upstream->fetch(
       Fetch(
           0,
