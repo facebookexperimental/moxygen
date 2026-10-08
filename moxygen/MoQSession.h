@@ -56,6 +56,7 @@ struct MoQSettings {
   // Timeout for waiting for in-flight streams when PUBLISH_DONE is received
   std::chrono::milliseconds publishDoneStreamCountTimeout{
       std::chrono::seconds(2)};
+  std::chrono::milliseconds requestTimeout{0};
 };
 
 class ReplyContext;

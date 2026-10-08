@@ -1757,3 +1757,64 @@ CO_TEST_P_X(MoQSessionTest, SubscribeCancelledWhileSubscribeOkQueued) {
   }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(MoQSessionTest, SubscribeTimesOutBeforeSubscribeOk) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.requestTimeout = std::chrono::milliseconds(50);
+  clientSession_->setMoqSettings(moqSettings);
+
+  folly::coro::Baton releaseHandler;
+  bool serverSawUnsubscribe = false;
+  std::shared_ptr<MockSubscriptionHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .WillOnce([&](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+        co_await releaseHandler;
+        serverHandle = makeSubscribeOkResult(sub);
+        EXPECT_CALL(*serverHandle, unsubscribe()).WillRepeatedly([&] {
+          serverSawUnsubscribe = true;
+        });
+        co_return serverHandle;
+      });
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onSubscribeError(SubscribeErrorCode::TIMEOUT));
+  auto consumer = std::make_shared<testing::StrictMock<MockTrackConsumer>>();
+  std::weak_ptr<TrackConsumer> weakConsumer = consumer;
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), std::move(consumer));
+  EXPECT_TRUE(res.hasError());
+  if (res.hasError()) {
+    EXPECT_EQ(res.error().errorCode, SubscribeErrorCode::TIMEOUT);
+  }
+  releaseHandler.post();
+  co_await folly::coro::sleep(std::chrono::milliseconds(200));
+
+  EXPECT_TRUE(weakConsumer.expired());
+  EXPECT_TRUE(serverSawUnsubscribe);
+  EXPECT_FALSE(clientSession_->isClosed());
+  if (serverHandle) {
+    testing::Mock::VerifyAndClearExpectations(serverHandle.get());
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, SubscribeRepliedWithinRequestTimeout) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.requestTimeout = std::chrono::seconds(5);
+  clientSession_->setMoqSettings(moqSettings);
+  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
+    pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+    co_return makeSubscribeOkResult(sub);
+  });
+  expectPublishDone();
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+
+  EXPECT_FALSE(res.hasError());
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

@@ -1199,3 +1199,44 @@ CO_TEST_P_X(MoQSessionTest, FetchCallerCancelledBeforeFetchOk) {
   }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(MoQSessionTest, FetchTimesOutBeforeFetchOk) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.requestTimeout = std::chrono::milliseconds(50);
+  clientSession_->setMoqSettings(moqSettings);
+
+  folly::coro::Baton releaseHandler;
+  bool serverSawFetchCancel = false;
+  std::shared_ptr<MockFetchHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce([&](Fetch fetch, auto /*pub*/) -> TaskFetchResult {
+        co_await releaseHandler;
+        serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+        EXPECT_CALL(*serverHandle, fetchCancel()).WillRepeatedly([&] {
+          serverSawFetchCancel = true;
+        });
+        co_return serverHandle;
+      });
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_, onFetchError(FetchErrorCode::TIMEOUT));
+  auto consumer = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+  std::weak_ptr<FetchConsumer> weakConsumer = consumer;
+
+  auto res = co_await clientSession_->fetch(
+      getFetch({0, 0}, {0, 1}), std::move(consumer));
+  EXPECT_TRUE(res.hasError());
+  if (res.hasError()) {
+    EXPECT_EQ(res.error().errorCode, FetchErrorCode::TIMEOUT);
+  }
+  releaseHandler.post();
+  co_await folly::coro::sleep(std::chrono::milliseconds(200));
+
+  EXPECT_TRUE(weakConsumer.expired());
+  EXPECT_TRUE(serverSawFetchCancel);
+  EXPECT_FALSE(clientSession_->isClosed());
+  if (serverHandle) {
+    testing::Mock::VerifyAndClearExpectations(serverHandle.get());
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

@@ -2384,6 +2384,10 @@ class MoQSession::FetchTrackReceiveState
     return dataStreamCancelCode_;
   }
 
+  void dropFetchCallback() {
+    callback_.reset();
+  }
+
   void resetFetchCallback(MoQSession* session) {
     callback_.reset();
     if (fetchOkAndAllDataReceived()) {
@@ -6373,8 +6377,22 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
       reqID, PendingRequestState::makeSubscribeTrack(trackReceiveState));
   pendingSubscribeTracks_.insert(fullTrackName);
   auto cancelGuard = cancelOnExit(reqID);
-  auto subscribeResultTry =
-      co_await co_awaitTry(trackReceiveState->subscribeFuture());
+  auto reply = trackReceiveState->subscribeFuture();
+  const auto limit = moqSettings_.requestTimeout;
+  folly::Try<SubscribeTrackReceiveState::SubscribeResult> subscribeResultTry;
+  if (limit > std::chrono::milliseconds::zero()) {
+    subscribeResultTry =
+        co_await co_awaitTry(folly::coro::timeout(std::move(reply), limit));
+  } else {
+    subscribeResultTry = co_await co_awaitTry(std::move(reply));
+  }
+  if (subscribeResultTry.tryGetExceptionObject<folly::FutureTimeout>()) {
+    SubscribeError subscribeError = {
+        reqID, SubscribeErrorCode::TIMEOUT, "request timed out"};
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
+    co_return folly::makeUnexpected(subscribeError);
+  }
   if (subscribeResultTry.hasException()) {
     // likely cancellation
     XLOG(ERR) << "subscribeFuture exception=" << subscribeResultTry.exception();
@@ -6899,7 +6917,24 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
       trackReceiveState->getRequestID(),
       PendingRequestState::makeFetch(trackReceiveState));
   auto cancelGuard = cancelOnExit(reqID);
-  auto fetchResult = co_await trackReceiveState->fetchFuture();
+  auto reply = trackReceiveState->fetchFuture();
+  const auto limit = moqSettings_.requestTimeout;
+  folly::Try<FetchTrackReceiveState::FetchResult> fetchResultTry;
+  if (limit > std::chrono::milliseconds::zero()) {
+    fetchResultTry =
+        co_await co_awaitTry(folly::coro::timeout(std::move(reply), limit));
+  } else {
+    fetchResultTry = co_await co_awaitTry(std::move(reply));
+  }
+  if (fetchResultTry.tryGetExceptionObject<folly::FutureTimeout>()) {
+    trackReceiveState->dropFetchCallback();
+    FetchError fetchError = {
+        reqID, FetchErrorCode::TIMEOUT, "request timed out"};
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onFetchError, fetchError.errorCode);
+    co_return folly::makeUnexpected(fetchError);
+  }
+  auto fetchResult = std::move(fetchResultTry).value();
   cancelGuard.dismiss();
   XLOG(DBG1) << __func__
              << " fetchReady trackReceiveState=" << trackReceiveState;
