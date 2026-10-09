@@ -6,9 +6,36 @@
 
 #include "moxygen/test/MoQSessionTestCommon.h"
 
+#include "moxygen/MoQTrackProperties.h"
+
 using namespace moxygen;
 using namespace moxygen::test;
 using testing::_;
+
+CO_TEST_P_X(Draft22Test, FetchOmitsUnrequestedTrackProperties) {
+  co_await setupMoQSession();
+  expectFetch([](Fetch fetch, auto) -> TaskFetchResult {
+    EXPECT_FALSE(fetch.includeProperties);
+    auto ok = makeFetchOkResult(fetch, AbsoluteLocation{0, 1})->fetchOk();
+    ok.extensions.insertMutableExtension(
+        Extension{kPublisherPriorityExtensionType, 100});
+    co_return std::make_shared<MockFetchHandle>(std::move(ok));
+  });
+  expectFetchSuccess();
+
+  auto request = getFetch({0, 0}, {0, 1});
+  request.includeProperties = false;
+  auto result = co_await clientSession_->fetch(request, fetchCallback_);
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+  EXPECT_TRUE(result.value()->fetchOk().extensions.empty());
+
+  EXPECT_CALL(*fetchCallback_, reset(_));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 
 // === FETCH tests ===
 

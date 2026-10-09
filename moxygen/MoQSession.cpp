@@ -4586,6 +4586,9 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
   auto requestID = sub.requestID;
   auto fullTrackName = sub.fullTrackName;
   auto& params = sub.params;
+  const bool sendTrackProperties =
+      getDraftMajorVersion(*getNegotiatedVersion()) < 22 ||
+      sub.includeProperties;
 
   // TODO: Formalize after parameter refactor
   // We should only keep e2e params here and remove everything else
@@ -4631,6 +4634,10 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     setPublisherPriorityFromParams(
         subOk.params, subOk.extensions, trackPublisher);
     trackPublisher->subscribeOkSent(subOk);
+
+    if (!sendTrackProperties) {
+      subOk.extensions = Extensions{};
+    }
 
     // TODO: verify TrackAlias is unique
     sendSubscribeOk(subOk, *replyContext);
@@ -5506,6 +5513,9 @@ folly::coro::Task<void> MoQSession::handleFetch(
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto requestID = fetch.requestID;
+  const bool sendTrackProperties =
+      getDraftMajorVersion(*getNegotiatedVersion()) < 22 ||
+      fetch.includeProperties;
   if (!fetchPublisher->getStreamPublisher()) {
     XLOG(ERR) << "Fetch Publisher killed sess=" << this;
     fetchError(
@@ -5554,6 +5564,9 @@ folly::coro::Task<void> MoQSession::handleFetch(
     auto fetchHandle = std::move(fetchResult->value());
     auto fetchOkMsg = fetchHandle->fetchOk();
     fetchOkMsg.requestID = requestID;
+    if (!sendTrackProperties) {
+      fetchOkMsg.extensions = Extensions{};
+    }
     fetchOk(fetchOkMsg, *replyContext);
     fetchPublisher->setFetchHandle(std::move(fetchHandle));
   }
@@ -5687,6 +5700,9 @@ folly::coro::Task<void> MoQSession::handleTrackStatus(
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
+  const bool sendTrackProperties =
+      getDraftMajorVersion(*getNegotiatedVersion()) < 22 ||
+      trackStatus.includeProperties;
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto trackStatusResult =
       co_await co_awaitTry(publishHandler_->trackStatus(trackStatus));
@@ -5714,6 +5730,9 @@ folly::coro::Task<void> MoQSession::handleTrackStatus(
     auto trackStatOk = std::move(trackStatusResult->value());
     trackStatOk.requestID = trackStatus.requestID;
     trackStatOk.fullTrackName = trackStatus.fullTrackName;
+    if (!sendTrackProperties) {
+      trackStatOk.trackProperties = Extensions{};
+    }
     trackStatusOk(trackStatOk, *replyContext);
   }
   retireRequestID(/*signalWriteLoop=*/false);

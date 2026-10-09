@@ -227,7 +227,10 @@ void MoQSessionTest::SetUp() {
 
   // For Draft15+, initialize version via ALPN since it's required
   if (getDraftMajorVersion(getServerSelectedVersion()) >= 15) {
-    auto alpn = getAlpnFromVersion(getServerSelectedVersion());
+    auto alpn = getAlpnFromVersion(
+        getServerSelectedVersion(),
+        /*useStandard=*/
+        getDraftMajorVersion(getServerSelectedVersion()) >= 22);
     if (alpn.has_value()) {
       clientSession_->validateAndSetVersionFromAlpn(alpn.value());
       serverSession_->validateAndSetVersionFromAlpn(alpn.value());
@@ -667,6 +670,11 @@ INSTANTIATE_TEST_SUITE_P(
     Draft18Test,
     Draft18Test,
     testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+
+INSTANTIATE_TEST_SUITE_P(
+    Draft22Test,
+    Draft22Test,
+    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}));
 
 namespace {
 std::vector<VersionParams> getPreDraft18VersionParams() {

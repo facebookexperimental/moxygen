@@ -7,12 +7,39 @@
 #include "moxygen/test/MoQSessionTestCommon.h"
 
 #include <folly/coro/Timeout.h>
+#include "moxygen/MoQTrackProperties.h"
 
 using namespace moxygen;
 using namespace moxygen::test;
 using testing::_;
 
 // === SUBSCRIBE tests ===
+
+CO_TEST_P_X(Draft22Test, SubscribeOmitsUnrequestedTrackProperties) {
+  co_await setupMoQSession();
+  expectSubscribe([](auto sub, auto) -> TaskSubscribeResult {
+    EXPECT_FALSE(sub.includeProperties);
+    auto ok = makeSubscribeOkResult(sub)->subscribeOk();
+    ok.extensions.insertMutableExtension(
+        Extension{kPublisherPriorityExtensionType, 100});
+    co_return std::make_shared<MockSubscriptionHandle>(std::move(ok));
+  });
+
+  auto request = getSubscribe(kTestTrackName);
+  request.includeProperties = false;
+  auto result = co_await clientSession_->subscribe(request, subscribeCallback_);
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+  EXPECT_TRUE(result.value()->subscribeOk().extensions.empty());
+
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+}
 
 CO_TEST_P_X(MoQSessionTest, SubscribeOkDuplicateTrackAlias) {
   co_await setupMoQSession();

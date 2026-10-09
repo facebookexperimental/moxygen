@@ -14,6 +14,34 @@ using testing::_;
 
 // === TRACK STATUS tests ===
 
+CO_TEST_P_X(Draft22Test, TrackStatusOmitsUnrequestedTrackProperties) {
+  co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());
+  EXPECT_CALL(*serverPublisher, trackStatus(_))
+      .WillOnce(
+          [](TrackStatus request)
+              -> folly::coro::Task<Publisher::TrackStatusResult> {
+            EXPECT_FALSE(request.includeProperties);
+            auto ok = makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
+            ok.trackProperties.insertMutableExtension(
+                Extension{kPublisherPriorityExtensionType, 100});
+            co_return ok;
+          });
+
+  auto request = getTrackStatus();
+  request.includeProperties = false;
+  auto result = co_await clientSession_->trackStatus(request);
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+  EXPECT_TRUE(result->trackProperties.empty());
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, TrackStatusOk) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
