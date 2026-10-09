@@ -1268,3 +1268,78 @@ CO_TEST_P_X(MoQSessionTest, FetchTimesOutBeforeFetchOk) {
   }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(MoQSessionTest, FetchThatStallsAfterFetchOkIsReset) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.requestTimeout = std::chrono::milliseconds(100);
+  clientSession_->setMoqSettings(moqSettings);
+
+  bool serverSawFetchCancel = false;
+  std::shared_ptr<FetchConsumer> serverPub;
+  std::shared_ptr<MockFetchHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce([&](Fetch fetch, auto pub) -> TaskFetchResult {
+        serverPub = std::move(pub);
+        serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+        EXPECT_CALL(*serverHandle, fetchCancel()).WillRepeatedly([&] {
+          serverSawFetchCancel = true;
+        });
+        co_return serverHandle;
+      });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  bool consumerReset = false;
+  auto consumer = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+  EXPECT_CALL(*consumer, reset(ResetStreamErrorCode::DELIVERY_TIMEOUT))
+      .WillOnce([&] { consumerReset = true; });
+
+  auto res = co_await clientSession_->fetch(
+      getFetch({0, 0}, {0, 1}), std::move(consumer));
+  EXPECT_TRUE(res.hasValue());
+  co_await folly::coro::sleep(std::chrono::milliseconds(400));
+
+  EXPECT_TRUE(consumerReset);
+  EXPECT_TRUE(serverSawFetchCancel);
+  EXPECT_FALSE(clientSession_->isClosed());
+  if (serverHandle) {
+    testing::Mock::VerifyAndClearExpectations(serverHandle.get());
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, FetchWhoseDataKeepsArrivingIsNotReset) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.requestTimeout = std::chrono::milliseconds(100);
+  clientSession_->setMoqSettings(moqSettings);
+
+  std::shared_ptr<FetchConsumer> serverPub;
+  expectFetch([&serverPub](Fetch fetch, auto pub) -> TaskFetchResult {
+    serverPub = std::move(pub);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 4});
+  });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  EXPECT_CALL(*fetchCallback_, object(0, 0, _, _, _, _, _))
+      .Times(5)
+      .WillRepeatedly(testing::Return(folly::unit));
+
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 5}), fetchCallback_);
+  EXPECT_TRUE(res.hasValue());
+  for (uint64_t objectID = 0; objectID < 5; ++objectID) {
+    co_await folly::coro::sleep(std::chrono::milliseconds(60));
+    serverPub->object(
+        0,
+        0,
+        objectID,
+        moxygen::test::makeBuf(10),
+        noExtensions(),
+        /*finFetch=*/objectID == 4);
+  }
+  co_await folly::coro::sleep(std::chrono::milliseconds(300));
+
+  EXPECT_FALSE(clientSession_->isClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

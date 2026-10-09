@@ -936,7 +936,9 @@ class MoQSession : public Subscriber,
   void fetchError(const FetchError& fetchError, ReplyContext& replyContext);
   void fetchCancel(
       const FetchCancel& fetchCancel,
-      const std::shared_ptr<BidiStreamControl>& control = nullptr);
+      const std::shared_ptr<BidiStreamControl>& control = nullptr,
+      ResetStreamErrorCode consumerError = ResetStreamErrorCode::CANCELLED);
+  void onFetchStalled(RequestID requestID);
 
   folly::coro::Task<void> handlePublish(
       PublishRequest publish,
