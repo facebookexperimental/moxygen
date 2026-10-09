@@ -1311,34 +1311,35 @@ CO_TEST_P_X(MoQSessionTest, FetchThatStallsAfterFetchOkIsReset) {
 CO_TEST_P_X(MoQSessionTest, FetchWhoseDataKeepsArrivingIsNotReset) {
   co_await setupMoQSession();
   MoQSettings moqSettings;
-  moqSettings.requestTimeout = std::chrono::milliseconds(100);
+  moqSettings.requestTimeout = std::chrono::milliseconds(500);
   clientSession_->setMoqSettings(moqSettings);
 
+  constexpr uint64_t kObjects = 30;
   std::shared_ptr<FetchConsumer> serverPub;
   expectFetch([&serverPub](Fetch fetch, auto pub) -> TaskFetchResult {
     serverPub = std::move(pub);
-    co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 4});
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{0, kObjects - 1});
   });
   expectFetchSuccess();
   EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
   EXPECT_CALL(*fetchCallback_, object(0, 0, _, _, _, _, _))
-      .Times(5)
+      .Times(kObjects)
       .WillRepeatedly(testing::Return(folly::unit));
 
-  auto res =
-      co_await clientSession_->fetch(getFetch({0, 0}, {0, 5}), fetchCallback_);
+  auto res = co_await clientSession_->fetch(
+      getFetch({0, 0}, {0, kObjects}), fetchCallback_);
   EXPECT_TRUE(res.hasValue());
-  for (uint64_t objectID = 0; objectID < 5; ++objectID) {
-    co_await folly::coro::sleep(std::chrono::milliseconds(60));
+  for (uint64_t objectID = 0; objectID < kObjects; ++objectID) {
+    co_await folly::coro::sleep(std::chrono::milliseconds(20));
     serverPub->object(
         0,
         0,
         objectID,
         moxygen::test::makeBuf(10),
         noExtensions(),
-        /*finFetch=*/objectID == 4);
+        /*finFetch=*/objectID == kObjects - 1);
   }
-  co_await folly::coro::sleep(std::chrono::milliseconds(300));
+  co_await folly::coro::sleep(std::chrono::milliseconds(600));
 
   EXPECT_FALSE(clientSession_->isClosed());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
