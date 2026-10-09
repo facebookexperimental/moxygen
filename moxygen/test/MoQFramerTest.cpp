@@ -6532,6 +6532,206 @@ TEST_F(ParametersIsParamAllowedTest, V18OnlyParamKeysUnknownBeforeV18) {
   }
 }
 
+TEST_F(ParametersIsParamAllowedTest, IncludePropertiesIsDraft22Only) {
+  const auto rawKey =
+      folly::to_underlying(TrackRequestParamKey::INCLUDE_PROPERTIES);
+  EXPECT_FALSE(Parameters::isKnownParamKey(rawKey, 21));
+  EXPECT_TRUE(Parameters::isKnownParamKey(rawKey, 22));
+
+  for (auto frameType :
+       {FrameType::SUBSCRIBE,
+        FrameType::TRACK_STATUS,
+        FrameType::FETCH,
+        FrameType::SUBSCRIBE_TRACKS}) {
+    Parameters params(frameType);
+    params.setMajorVersion(22);
+    EXPECT_TRUE(
+        params.isParamAllowed(TrackRequestParamKey::INCLUDE_PROPERTIES));
+  }
+
+  Parameters publishParams(FrameType::PUBLISH);
+  publishParams.setMajorVersion(22);
+  EXPECT_FALSE(
+      publishParams.isParamAllowed(TrackRequestParamKey::INCLUDE_PROPERTIES));
+}
+
+TEST(MoQFramerV22Test, IncludePropertiesFalseRoundTripsOnAllowedRequests) {
+  MoQFrameWriter writer;
+  MoQFrameParser parser;
+  writer.initializeVersion(kVersionDraft22);
+  parser.initializeVersion(kVersionDraft22);
+
+  const FullTrackName ftn{TrackNamespace({"ns"}), "track"};
+
+  SubscribeRequest subscribe = SubscribeRequest::make(ftn);
+  subscribe.requestID = RequestID(1);
+  subscribe.includeProperties = false;
+  folly::IOBufQueue subscribeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeSubscribeRequest(subscribeBuf, subscribe).hasValue());
+  auto subscribeBytes = subscribeBuf.move();
+  folly::io::Cursor subscribeCursor(subscribeBytes.get());
+  ASSERT_EQ(
+      readVarintFrom(subscribeCursor),
+      folly::to_underlying(FrameType::SUBSCRIBE));
+  auto subscribeLength = subscribeCursor.readBE<uint16_t>();
+  auto parsedSubscribe =
+      parser.parseSubscribeRequest(subscribeCursor, subscribeLength);
+  ASSERT_TRUE(parsedSubscribe.hasValue());
+  EXPECT_FALSE(parsedSubscribe->includeProperties);
+
+  TrackStatus trackStatus = SubscribeRequest::make(ftn);
+  trackStatus.requestID = RequestID(3);
+  trackStatus.includeProperties = false;
+  folly::IOBufQueue trackStatusBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeTrackStatus(trackStatusBuf, trackStatus).hasValue());
+  auto trackStatusBytes = trackStatusBuf.move();
+  folly::io::Cursor trackStatusCursor(trackStatusBytes.get());
+  ASSERT_EQ(
+      readVarintFrom(trackStatusCursor),
+      folly::to_underlying(FrameType::TRACK_STATUS));
+  auto trackStatusLength = trackStatusCursor.readBE<uint16_t>();
+  auto parsedTrackStatus =
+      parser.parseTrackStatus(trackStatusCursor, trackStatusLength);
+  ASSERT_TRUE(parsedTrackStatus.hasValue());
+  EXPECT_FALSE(parsedTrackStatus->includeProperties);
+
+  Fetch fetch(
+      RequestID(5), ftn, AbsoluteLocation{0, 0}, AbsoluteLocation{1, 0});
+  fetch.includeProperties = false;
+  folly::IOBufQueue fetchBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeFetch(fetchBuf, fetch).hasValue());
+  auto fetchBytes = fetchBuf.move();
+  folly::io::Cursor fetchCursor(fetchBytes.get());
+  ASSERT_EQ(
+      readVarintFrom(fetchCursor), folly::to_underlying(FrameType::FETCH));
+  auto fetchLength = fetchCursor.readBE<uint16_t>();
+  auto parsedFetch = parser.parseFetch(fetchCursor, fetchLength);
+  ASSERT_TRUE(parsedFetch.hasValue());
+  EXPECT_FALSE(parsedFetch->includeProperties);
+
+  SubscribeTracks subscribeTracks;
+  subscribeTracks.requestID = RequestID(7);
+  subscribeTracks.trackNamespacePrefix = TrackNamespace({"ns"});
+  subscribeTracks.includeProperties = false;
+  folly::IOBufQueue subscribeTracksBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeSubscribeTracks(subscribeTracksBuf, subscribeTracks)
+                  .hasValue());
+  auto subscribeTracksBytes = subscribeTracksBuf.move();
+  folly::io::Cursor subscribeTracksCursor(subscribeTracksBytes.get());
+  auto subscribeTracksFrameType = decodeMoQVarint(subscribeTracksCursor);
+  ASSERT_TRUE(subscribeTracksFrameType.has_value());
+  EXPECT_EQ(
+      subscribeTracksFrameType->first,
+      folly::to_underlying(FrameType::SUBSCRIBE_TRACKS));
+  auto subscribeTracksLength = subscribeTracksCursor.readBE<uint16_t>();
+  auto parsedSubscribeTracks =
+      parser.parseSubscribeTracks(subscribeTracksCursor, subscribeTracksLength);
+  ASSERT_TRUE(parsedSubscribeTracks.hasValue());
+  EXPECT_FALSE(parsedSubscribeTracks->includeProperties);
+}
+
+TEST(MoQFramerV22Test, IncludePropertiesIsIgnoredByWriterBeforeDraft22) {
+  MoQFrameWriter writer;
+  MoQFrameParser parser;
+  writer.initializeVersion(kVersionDraft21);
+  parser.initializeVersion(kVersionDraft21);
+
+  auto subscribe =
+      SubscribeRequest::make(FullTrackName{TrackNamespace({"ns"}), "track"});
+  subscribe.includeProperties = false;
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeSubscribeRequest(buf, subscribe).hasValue());
+
+  auto bytes = buf.move();
+  folly::io::Cursor cursor(bytes.get());
+  ASSERT_EQ(readVarintFrom(cursor), folly::to_underlying(FrameType::SUBSCRIBE));
+  auto length = cursor.readBE<uint16_t>();
+  auto parsed = parser.parseSubscribeRequest(cursor, length);
+  ASSERT_TRUE(parsed.hasValue());
+  EXPECT_TRUE(parsed->includeProperties);
+}
+
+TEST(MoQFramerV22Test, IncludePropertiesInvalidValueIsRejectedByWriters) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft22);
+
+  auto addInvalidIncludeProperties = [](TrackRequestParameters& params) {
+    params.setMajorVersion(22);
+    return params.insertParam(Parameter(
+        folly::to_underlying(TrackRequestParamKey::INCLUDE_PROPERTIES),
+        uint64_t(2)));
+  };
+
+  auto subscribe =
+      SubscribeRequest::make(FullTrackName{TrackNamespace({"ns"}), "track"});
+  ASSERT_TRUE(addInvalidIncludeProperties(subscribe.params).hasValue());
+  folly::IOBufQueue subscribeBuf{folly::IOBufQueue::cacheChainLength()};
+  EXPECT_TRUE(writer.writeSubscribeRequest(subscribeBuf, subscribe).hasError());
+
+  Fetch fetch(
+      RequestID(1),
+      FullTrackName{TrackNamespace({"ns"}), "track"},
+      AbsoluteLocation{0, 0},
+      AbsoluteLocation{1, 0});
+  ASSERT_TRUE(addInvalidIncludeProperties(fetch.params).hasValue());
+  folly::IOBufQueue fetchBuf{folly::IOBufQueue::cacheChainLength()};
+  EXPECT_TRUE(writer.writeFetch(fetchBuf, fetch).hasError());
+
+  SubscribeTracks subscribeTracks;
+  subscribeTracks.requestID = RequestID(3);
+  subscribeTracks.trackNamespacePrefix = TrackNamespace({"ns"});
+  ASSERT_TRUE(addInvalidIncludeProperties(subscribeTracks.params).hasValue());
+  folly::IOBufQueue subscribeTracksBuf{folly::IOBufQueue::cacheChainLength()};
+  EXPECT_TRUE(writer.writeSubscribeTracks(subscribeTracksBuf, subscribeTracks)
+                  .hasError());
+}
+
+TEST(MoQFramerV22Test, IncludePropertiesInvalidValueIsRejectedForParsing) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft22);
+  auto subscribe =
+      SubscribeRequest::make(FullTrackName{TrackNamespace({"ns"}), "track"});
+  subscribe.includeProperties = false;
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeSubscribeRequest(buf, subscribe).hasValue());
+
+  auto bytes = buf.move();
+  bytes->coalesce();
+  ASSERT_GT(bytes->length(), 0);
+  // INCLUDE_PROPERTIES is the highest-numbered parameter and therefore the
+  // final byte in this request. Change its valid uint8 value from 0 to 2.
+  bytes->writableData()[bytes->length() - 1] = 2;
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft22);
+  folly::io::Cursor cursor(bytes.get());
+  ASSERT_EQ(readVarintFrom(cursor), folly::to_underlying(FrameType::SUBSCRIBE));
+  auto length = cursor.readBE<uint16_t>();
+  auto parsed = parser.parseSubscribeRequest(cursor, length);
+  ASSERT_TRUE(parsed.hasError());
+  EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST(MoQFramerV22Test, Draft21ParserRejectsIncludeProperties) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft22);
+  auto subscribe =
+      SubscribeRequest::make(FullTrackName{TrackNamespace({"ns"}), "track"});
+  subscribe.includeProperties = false;
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeSubscribeRequest(buf, subscribe).hasValue());
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft21);
+  auto bytes = buf.move();
+  folly::io::Cursor cursor(bytes.get());
+  ASSERT_EQ(readVarintFrom(cursor), folly::to_underlying(FrameType::SUBSCRIBE));
+  auto length = cursor.readBE<uint16_t>();
+  auto parsed = parser.parseSubscribeRequest(cursor, length);
+  ASSERT_TRUE(parsed.hasError());
+  EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
 // Keys present in every supported draft -- including the key values that are
 // reinterpreted in v18 (0x02 DELIVERY_TIMEOUT/OBJECT_DELIVERY_TIMEOUT, 0x04
 // MAX_CACHE_DURATION/RENDEZVOUS_TIMEOUT) -- stay known across versions.

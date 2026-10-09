@@ -6876,7 +6876,15 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   aliasifyAuthTokens(fetch.params);
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  moqFrameWriter_.writeFetch(writeBuf, fetch);
+  auto writeResult = moqFrameWriter_.writeFetch(writeBuf, fetch);
+  if (!writeResult) {
+    XLOG(ERR) << "writeFetch failed sess=" << this;
+    FetchError fetchError = {
+        reqID, FetchErrorCode::INTERNAL_ERROR, "local write failed"};
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onFetchError, fetchError.errorCode);
+    co_return folly::makeUnexpected(fetchError);
+  }
   auto sendResult = sendRequest(
       writeBuf,
       FrameType::FETCH_OK,

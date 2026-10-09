@@ -59,6 +59,7 @@ ParamValueEncoding paramEncodingV18(uint64_t key) {
     case K::SUBSCRIBER_PRIORITY:
     case K::GROUP_ORDER:
     case K::FORWARD:
+    case K::INCLUDE_PROPERTIES:
       return ParamValueEncoding::Uint8;
     case K::OBJECT_DELIVERY_TIMEOUT:
     case K::RENDEZVOUS_TIMEOUT:
@@ -111,7 +112,7 @@ bool isValidSubscriberPriorityParam(uint64_t value) {
   return value <= 255;
 }
 
-bool isValidForwardParam(uint64_t value) {
+bool isValidBooleanParam(uint64_t value) {
   // Valid values are 0 or 1
   return value <= 1;
 }
@@ -125,7 +126,10 @@ bool isIntParamValid(uint64_t version, uint64_t key, uint64_t value) {
           moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY):
         return isValidSubscriberPriorityParam(value);
       case folly::to_underlying(moxygen::TrackRequestParamKey::FORWARD):
-        return isValidForwardParam(value);
+        return isValidBooleanParam(value);
+      case folly::to_underlying(
+          moxygen::TrackRequestParamKey::INCLUDE_PROPERTIES):
+        return isValidBooleanParam(value);
       default:
         return true;
     }
@@ -198,6 +202,25 @@ void appendIntRequestSpecificParam(
     return;
   }
   requestSpecificParams.emplace_back(folly::to_underlying(key), *value);
+}
+
+void appendIncludePropertiesParam(
+    std::vector<moxygen::Parameter>& requestSpecificParams,
+    const moxygen::TrackRequestParameters& params,
+    bool includeProperties,
+    uint64_t version) {
+  if (moxygen::getDraftMajorVersion(version) < 22 ||
+      moxygen::getFirstIntParam(
+          params, moxygen::TrackRequestParamKey::INCLUDE_PROPERTIES)
+          .has_value()) {
+    return;
+  }
+  // The default is 1, so only encode the parameter when opting out.
+  if (!includeProperties) {
+    requestSpecificParams.emplace_back(
+        folly::to_underlying(moxygen::TrackRequestParamKey::INCLUDE_PROPERTIES),
+        uint64_t(0));
+  }
 }
 
 void insertPublishOkIntParamIfMissing(
@@ -2051,6 +2074,10 @@ void MoQFrameParser::handleRequestSpecificParams(
 
     // FORWARD
     handleForwardParam(subscribeRequest.forward, requestSpecificParams);
+
+    // INCLUDE_PROPERTIES (draft 22+; defaults to true).
+    handleIncludePropertiesParam(
+        subscribeRequest.includeProperties, subscribeRequest.params);
   }
 }
 
@@ -2763,6 +2790,19 @@ void MoQFrameParser::handleForwardParam(
   }
 }
 
+void MoQFrameParser::handleIncludePropertiesParam(
+    bool& includePropertiesField,
+    const TrackRequestParameters& params) const noexcept {
+  if (getDraftMajorVersion(*version_) < 22) {
+    return;
+  }
+  auto maybeIncludeProperties =
+      getFirstIntParam(params, TrackRequestParamKey::INCLUDE_PROPERTIES);
+  if (maybeIncludeProperties.has_value()) {
+    includePropertiesField = (*maybeIncludeProperties == 1);
+  }
+}
+
 // Overload for Optional<bool> - used by SubscribeUpdate to allow
 // preserving existing forward state when parameter is absent
 void MoQFrameParser::handleForwardParam(
@@ -3002,6 +3042,8 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
   if (!parseParamsResult) {
     return folly::makeUnexpected(parseParamsResult.error());
   }
+  handleIncludePropertiesParam(
+      trackStatus.includeProperties, trackStatus.params);
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
@@ -3284,6 +3326,8 @@ void MoQFrameParser::handleRequestSpecificParams(
   // GROUP_ORDER
   handleGroupOrderParam(
       fetchRequest.groupOrder, requestSpecificParams, GroupOrder::OldestFirst);
+  handleIncludePropertiesParam(
+      fetchRequest.includeProperties, fetchRequest.params);
 }
 
 folly::Expected<FetchCancel, ErrorCode> MoQFrameParser::parseFetchCancel(
@@ -3513,6 +3557,8 @@ MoQFrameParser::parseSubscribeTracks(folly::io::Cursor& cursor, size_t length)
   }
 
   handleForwardParam(subscribeTracks.forward, requestSpecificParams);
+  handleIncludePropertiesParam(
+      subscribeTracks.includeProperties, subscribeTracks.params);
   return subscribeTracks;
 }
 
@@ -4755,6 +4801,21 @@ void MoQFrameWriter::writeTrackRequestParams(
     bool& error) const noexcept {
   XCHECK(*version_)
       << "Version must be set before writing track request params";
+  const auto majorVersion = getDraftMajorVersion(*version_);
+  const auto includePropertiesKey =
+      folly::to_underlying(TrackRequestParamKey::INCLUDE_PROPERTIES);
+  auto includePropertiesIsInvalid = [&](const auto& paramList) {
+    return std::any_of(
+        paramList.begin(), paramList.end(), [&](const Parameter& param) {
+          return param.key == includePropertiesKey &&
+              (majorVersion < 22 || param.asUint64 > 1);
+        });
+  };
+  if (includePropertiesIsInvalid(params) ||
+      includePropertiesIsInvalid(requestSpecificParams)) {
+    error = true;
+    return;
+  }
   // Write total count of all parameters
   writeVarint(
       writeBuf, params.size() + requestSpecificParams.size(), size, error);
@@ -5373,6 +5434,12 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
       newGroupRequestParam.asUint64 = *newGroupRequestValue;
       requestSpecificParams.push_back(newGroupRequestParam);
     }
+
+    appendIncludePropertiesParam(
+        requestSpecificParams,
+        subscribeRequest.params,
+        subscribeRequest.includeProperties,
+        *version_);
   } else {
     writeVarint(
         writeBuf,
@@ -5403,6 +5470,9 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
 
   writeTrackRequestParams(
       writeBuf, subscribeRequest.params, requestSpecificParams, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
   return size;
 }
 
@@ -6159,8 +6229,17 @@ WriteResult MoQFrameWriter::writeSubscribeTracks(
     requestSpecificParams.push_back(forwardParam);
   }
 
+  appendIncludePropertiesParam(
+      requestSpecificParams,
+      subscribeTracks.params,
+      subscribeTracks.includeProperties,
+      *version_);
+
   writeTrackRequestParams(
       writeBuf, subscribeTracks.params, requestSpecificParams, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
@@ -6317,9 +6396,18 @@ WriteResult MoQFrameWriter::writeFetch(
       groupOrderParam.asUint64 = folly::to_underlying(fetch.groupOrder);
       requestSpecificParams.push_back(groupOrderParam);
     }
+
+    appendIncludePropertiesParam(
+        requestSpecificParams,
+        fetch.params,
+        fetch.includeProperties,
+        *version_);
   }
   writeTrackRequestParams(
       writeBuf, fetch.params, requestSpecificParams, size, error);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
 
   writeSize(sizePtr, size, error, *version_);
   if (error) {

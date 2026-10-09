@@ -481,6 +481,10 @@ class MoQFrameParser {
       bool& forwardField,
       const std::vector<Parameter>& requestSpecificParams) const noexcept;
 
+  void handleIncludePropertiesParam(
+      bool& includePropertiesField,
+      const TrackRequestParameters& params) const noexcept;
+
   // Overload for Optional<bool> - used by SubscribeUpdate
   void handleForwardParam(
       std::optional<bool>& forwardField,

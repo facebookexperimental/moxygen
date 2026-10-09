@@ -12,6 +12,34 @@ using testing::_;
 
 // === FETCH tests ===
 
+CO_TEST_P_X(Draft18Test, FetchSerializationErrorDoesNotSendRequest) {
+  co_await setupMoQSession();
+
+  auto fetch = getFetch({0, 0}, {0, 1});
+  fetch.params.setMajorVersion(22);
+  auto insertResult = fetch.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::INCLUDE_PROPERTIES),
+      uint64_t(0)));
+  EXPECT_TRUE(insertResult.hasValue());
+  if (insertResult.hasError()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onFetchError(FetchErrorCode::INTERNAL_ERROR));
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto result = co_await clientSession_->fetch(fetch, fetchCallback_);
+  EXPECT_TRUE(result.hasError());
+  if (result.hasError()) {
+    EXPECT_EQ(result.error().errorCode, FetchErrorCode::INTERNAL_ERROR);
+    EXPECT_EQ(result.error().reasonPhrase, "local write failed");
+  }
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, Fetch) {
   co_await setupMoQSession();
   // Usage

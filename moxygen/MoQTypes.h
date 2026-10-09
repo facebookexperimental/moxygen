@@ -583,6 +583,7 @@ enum class TrackRequestParamKey : uint64_t {
   FORWARD = 0x10,
   NEW_GROUP_REQUEST = 0x32,
   TRACK_NAMESPACE_PREFIX = 0x34,
+  INCLUDE_PROPERTIES = 0x35,
 };
 
 inline bool isRendezvousTimeoutParam(uint64_t key, uint64_t majorVersion) {
@@ -1155,6 +1156,7 @@ struct SubscribeRequest {
   std::optional<AbsoluteLocation> start;
   uint64_t endGroup{0};
   TrackRequestParameters params{FrameType::SUBSCRIBE};
+  bool includeProperties{true};
 };
 
 struct RequestUpdate {
@@ -1339,6 +1341,7 @@ struct Fetch {
   GroupOrder groupOrder{GroupOrder::Default};
   TrackRequestParameters params{FrameType::FETCH};
   std::variant<StandaloneFetch, JoiningFetch> args;
+  bool includeProperties{true};
 };
 
 std::pair<StandaloneFetch*, JoiningFetch*> fetchType(Fetch& fetch);
@@ -1381,6 +1384,7 @@ struct SubscribeTracks {
   TrackNamespace trackNamespacePrefix;
   bool forward{true};
   TrackRequestParameters params{FrameType::SUBSCRIBE_TRACKS};
+  bool includeProperties{true};
 };
 
 // Draft 18+ only.
