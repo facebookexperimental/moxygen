@@ -538,7 +538,8 @@ Subscriber::PublishResult MoQRelay::publish(
               forwarder,
               info.forward,
               info.trackNamespacePrefix,
-              info.publishBlockedHandle))
+              info.publishBlockedHandle,
+              info.includeProperties))
           .start();
     }
   }
@@ -586,7 +587,8 @@ folly::coro::Task<void> MoQRelay::publishToSession(
     std::shared_ptr<MoQForwarder> forwarder,
     bool forward,
     TrackNamespace trackNamespacePrefix,
-    std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle) {
+    std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle,
+    bool includeProperties) {
   const auto fullTrackName = forwarder->fullTrackName();
   auto subscriber = forwarder->addSubscriber(session->sessionId(), forward);
   if (!subscriber) {
@@ -597,8 +599,13 @@ folly::coro::Task<void> MoQRelay::publishToSession(
   XLOG(DBG4) << "added subscriber for ftn=" << fullTrackName;
   auto guard = folly::makeGuard([subscriber] { subscriber->unsubscribe(); });
 
-  auto pubInitial =
-      session->publish(subscriber->getPublishRequest(), subscriber);
+  auto publishRequest = subscriber->getPublishRequest();
+  auto negotiatedVersion = session->getNegotiatedVersion();
+  if (!includeProperties && negotiatedVersion.has_value() &&
+      getDraftMajorVersion(*negotiatedVersion) >= 22) {
+    publishRequest.extensions = Extensions{};
+  }
+  auto pubInitial = session->publish(std::move(publishRequest), subscriber);
   if (pubInitial.hasError()) {
     const auto& publishError = pubInitial.error();
     XLOG(ERR) << "Publish failed err=" << publishError.reasonPhrase;
@@ -1016,7 +1023,8 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
           SubscribeNamespaceOptions::PUBLISH,
           /*namespacePublishHandle=*/nullptr,
           std::move(publishBlockedHandle),
-          subTracks.trackNamespacePrefix});
+          subTracks.trackNamespacePrefix,
+          subTracks.includeProperties});
   if (wasEmpty && tracksNode->parent_) {
     tracksNode->parent_->incrementActiveChildren();
   }
@@ -1050,7 +1058,8 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
               subscriptionIt->second.forwarder,
               subTracks.forward,
               subTracks.trackNamespacePrefix,
-              tracksNode->sessions.at(session).publishBlockedHandle))
+              tracksNode->sessions.at(session).publishBlockedHandle,
+              tracksNode->sessions.at(session).includeProperties))
           .start();
     }
     for (auto& nextNodeIt : pubNode->children) {
@@ -1074,7 +1083,8 @@ void MoQRelay::publishExistingMatchingTracks(
     bool forward,
     const std::shared_ptr<Publisher::PublishBlockedHandle>&
         publishBlockedHandle,
-    const TrackNamespace* skipUnderPrefix) {
+    const TrackNamespace* skipUnderPrefix,
+    bool includeProperties) {
   auto exec = session->getExecutor();
   std::deque<std::tuple<TrackNamespace, std::shared_ptr<NamespaceNode>>> nodes;
   if (auto pubNode = findNamespaceNode(prefix, /*createMissingNodes=*/false)) {
@@ -1106,7 +1116,8 @@ void MoQRelay::publishExistingMatchingTracks(
               subscriptionIt->second.forwarder,
               forward,
               prefix,
-              publishBlockedHandle))
+              publishBlockedHandle,
+              includeProperties))
           .start();
     }
     for (auto& nextNodeIt : pubNode->children) {
@@ -1226,7 +1237,8 @@ MoQRelay::updateTracksSubscriptionPrefix(
           newPrefix,
           it->second.forward,
           it->second.publishBlockedHandle,
-          &oldPrefix);
+          &oldPrefix,
+          it->second.includeProperties);
     }
   }
   return folly::unit;

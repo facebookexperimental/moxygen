@@ -135,6 +135,39 @@ TEST(SubscribeTracksReplyTest, ErrorAfterErrorIsRejected) {
 // SUBSCRIBE_NAMESPACE in draft 18.
 using V18PlusSubscribeTracksTest = MoQSessionTest;
 
+CO_TEST_P_X(Draft22Test, SubscribeTracksCarriesIncludePropertiesFalse) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<MockSubscribeTracksHandle> mockHandle;
+  EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
+      .WillOnce(
+          [&mockHandle](
+              SubscribeTracks subTracks, auto /*publishBlockedHandle*/)
+              -> folly::coro::Task<Publisher::SubscribeTracksResult> {
+            EXPECT_FALSE(subTracks.includeProperties);
+            mockHandle = std::make_shared<MockSubscribeTracksHandle>(
+                SubscribeTracksOk({.requestID = subTracks.requestID}));
+            co_return mockHandle;
+          });
+
+  auto request = getSubscribeTracks();
+  request.includeProperties = false;
+  auto result = co_await clientSession_->subscribeTracks(request);
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+
+  folly::coro::Baton unsubscribed;
+  EXPECT_CALL(*mockHandle, unsubscribeTracks()).WillOnce([&unsubscribed]() {
+    unsubscribed.post();
+  });
+  result.value()->unsubscribeTracks();
+  co_await unsubscribed;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeAndUnsubscribeTracks) {
   co_await setupMoQSession();
 

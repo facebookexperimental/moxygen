@@ -151,6 +151,9 @@ class MoQRelay : public Publisher,
       std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle;
       // The namespace prefix this subscriber used for SUBSCRIBE_NAMESPACE
       TrackNamespace trackNamespacePrefix;
+      // Draft 22+: whether SUBSCRIBE_TRACKS requested Track Properties in
+      // resulting PUBLISH messages.
+      bool includeProperties{true};
     };
 
     // Sessions with a SUBSCRIBE_NAMESPACE here, with their preferences
@@ -300,7 +303,8 @@ class MoQRelay : public Publisher,
       bool forward,
       TrackNamespace trackNamespacePrefix = {},
       std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle =
-          nullptr);
+          nullptr,
+      bool includeProperties = true);
 
   // Emit PUBLISH to `session` for every already-published track matching
   // `prefix`. Tracks under `skipUnderPrefix` are skipped -- they are already
@@ -313,7 +317,8 @@ class MoQRelay : public Publisher,
       bool forward,
       const std::shared_ptr<Publisher::PublishBlockedHandle>&
           publishBlockedHandle,
-      const TrackNamespace* skipUnderPrefix = nullptr);
+      const TrackNamespace* skipUnderPrefix = nullptr,
+      bool includeProperties = true);
 
   // Namespace-tree analog of publishExistingMatchingTracks: replays existing
   // PUBLISH_NAMESPACEs and matching PUBLISHes under `prefix` to a

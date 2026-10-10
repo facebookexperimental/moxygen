@@ -2966,13 +2966,31 @@ class MoQRelayTracksTest : public MoQRelayTest {
     return session;
   }
 
+  std::shared_ptr<MockMoQSession> createV21Session() {
+    auto session = std::make_shared<NiceMock<MockMoQSession>>(exec_);
+    ON_CALL(*session, getNegotiatedVersion())
+        .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft21)));
+    getOrCreateMockState(session);
+    return session;
+  }
+
+  std::shared_ptr<MockMoQSession> createV22Session() {
+    auto session = std::make_shared<NiceMock<MockMoQSession>>(exec_);
+    ON_CALL(*session, getNegotiatedVersion())
+        .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft22)));
+    getOrCreateMockState(session);
+    return session;
+  }
+
   Publisher::SubscribeTracksResult subscribeTracks(
       std::shared_ptr<MoQSession> session,
       const TrackNamespace& nsPrefix,
       std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle =
-          nullptr) {
+          nullptr,
+      bool includeProperties = true) {
     SubscribeTracks subTracks;
     subTracks.trackNamespacePrefix = nsPrefix;
+    subTracks.includeProperties = includeProperties;
     return withSessionContext(session, [&]() {
       auto task = relay_->subscribeTracks(
           std::move(subTracks), std::move(publishBlockedHandle));
@@ -2986,9 +3004,10 @@ class MoQRelayTracksTest : public MoQRelayTest {
       std::shared_ptr<MoQSession> session,
       const TrackNamespace& nsPrefix,
       std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle =
-          nullptr) {
-    auto res =
-        subscribeTracks(session, nsPrefix, std::move(publishBlockedHandle));
+          nullptr,
+      bool includeProperties = true) {
+    auto res = subscribeTracks(
+        session, nsPrefix, std::move(publishBlockedHandle), includeProperties);
     EXPECT_TRUE(res.hasValue());
     if (!res.hasValue()) {
       return nullptr;
@@ -3060,6 +3079,92 @@ TEST_F(MoQRelayTracksTest, NewPublishFanoutToTracksSubscriber) {
   EXPECT_CALL(*subscriber, publish(_, _)).Times(1);
 
   doPublish(publisher, kTestTrackName);
+  for (int i = 0; i < 5; i++) {
+    exec_->drive();
+  }
+
+  ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(subscriber.get()));
+  removeSession(subscriber);
+  removeSession(publisher);
+}
+
+TEST_F(MoQRelayTracksTest, SubscribeTracksOmitsUnrequestedTrackProperties) {
+  auto subscriber = createV22Session();
+  auto publisher = createMockSession();
+  setupPublishSucceeds(subscriber);
+
+  doSubscribeTracks(
+      subscriber,
+      kTestNamespace,
+      /*publishBlockedHandle=*/nullptr,
+      /*includeProperties=*/false);
+
+  EXPECT_CALL(
+      *subscriber,
+      publish(
+          Truly([](const PublishRequest& publish) {
+            return publish.extensions.empty();
+          }),
+          _))
+      .Times(1);
+
+  PublishRequest publish;
+  publish.fullTrackName = kTestTrackName;
+  publish.extensions.insertMutableExtension(
+      Extension{kPublisherPriorityExtensionType, 100});
+  withSessionContext(publisher, [&]() {
+    auto result =
+        relay_->publish(std::move(publish), createMockSubscriptionHandle());
+    EXPECT_TRUE(result.hasValue());
+    if (result.hasValue()) {
+      getOrCreateMockState(publisher)->publishConsumers.push_back(
+          result->consumer);
+    }
+  });
+  for (int i = 0; i < 5; i++) {
+    exec_->drive();
+  }
+
+  ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(subscriber.get()));
+  removeSession(subscriber);
+  removeSession(publisher);
+}
+
+TEST_F(MoQRelayTracksTest, SubscribeTracksDoesNotOmitPropertiesBeforeDraft22) {
+  auto subscriber = createV21Session();
+  auto publisher = createMockSession();
+  setupPublishSucceeds(subscriber);
+
+  // A false value on the in-memory struct must have no effect before the
+  // parameter exists on the wire in draft 22.
+  doSubscribeTracks(
+      subscriber,
+      kTestNamespace,
+      /*publishBlockedHandle=*/nullptr,
+      /*includeProperties=*/false);
+
+  EXPECT_CALL(
+      *subscriber,
+      publish(
+          Truly([](const PublishRequest& publish) {
+            return !publish.extensions.empty();
+          }),
+          _))
+      .Times(1);
+
+  PublishRequest publish;
+  publish.fullTrackName = kTestTrackName;
+  publish.extensions.insertMutableExtension(
+      Extension{kPublisherPriorityExtensionType, 100});
+  withSessionContext(publisher, [&]() {
+    auto result =
+        relay_->publish(std::move(publish), createMockSubscriptionHandle());
+    EXPECT_TRUE(result.hasValue());
+    if (result.hasValue()) {
+      getOrCreateMockState(publisher)->publishConsumers.push_back(
+          result->consumer);
+    }
+  });
   for (int i = 0; i < 5; i++) {
     exec_->drive();
   }
