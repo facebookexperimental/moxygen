@@ -531,10 +531,7 @@ ObjectReceiverCallback::FlowControlState MoQTestClient::onObject(
   XLOG(DBG1) << "MoQTest DEBUGGING: Calling onObject";
 
   // A zero-length object arrives with no payload buffer at all.
-  auto payloadStr = payload ? payload->toString() : std::string();
-
-  // Validate the received data
-  if (!validateSubscribedData(state, objHeader, payloadStr)) {
+  if (!validateSubscribedData(state, objHeader, payload.get())) {
     XLOG(ERR)
         << "MoQTest verification result: FAILURE! reason: Data Validation Failed";
     verdictFailed_ = true;
@@ -913,7 +910,7 @@ void MoQTestClient::cancelRequest() {
 bool MoQTestClient::validateSubscribedData(
     ReceiveState& state,
     const ObjectHeader& header,
-    const std::string& payload) {
+    const folly::IOBuf* payload) {
   const auto preference = deliveredForwardingPreference(state);
   if (!state.seeded) {
     seedCursor(state, header);
@@ -1066,8 +1063,10 @@ bool MoQTestClient::validateSubscribedData(
   int objectSize = moxygen::getObjectSize(header.id, &params_);
   if (!validatePayload(objectSize, payload)) {
     XLOG(ERR)
-        << "MoQTest verification result: FAILURE! reason: Payload Mismatch: Actual="
-        << payload << "  Expected=" << std::string(objectSize, 't');
+        << "MoQTest verification result: FAILURE! reason: Payload Mismatch: Length="
+        << (payload ? payload->computeChainDataLength() : 0)
+        << "  Expected=" << objectSize
+        << "  FirstMismatchOffset=" << findPayloadMismatch(payload);
     return false;
   }
 
