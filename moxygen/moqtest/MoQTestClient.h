@@ -456,7 +456,7 @@ class MoQTestClient : public Subscriber,
   bool validateSubscribedData(
       ReceiveState& state,
       const ObjectHeader& header,
-      const std::string& payload);
+      const folly::IOBuf* payload);
   folly::Expected<folly::Unit, ExtensionError> validateExtensions(
       const std::vector<Extension>& extensions,
       MoQTestParameters* params);

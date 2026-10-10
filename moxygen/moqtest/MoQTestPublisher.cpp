@@ -353,8 +353,7 @@ folly::coro::Task<void> MoQTestPublisher::sendOneSubgroupPerGroup(
       if (objectId < lastObjectInGroup(params) ||
           !params.sendEndOfGroupMarkers) {
         // Begin Delivering Object With Payload
-        std::string p = std::string(objectSize, 't');
-        auto objectPayload = folly::IOBuf::copyBuffer(p);
+        auto objectPayload = makePayload(objectSize);
         auto res = subConsumer->object(
             objectId,
             std::move(objectPayload),
@@ -413,8 +412,7 @@ folly::coro::Task<void> MoQTestPublisher::sendOneSubgroupPerObject(
       if (objectId < lastObjectInGroup(params) ||
           !params.sendEndOfGroupMarkers) {
         // Begin Delivering Object With Payload
-        std::string p = std::string(objectSize, 't');
-        auto objectPayload = folly::IOBuf::copyBuffer(p);
+        auto objectPayload = makePayload(objectSize);
         auto res = subConsumer->object(
             objectId,
             std::move(objectPayload),
@@ -496,8 +494,7 @@ folly::coro::Task<void> MoQTestPublisher::sendTwoSubgroupsPerGroup(
         // Begin Delivering Object With Payload
         int index = objectId % 2;
         XLOG(DBG1) << "Sending Object " << objectId << " to Subgroup " << index;
-        std::string p = std::string(objectSize, 't');
-        auto objectPayload = folly::IOBuf::copyBuffer(p);
+        auto objectPayload = makePayload(objectSize);
         auto res = subConsumers[index]->object(
             objectId,
             std::move(objectPayload),
@@ -579,7 +576,7 @@ folly::coro::Task<void> MoQTestPublisher::sendDatagram(
         header.length = 0;
       } else {
         objectSize = getObjectSize(objectId, &params);
-        objectPayload = folly::IOBuf::copyBuffer(std::string(objectSize, 't'));
+        objectPayload = makePayload(objectSize);
         // Add Integer/Variable Extensions if needed
         header.extensions = Extensions(
             getExtensions(
@@ -779,8 +776,7 @@ folly::coro::Task<void> MoQTestPublisher::fetchObjects(
       auto res = folly::makeExpected<MoQPublishError>(folly::unit);
       if (objectId < lastObjectInGroup(params) || !sendEndOfGroupMarkers) {
         int objectSize = getObjectSize(objectId, &params);
-        auto objectPayload =
-            folly::IOBuf::copyBuffer(std::string(objectSize, 't'));
+        auto objectPayload = makePayload(objectSize);
         res = callback->object(
             groupNum,
             subgroupId,
