@@ -372,7 +372,8 @@ folly::coro::Task<InteropTestResult> MoQInteropClient::testAnnounceSubscribe() {
     recordNegotiatedVersion(result, *publisher);
 
     PublishNamespace pn;
-    pn.trackNamespace = TrackNamespace({"moq-interop-test"});
+    pn.trackNamespace =
+        TrackNamespace(std::vector<std::string>{"moq-test", "interop"});
 
     auto pubNsResult = co_await folly::coro::timeout(
         publisher->moqSession_->publishNamespace(std::move(pn)),
@@ -398,7 +399,9 @@ folly::coro::Task<InteropTestResult> MoQInteropClient::testAnnounceSubscribe() {
     subscriber = co_await createAndSetupSession();
     recordNegotiatedVersion(result, *subscriber);
 
-    FullTrackName ftn{TrackNamespace({"moq-interop-test"}), "interop-track"};
+    FullTrackName ftn{
+        TrackNamespace(std::vector<std::string>{"moq-test", "interop"}),
+        "interop-track"};
     auto sub = SubscribeRequest::make(ftn);
     auto consumer = std::make_shared<NoopTrackConsumer>();
 
