@@ -93,6 +93,7 @@ moxygen_add_library(moxygen_moq
     moxygen_moq_types
     moxygen_stats_moq_stats
     proxygen::proxygen_http_webtransport
+    mvfst::mvfst_config
     Folly::folly_cancellation_token
     Folly::folly_container_f14_hash
     Folly::folly_coro_promise

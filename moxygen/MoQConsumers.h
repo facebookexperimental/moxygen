@@ -206,11 +206,12 @@ class TrackConsumer {
 // A note on Fetch flow control:
 //
 // Fetches are not intended to be consumed in real-time and can apply
-// backpressure to the publisher.  The API is similar to write(2), and a
-// returned MoQPublishError with code=BLOCKED signals the publisher to stop
-// invoking methods.
+// backpressure to the publisher.  A returned MoQPublishError with code=BLOCKED
+// means the call was accepted, and signals the publisher to stop invoking
+// methods.  Accepted data is delivered even if no further call follows.
 //
-// Publishers can use awaitReadyToConsume to determine when it is ok to resume.
+// Publishers can use awaitReadyToConsume to determine when it is ok to resume
+// with the next call.
 //
 // When used as a read interface, the application can return BLOCKED to initiate
 // backpressure, but the library may still have some already read data that

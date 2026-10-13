@@ -17,10 +17,12 @@
 #include <folly/MaybeManagedPtr.h>
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 #include <folly/container/IntrusiveList.h>
 #include <folly/coro/Promise.h>
 #include <folly/coro/Task.h>
 #include <folly/logging/xlog.h>
+#include <quic/mvfst-config.h>
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/Publisher.h>
 #include <moxygen/Subscriber.h>
@@ -57,6 +59,12 @@ struct MoQSettings {
   std::chrono::milliseconds publishDoneStreamCountTimeout{
       std::chrono::seconds(2)};
   std::chrono::milliseconds requestTimeout{0};
+  // Draft 18+: how long a joining FETCH waits for a SUBSCRIBE it references
+  // that has not arrived yet. Once the SUBSCRIBE arrives, the FETCH follows
+  // that subscription's outcome instead.
+  std::chrono::milliseconds joiningDependencyTimeout{std::chrono::seconds(2)};
+  // Joining FETCHes held while their subscription is unseen or pending.
+  size_t maxDeferredJoiningFetches{16};
 };
 
 class ReplyContext;
@@ -516,6 +524,22 @@ class MoQSession : public Subscriber,
       return nullptr;
     }
 
+    // See MoQSession::awaitUniStreamCredit.
+    auto awaitUniStreamCredit() {
+      if (!session_) {
+        return UniStreamCreditWait{
+            .credit = folly::makeSemiFuture<folly::Unit>(
+                std::runtime_error("session closed"))};
+      }
+      return session_->awaitUniStreamCredit();
+    }
+
+    void cancelUniStreamCreditWait(uint64_t waiterId) {
+      if (session_) {
+        session_->cancelUniStreamCreditWait(waiterId);
+      }
+    }
+
     uint64_t getVersion() const {
       return version_;
     }
@@ -928,10 +952,46 @@ class MoQSession : public Subscriber,
   void beginSubscriptionStat(PublisherImpl& pubTrack);
   void endSubscriptionStat(PublisherImpl& pubTrack);
 
+  // A joining FETCH waiting for its subscription to be established.
+  struct JoiningDependency;
+  class JoiningDependencyTimeout;
+  using JoiningDependencyResult = folly::Expected<FullTrackName, FetchError>;
+
   folly::coro::Task<void> handleFetch(
       Fetch fetch,
       std::shared_ptr<FetchPublisherImpl> fetchPublisher,
-      std::shared_ptr<ReplyContext> replyContext);
+      std::shared_ptr<ReplyContext> replyContext,
+      std::shared_ptr<JoiningDependency> dependency);
+  // Checks the subscription a joining FETCH references:
+  // - established: returns null, and the FETCH proceeds now;
+  // - pending, or an unseen draft 18 ID: returns a dependency the FETCH waits
+  //   on;
+  // - otherwise: returns an error, after answering the FETCH with FETCH_ERROR
+  //   or closing the session.
+  folly::Expected<std::shared_ptr<JoiningDependency>, folly::Unit>
+  prepareJoiningFetch(
+      Fetch& fetch,
+      const JoiningFetch& joining,
+      ReplyContext& replyContext);
+  bool isDeferrableUnseenJoiningID(RequestID joiningID, RequestID fetchID)
+      const;
+  folly::Expected<std::shared_ptr<JoiningDependency>, folly::Unit>
+  deferJoiningFetch(
+      RequestID fetchID,
+      RequestID joiningID,
+      bool unseen,
+      ReplyContext& replyContext);
+  void removeJoiningDependency(
+      const std::shared_ptr<JoiningDependency>& dependency);
+  // The referenced SUBSCRIBE arrived: stop waiting on the unseen-ID timer.
+  void bindJoiningDependencies(RequestID subscriptionID);
+  void resolveJoiningDependencies(
+      RequestID subscriptionID,
+      const JoiningDependencyResult& result);
+  void failJoiningDependencies(RequestID subscriptionID);
+  void onJoiningDependencyTimeout(
+      const std::shared_ptr<JoiningDependency>& dependency);
+
   void fetchOk(const FetchOk& fetchOk, ReplyContext& replyContext);
   void fetchError(const FetchError& fetchError, ReplyContext& replyContext);
   void fetchCancel(
@@ -1518,6 +1578,27 @@ class MoQSession : public Subscriber,
   folly::F14FastSet<FullTrackName, FullTrackName::hash> pendingSubscribeTracks_;
   folly::F14FastMap<TrackAlias, std::list<Payload>, TrackAlias::hash>
       bufferedDatagrams_;
+  folly::F14FastMap<
+      RequestID,
+      std::vector<std::shared_ptr<JoiningDependency>>,
+      RequestID::hash>
+      joiningDependencies_;
+  size_t numJoiningDependencies_{0};
+
+  // QuicWebTransport allows one uni stream credit waiter at a time, so every
+  // request on the session shares a single transport wait.
+  struct UniStreamCreditWait {
+    // Zero when credit was already available.
+    uint64_t waiterId{0};
+    folly::SemiFuture<folly::Unit> credit;
+  };
+  UniStreamCreditWait awaitUniStreamCredit();
+  // Drops the waiter; its future fails.
+  void cancelUniStreamCreditWait(uint64_t waiterId);
+  quic::InlineMap<uint64_t, folly::Promise<folly::Unit>, 4>
+      uniStreamCreditWaiters_;
+  uint64_t nextUniStreamCreditWaiter_{1};
+  bool waitingForUniStreamCredit_{false};
   // F14Node: moving an intrusive list head would relink every waiter.
   folly::F14NodeMap<TrackAlias, AliasWaiterList, TrackAlias::hash>
       bufferedSubgroups_;

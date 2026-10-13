@@ -452,6 +452,10 @@ class StreamPublisherImpl
   }
 
   folly::Expected<folly::Unit, MoQPublishError> ensureWriteHandle();
+  // Writes held for stream credit are flushed when it arrives, whether or not
+  // the producer waits for readiness again.
+  void waitForStreamCredit();
+  void onStreamCredit(folly::Try<folly::Unit> credit);
 
   void setWriteHandle(proxygen::WebTransport::StreamWriteHandle* writeHandle);
 
@@ -483,6 +487,14 @@ class StreamPublisherImpl
   bool streamComplete_{false};
   std::optional<folly::CancellationCallback> cancelCallback_;
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
+  // A FETCH out of uni stream credit accepts writes into writeBuf_ and
+  // reports BLOCKED; they go out once its stream can be created.
+  bool awaitingStreamCredit_{false};
+  bool pendingFin_{false};
+  bool pendingEndObject_{false};
+  // Zero when credit was already available.
+  std::optional<uint64_t> streamCreditWaitId_;
+  std::vector<folly::Promise<uint64_t>> streamCreditReadiness_;
   StreamType streamType_;
   bool includeExtensions_{true}; // Subgroups only, FETCH always allows them
   TrackAlias trackAlias_{0}; // Store track alias separately from ObjectHeader
@@ -713,6 +725,12 @@ StreamPublisherImpl::writeToStream(bool finStream, bool endObject) {
   }
 
   if (!writeHandle_) {
+    if (awaitingStreamCredit_) {
+      pendingFin_ = pendingFin_ || finStream;
+      pendingEndObject_ = endObject;
+      return folly::makeUnexpected(MoQPublishError(
+          MoQPublishError::BLOCKED, "Waiting for uni stream credit"));
+    }
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::CANCELLED, "Cancelled: writeCurrentObject"));
   }
@@ -824,7 +842,7 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::objectImpl(
   auto length = payload ? payload->computeChainDataLength() : 0;
   header_.status = ObjectStatus::NORMAL;
 
-  if (logger_) {
+  if (logger_ && writeHandle_) {
     auto payloadClone = payload ? payload->clone() : nullptr;
     if (streamType_ != StreamType::FETCH_HEADER) {
       logger_->logSubgroupObjectCreated(
@@ -895,8 +913,14 @@ StreamPublisherImpl::objectPayload(Payload payload, bool finStream) {
         MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
   }
   if (!writeHandle_) {
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::CANCELLED, "Cancelled objectPayload"));
+    if (!awaitingStreamCredit_ || pendingFin_) {
+      return folly::makeUnexpected(MoQPublishError(
+          MoQPublishError::CANCELLED, "Cancelled objectPayload"));
+    }
+    auto res = ensureWriteHandle();
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
   }
   auto validateObjectPublishRes =
       validateObjectPublishAndUpdateState(payload.get(), finStream);
@@ -1012,6 +1036,11 @@ void StreamPublisherImpl::reset(ResetStreamErrorCode error) {
   if (deliveryTimer_) {
     deliveryTimer_->cancelAllTimers();
   }
+  awaitingStreamCredit_ = false;
+  pendingFin_ = false;
+  if (streamCreditWaitId_ && publisher_) {
+    publisher_->cancelUniStreamCreditWait(*streamCreditWaitId_);
+  }
 
   if (auto* wh = std::exchange(writeHandle_, nullptr)) {
     wh->resetStream(
@@ -1027,8 +1056,21 @@ void StreamPublisherImpl::reset(ResetStreamErrorCode error) {
 folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
 StreamPublisherImpl::awaitReadyToConsume() {
   if (!writeHandle_) {
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::CANCELLED, "Fetch cancelled"));
+    auto wt = (streamComplete_ || !publisher_) ? nullptr
+                                               : publisher_->getWebTransport();
+    if (!wt) {
+      return folly::makeUnexpected(
+          MoQPublishError(MoQPublishError::CANCELLED, "Fetch cancelled"));
+    }
+    // A FETCH stream is created by its first write, so only held writes wait.
+    // Not every transport can wait for credit: HTTP/3 WebTransport aborts.
+    if (!awaitingStreamCredit_) {
+      return folly::makeSemiFuture<uint64_t>(0);
+    }
+    waitForStreamCredit();
+    auto [promise, future] = folly::makePromiseContract<uint64_t>();
+    streamCreditReadiness_.push_back(std::move(promise));
+    return std::move(future);
   }
   auto writableFuture = writeHandle_->awaitWritable();
   if (!writableFuture) {
@@ -1058,14 +1100,19 @@ StreamPublisherImpl::ensureWriteHandle() {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Publish after fetchCancel"));
   }
+  if (pendingFin_) {
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::API_ERROR, "Write after end of FETCH"));
+  }
 
   auto stream = wt->createUniStream();
   if (!stream) {
-    // failed to create a stream
-    XLOG(ERR) << "Failed to create uni stream tp=" << this;
-    return folly::makeUnexpected(MoQPublishError(
-        MoQPublishError::BLOCKED, "Failed to create uni stream."));
+    XLOG(DBG4) << "No uni stream credit, holding FETCH data tp=" << this;
+    awaitingStreamCredit_ = true;
+    waitForStreamCredit();
+    return folly::unit;
   }
+  awaitingStreamCredit_ = false;
   XLOG(DBG4) << "New stream created, id: " << stream.value()->getID()
              << " tp=" << this;
   // For FETCH, ensureWrite comes from validatePublish or endOfFetch.
@@ -1077,6 +1124,42 @@ StreamPublisherImpl::ensureWriteHandle() {
       header_.priority.value_or(kDefaultPriority)));
   setWriteHandle(*stream);
   return folly::unit;
+}
+
+void StreamPublisherImpl::waitForStreamCredit() {
+  if (streamCreditWaitId_) {
+    return;
+  }
+  auto wait = publisher_->awaitUniStreamCredit();
+  streamCreditWaitId_ = wait.waiterId;
+  std::move(wait.credit)
+      .via(publisher_->getExecutor().get())
+      .thenTry([self = shared_from_this()](folly::Try<folly::Unit>&& credit) {
+        self->onStreamCredit(std::move(credit));
+      });
+}
+
+void StreamPublisherImpl::onStreamCredit(folly::Try<folly::Unit> credit) {
+  streamCreditWaitId_.reset();
+  if (credit.hasValue() && awaitingStreamCredit_ && publisher_) {
+    const bool fin = std::exchange(pendingFin_, false);
+    auto res = ensureWriteHandle();
+    if (res && !writeHandle_) {
+      // Another stream took the credit first; ensureWriteHandle waits again.
+      pendingFin_ = fin;
+      return;
+    }
+    if (res) {
+      (void)writeToStream(fin, pendingEndObject_);
+    }
+  }
+  for (auto& waiter : std::exchange(streamCreditReadiness_, {})) {
+    if (credit.hasException()) {
+      waiter.setException(credit.exception());
+    } else {
+      waiter.setValue(0);
+    }
+  }
 }
 
 } // namespace
@@ -1438,6 +1521,17 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     }
   }
 
+  void setSubscribeLocType(LocationType locType) {
+    subscribeLocType_ = locType;
+  }
+
+  // Drafts 14-16 only allow a joining FETCH against a Largest Object
+  // subscription. PUBLISH-initiated subscriptions carry no SUBSCRIBE filter.
+  bool allowsPreDraft18JoiningFetch() const {
+    return !subscribeLocType_ ||
+        *subscribeLocType_ == LocationType::LargestObject;
+  }
+
   void unsubscribe() {
     cancelGoawayResetTimer();
     if (!subscriptionHandle_) {
@@ -1561,6 +1655,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<Subscriber::SubscriptionHandle> subscriptionHandle_;
+  std::optional<LocationType> subscribeLocType_;
   std::optional<TrackAlias> trackAlias_;
   std::optional<PublishDone> pendingPublishDone_;
   folly::F14FastMap<
@@ -1620,6 +1715,10 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
 
   bool isCancelled() const {
     return cancelled_;
+  }
+
+  void setFullTrackName(FullTrackName fullTrackName) {
+    fullTrackName_ = std::move(fullTrackName);
   }
 
   void cancel() {
@@ -1887,7 +1986,7 @@ MoQSession::TrackPublisherImpl::awaitStreamCredit() {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "awaitStreamCredit after publishDone"));
   }
-  return wt->awaitUniStreamCredit();
+  return session_->awaitUniStreamCredit().credit;
 }
 
 void MoQSession::TrackPublisherImpl::onStreamComplete(
@@ -2527,6 +2626,55 @@ class MoQSession::FetchTrackReceiveState
   std::unique_ptr<StallTimeout> stallTimeout_;
 };
 
+// Links a held joining FETCH to the SUBSCRIBE or PUBLISH it references.
+// `future` completes when that subscription is established, with its track,
+// or with the error the FETCH fails with.
+struct MoQSession::JoiningDependency {
+  JoiningDependency(RequestID subscription, RequestID fetch)
+      : subscriptionID(subscription), fetchID(fetch) {
+    auto contract = folly::coro::makePromiseContract<JoiningDependencyResult>();
+    promise = std::move(contract.first);
+    future = std::move(contract.second);
+  }
+
+  void resolve(JoiningDependencyResult result) {
+    if (std::exchange(resolved, true)) {
+      return;
+    }
+    unseenTimer.reset();
+    promise.setValue(std::move(result));
+  }
+
+  RequestID subscriptionID;
+  RequestID fetchID;
+  folly::coro::Promise<JoiningDependencyResult> promise;
+  folly::coro::Future<JoiningDependencyResult> future;
+  std::unique_ptr<JoiningDependencyTimeout> unseenTimer;
+  bool resolved{false};
+};
+
+class MoQSession::JoiningDependencyTimeout : public quic::QuicTimerCallback {
+ public:
+  JoiningDependencyTimeout(
+      std::weak_ptr<MoQSession> session,
+      std::weak_ptr<JoiningDependency> dependency)
+      : session_(std::move(session)), dependency_(std::move(dependency)) {}
+
+  void timeoutExpired() noexcept override {
+    auto session = session_.lock();
+    auto dependency = dependency_.lock();
+    if (session && dependency) {
+      session->onJoiningDependencyTimeout(dependency);
+    }
+  }
+
+  void callbackCanceled() noexcept override {}
+
+ private:
+  std::weak_ptr<MoQSession> session_;
+  std::weak_ptr<JoiningDependency> dependency_;
+};
+
 const std::shared_ptr<BidiStreamControl>&
 MoQSession::PendingRequestState::bidiControl() const {
   switch (type_) {
@@ -2668,6 +2816,22 @@ MoQSession::~MoQSession() {
 
 void MoQSession::cleanup() {
   cancelGoawayTimeout();
+  for (auto& [_, waiter] : std::exchange(uniStreamCreditWaiters_, {})) {
+    waiter.setException(std::runtime_error("session closed"));
+  }
+  auto joiningDependencies = std::move(joiningDependencies_);
+  joiningDependencies_.clear();
+  numJoiningDependencies_ = 0;
+  for (auto& [_, dependencies] : joiningDependencies) {
+    for (auto& dependency : dependencies) {
+      dependency->resolve(
+          folly::makeUnexpected(
+              FetchError{
+                  RequestID(0),
+                  FetchErrorCode::INTERNAL_ERROR,
+                  "session closed"}));
+    }
+  }
   while (!fetches_.empty()) {
     auto it = fetches_.begin();
     auto fetch = std::move(it->second);
@@ -3704,6 +3868,7 @@ void MoQSession::cleanupUnansweredRequest(
       break;
     }
     case PendingRequestState::Type::PUBLISH: {
+      failJoiningDependencies(requestID);
       auto pubIt = pubTracks_.find(requestID);
       if (pubIt != pubTracks_.end()) {
         pendingPublishTracks_.erase(pubIt->second->fullTrackName());
@@ -4547,11 +4712,13 @@ void MoQSession::onSubscribeImpl(
       forward,
       deliveryTimeout);
   trackPublisher->setReplyContext(replyContext);
+  trackPublisher->setSubscribeLocType(subscribeRequest.locType);
   if (logger_) {
     trackPublisher->setLogger(logger_);
   }
 
   pubTracks_.emplace(requestID, trackPublisher);
+  bindJoiningDependencies(requestID);
 
   // Check for duplicate subscription: if there's already a pending outgoing
   // PUBLISH for the same track, reject the SUBSCRIBE
@@ -4608,6 +4775,7 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     if (subscribeResult.hasValue() && subscribeResult->hasValue()) {
       subscribeResult->value()->unsubscribe();
     }
+    failJoiningDependencies(requestID);
     co_return;
   }
   if (subscribeResult.hasException()) {
@@ -4642,6 +4810,9 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     // TODO: verify TrackAlias is unique
     sendSubscribeOk(subOk, *replyContext);
     trackPublisher->setSubscriptionHandle(std::move(subHandle));
+    // The subscription handle and its Joining Location are installed, so a
+    // dependent joining FETCH can be dispatched.
+    resolveJoiningDependencies(requestID, fullTrackName);
   }
 }
 
@@ -4842,6 +5013,7 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
       publisherDrained(unsubscribe.requestID);
     } // else, the caller invoked publishDone, which isn't needed but fine
   }
+  failJoiningDependencies(unsubscribe.requestID);
 }
 
 void MoQSession::onPublishOk(PublishOk publishOk) {
@@ -4868,17 +5040,25 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
 
   // Extract delivery timeout from PUBLISH_OK params and update
   // trackPublisher
+  std::optional<FullTrackName> establishedTrack;
   auto trackIt = pubTracks_.find(publishOk.requestID);
   if (trackIt != pubTracks_.end()) {
     auto trackPublisher =
         std::static_pointer_cast<TrackPublisherImpl>(trackIt->second);
     trackPublisher->onPublishOk(publishOk);
     pendingPublishTracks_.erase(trackIt->second->fullTrackName());
+    establishedTrack = trackIt->second->fullTrackName();
   }
   // No disarm: PUBLISH_OK is non-terminal; publishDone's flush(fin) disarms.
 
+  const auto requestID = publishOk.requestID;
   publishPtr->setValue(std::move(publishOk));
   pendingRequests_.erase(pubIt);
+  // Held joining FETCHes resume after the publisher's reply continuation, so
+  // a relay has recorded the subscription before it is asked to serve them.
+  if (establishedTrack) {
+    resolveJoiningDependencies(requestID, *establishedTrack);
+  }
 }
 
 void MoQSession::onRequestError(RequestError error, FrameType frameType) {
@@ -5406,6 +5586,199 @@ void MoQSession::onRequestsBlocked(RequestsBlocked requestsBlocked) {
   }
 }
 
+bool MoQSession::isDeferrableUnseenJoiningID(
+    RequestID joiningID,
+    RequestID fetchID) const {
+  // Draft 18 request streams can deliver the FETCH before the SUBSCRIBE it
+  // references. Only a peer-issued ID that precedes the FETCH can still be in
+  // flight; this is a deferral policy, not a validity rule.
+  const bool peerIssued = ((joiningID.value % 2) == 1) ==
+      (dir_ == MoQControlCodec::Direction::CLIENT);
+  return getDraftMajorVersion(*getNegotiatedVersion()) >= 18 && peerIssued &&
+      joiningID.value < fetchID.value && joiningID.value < maxRequestID_;
+}
+
+folly::Expected<std::shared_ptr<MoQSession::JoiningDependency>, folly::Unit>
+MoQSession::prepareJoiningFetch(
+    Fetch& fetch,
+    const JoiningFetch& joining,
+    ReplyContext& replyContext) {
+  const auto joiningID = *joining.joiningRequestID;
+  auto reject = [&](std::string reason) {
+    fetchError(
+        {fetch.requestID,
+         FetchErrorCode::INVALID_JOINING_REQUEST_ID,
+         std::move(reason)},
+        replyContext);
+    return folly::makeUnexpected(folly::unit);
+  };
+  auto joinIt = pubTracks_.find(joiningID);
+  if (joinIt == pubTracks_.end()) {
+    if (!isDeferrableUnseenJoiningID(joiningID, fetch.requestID)) {
+      XLOG(ERR) << "Unknown joining subscribe ID=" << joiningID.value
+                << " sess=" << this;
+      return reject("Unknown joining requestID");
+    }
+    return deferJoiningFetch(
+        fetch.requestID, joiningID, /*unseen=*/true, replyContext);
+  }
+  auto trackPublisher =
+      std::dynamic_pointer_cast<TrackPublisherImpl>(joinIt->second);
+  if (!trackPublisher || trackPublisher->isDone()) {
+    return reject("Joining requestID is not an active subscription");
+  }
+  if (getDraftMajorVersion(*getNegotiatedVersion()) < 18 &&
+      !trackPublisher->allowsPreDraft18JoiningFetch()) {
+    XLOG(ERR) << "Joining FETCH against a non-LargestObject subscription id="
+              << joiningID.value << " sess=" << this;
+    close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    return folly::makeUnexpected(folly::unit);
+  }
+  fetch.fullTrackName = trackPublisher->fullTrackName();
+  if (trackPublisher->state() == PublisherImpl::State::ESTABLISHED) {
+    return nullptr;
+  }
+  return deferJoiningFetch(
+      fetch.requestID, joiningID, /*unseen=*/false, replyContext);
+}
+
+folly::Expected<std::shared_ptr<MoQSession::JoiningDependency>, folly::Unit>
+MoQSession::deferJoiningFetch(
+    RequestID fetchID,
+    RequestID joiningID,
+    bool unseen,
+    ReplyContext& replyContext) {
+  if (numJoiningDependencies_ >= moqSettings_.maxDeferredJoiningFetches) {
+    fetchError(
+        {fetchID,
+         getDraftMajorVersion(*getNegotiatedVersion()) >= 18
+             ? FetchErrorCode::EXCESSIVE_LOAD
+             : FetchErrorCode::INTERNAL_ERROR,
+         "Too many pending joining FETCHes"},
+        replyContext);
+    return folly::makeUnexpected(folly::unit);
+  }
+  auto dependency = std::make_shared<JoiningDependency>(joiningID, fetchID);
+  if (unseen) {
+    dependency->unseenTimer = std::make_unique<JoiningDependencyTimeout>(
+        weak_from_this(), dependency);
+    exec_->scheduleTimeout(
+        dependency->unseenTimer.get(), moqSettings_.joiningDependencyTimeout);
+  }
+  joiningDependencies_[joiningID].push_back(dependency);
+  numJoiningDependencies_++;
+  return dependency;
+}
+
+void MoQSession::removeJoiningDependency(
+    const std::shared_ptr<JoiningDependency>& dependency) {
+  dependency->unseenTimer.reset();
+  auto it = joiningDependencies_.find(dependency->subscriptionID);
+  if (it == joiningDependencies_.end()) {
+    return;
+  }
+  auto& dependencies = it->second;
+  auto depIt = std::find(dependencies.begin(), dependencies.end(), dependency);
+  if (depIt == dependencies.end()) {
+    return;
+  }
+  dependencies.erase(depIt);
+  numJoiningDependencies_--;
+  if (dependencies.empty()) {
+    joiningDependencies_.erase(it);
+  }
+}
+
+void MoQSession::bindJoiningDependencies(RequestID subscriptionID) {
+  auto it = joiningDependencies_.find(subscriptionID);
+  if (it == joiningDependencies_.end()) {
+    return;
+  }
+  for (auto& dependency : it->second) {
+    dependency->unseenTimer.reset();
+  }
+}
+
+void MoQSession::resolveJoiningDependencies(
+    RequestID subscriptionID,
+    const JoiningDependencyResult& result) {
+  auto it = joiningDependencies_.find(subscriptionID);
+  if (it == joiningDependencies_.end()) {
+    return;
+  }
+  auto dependencies = std::move(it->second);
+  joiningDependencies_.erase(it);
+  numJoiningDependencies_ -= dependencies.size();
+  for (auto& dependency : dependencies) {
+    dependency->resolve(result);
+  }
+}
+
+void MoQSession::failJoiningDependencies(RequestID subscriptionID) {
+  resolveJoiningDependencies(
+      subscriptionID,
+      folly::makeUnexpected(
+          FetchError{
+              RequestID(0),
+              FetchErrorCode::INVALID_JOINING_REQUEST_ID,
+              "Joining subscription was not established"}));
+}
+
+void MoQSession::onJoiningDependencyTimeout(
+    const std::shared_ptr<JoiningDependency>& dependency) {
+  XLOG(DBG1) << "Joining FETCH id=" << dependency->fetchID
+             << " gave up waiting for SUBSCRIBE id="
+             << dependency->subscriptionID << " sess=" << this;
+  // This runs inside the timer's own callback, so it must not be destroyed
+  // here.
+  exec_->add([timer = std::move(dependency->unseenTimer)]() mutable {
+    timer.reset();
+  });
+  removeJoiningDependency(dependency);
+  dependency->resolve(
+      folly::makeUnexpected(
+          FetchError{
+              RequestID(0),
+              FetchErrorCode::INVALID_JOINING_REQUEST_ID,
+              "Unknown joining requestID"}));
+}
+
+MoQSession::UniStreamCreditWait MoQSession::awaitUniStreamCredit() {
+  if (!waitingForUniStreamCredit_) {
+    auto credit = wt_->awaitUniStreamCredit();
+    if (credit.isReady()) {
+      return {.credit = std::move(credit)};
+    }
+    waitingForUniStreamCredit_ = true;
+    std::move(credit)
+        .via(exec_.get())
+        .thenTry(
+            [weakSelf = weak_from_this()](folly::Try<folly::Unit>&& result) {
+              auto self = weakSelf.lock();
+              if (!self) {
+                return;
+              }
+              self->waitingForUniStreamCredit_ = false;
+              for (auto& [_, waiter] :
+                   std::exchange(self->uniStreamCreditWaiters_, {})) {
+                if (result.hasException()) {
+                  waiter.setException(result.exception());
+                } else {
+                  waiter.setValue();
+                }
+              }
+            });
+  }
+  auto [promise, future] = folly::makePromiseContract<folly::Unit>();
+  const auto waiterId = nextUniStreamCreditWaiter_++;
+  uniStreamCreditWaiters_.emplace(waiterId, std::move(promise));
+  return {.waiterId = waiterId, .credit = std::move(future)};
+}
+
+void MoQSession::cancelUniStreamCreditWait(uint64_t waiterId) {
+  uniStreamCreditWaiters_.erase(waiterId);
+}
+
 void MoQSession::onFetch(Fetch fetch) {
   onFetchImpl(std::move(fetch), controlStreamReplyContext());
 }
@@ -5459,20 +5832,6 @@ void MoQSession::onFetchImpl(
         return;
       }
     }
-  } else {
-    auto joinIt = pubTracks_.find(*joining->joiningRequestID);
-    if (joinIt == pubTracks_.end()) {
-      XLOG(ERR) << "Unknown joining subscribe ID="
-                << joining->joiningRequestID->value << " sess=" << this;
-      // message error
-      fetchError(
-          {fetch.requestID,
-           FetchErrorCode::INVALID_JOINING_REQUEST_ID,
-           "Unknown joining requestID"},
-          *replyContext);
-      return;
-    }
-    fetch.fullTrackName = joinIt->second->fullTrackName();
   }
   auto it = pubTracks_.find(fetch.requestID);
   if (it != pubTracks_.end()) {
@@ -5483,6 +5842,16 @@ void MoQSession::onFetchImpl(
         {fetch.requestID, FetchErrorCode::INTERNAL_ERROR, "dup sub ID"},
         *replyContext);
     return;
+  }
+  // A FETCH under this ID means no SUBSCRIBE will ever use it.
+  failJoiningDependencies(fetch.requestID);
+  std::shared_ptr<JoiningDependency> dependency;
+  if (joining) {
+    auto prepared = prepareJoiningFetch(fetch, *joining, *replyContext);
+    if (prepared.hasError()) {
+      return;
+    }
+    dependency = std::move(prepared.value());
   }
   auto fetchPublisher = std::make_shared<FetchPublisherImpl>(
       this,
@@ -5502,13 +5871,15 @@ void MoQSession::onFetchImpl(
       handleFetch(
           std::move(fetch),
           std::move(fetchPublisher),
-          std::move(replyContext)));
+          std::move(replyContext),
+          std::move(dependency)));
 }
 
 folly::coro::Task<void> MoQSession::handleFetch(
     Fetch fetch,
     std::shared_ptr<FetchPublisherImpl> fetchPublisher,
-    std::shared_ptr<ReplyContext> replyContext) {
+    std::shared_ptr<ReplyContext> replyContext,
+    std::shared_ptr<JoiningDependency> dependency) {
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
@@ -5516,14 +5887,32 @@ folly::coro::Task<void> MoQSession::handleFetch(
   const bool sendTrackProperties =
       getDraftMajorVersion(*getNegotiatedVersion()) < 22 ||
       fetch.includeProperties;
-  if (!fetchPublisher->getStreamPublisher()) {
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  if (dependency) {
+    auto dependencyResult = co_await co_awaitTry(
+        co_withCancellation(token, std::move(dependency->future)));
+    removeJoiningDependency(dependency);
+    if (dependencyResult.hasException() || token.isCancellationRequested()) {
+      // FETCH_CANCEL or session close already removed the request.
+      co_return;
+    }
+    if (dependencyResult->hasError()) {
+      fetchPublisher->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+      auto fetchErr = std::move(dependencyResult->error());
+      fetchErr.requestID = requestID;
+      fetchError(fetchErr, *replyContext);
+      co_return;
+    }
+    fetch.fullTrackName = std::move(dependencyResult->value());
+    fetchPublisher->setFullTrackName(fetch.fullTrackName);
+  }
+  if (!fetchPublisher->getStreamPublisher() || !publishHandler_) {
     XLOG(ERR) << "Fetch Publisher killed sess=" << this;
     fetchError(
         {requestID, FetchErrorCode::INTERNAL_ERROR, "Fetch Failed"},
         *replyContext);
     co_return;
   }
-  auto token = co_await folly::coro::co_current_cancellation_token;
   auto fetchResult = co_await co_awaitTry(publishHandler_->fetch(
       std::move(fetch), fetchPublisher->getStreamPublisher()));
   if (token.isCancellationRequested()) {
@@ -5612,8 +6001,8 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
   }
 
   if (fetchIt == fetches_.end()) {
-    XLOG(ERR) << "No matching subscribe ID=" << fetchOk.requestID
-              << " sess=" << this;
+    XLOG(DBG1) << "No matching subscribe ID=" << fetchOk.requestID
+               << " sess=" << this;
     return;
   }
   const auto& trackReceiveState = fetchIt->second;
@@ -6536,6 +6925,7 @@ void MoQSession::subscribeError(
     const SubscribeError& subErr,
     ReplyContext& ctx) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  failJoiningDependencies(subErr.requestID);
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_, onSubscribeError, subErr.errorCode);
   // A subscribe handler may legally open subgroups and then reject; those
