@@ -173,6 +173,11 @@ class MoQForwarder : public TrackConsumer {
     return subscribers_.empty();
   }
 
+  std::shared_ptr<Subscriber> findSubscriber(SessionId sessionId) const {
+    auto it = subscribers_.find(sessionId);
+    return it == subscribers_.end() ? nullptr : it->second;
+  }
+
   std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
       SessionId sessionId,
       const SubscribeRequest& subReq,
@@ -250,6 +255,10 @@ class MoQForwarder : public TrackConsumer {
 
   bool checkRange(const Subscriber& sub);
 
+  // Like checkRange, but the lower bound is the delivered object's own
+  // location: the track-wide Largest does not admit an older object.
+  bool checkObjectRange(const Subscriber& sub, AbsoluteLocation location);
+
   // Returns true if largest_ has advanced past sub.range.end. As a side
   // effect this also publishDone's the subscriber; that retirement
   // probably belongs elsewhere (TODO).
@@ -269,6 +278,16 @@ class MoQForwarder : public TrackConsumer {
       uint64_t subgroupID,
       Priority priority,
       BeginSubgroupOptions options = {}) override;
+
+  // For a caller that keeps consuming the subgroup even when no subscriber
+  // currently accepts it (e.g. a cache). The returned forwarder starts with
+  // cache interest set; see SubgroupForwarder::setCacheInterest.
+  folly::Expected<std::shared_ptr<SubgroupForwarder>, MoQPublishError>
+  beginSubgroupWithCacheInterest(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      Priority priority,
+      BeginSubgroupOptions options = {});
 
   folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
   awaitStreamCredit() override;
@@ -295,13 +314,24 @@ class MoQForwarder : public TrackConsumer {
     // Set only when upstream marked this stream as starting with the original
     // first object for the logical subgroup.
     std::optional<uint64_t> firstObjectId_;
+    // The object most recently started on this stream.
+    std::optional<uint64_t> lastObjectId_;
+    // Keeps this subgroup alive while no subscriber accepts its objects,
+    // because a cache still records them.
+    bool cacheInterest_{false};
 
+    // newObjectID is the object that may open a downstream stream for a
+    // subscriber without one; nullopt never opens one.
     template <typename Fn>
     folly::Expected<folly::Unit, MoQPublishError> forEachSubscriberSubgroup(
         Fn&& fn,
-        bool makeNew = true,
+        std::optional<uint64_t> newObjectID,
         const std::string& callsite = "",
         TrackConsumer::BeginSubgroupOptions newSubgroupOptions = {});
+
+    // True if a subscriber without a downstream stream could still accept a
+    // later object on this subgroup.
+    bool subscriberMayAcceptLaterObject() const;
 
     // Helper to erase subgroup from subscriber and remove subscriber if
     // draining
@@ -338,6 +368,17 @@ class MoQForwarder : public TrackConsumer {
 
     // Detach from the owning MoQForwarder (called from MoQForwarder destructor)
     void detach();
+
+    // While set, data that no subscriber accepts is a successful no-op and
+    // this forwarder stays registered, so later subscribers can attach at an
+    // object boundary. Cleared, the baseline CANCELLED behavior applies.
+    void setCacheInterest(bool interest) {
+      cacheInterest_ = interest;
+    }
+
+    [[nodiscard]] bool attached() const {
+      return forwarder_ != nullptr;
+    }
 
     folly::Expected<folly::Unit, MoQPublishError> object(
         uint64_t objectID,
@@ -376,6 +417,14 @@ class MoQForwarder : public TrackConsumer {
 
  private:
   static Payload maybeClone(const Payload& payload);
+
+  folly::Expected<std::shared_ptr<SubgroupForwarder>, MoQPublishError>
+  beginSubgroupImpl(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      Priority priority,
+      BeginSubgroupOptions options,
+      bool cacheInterest);
 
   // Helper that checks if both subscribers_ and subgroups_ are empty and
   // fires onEmpty callback if so

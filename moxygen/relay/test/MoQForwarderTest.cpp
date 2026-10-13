@@ -124,7 +124,11 @@ struct CountingCallback : public MoQForwarder::Callback {
   void onEmpty(MoQForwarder*) override {
     onEmptyCount++;
   }
+  void forwardChanged(MoQForwarder*, bool forward) override {
+    forwardChanges.push_back(forward);
+  }
   size_t onEmptyCount{0};
+  std::vector<bool> forwardChanges;
 };
 
 struct TestNGRCallback : public MoQForwarder::Callback {
@@ -2025,6 +2029,299 @@ TEST_F(MoQForwarderTest, DeprecatedSessionOverloadsResolveToTheSameSubscriber) {
 
   forwarder->removeSubscriber(session, std::nullopt, "test");
   EXPECT_TRUE(forwarder->empty());
+}
+
+namespace {
+
+std::shared_ptr<MockSubgroupConsumer> acceptingSubgroupConsumer() {
+  auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
+  ON_CALL(*sg, object(_, _, _, _))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  ON_CALL(*sg, beginObject(_, _, _, _))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  ON_CALL(*sg, objectPayload(_, _))
+      .WillByDefault(Return(
+          folly::makeExpected<MoQPublishError>(ObjectPublishStatus::DONE)));
+  ON_CALL(*sg, endOfSubgroup())
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  ON_CALL(*sg, endOfGroup(_))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  return sg;
+}
+
+} // namespace
+
+// Test: once a subscriber's filter starts at (43,3), a late object from an
+// older group stays off its live subscription even after the track's Largest
+// has passed the filter start.
+TEST_F(MoQForwarderTest, LateOlderGroupObjectNotForwardedAfterLargestAdvances) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  // The early subscriber joins before any data, so it receives everything.
+  auto earlyConsumer = createMockConsumer();
+  EXPECT_CALL(*earlyConsumer, beginSubgroup(_, _, _, _))
+      .WillRepeatedly(
+          Return(subgroupConsumerResult(acceptingSubgroupConsumer())));
+  ASSERT_NE(
+      addSubscriber(
+          *forwarder, createMockSession(), earlyConsumer, RequestID(1)),
+      nullptr);
+  auto olderSubgroup = forwarder->beginSubgroup(42, 1, 0);
+  ASSERT_TRUE(olderSubgroup.hasValue());
+  auto currentSubgroup = forwarder->beginSubgroup(43, 0, 0);
+  ASSERT_TRUE(currentSubgroup.hasValue());
+  for (uint64_t objectID = 0; objectID < 3; objectID++) {
+    EXPECT_TRUE(
+        (*currentSubgroup)->object(objectID, test::makeBuf(10)).hasValue());
+  }
+
+  // Joins with Largest (43,2): its live range starts at (43,3).
+  auto lateConsumer = createMockConsumer();
+  auto lateSubgroup = acceptingSubgroupConsumer();
+  EXPECT_CALL(*lateConsumer, beginSubgroup(42, _, _, _)).Times(0);
+  EXPECT_CALL(*lateConsumer, beginSubgroup(43, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(lateSubgroup)));
+  EXPECT_CALL(*lateSubgroup, object(3, _, _, _));
+  ASSERT_NE(
+      addSubscriber(
+          *forwarder, createMockSession(), lateConsumer, RequestID(2)),
+      nullptr);
+
+  EXPECT_TRUE((*currentSubgroup)->object(3, test::makeBuf(10)).hasValue());
+  EXPECT_TRUE((*olderSubgroup)->object(31, test::makeBuf(10)).hasValue());
+}
+
+// Test: a stream that only carries objects below a subscriber's start in that
+// group opens for it at the first admitted object, which is not the stream's
+// first object. The upstream stream must survive the excluded objects.
+TEST_F(MoQForwarderTest, SubgroupInStartGroupOpensAtFirstAdmittedObject) {
+  auto forwarder = std::make_shared<MoQForwarder>(
+      kFwdTestTrackName, AbsoluteLocation{43, 2});
+  auto consumer = createMockConsumer();
+  auto subgroup = acceptingSubgroupConsumer();
+  TrackConsumer::BeginSubgroupOptions opened;
+  EXPECT_CALL(*consumer, beginSubgroup(43, 1, _, _))
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    TrackConsumer::BeginSubgroupOptions options) {
+        opened = options;
+        return subgroupConsumerResult(subgroup);
+      });
+  EXPECT_CALL(*subgroup, object(1, _, _, _)).Times(0);
+  EXPECT_CALL(*subgroup, object(5, _, _, _));
+  ASSERT_NE(
+      addSubscriber(*forwarder, createMockSession(), consumer, RequestID(1)),
+      nullptr);
+
+  TrackConsumer::BeginSubgroupOptions publishOptions;
+  publishOptions.beginsWithFirstObject = true;
+  auto sgRes = forwarder->beginSubgroup(43, 1, 0, publishOptions);
+  ASSERT_TRUE(sgRes.hasValue());
+  EXPECT_TRUE((*sgRes)->object(1, test::makeBuf(10)).hasValue());
+  EXPECT_TRUE((*sgRes)->object(5, test::makeBuf(10)).hasValue());
+
+  EXPECT_FALSE(opened.beginsWithFirstObject);
+}
+
+// Test: datagrams and single-object streams are filtered by their own
+// location, not by the track-wide Largest.
+TEST_F(MoQForwarderTest, DatagramAndObjectStreamFilteredByObjectLocation) {
+  auto forwarder = std::make_shared<MoQForwarder>(
+      kFwdTestTrackName, AbsoluteLocation{43, 2});
+  auto consumer = createMockConsumer();
+  EXPECT_CALL(*consumer, datagram(_, _, _))
+      .WillOnce([](const ObjectHeader& header, Payload, bool) {
+        EXPECT_EQ(header.group, 43);
+        EXPECT_EQ(header.id, 4);
+        return folly::makeExpected<MoQPublishError>(folly::unit);
+      });
+  EXPECT_CALL(*consumer, objectStream(_, _, _)).Times(0);
+  ASSERT_NE(
+      addSubscriber(*forwarder, createMockSession(), consumer, RequestID(1)),
+      nullptr);
+
+  EXPECT_TRUE(forwarder
+                  ->datagram(
+                      ObjectHeader(43, 0, 4, 0, uint64_t(1)),
+                      folly::IOBuf::copyBuffer("x"))
+                  .hasValue());
+  EXPECT_TRUE(forwarder
+                  ->datagram(
+                      ObjectHeader(42, 0, 31, 0, uint64_t(1)),
+                      folly::IOBuf::copyBuffer("x"))
+                  .hasValue());
+  EXPECT_TRUE(forwarder
+                  ->objectStream(
+                      ObjectHeader(43, 0, 1, 0, uint64_t(1)),
+                      folly::IOBuf::copyBuffer("x"))
+                  .hasValue());
+}
+
+// Test: an END_OF_GROUP status below a subscriber's start must not open a
+// downstream stream for it.
+TEST_F(MoQForwarderTest, ExcludedStatusObjectDoesNotOpenStream) {
+  auto forwarder = std::make_shared<MoQForwarder>(
+      kFwdTestTrackName, AbsoluteLocation{43, 2});
+  auto consumer = createMockConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(_, _, _, _)).Times(0);
+  ASSERT_NE(
+      addSubscriber(*forwarder, createMockSession(), consumer, RequestID(1)),
+      nullptr);
+
+  auto sgRes = forwarder->beginSubgroup(42, 0, 0);
+  ASSERT_TRUE(sgRes.hasValue());
+  EXPECT_TRUE((*sgRes)->endOfGroup(60).hasValue());
+}
+
+// Test: with cache interest, a subgroup that no subscriber accepts stays
+// registered as a successful no-op. A later subscriber attaches at the next
+// object boundary, with a stream that does not claim the subgroup's first
+// object and carries an explicit subgroup ID.
+TEST_F(MoQForwarderTest, CacheInterestRetainsIdleSubgroupForLateSubscriber) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto firstConsumer = createMockConsumer();
+  auto firstSubgroup = acceptingSubgroupConsumer();
+  EXPECT_CALL(*firstConsumer, beginSubgroup(43, 4, _, _))
+      .WillOnce(Return(subgroupConsumerResult(firstSubgroup)));
+  EXPECT_CALL(*firstSubgroup, object(4, _, _, _));
+  EXPECT_CALL(*firstSubgroup, object(5, _, _, _))
+      .WillOnce(Return(stopSendingError()));
+  ASSERT_NE(
+      addSubscriber(
+          *forwarder, createMockSession(), firstConsumer, RequestID(1)),
+      nullptr);
+
+  TrackConsumer::BeginSubgroupOptions publishOptions;
+  publishOptions.beginsWithFirstObject = true;
+  publishOptions.subgroupIDFormat = SubgroupIDFormat::FirstObject;
+  auto sgRes =
+      forwarder->beginSubgroupWithCacheInterest(43, 4, 0, publishOptions);
+  ASSERT_TRUE(sgRes.hasValue());
+  std::shared_ptr<SubgroupConsumer> subgroup = *sgRes;
+  EXPECT_TRUE(subgroup->object(4, test::makeBuf(10)).hasValue());
+  // The only subscriber stops this subgroup; the cache still consumes it.
+  EXPECT_TRUE(subgroup->object(5, test::makeBuf(10)).hasValue());
+  EXPECT_TRUE(subgroup->object(6, test::makeBuf(10)).hasValue());
+  EXPECT_TRUE((*sgRes)->attached());
+
+  auto lateConsumer = createMockConsumer();
+  auto lateSubgroup = acceptingSubgroupConsumer();
+  TrackConsumer::BeginSubgroupOptions lateOptions;
+  EXPECT_CALL(*lateConsumer, beginSubgroup(43, 4, _, _))
+      .WillOnce([&](uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    TrackConsumer::BeginSubgroupOptions options) {
+        lateOptions = options;
+        return subgroupConsumerResult(lateSubgroup);
+      });
+  EXPECT_CALL(*lateSubgroup, beginObject(7, 8, _, _));
+  EXPECT_CALL(*lateSubgroup, objectPayload(_, false));
+  ASSERT_NE(
+      addSubscriber(
+          *forwarder, createMockSession(), lateConsumer, RequestID(2)),
+      nullptr);
+
+  EXPECT_TRUE(
+      subgroup->beginObject(7, 8, folly::IOBuf::copyBuffer("1234")).hasValue());
+  auto payloadRes =
+      subgroup->objectPayload(folly::IOBuf::copyBuffer("5678"), false);
+  ASSERT_TRUE(payloadRes.hasValue());
+  EXPECT_EQ(*payloadRes, ObjectPublishStatus::DONE);
+
+  EXPECT_FALSE(lateOptions.beginsWithFirstObject);
+  EXPECT_EQ(lateOptions.subgroupIDFormat, SubgroupIDFormat::Present);
+}
+
+// Test: cache interest never keeps a forwarder without subscribers alive, so
+// the owner still learns the track became empty.
+TEST_F(MoQForwarderTest, CacheInterestDoesNotOutliveLastSubscriber) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto callback = std::make_shared<CountingCallback>();
+  forwarder->setCallback(callback);
+  auto consumer = createMockConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(_, _, _, _))
+      .WillOnce(Return(subgroupConsumerResult(acceptingSubgroupConsumer())));
+  auto subscriber =
+      addSubscriber(*forwarder, createMockSession(), consumer, RequestID(1));
+  ASSERT_NE(subscriber, nullptr);
+  auto sgRes = forwarder->beginSubgroupWithCacheInterest(1, 0, 0);
+  ASSERT_TRUE(sgRes.hasValue());
+
+  subscriber->unsubscribe();
+  std::shared_ptr<SubgroupConsumer> subgroup = *sgRes;
+  auto res = subgroup->object(0, test::makeBuf(10));
+
+  EXPECT_TRUE(res.hasError());
+  EXPECT_EQ(callback->onEmptyCount, 1);
+}
+
+// A subscription handle may unsubscribe from inside publishDone, as the
+// proxy's downstream handle does when its session drops it. Draining and
+// removal must not touch the subscriber's map entry afterwards.
+TEST_F(MoQForwarderTest, PublishDoneMayReenterUnsubscribe) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto callback = std::make_shared<CountingCallback>();
+  forwarder->setCallback(callback);
+  auto draining = createMockConsumer();
+  auto removed = createMockConsumer();
+  std::shared_ptr<MoQForwarder::Subscriber> drainingSubscriber;
+  std::shared_ptr<MoQForwarder::Subscriber> removedSubscriber;
+  EXPECT_CALL(*draining, publishDone(_)).WillOnce([&](const PublishDone&) {
+    drainingSubscriber->unsubscribe();
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  });
+  EXPECT_CALL(*removed, publishDone(_)).WillOnce([&](const PublishDone&) {
+    removedSubscriber->unsubscribe();
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  });
+  auto removedSession = createMockSession();
+  drainingSubscriber =
+      addSubscriber(*forwarder, createMockSession(), draining, RequestID(1));
+  removedSubscriber =
+      addSubscriber(*forwarder, removedSession, removed, RequestID(2));
+
+  forwarder->removeSubscriber(
+      removedSession->sessionId(),
+      PublishDone{
+          RequestID(2), PublishDoneStatusCode::SUBSCRIPTION_ENDED, 0, "gone"},
+      "test");
+  forwarder->publishDone(
+      PublishDone{RequestID(0), PublishDoneStatusCode::TRACK_ENDED, 0, "done"});
+
+  EXPECT_TRUE(forwarder->empty());
+  EXPECT_EQ(callback->onEmptyCount, 1);
+}
+
+// Removing one subscriber can remove the last other one from its publishDone.
+// The forwarder then becomes empty once; it does not first report that
+// forwarding stopped.
+TEST_F(MoQForwarderTest, ReentrantRemovalOfLastOtherSubscriberOnlyEmpties) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto callback = std::make_shared<CountingCallback>();
+  forwarder->setCallback(callback);
+  auto first = createMockConsumer();
+  auto second = createMockConsumer();
+  std::shared_ptr<MoQForwarder::Subscriber> secondSubscriber;
+  EXPECT_CALL(*first, publishDone(_)).WillOnce([&](const PublishDone&) {
+    secondSubscriber->unsubscribe();
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  });
+  auto firstSession = createMockSession();
+  addSubscriber(*forwarder, firstSession, first, RequestID(1));
+  secondSubscriber =
+      addSubscriber(*forwarder, createMockSession(), second, RequestID(2));
+
+  forwarder->removeSubscriber(
+      firstSession->sessionId(),
+      PublishDone{
+          RequestID(1), PublishDoneStatusCode::SUBSCRIPTION_ENDED, 0, "gone"},
+      "test");
+
+  EXPECT_TRUE(forwarder->empty());
+  EXPECT_EQ(callback->onEmptyCount, 1);
+  const std::vector<bool> startedOnly{true};
+  EXPECT_EQ(callback->forwardChanges, startedOnly);
 }
 
 } // namespace moxygen::test
