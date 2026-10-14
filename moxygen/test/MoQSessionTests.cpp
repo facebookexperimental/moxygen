@@ -799,6 +799,11 @@ INSTANTIATE_TEST_SUITE_P(
     Draft18GoawayRequestRejectionTest,
     testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
 
+INSTANTIATE_TEST_SUITE_P(
+    Draft22GoawayRequestRejectionTest,
+    Draft18GoawayRequestRejectionTest,
+    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}));
+
 CO_TEST_P_X(
     Draft18GoawayRequestRejectionTest,
     SentGoawayRejectsInboundSubscribe) {
@@ -1102,7 +1107,9 @@ CO_TEST_P_X(MoQSessionTest, Goaway) {
   folly::coro::Baton goawayBaton;
   EXPECT_CALL(*serverPublisher, goaway(_))
       .WillOnce(testing::Invoke([&](auto receivedGoaway) -> void {
-        if (getDraftMajorVersion(getServerSelectedVersion()) >= 18) {
+        const auto majorVersion =
+            getDraftMajorVersion(getServerSelectedVersion());
+        if (majorVersion >= 18 && majorVersion < 22) {
           ASSERT_TRUE(receivedGoaway.requestID.has_value());
           EXPECT_EQ(*receivedGoaway.requestID, RequestID(1));
         } else {
@@ -1114,6 +1121,30 @@ CO_TEST_P_X(MoQSessionTest, Goaway) {
   co_await goawayBaton;
 
   subscribeHandler->unsubscribe();
+}
+
+CO_TEST_P_X(Draft22Test, GoawayOmitsRequestID) {
+  co_await setupMoQSession();
+  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
+    auto pubResult = pub->beginSubgroup(0, 0, 0);
+    EXPECT_FALSE(pubResult.hasError());
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+  auto result = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  CO_ASSERT_TRUE(result.hasValue());
+
+  folly::coro::Baton goawayBaton;
+  EXPECT_CALL(*serverPublisher, goaway(_))
+      .WillOnce(testing::Invoke([&](const Goaway& receivedGoaway) {
+        EXPECT_FALSE(receivedGoaway.requestID.has_value());
+        EXPECT_EQ(receivedGoaway.timeout, 1500);
+        goawayBaton.post();
+      }));
+  clientSession_->goaway(Goaway{"", 1500, std::make_optional(RequestID(99))});
+  co_await goawayBaton;
+
+  result.value()->unsubscribe();
 }
 
 // Draft-18 request-stream GOAWAY (per-request migration). These exercise

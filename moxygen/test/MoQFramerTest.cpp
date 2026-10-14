@@ -711,7 +711,53 @@ TEST(MoQFramerGoawayTest, Draft18ControlStreamRequiresRequestID) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   EXPECT_DEATH(
       writer.writeGoaway(writeBuf, goaway, /*onRequestStream=*/false),
-      "RequestID required for draft-18\\+ control-stream GOAWAY");
+      "RequestID required for draft-18 through draft-21 control-stream "
+      "GOAWAY");
+}
+
+TEST(MoQFramerGoawayTest, Draft22ControlStreamOmitsRequestID) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft22);
+  Goaway goaway;
+  goaway.newSessionUri = "/new-session";
+  goaway.timeout = 1500;
+  goaway.requestID = RequestID(6);
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeGoaway(writeBuf, goaway).hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::GOAWAY));
+  auto bodyLen = cursor.readBE<uint16_t>();
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft22);
+  auto parsed = parser.parseGoaway(cursor, bodyLen);
+  ASSERT_TRUE(parsed.hasValue());
+  EXPECT_EQ(parsed->newSessionUri, goaway.newSessionUri);
+  EXPECT_EQ(parsed->timeout, goaway.timeout);
+  EXPECT_FALSE(parsed->requestID.has_value());
+}
+
+TEST(MoQFramerGoawayTest, Draft22ControlStreamRejectsRequestID) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  const std::string uri = "/new-session";
+  writeVarintTo(writeBuf, uri.size());
+  writeBuf.append(uri);
+  writeVarintTo(writeBuf, 1500);
+  writeVarintTo(writeBuf, 6);
+
+  const auto length = writeBuf.chainLength();
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft22);
+  auto parsed = parser.parseGoaway(cursor, length);
+  ASSERT_TRUE(parsed.hasError());
+  EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
 TEST_P(MoQFramerTest, ParseObjectHeader) {

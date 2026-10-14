@@ -3017,10 +3017,13 @@ void MoQSession::goaway(Goaway goaway) {
       close(SessionCloseErrorCode::NO_ERROR);
       return;
     }
-    const bool draft18OrLater =
-        getDraftMajorVersion(*moqFrameWriter_.getVersion()) >= 18;
-    if (draft18OrLater) {
+    const auto majorVersion =
+        getDraftMajorVersion(*moqFrameWriter_.getVersion());
+    const bool draft18OrLater = majorVersion >= 18;
+    if (majorVersion >= 18 && majorVersion < 22) {
       goaway.requestID = RequestID(nextPeerRequestIDForGoaway_);
+    } else if (majorVersion >= 22) {
+      goaway.requestID.reset();
     }
     if (logger_) {
       logger_->logGoaway(goaway);
@@ -6417,25 +6420,34 @@ void MoQSession::onGoaway(Goaway goaway) {
     return;
   }
   auto negotiatedVersion = getNegotiatedVersion();
-  if (negotiatedVersion && getDraftMajorVersion(*negotiatedVersion) >= 18) {
-    // Wire input is rejected by parseGoaway(); keep this for synthesized
-    // values.
-    if (!goaway.requestID.has_value()) {
-      XLOG(ERR) << "Received GOAWAY without requestID sess=" << this;
-      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-      return;
+  if (negotiatedVersion) {
+    const auto majorVersion = getDraftMajorVersion(*negotiatedVersion);
+    if (majorVersion >= 22) {
+      if (goaway.requestID.has_value()) {
+        XLOG(ERR) << "Received draft-22+ GOAWAY with requestID sess=" << this;
+        close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+        return;
+      }
+    } else if (majorVersion >= 18) {
+      // Wire input is rejected by parseGoaway(); keep this for synthesized
+      // values.
+      if (!goaway.requestID.has_value()) {
+        XLOG(ERR) << "Received GOAWAY without requestID sess=" << this;
+        close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+        return;
+      }
+      const bool requestIDOdd = (goaway.requestID->value % 2) == 1;
+      // Our locally initiated request IDs are odd when we are the server.
+      const bool localRequestIDParityOdd =
+          dir_ == MoQControlCodec::Direction::SERVER;
+      if (requestIDOdd != localRequestIDParityOdd) {
+        XLOG(ERR) << "Received GOAWAY with invalid requestID parity id="
+                  << *goaway.requestID << " sess=" << this;
+        close(SessionCloseErrorCode::INVALID_REQUEST_ID);
+        return;
+      }
+      receivedGoawayRequestID_ = goaway.requestID;
     }
-    const bool requestIDOdd = (goaway.requestID->value % 2) == 1;
-    // Our locally initiated request IDs are odd when we are the server.
-    const bool localRequestIDParityOdd =
-        dir_ == MoQControlCodec::Direction::SERVER;
-    if (requestIDOdd != localRequestIDParityOdd) {
-      XLOG(ERR) << "Received GOAWAY with invalid requestID parity id="
-                << *goaway.requestID << " sess=" << this;
-      close(SessionCloseErrorCode::INVALID_REQUEST_ID);
-      return;
-    }
-    receivedGoawayRequestID_ = goaway.requestID;
   }
   receivedGoaway_ = true;
   folly::RequestContextScopeGuard guard;
@@ -8065,7 +8077,8 @@ bool MoQSession::closeSessionIfRequestIDInvalid(
       }
       nextExpectedPeerRequestID_ += getRequestIDMultiplier();
     } // in draft 16+, request IDs can come out of order
-    if (getDraftMajorVersion(*getNegotiatedVersion()) >= 18) {
+    const auto majorVersion = getDraftMajorVersion(*getNegotiatedVersion());
+    if (majorVersion >= 18) {
       // Draft 18 dropped MAX_REQUEST_ID, so nothing else keeps the cutoff
       // from wrapping.
       if (requestID.value >
@@ -8075,9 +8088,11 @@ bool MoQSession::closeSessionIfRequestIDInvalid(
         close(SessionCloseErrorCode::INVALID_REQUEST_ID);
         return true;
       }
-      nextPeerRequestIDForGoaway_ = std::max(
-          nextPeerRequestIDForGoaway_,
-          requestID.value + getRequestIDMultiplier());
+      if (majorVersion < 22) {
+        nextPeerRequestIDForGoaway_ = std::max(
+            nextPeerRequestIDForGoaway_,
+            requestID.value + getRequestIDMultiplier());
+      }
     }
   } else {
     if (requestID.value >= maxRequestID_) {
@@ -8098,11 +8113,14 @@ bool MoQSession::shouldRejectNewPeerRequestDueToGoaway() const {
 }
 
 bool MoQSession::shouldFailNewLocalRequestDueToGoaway() const {
-  // The received cutoff describes already-sent requests; after GOAWAY, do not
-  // start new local requests on this session.
-  return receivedGoawayRequestID_.has_value() &&
-      negotiatedVersion_.has_value() &&
-      getDraftMajorVersion(*negotiatedVersion_) >= 18;
+  if (!receivedGoaway_ || !negotiatedVersion_.has_value()) {
+    return false;
+  }
+  const auto majorVersion = getDraftMajorVersion(*negotiatedVersion_);
+  // Draft 22 removed the cutoff Request ID. Drafts 18-21 still use its
+  // presence to confirm receipt of a valid GOAWAY.
+  return majorVersion >= 22 ||
+      (majorVersion >= 18 && receivedGoawayRequestID_.has_value());
 }
 
 void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {

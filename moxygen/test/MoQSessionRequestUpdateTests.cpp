@@ -93,6 +93,11 @@ INSTANTIATE_TEST_SUITE_P(
     Draft18RequestUpdateGoawayTest,
     testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
 
+INSTANTIATE_TEST_SUITE_P(
+    Draft22RequestUpdateGoawayTest,
+    Draft18RequestUpdateGoawayTest,
+    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}));
+
 CO_TEST_P_X(
     Draft18RequestUpdateGoawayTest,
     DrainingRejectsInboundRequestUpdate) {

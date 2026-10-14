@@ -3138,7 +3138,8 @@ folly::Expected<Goaway, ErrorCode> MoQFrameParser::parseGoaway(
     return folly::makeUnexpected(res.error());
   }
   goaway.newSessionUri = std::move(res.value());
-  if (getDraftMajorVersion(*version_) >= 18) {
+  const auto majorVersion = getDraftMajorVersion(*version_);
+  if (majorVersion >= 18) {
     auto timeout = decodeVarint(cursor, length);
     if (!timeout) {
       XLOG(DBG4) << "parseGoaway: UNDERFLOW on timeout";
@@ -3147,9 +3148,9 @@ folly::Expected<Goaway, ErrorCode> MoQFrameParser::parseGoaway(
     length -= timeout->second;
     goaway.timeout = timeout->first;
 
-    // Per draft 18, the Request ID is present only when GOAWAY is sent on the
-    // control stream; a request-stream GOAWAY omits it entirely.
-    if (!onRequestStream) {
+    // Drafts 18-21 carry Request ID on the control stream. Request-stream
+    // GOAWAY and draft 22+ session GOAWAY omit it.
+    if (!onRequestStream && majorVersion < 22) {
       auto requestID = decodeVarint(cursor, length);
       if (!requestID) {
         XLOG(DBG4) << "parseGoaway: UNDERFLOW on requestID";
@@ -6142,13 +6143,16 @@ WriteResult MoQFrameWriter::writeGoaway(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::GOAWAY, error);
   writeFixedString(writeBuf, goaway.newSessionUri, size, error);
-  if (getDraftMajorVersion(*version_) >= 18) {
+  const auto majorVersion = getDraftMajorVersion(*version_);
+  if (majorVersion >= 18) {
     writeVarint(writeBuf, goaway.timeout, size, error);
-    // Per draft 18, Request ID is present only when GOAWAY is sent on the
-    // control stream; a request-stream GOAWAY omits it entirely.
-    XCHECK(onRequestStream || goaway.requestID.has_value())
-        << "RequestID required for draft-18+ control-stream GOAWAY";
-    if (!onRequestStream) {
+    // Drafts 18-21 carry Request ID on the control stream. Request-stream
+    // GOAWAY and draft 22+ session GOAWAY omit it.
+    const bool writeRequestID = !onRequestStream && majorVersion < 22;
+    XCHECK(!writeRequestID || goaway.requestID.has_value())
+        << "RequestID required for draft-18 through draft-21 control-stream "
+           "GOAWAY";
+    if (writeRequestID) {
       writeVarint(writeBuf, goaway.requestID->value, size, error);
     }
   }
