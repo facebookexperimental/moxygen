@@ -357,14 +357,6 @@ const folly::F14FastSet<FrameType> kAllowedFramesForFillTimeout = {
 const folly::F14FastSet<FrameType> kAllowedFramesForTrackNamespacePrefix = {
     FrameType::REQUEST_UPDATE};
 
-// v22+ INCLUDE_PROPERTIES (0x35): MAY appear in SUBSCRIBE, TRACK_STATUS,
-// FETCH, or SUBSCRIBE_TRACKS.
-const folly::F14FastSet<FrameType> kAllowedFramesForIncludeProperties = {
-    FrameType::SUBSCRIBE,
-    FrameType::TRACK_STATUS,
-    FrameType::FETCH,
-    FrameType::SUBSCRIBE_TRACKS};
-
 // Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
 // Empty set means allowed for all frame types
 const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
@@ -389,8 +381,13 @@ const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
         {TrackRequestParamKey::FILL_TIMEOUT, kAllowedFramesForFillTimeout},
         {TrackRequestParamKey::TRACK_NAMESPACE_PREFIX,
          kAllowedFramesForTrackNamespacePrefix},
+        // v22+ INCLUDE_PROPERTIES (0x35): MAY appear in SUBSCRIBE,
+        // TRACK_STATUS, FETCH, or SUBSCRIBE_TRACKS.
         {TrackRequestParamKey::INCLUDE_PROPERTIES,
-         kAllowedFramesForIncludeProperties},
+         {FrameType::SUBSCRIBE,
+          FrameType::TRACK_STATUS,
+          FrameType::FETCH,
+          FrameType::SUBSCRIBE_TRACKS}},
 };
 
 // Frame types that allow all parameters (no validation)
