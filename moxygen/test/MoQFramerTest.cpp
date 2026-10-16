@@ -5489,6 +5489,89 @@ TEST_F(MoQFramerV18Test, RequestOkToPublishOkRejectsNonPublishOkParams) {
   EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
+TEST(MoQFramerV22Test, PublishOkCarriesOnlyExpires) {
+  constexpr uint64_t kExpiresMs = 1234;
+  MoQFrameWriter writer;
+  MoQFrameParser parser;
+  writer.initializeVersion(kVersionDraft22);
+  parser.initializeVersion(kVersionDraft22);
+
+  PublishOk publishOk;
+  publishOk.requestID = RequestID(55);
+  publishOk.forward = false;
+  publishOk.subscriberPriority = 42;
+  publishOk.groupOrder = GroupOrder::NewestFirst;
+  publishOk.locType = LocationType::AbsoluteRange;
+  publishOk.start = AbsoluteLocation{3, 4};
+  publishOk.endGroup = 9;
+  publishOk.params.setMajorVersion(18);
+  ASSERT_TRUE(
+      publishOk.params
+          .insertParam(Parameter(
+              folly::to_underlying(TrackRequestParamKey::EXPIRES), kExpiresMs))
+          .hasValue());
+  ASSERT_TRUE(publishOk.params
+                  .insertParam(Parameter(
+                      folly::to_underlying(
+                          TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT),
+                      uint64_t(1000)))
+                  .hasValue());
+  ASSERT_TRUE(
+      publishOk.params
+          .insertParam(Parameter(
+              folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST),
+              uint64_t(11)))
+          .hasValue());
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writePublishOk(writeBuf, publishOk).hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  const auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::REQUEST_OK));
+
+  ASSERT_TRUE(cursor.canAdvance(sizeof(uint16_t)));
+  const auto frameLength = cursor.readBE<uint16_t>();
+  const auto requestOk =
+      parser.parseRequestOk(cursor, frameLength, FrameType::PUBLISH_OK);
+  ASSERT_TRUE(requestOk.hasValue());
+  EXPECT_TRUE(requestOk->params.empty());
+  ASSERT_EQ(requestOk->requestSpecificParams.size(), 1);
+  EXPECT_EQ(
+      requestOk->requestSpecificParams.front().key,
+      folly::to_underlying(TrackRequestParamKey::EXPIRES));
+  EXPECT_EQ(requestOk->requestSpecificParams.front().asUint64, kExpiresMs);
+
+  const auto parsed =
+      requestOk->toPublishOk(getDraftMajorVersion(kVersionDraft22));
+  ASSERT_TRUE(parsed.hasValue());
+  EXPECT_TRUE(parsed->forward);
+  EXPECT_EQ(parsed->subscriberPriority, kDefaultPriority);
+  EXPECT_EQ(parsed->groupOrder, GroupOrder::Default);
+  EXPECT_EQ(
+      getFirstIntParam(parsed->params, TrackRequestParamKey::EXPIRES),
+      kExpiresMs);
+  EXPECT_EQ(
+      getFirstIntParam(
+          parsed->params, TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT),
+      std::nullopt);
+  EXPECT_EQ(
+      getFirstIntParam(parsed->params, TrackRequestParamKey::NEW_GROUP_REQUEST),
+      std::nullopt);
+}
+
+TEST(MoQFramerV22Test, PublishOkRejectsSubscriptionParameters) {
+  RequestOk requestOk;
+  requestOk.requestSpecificParams.emplace_back(
+      folly::to_underlying(TrackRequestParamKey::FORWARD), uint64_t(0));
+
+  const auto parsed =
+      requestOk.toPublishOk(getDraftMajorVersion(kVersionDraft22));
+  ASSERT_TRUE(parsed.hasError());
+  EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
 TEST_F(MoQFramerV18Test, PublishOkWireTypeRejected) {
   MoQFrameWriter draft17Writer;
   draft17Writer.initializeVersion(kVersionDraft17);
@@ -6544,6 +6627,28 @@ TEST_F(ParametersIsParamAllowedTest, MultipleParamsMixedResults) {
   EXPECT_FALSE(params.isParamAllowed(TrackRequestParamKey::LARGEST_OBJECT));
 }
 
+TEST_F(
+    ParametersIsParamAllowedTest,
+    Draft22PublishOkRejectsSubscriptionParameters) {
+  Parameters publishOkParams(FrameType::PUBLISH_OK);
+  publishOkParams.setMajorVersion(22);
+  Parameters requestOkParams(FrameType::REQUEST_OK);
+  requestOkParams.setMajorVersion(22);
+
+  for (const auto key :
+       {TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT,
+        TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT,
+        TrackRequestParamKey::SUBSCRIBER_PRIORITY,
+        TrackRequestParamKey::SUBSCRIPTION_FILTER,
+        TrackRequestParamKey::GROUP_ORDER,
+        TrackRequestParamKey::FORWARD,
+        TrackRequestParamKey::NEW_GROUP_REQUEST}) {
+    EXPECT_FALSE(publishOkParams.isParamAllowed(key));
+    EXPECT_FALSE(requestOkParams.isParamAllowed(key));
+  }
+  EXPECT_TRUE(publishOkParams.isParamAllowed(TrackRequestParamKey::EXPIRES));
+  EXPECT_TRUE(requestOkParams.isParamAllowed(TrackRequestParamKey::EXPIRES));
+}
 // Draft 18 dropped FORWARD from SUBSCRIBE_NAMESPACE (split into
 // SUBSCRIBE_TRACKS). Receivers MUST treat its presence in a draft-18
 // SUBSCRIBE_NAMESPACE as PROTOCOL_VIOLATION (§10.2.12, §10.2.1).

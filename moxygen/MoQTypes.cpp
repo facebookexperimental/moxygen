@@ -357,6 +357,20 @@ const folly::F14FastSet<FrameType> kAllowedFramesForFillTimeout = {
 const folly::F14FastSet<FrameType> kAllowedFramesForTrackNamespacePrefix = {
     FrameType::REQUEST_UPDATE};
 
+static bool isLegacyPublishOkSubscriptionParameter(TrackRequestParamKey key) {
+  switch (key) {
+    case TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT:
+    case TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT:
+    case TrackRequestParamKey::SUBSCRIBER_PRIORITY:
+    case TrackRequestParamKey::SUBSCRIPTION_FILTER:
+    case TrackRequestParamKey::GROUP_ORDER:
+    case TrackRequestParamKey::FORWARD:
+    case TrackRequestParamKey::NEW_GROUP_REQUEST:
+      return true;
+    default:
+      return false;
+  }
+}
 // Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
 // Empty set means allowed for all frame types
 const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
@@ -432,6 +446,14 @@ bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
     return true;
   }
 
+  const bool isDraft22OrLater =
+      majorVersion_.has_value() && *majorVersion_ >= 22;
+  const bool isPublishOkResponse = frameType_ == FrameType::PUBLISH_OK ||
+      frameType_ == FrameType::REQUEST_OK;
+  if (isDraft22OrLater && isPublishOkResponse &&
+      isLegacyPublishOkSubscriptionParameter(key)) {
+    return false;
+  }
   if (key == TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT &&
       majorVersion_.has_value() && *majorVersion_ >= 18) {
     return kAllowedFramesForObjectDeliveryTimeoutV18.contains(frameType_);

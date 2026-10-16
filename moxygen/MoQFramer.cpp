@@ -180,7 +180,12 @@ std::vector<moxygen::Parameter> mergeAndSortParams(
   return sortParamsByKey(std::move(allParams));
 }
 
-bool isPublishOkRequestSpecificParam(moxygen::TrackRequestParamKey key) {
+bool isPublishOkRequestSpecificParam(
+    moxygen::TrackRequestParamKey key,
+    uint64_t majorVersion) {
+  if (majorVersion >= 22) {
+    return key == moxygen::TrackRequestParamKey::EXPIRES;
+  }
   switch (key) {
     case moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER:
     case moxygen::TrackRequestParamKey::EXPIRES:
@@ -241,8 +246,20 @@ void insertPublishOkIntParamIfMissing(
 
 std::vector<moxygen::Parameter> getPublishOkRequestSpecificParams(
     const moxygen::PublishOk& publishOk,
+    uint64_t majorVersion,
     bool includeRequestOkOnlyParams = false) {
   std::vector<moxygen::Parameter> requestSpecificParams;
+
+  if (majorVersion >= 22) {
+    if (includeRequestOkOnlyParams) {
+      appendIntRequestSpecificParam(
+          requestSpecificParams,
+          moxygen::TrackRequestParamKey::EXPIRES,
+          moxygen::getFirstIntParam(
+              publishOk.params, moxygen::TrackRequestParamKey::EXPIRES));
+    }
+    return requestSpecificParams;
+  }
 
   moxygen::Parameter subscriptionFilterParam;
   subscriptionFilterParam.key =
@@ -4134,7 +4151,7 @@ static folly::Expected<PublishOk, ErrorCode> requestOkToPublishOk(
 
   for (const auto& param : requestOk.requestSpecificParams) {
     if (!isPublishOkRequestSpecificParam(
-            static_cast<TrackRequestParamKey>(param.key))) {
+            static_cast<TrackRequestParamKey>(param.key), majorVersion)) {
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
   }
@@ -4212,7 +4229,7 @@ RequestOk RequestOk::fromPublishOk(
   requestOk.params.setMajorVersion(majorVersion);
   for (const auto& param : publishOk.params) {
     if (isPublishOkRequestSpecificParam(
-            static_cast<TrackRequestParamKey>(param.key))) {
+            static_cast<TrackRequestParamKey>(param.key), majorVersion)) {
       continue;
     }
     auto insertResult = requestOk.params.insertParam(param);
@@ -4222,7 +4239,7 @@ RequestOk RequestOk::fromPublishOk(
     }
   }
   requestOk.requestSpecificParams =
-      getPublishOkRequestSpecificParams(publishOk, true);
+      getPublishOkRequestSpecificParams(publishOk, majorVersion, true);
   return requestOk;
 }
 
@@ -5866,7 +5883,8 @@ WriteResult MoQFrameWriter::writePublishOk(
 
   std::vector<Parameter> requestSpecificParams;
   if (majorVersion >= 15) {
-    requestSpecificParams = getPublishOkRequestSpecificParams(publishOk);
+    requestSpecificParams =
+        getPublishOkRequestSpecificParams(publishOk, majorVersion);
   } else {
     writeVarint(
         writeBuf,
