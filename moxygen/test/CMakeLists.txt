@@ -79,6 +79,16 @@ moxygen_add_test(TARGET MoQTests
     testmain
 )
 
+moxygen_add_test(TARGET UniStreamQueueTests
+  PREFIX "UniStreamQueue"
+  SOURCES
+    UniStreamQueueTest.cpp
+  DEPENDS
+    moxygen_moq
+    testmain
+    Folly::folly_executors_manual_executor
+)
+
 moxygen_add_test(TARGET MoQLocationTests
   PREFIX "MoQLocation"
   SOURCES
@@ -95,6 +105,7 @@ moxygen_add_test(TARGET MoQSessionTests
     MoQSessionObjectDeliveryTests.cpp
     MoQSessionPublishNamespaceTests.cpp
     MoQSessionPublishTests.cpp
+    MoQSessionStreamCreditTests.cpp
     MoQSessionSubscribeNamespaceTests.cpp
     MoQSessionSubscribeTests.cpp
     MoQSessionSubscribeTracksTests.cpp
