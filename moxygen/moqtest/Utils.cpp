@@ -500,17 +500,60 @@ bool validateVarExtensions(Extension varExt, MoQTestParameters* params) {
       static_cast<uint64_t>(2 * params->testVariableExtension + 1));
 }
 
+namespace {
+constexpr size_t kPayloadPeriod = 1 << 16;
+
+const std::string& payloadPattern() {
+  static const std::string pattern = [] {
+    std::string p(kPayloadPeriod, 't');
+    for (size_t offset = 0; offset < kPayloadPeriod; offset += 256) {
+      p[offset] = static_cast<char>(offset >> 8);
+    }
+    return p;
+  }();
+  return pattern;
+}
+} // namespace
+
+std::unique_ptr<folly::IOBuf> makePayload(size_t objectSize) {
+  const auto& pattern = payloadPattern();
+  auto payload = folly::IOBuf::wrapBuffer(
+      pattern.data(), std::min(kPayloadPeriod, objectSize));
+  for (size_t offset = kPayloadPeriod; offset < objectSize;
+       offset += kPayloadPeriod) {
+    payload->appendToChain(folly::IOBuf::wrapBuffer(
+        pattern.data(), std::min(kPayloadPeriod, objectSize - offset)));
+  }
+  return payload;
+}
+
+size_t findPayloadMismatch(const folly::IOBuf* payload) {
+  if (!payload) {
+    return 0;
+  }
+  auto pattern = reinterpret_cast<const uint8_t*>(payloadPattern().data());
+  size_t offset = 0;
+  for (auto range : *payload) {
+    while (!range.empty()) {
+      size_t patternOffset = offset % kPayloadPeriod;
+      size_t len = std::min(range.size(), kPayloadPeriod - patternOffset);
+      auto end = range.begin() + len;
+      auto it =
+          std::mismatch(range.begin(), end, pattern + patternOffset).first;
+      if (it != end) {
+        return offset + (it - range.begin());
+      }
+      offset += len;
+      range.advance(len);
+    }
+  }
+  return offset;
+}
+
 // Payload Validation Helper Function
-bool validatePayload(int objectSize, std::string payload) {
-  int payloadLength = (payload).length();
-  if (payloadLength != objectSize) {
-    return false;
-  }
-
-  if (payload != std::string(payloadLength, 't')) {
-    return false;
-  }
-
-  return true;
+bool validatePayload(int objectSize, const folly::IOBuf* payload) {
+  size_t length = payload ? payload->computeChainDataLength() : 0;
+  return objectSize >= 0 && length == static_cast<size_t>(objectSize) &&
+      findPayloadMismatch(payload) == length;
 }
 } // namespace moxygen
