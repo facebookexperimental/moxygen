@@ -422,4 +422,37 @@ TEST_F(FileMLoggerTest, LoggerDoesNotRetainObjectBackingStorage) {
   EXPECT_TRUE(violations.empty()) << violations;
 }
 
+// From draft 16 on, PUBLISH_NAMESPACE_DONE and PUBLISH_NAMESPACE_CANCEL carry
+// a request ID and an empty namespace.
+TEST_F(FileMLoggerTest, PublishNamespaceDoneByRequestId) {
+  const auto path = (dir_ / "pubns_done.mlog").string();
+  FileMLogger logger(VantagePoint::SERVER, path);
+  PublishNamespaceDone done;
+  done.requestID = RequestID(7);
+  logger.logPublishNamespaceDone(
+      done, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+  logger.outputLogs();
+
+  const auto event = parseSingleEvent(path);
+  const auto& message = event["data"]["message"];
+  EXPECT_EQ(message["request_id"].asInt(), 7);
+  EXPECT_TRUE(message["trackNamespace"].empty());
+}
+
+TEST_F(FileMLoggerTest, PublishNamespaceCancelByRequestId) {
+  const auto path = (dir_ / "pubns_cancel.mlog").string();
+  FileMLogger logger(VantagePoint::SERVER, path);
+  PublishNamespaceCancel cancel;
+  cancel.requestID = RequestID(9);
+  cancel.errorCode = RequestErrorCode::INTERNAL_ERROR;
+  logger.logPublishNamespaceCancel(
+      cancel, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+  logger.outputLogs();
+
+  const auto event = parseSingleEvent(path);
+  const auto& message = event["data"]["message"];
+  EXPECT_EQ(message["request_id"].asInt(), 9);
+  EXPECT_TRUE(message["track_namespace"].empty());
+}
+
 } // namespace moxygen

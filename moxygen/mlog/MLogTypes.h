@@ -337,6 +337,7 @@ class MOQTPublishNamespaceCancel : public MOQTBaseControlMessage {
   }
   folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
+  std::optional<uint64_t> requestId;
   uint64_t errorCode{};
   std::optional<std::string> reason;
   std::optional<std::string> reasonBytes;
@@ -488,6 +489,7 @@ class MOQTPublishNamespaceDone : public MOQTBaseControlMessage {
   }
   folly::dynamic toDynamic() const override;
   std::vector<MOQTByteString> trackNamespace;
+  std::optional<uint64_t> requestId;
 };
 
 class MOQTTrackStatusOk : public MOQTBaseControlMessage {

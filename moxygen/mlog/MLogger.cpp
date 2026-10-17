@@ -385,6 +385,9 @@ void MLogger::logPublishNamespaceCancel(
   auto baseMsg = std::make_unique<MOQTPublishNamespaceCancel>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespace.trackNamespace, type);
+  if (req.requestID) {
+    baseMsg->requestId = req.requestID->value;
+  }
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
 
   if (isHexstring(req.reasonPhrase)) {
@@ -560,6 +563,9 @@ void MLogger::logPublishNamespaceDone(
   auto baseMsg = std::make_unique<MOQTPublishNamespaceDone>();
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
       req.trackNamespace.trackNamespace, type);
+  if (req.requestID) {
+    baseMsg->requestId = req.requestID->value;
+  }
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
