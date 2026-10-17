@@ -123,6 +123,9 @@ class SubgroupConsumer {
   // pace data according to the rate at which the consumer is consuming it. If
   // the publisher ignores this signal (which is perfectly valid), it may get
   // a TOO_FAR_BEHIND if the client is unable to keep up.
+  //
+  // At most one call may be pending. A call made while an earlier future is
+  // incomplete can fail with API_ERROR, even if that future was dropped.
   virtual folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
   awaitReadyToConsume() {
     return folly::makeSemiFuture<uint64_t>(0);
@@ -290,7 +293,9 @@ class FetchConsumer {
   // (unsubscribe()/fetchCancel()). goaway.requestID is unset (implicit).
   virtual void goaway(Goaway /*goaway*/) {}
 
-  // Wait for the fetch to become writable
+  // Wait for the fetch to become writable. At most one call may be pending. A
+  // call made while an earlier future is incomplete can fail with API_ERROR,
+  // even if that future was dropped.
   virtual folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
   awaitReadyToConsume() = 0;
 

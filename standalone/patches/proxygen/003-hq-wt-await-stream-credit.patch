@@ -1,0 +1,169 @@
+WebTransport over HTTP/3 could not wait for stream credit. On the server,
+HQStreamTransport inherited HTTPTransaction::Transport's LOG(FATAL) defaults.
+On the client, WebTransportFilter returned a ready future even when no stream
+could be created. HQSession now keeps credit waiters that the QUIC socket's
+streams-available callbacks complete. WebTransportFilter waits for
+WT_MAX_STREAMS when that limit blocks, and otherwise forwards to HQSession.
+
+diff --git a/proxygen/lib/http/session/HQSession.cpp b/proxygen/lib/http/session/HQSession.cpp
+index f628cc54e..fd55efc3c 100644
+--- a/proxygen/lib/http/session/HQSession.cpp
++++ b/proxygen/lib/http/session/HQSession.cpp
+@@ -240,6 +240,11 @@ void HQSession::dispatchRequestStreamImpl(quic::StreamId id) {
+ 
+ void HQSession::onBidirectionalStreamsAvailable(
+     uint64_t numStreamsAvailable) noexcept {
++  if (numStreamsAvailable > 0) {
++    for (auto& waiter : std::exchange(wtBidiCreditWaiters_, {})) {
++      waiter.setValue();
++    }
++  }
+   if (isUpstream(direction_)) {
+     VLOG(4) << "Got new max number of concurrent streams we can initiate: "
+             << numStreamsAvailable << " sess=" << *this;
+@@ -249,6 +254,15 @@ void HQSession::onBidirectionalStreamsAvailable(
+   }
+ }
+ 
++void HQSession::onUnidirectionalStreamsAvailable(
++    uint64_t numStreamsAvailable) noexcept {
++  if (numStreamsAvailable > 0) {
++    for (auto& waiter : std::exchange(wtUniCreditWaiters_, {})) {
++      waiter.setValue();
++    }
++  }
++}
++
+ void HQSession::onNewUnidirectionalStream(quic::StreamId id) noexcept {
+   // This is where a new unidirectional ingress stream is available
+   // Try to check whether this is a push
+@@ -3934,6 +3948,26 @@ bool HQSession::HQStreamTransport::canCreateBidiStream() {
+   return session_.sock_->getNumOpenableBidirectionalStreams() > 0;
+ }
+ 
++folly::SemiFuture<folly::Unit>
++HQSession::HQStreamTransport::awaitUniStreamCredit() {
++  if (canCreateUniStream()) {
++    return folly::makeSemiFuture();
++  }
++  auto [promise, future] = folly::makePromiseContract<folly::Unit>();
++  session_.wtUniCreditWaiters_.push_back(std::move(promise));
++  return std::move(future);
++}
++
++folly::SemiFuture<folly::Unit>
++HQSession::HQStreamTransport::awaitBidiStreamCredit() {
++  if (canCreateBidiStream()) {
++    return folly::makeSemiFuture();
++  }
++  auto [promise, future] = folly::makePromiseContract<folly::Unit>();
++  session_.wtBidiCreditWaiters_.push_back(std::move(promise));
++  return std::move(future);
++}
++
+ folly::Expected<WebTransport::FCState, WebTransport::ErrorCode>
+ HQSession::HQStreamTransport::sendWebTransportStreamData(
+     HTTPCodec::StreamID id,
+diff --git a/proxygen/lib/http/session/HQSession.h b/proxygen/lib/http/session/HQSession.h
+index 3029a8fb5..be9218a93 100644
+--- a/proxygen/lib/http/session/HQSession.h
++++ b/proxygen/lib/http/session/HQSession.h
+@@ -200,6 +200,9 @@ class HQSession
+   void onBidirectionalStreamsAvailable(
+       uint64_t /*numStreamsAvailable*/) noexcept override;
+ 
++  void onUnidirectionalStreamsAvailable(
++      uint64_t numStreamsAvailable) noexcept override;
++
+   void onStopSending(quic::StreamId id,
+                      quic::ApplicationErrorCode error) noexcept override;
+ 
+@@ -1897,6 +1900,9 @@ class HQSession
+     bool canCreateUniStream() override;
+     bool canCreateBidiStream() override;
+ 
++    folly::SemiFuture<folly::Unit> awaitUniStreamCredit() override;
++    folly::SemiFuture<folly::Unit> awaitBidiStreamCredit() override;
++
+     folly::Expected<WebTransport::FCState, WebTransport::ErrorCode>
+     sendWebTransportStreamData(
+         HTTPCodec::StreamID /*id*/,
+@@ -2061,6 +2067,10 @@ class HQSession
+   };
+   HTTPSettings ingressSettings_;
+   uint64_t wtInitialSendWindow_{quic::kMaxVarInt};
++  // WebTransport sessions waiting for stream credit. They fail with
++  // BrokenPromise if the session is destroyed first.
++  std::vector<folly::Promise<folly::Unit>> wtUniCreditWaiters_;
++  std::vector<folly::Promise<folly::Unit>> wtBidiCreditWaiters_;
+   // Maximum Stream/Push ID that we are allowed to open, from GOAWAY
+   quic::StreamId peerMinUnseenId_{hq::kMaxClientBidiStreamId};
+   uint64_t minUnseenIncomingPushId_{0};
+diff --git a/proxygen/lib/http/session/WebTransportFilter.h b/proxygen/lib/http/session/WebTransportFilter.h
+index ba5ad76c2..a8e64464b 100644
+--- a/proxygen/lib/http/session/WebTransportFilter.h
++++ b/proxygen/lib/http/session/WebTransportFilter.h
+@@ -287,12 +287,30 @@ class WebTransportFilter
+                  : folly::unit;
+   }
+ 
++  // Waits on whichever limit blocks: the session's WT_MAX_STREAMS, or the
++  // QUIC connection's through h3Tp_.
+   folly::SemiFuture<folly::Unit> awaitUniStreamCredit() override {
+-    return folly::makeFuture(folly::unit);
++    if ((nextNewWTUniStream_ >> 2) >= maxWTUniStreams_) {
++      auto [promise, future] = folly::makePromiseContract<folly::Unit>();
++      uniCreditWaiters_.push_back(std::move(promise));
++      return std::move(future);
++    }
++    if (h3Tp_) {
++      return h3Tp_->awaitUniStreamCredit();
++    }
++    return folly::makeSemiFuture();
+   }
+ 
+   folly::SemiFuture<folly::Unit> awaitBidiStreamCredit() override {
+-    return folly::makeSemiFuture(folly::unit);
++    if ((nextNewWTBidiStream_ >> 2) >= maxWTBidiStreams_) {
++      auto [promise, future] = folly::makePromiseContract<folly::Unit>();
++      bidiCreditWaiters_.push_back(std::move(promise));
++      return std::move(future);
++    }
++    if (h3Tp_) {
++      return h3Tp_->awaitBidiStreamCredit();
++    }
++    return folly::makeSemiFuture();
+   }
+ 
+   bool canCreateUniStream() override {
+@@ -373,6 +391,9 @@ class WebTransportFilter
+   void onMaxStreamsBidi(WTMaxStreamsCapsule capsule) noexcept override {
+     XLOG(DBG1) << __func__;
+     maxWTBidiStreams_ = capsule.maximumStreams;
++    for (auto& waiter : std::exchange(bidiCreditWaiters_, {})) {
++      waiter.setValue();
++    }
+     if (wtImpl_) {
+       wtImpl_->onMaxStreams(capsule.maximumStreams, true);
+     }
+@@ -380,6 +401,9 @@ class WebTransportFilter
+   void onMaxStreamsUni(WTMaxStreamsCapsule capsule) noexcept override {
+     XLOG(DBG1) << __func__;
+     maxWTUniStreams_ = capsule.maximumStreams;
++    for (auto& waiter : std::exchange(uniCreditWaiters_, {})) {
++      waiter.setValue();
++    }
+     if (wtImpl_) {
+       wtImpl_->onMaxStreams(capsule.maximumStreams, false);
+     }
+@@ -444,6 +468,10 @@ class WebTransportFilter
+   uint64_t nextNewWTUniStream_{2};
+   uint64_t maxWTBidiStreams_{quic::kMaxVarInt};
+   uint64_t maxWTUniStreams_{quic::kMaxVarInt};
++  // Waiting for WT_MAX_STREAMS. They fail with BrokenPromise if the filter is
++  // destroyed first.
++  std::vector<folly::Promise<folly::Unit>> uniCreditWaiters_;
++  std::vector<folly::Promise<folly::Unit>> bidiCreditWaiters_;
+   folly::F14FastMap<HTTPCodec::StreamID, WebTransportImpl::StreamReadHandle*>
+       readCallbacks_;
+   struct WriteCallback {
