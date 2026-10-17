@@ -485,6 +485,11 @@ class StreamPublisherImpl
 
   std::shared_ptr<MoQSession::PublisherImpl> publisher_{nullptr};
   bool streamComplete_{false};
+  // Set when the session reset the stream on its own (peer STOP_SENDING or
+  // delivery timeout), not at the caller's request. Later writes then fail
+  // with CANCELLED rather than API_ERROR, so the caller only drops the
+  // subgroup.
+  bool cancelled_{false};
   std::optional<folly::CancellationCallback> cancelCallback_;
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
   // A FETCH out of uni stream credit accepts writes into writeBuf_ and
@@ -541,6 +546,7 @@ StreamPublisherImpl::StreamPublisherImpl(
                          << " streamID=" << writeHandle_->getID()
                          << " with errorCode="
                          << folly::to_underlying(errorCode);
+              cancelled_ = true;
               this->reset(errorCode);
             }
           });
@@ -642,6 +648,7 @@ void StreamPublisherImpl::setWriteHandle(
       XLOG(DBG0) << "Peer requested write termination id="
                  << writeHandle_->getID() << " code=" << (ex ? ex->what() : "")
                  << " sgp=" << this;
+      cancelled_ = true;
       reset(ResetStreamErrorCode::CANCELLED);
     }
   });
@@ -1086,8 +1093,10 @@ StreamPublisherImpl::ensureWriteHandle() {
     return folly::unit;
   }
   if (streamComplete_) {
-    // TODO: return CANCELLED if after stop sending, since that's not an API
-    // error
+    if (cancelled_) {
+      return folly::makeUnexpected(MoQPublishError(
+          MoQPublishError::CANCELLED, "Write after stream cancelled"));
+    }
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Write after stream complete or reset"));
   }

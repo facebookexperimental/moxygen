@@ -1224,6 +1224,73 @@ CO_TEST_P_X(
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// A delivery-timeout reset is the session's own doing, so writing the next
+// object on that subgroup must fail with CANCELLED, not API_ERROR. The relay
+// forwarder drops only the subgroup on CANCELLED but removes the whole
+// subscriber on API_ERROR.
+CO_TEST_P_X(MoQSessionTest, DeliveryTimeoutResetCancelsLaterObjects) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest pub{
+      RequestID(0),
+      FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+      TrackAlias(100),
+      GroupOrder::Default,
+      AbsoluteLocation{0, 100},
+      true,
+  };
+  setPublisherDeliveryTimeout(pub, std::chrono::milliseconds(50));
+
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce([](const PublishRequest& p, auto) -> Subscriber::PublishResult {
+        auto consumer =
+            std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+        ON_CALL(*consumer, setTrackAlias(_))
+            .WillByDefault(
+                testing::Return(
+                    folly::Expected<folly::Unit, MoQPublishError>(
+                        folly::unit)));
+        ON_CALL(*consumer, publishDone(_))
+            .WillByDefault(testing::Return(folly::unit));
+        PublishOk ok{
+            p.requestID,
+            true,
+            128,
+            GroupOrder::Default,
+            LocationType::LargestObject,
+            std::nullopt,
+            std::make_optional(uint64_t(0))};
+        return Subscriber::PublishConsumerAndReplyTask{
+            std::static_pointer_cast<TrackConsumer>(consumer),
+            folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
+                std::move(ok))};
+      });
+  folly::coro::Baton timedOut;
+  EXPECT_CALL(
+      *clientPublisherStatsCallback_,
+      onSubgroupReset(ResetStreamErrorCode::DELIVERY_TIMEOUT))
+      .WillOnce([&](auto) { timedOut.post(); });
+
+  auto result = clientSession_->publish(std::move(pub), makePublishHandle());
+  EXPECT_TRUE(result.hasValue());
+  auto consumer = result.value().consumer;
+  EXPECT_TRUE((co_await std::move(result.value().reply)).hasValue());
+
+  // Object 0 is never acknowledged, so its delivery timer resets the stream.
+  auto sgp = consumer->beginSubgroup(0, 0, 0).value();
+  clientWt_->writeHandles.rbegin()->second->setImmediateDelivery(false);
+  EXPECT_TRUE(sgp->object(0, moxygen::test::makeBuf(10)).hasValue());
+  co_await timedOut;
+
+  auto next = sgp->object(1, moxygen::test::makeBuf(10));
+  EXPECT_TRUE(next.hasError());
+  if (next.hasError()) {
+    EXPECT_EQ(next.error().code, MoQPublishError::CANCELLED);
+  }
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, PublishConsumerObjectStreamAfterSessionClose) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
 
