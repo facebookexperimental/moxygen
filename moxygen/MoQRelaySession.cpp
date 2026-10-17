@@ -860,6 +860,12 @@ MoQRelaySession::publishNamespace(
         durationMsec.count());
   };
   const auto& trackNamespace = pubNs.trackNamespace;
+  if (isClosed()) {
+    co_return folly::makeUnexpected(PublishNamespaceError(
+        {failedLocalRequestID(),
+         PublishNamespaceErrorCode::INTERNAL_ERROR,
+         "closed session"}));
+  }
   if (shouldFailNewLocalRequestDueToGoaway()) {
     co_return folly::makeUnexpected(PublishNamespaceError(
         {failedLocalRequestID(),
@@ -1476,6 +1482,12 @@ MoQRelaySession::subscribeNamespace(
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
   const auto& trackNamespace = sa.trackNamespacePrefix;
+  if (isClosed()) {
+    co_return folly::makeUnexpected(SubscribeNamespaceError(
+        {failedLocalRequestID(),
+         SubscribeNamespaceErrorCode::INTERNAL_ERROR,
+         "closed session"}));
+  }
   if (shouldFailNewLocalRequestDueToGoaway()) {
     co_return folly::makeUnexpected(SubscribeNamespaceError(
         {failedLocalRequestID(),
@@ -1850,6 +1862,12 @@ MoQRelaySession::subscribeTracks(
     }
     co_return std::make_shared<NamespaceBackedSubscribeTracksHandle>(
         std::move(res.value()));
+  }
+  if (isClosed()) {
+    co_return folly::makeUnexpected(SubscribeTracksError(
+        {failedLocalRequestID(),
+         SubscribeTracksErrorCode::INTERNAL_ERROR,
+         "closed session"}));
   }
   // Mirror subscribe/subscribeNamespace/publishNamespace: don't start a new
   // local request after we've received a GOAWAY.
