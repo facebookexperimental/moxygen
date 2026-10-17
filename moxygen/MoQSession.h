@@ -1109,7 +1109,8 @@ class MoQSession : public Subscriber,
       PublishNamespace publishNamespace,
       std::shared_ptr<ReplyContext> replyContext);
 
-  void requestUpdate(
+  // Returns false if nothing was sent, so no reply will arrive.
+  bool requestUpdate(
       const RequestUpdate& reqUpdate,
       const std::shared_ptr<BidiStreamControl>& control = nullptr);
 
