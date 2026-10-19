@@ -6,6 +6,7 @@
 
 #include "moxygen/moqtest/interop/MoQInteropClient.h"
 
+#include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Collect.h>
 #include <folly/coro/Sleep.h>
@@ -104,6 +105,90 @@ class SimplePublisher : public moxygen::Publisher {
 namespace moxygen {
 
 namespace {
+class NamespaceEventRecorder final : public Publisher::NamespacePublishHandle {
+ public:
+  NamespaceEventRecorder(TrackNamespace targetSuffix, TrackNamespace syncSuffix)
+      : targetSuffix_(std::move(targetSuffix)),
+        syncSuffix_(std::move(syncSuffix)) {}
+
+  void namespaceMsg(const TrackNamespace& suffix) override {
+    postOnce(suffix, targetSuffix_, targetSeen_, targetAnnounced);
+    postOnce(suffix, syncSuffix_, syncSeen_, syncAnnounced);
+  }
+
+  void namespaceDoneMsg(const TrackNamespace& suffix) override {
+    postOnce(suffix, targetSuffix_, targetDone_, targetWithdrawn);
+    postOnce(suffix, syncSuffix_, syncDone_, syncWithdrawn);
+  }
+
+  folly::coro::Baton targetAnnounced;
+  folly::coro::Baton syncAnnounced;
+  folly::coro::Baton targetWithdrawn;
+  folly::coro::Baton syncWithdrawn;
+
+ private:
+  static void postOnce(
+      const TrackNamespace& actual,
+      const TrackNamespace& expected,
+      bool& posted,
+      folly::coro::Baton& baton) {
+    if (!posted && actual == expected) {
+      posted = true;
+      baton.post();
+    }
+  }
+
+  TrackNamespace targetSuffix_;
+  TrackNamespace syncSuffix_;
+  bool targetSeen_{false};
+  bool syncSeen_{false};
+  bool targetDone_{false};
+  bool syncDone_{false};
+};
+
+folly::coro::Task<void> waitFor(folly::coro::Baton& event) {
+  co_await event;
+}
+
+folly::coro::Task<std::shared_ptr<Publisher::SubscribeNamespaceHandle>>
+subscribeToNamespace(
+    MoQClient& client,
+    const TrackNamespace& prefix,
+    std::shared_ptr<NamespaceEventRecorder> recorder,
+    std::chrono::milliseconds timeout) {
+  SubscribeNamespace request{
+      .requestID = RequestID(0),
+      .trackNamespacePrefix = prefix,
+      .forward = true,
+      .options = SubscribeNamespaceOptions::NAMESPACE,
+  };
+  auto response = co_await folly::coro::timeout(
+      client.moqSession_->subscribeNamespace(
+          std::move(request), std::move(recorder)),
+      timeout);
+  if (response.hasError()) {
+    throw std::runtime_error(
+        "SUBSCRIBE_NAMESPACE failed: " + response.error().reasonPhrase);
+  }
+  co_return std::move(response.value());
+}
+
+folly::coro::Task<std::shared_ptr<Subscriber::PublishNamespaceHandle>>
+publishTrackNamespace(
+    MoQClient& client,
+    TrackNamespace trackNamespace,
+    std::chrono::milliseconds timeout) {
+  PublishNamespace request;
+  request.trackNamespace = std::move(trackNamespace);
+  auto response = co_await folly::coro::timeout(
+      client.moqSession_->publishNamespace(std::move(request)), timeout);
+  if (response.hasError()) {
+    throw std::runtime_error(
+        "PUBLISH_NAMESPACE failed: " + response.error().reasonPhrase);
+  }
+  co_return std::move(response.value());
+}
+
 // Reports the first version negotiated in a test. Every session in a test
 // offers the same ALPNs to the same relay, so one sample is representative;
 // a relay that answers a later connection differently is recorded separately
@@ -482,6 +567,150 @@ MoQInteropClient::testPublishNamespaceDone() {
   } catch (const std::exception& ex) {
     result.passed = false;
     result.message = ex.what();
+  }
+
+  auto end = std::chrono::steady_clock::now();
+  result.duration =
+      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+  co_return result;
+}
+
+folly::coro::Task<InteropTestResult>
+MoQInteropClient::testPublishNamespaceMultiPublisherRetention() {
+  InteropTestResult result;
+  result.testName = "publish-namespace-multi-publisher-retention";
+  auto start = std::chrono::steady_clock::now();
+  const char* stage = "session setup";
+
+  std::unique_ptr<MoQClient> observer;
+  std::unique_ptr<MoQClient> publisherA;
+  std::unique_ptr<MoQClient> publisherB;
+  std::unique_ptr<MoQClient> subscriberOne;
+  std::unique_ptr<MoQClient> subscriberTwo;
+  std::shared_ptr<Publisher::SubscribeNamespaceHandle> observerSubscription;
+  std::shared_ptr<Publisher::SubscribeNamespaceHandle> subscriptionOne;
+  std::shared_ptr<Publisher::SubscribeNamespaceHandle> subscriptionTwo;
+  std::shared_ptr<Subscriber::PublishNamespaceHandle> publisherATarget;
+  std::shared_ptr<Subscriber::PublishNamespaceHandle> publisherBTarget;
+  std::shared_ptr<Subscriber::PublishNamespaceHandle> publisherBSync;
+
+  try {
+    TrackNamespace prefix(
+        std::vector<std::string>{
+            "moq-test",
+            "interop",
+            result.testName,
+            std::to_string(start.time_since_epoch().count())});
+    auto targetParts = prefix.trackNamespace;
+    targetParts.emplace_back("namespace");
+    TrackNamespace target(std::move(targetParts));
+    auto syncParts = prefix.trackNamespace;
+    syncParts.emplace_back("zz-sync");
+    TrackNamespace sync(std::move(syncParts));
+    TrackNamespace targetSuffix(std::vector<std::string>{"namespace"});
+    TrackNamespace syncSuffix(std::vector<std::string>{"zz-sync"});
+
+    stage = "observer subscription";
+    observer = co_await createAndSetupRelaySession();
+    recordNegotiatedVersion(result, *observer);
+    auto observerEvents =
+        std::make_shared<NamespaceEventRecorder>(targetSuffix, syncSuffix);
+    observerSubscription = co_await subscribeToNamespace(
+        *observer, prefix, observerEvents, transactionTimeout_);
+
+    stage = "publisher A target announcement";
+    publisherA = co_await createAndSetupRelaySession();
+    recordNegotiatedVersion(result, *publisherA);
+    publisherATarget = co_await publishTrackNamespace(
+        *publisherA, target, transactionTimeout_);
+    co_await folly::coro::timeout(
+        waitFor(observerEvents->targetAnnounced), transactionTimeout_);
+
+    stage = "publisher B synchronization announcement";
+    publisherB = co_await createAndSetupRelaySession();
+    recordNegotiatedVersion(result, *publisherB);
+    publisherBTarget = co_await publishTrackNamespace(
+        *publisherB, target, transactionTimeout_);
+    publisherBSync =
+        co_await publishTrackNamespace(*publisherB, sync, transactionTimeout_);
+    co_await folly::coro::timeout(
+        waitFor(observerEvents->syncAnnounced), transactionTimeout_);
+
+    stage = "publisher B synchronization withdrawal";
+    publisherBTarget->publishNamespaceDone();
+    publisherBTarget.reset();
+    publisherBSync->publishNamespaceDone();
+    publisherBSync.reset();
+    co_await folly::coro::timeout(
+        waitFor(observerEvents->syncWithdrawn), transactionTimeout_);
+    observerSubscription->unsubscribeNamespace();
+    observerSubscription.reset();
+
+    stage = "late subscriber setup";
+    subscriberOne = co_await createAndSetupRelaySession();
+    recordNegotiatedVersion(result, *subscriberOne);
+    subscriberTwo = co_await createAndSetupRelaySession();
+    recordNegotiatedVersion(result, *subscriberTwo);
+    auto eventsOne =
+        std::make_shared<NamespaceEventRecorder>(targetSuffix, syncSuffix);
+    auto eventsTwo =
+        std::make_shared<NamespaceEventRecorder>(targetSuffix, syncSuffix);
+    subscriptionOne = co_await subscribeToNamespace(
+        *subscriberOne, prefix, eventsOne, transactionTimeout_);
+    subscriptionTwo = co_await subscribeToNamespace(
+        *subscriberTwo, prefix, eventsTwo, transactionTimeout_);
+
+    stage = "target namespace fan-out";
+    co_await folly::coro::timeout(
+        folly::coro::collectAll(
+            waitFor(eventsOne->targetAnnounced),
+            waitFor(eventsTwo->targetAnnounced)),
+        transactionTimeout_);
+
+    stage = "target namespace withdrawal fan-out";
+    publisherATarget->publishNamespaceDone();
+    publisherATarget.reset();
+    co_await folly::coro::timeout(
+        folly::coro::collectAll(
+            waitFor(eventsOne->targetWithdrawn),
+            waitFor(eventsTwo->targetWithdrawn)),
+        transactionTimeout_);
+
+    result.passed = true;
+    result.message =
+        "Retained namespace and withdrawal reached both subscribers";
+  } catch (const folly::FutureTimeout&) {
+    result.passed = false;
+    result.message = std::string("Timed out waiting for ") + stage;
+  } catch (const std::exception& ex) {
+    result.passed = false;
+    result.message = ex.what();
+  }
+
+  for (auto* handle : {&publisherBSync, &publisherBTarget, &publisherATarget}) {
+    if (*handle) {
+      (*handle)->publishNamespaceDone();
+      handle->reset();
+    }
+  }
+
+  for (auto* handle :
+       {&subscriptionTwo, &subscriptionOne, &observerSubscription}) {
+    if (*handle) {
+      (*handle)->unsubscribeNamespace();
+      handle->reset();
+    }
+  }
+
+  for (auto* client :
+       {subscriberTwo.get(),
+        subscriberOne.get(),
+        publisherB.get(),
+        publisherA.get(),
+        observer.get()}) {
+    if (client && client->moqSession_) {
+      client->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+    }
   }
 
   auto end = std::chrono::steady_clock::now();

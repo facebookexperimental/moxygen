@@ -56,6 +56,9 @@ class MoQInteropClient {
 
   folly::coro::Task<InteropTestResult> testPublishNamespaceDone();
 
+  folly::coro::Task<InteropTestResult>
+  testPublishNamespaceMultiPublisherRetention();
+
   folly::coro::Task<InteropTestResult> testSubscribeBeforeAnnounce();
 
  private:

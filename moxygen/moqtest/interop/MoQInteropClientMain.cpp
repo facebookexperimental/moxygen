@@ -83,6 +83,7 @@ const std::vector<std::string> kAllTests = {
     "subscribe-error",
     "announce-subscribe",
     "publish-namespace-done",
+    "publish-namespace-multi-publisher-retention",
     "subscribe-before-announce"};
 
 bool isUseQuicTransport(const std::string& url) {
@@ -104,6 +105,8 @@ folly::coro::Task<moxygen::InteropTestResult> runTest(
     co_return co_await client.testAnnounceSubscribe();
   } else if (testName == "publish-namespace-done") {
     co_return co_await client.testPublishNamespaceDone();
+  } else if (testName == "publish-namespace-multi-publisher-retention") {
+    co_return co_await client.testPublishNamespaceMultiPublisherRetention();
   } else if (testName == "subscribe-before-announce") {
     co_return co_await client.testSubscribeBeforeAnnounce();
   } else {
