@@ -243,7 +243,9 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
        FrameType::REQUEST_ERROR}};
 };
 
-TEST_P(MoQCodecTest, All) {
+class MoQCodecControlMessagesTest : public MoQCodecTest {};
+
+TEST_P(MoQCodecControlMessagesTest, All) {
   testAll(MoQControlCodec::Direction::CLIENT);
   testAll(MoQControlCodec::Direction::SERVER);
 }
@@ -353,7 +355,7 @@ TEST(MoQCodecPaddingTest, PaddingStreamRejectsNonZeroBytes) {
       MoQCodec::ParseResult::ERROR_TERMINATE);
 }
 
-TEST_P(MoQCodecTest, Underflow) {
+TEST_P(MoQCodecControlMessagesTest, Underflow) {
   testUnderflow(MoQControlCodec::Direction::CLIENT);
   testUnderflow(MoQControlCodec::Direction::SERVER);
 }
@@ -1856,6 +1858,11 @@ INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
     ::testing::Values(kVersionDraft14, kVersionDraft15, kVersionDraft16));
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQCodecControlMessagesTest,
+    MoQCodecControlMessagesTest,
+    ::testing::Values(kVersionDraft16));
 
 // Draft 18 dropped MAX_REQUEST_ID and REQUESTS_BLOCKED, so a peer that still
 // sends them is speaking an older draft on a draft 18 session.

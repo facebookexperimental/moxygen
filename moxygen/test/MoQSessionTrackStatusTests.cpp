@@ -14,6 +14,9 @@ using testing::_;
 
 // === TRACK STATUS tests ===
 
+class TrackStatusTest : public MoQSessionTest {};
+class Draft16TrackStatusTest : public MoQSessionTest {};
+
 CO_TEST_P_X(Draft22Test, TrackStatusOmitsUnrequestedTrackProperties) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
@@ -42,7 +45,7 @@ CO_TEST_P_X(Draft22Test, TrackStatusOmitsUnrequestedTrackProperties) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_P_X(MoQSessionTest, TrackStatusOk) {
+CO_TEST_P_X(TrackStatusTest, TrackStatusOk) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
   EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());
@@ -58,7 +61,7 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusOk) {
   EXPECT_FALSE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(PreDraft18Test, TrackStatusExceptionReleasesRequestID) {
+CO_TEST_P_X(Draft16TrackStatusTest, TrackStatusExceptionReleasesRequestID) {
   co_await setupMoQSession();
   auto initialMaxRequestID = serverSession_->maxRequestID();
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
@@ -114,7 +117,7 @@ CO_TEST_P_X(Draft18Test, TrackStatusExceptionReleasesBidiStreamCredit) {
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(MoQSessionTest, TrackStatusWithAuthorizationToken) {
+CO_TEST_P_X(TrackStatusTest, TrackStatusWithAuthorizationToken) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
   EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus());
@@ -161,7 +164,7 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusWithAuthorizationToken) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-CO_TEST_P_X(MoQSessionTest, TrackStatusPublisherException) {
+CO_TEST_P_X(TrackStatusTest, TrackStatusPublisherException) {
   co_await setupMoQSession();
   // The server has initialMaxRequestID_=4 (kTestMaxRequestID *
   // getRequestIDMultiplier). Each trackStatus uses one request ID. If
@@ -192,6 +195,19 @@ CO_TEST_P_X(MoQSessionTest, TrackStatusPublisherException) {
   }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    TrackStatusTest,
+    TrackStatusTest,
+    testing::Values(
+        VersionParams{{kVersionDraft16}, kVersionDraft16},
+        VersionParams{{kVersionDraft18}, kVersionDraft18},
+        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+
+INSTANTIATE_TEST_SUITE_P(
+    Draft16TrackStatusTest,
+    Draft16TrackStatusTest,
+    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}));
 
 // === Track Properties validation tests for REQUEST_OK (draft 18+) ===
 

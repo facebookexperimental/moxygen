@@ -261,6 +261,9 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       FullTrackName({TrackNamespace({"hello"}), "world"});
   trackStatus.groupOrder = GroupOrder::OldestFirst;
   trackStatus.locType = LocationType::LargestObject;
+  if (getDraftMajorVersion(version) >= 16) {
+    trackStatus.params = TrackRequestParameters{FrameType::TRACK_STATUS};
+  }
   addTestParams(trackStatus.params, moqFrameWriter, version);
   res = moqFrameWriter.writeTrackStatus(writeBuf, trackStatus);
 

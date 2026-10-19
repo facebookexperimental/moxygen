@@ -188,7 +188,8 @@ class MoQFrameParser {
 
   folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeRequest(
       folly::io::Cursor& cursor,
-      size_t length) const noexcept;
+      size_t length,
+      FrameType semanticFrameType = FrameType::SUBSCRIBE) const noexcept;
 
   folly::Expected<RequestUpdate, ErrorCode> parseRequestUpdate(
       folly::io::Cursor& cursor,
@@ -916,7 +917,8 @@ class MoQFrameWriter {
 
   WriteResult writeSubscribeRequestHelper(
       folly::IOBufQueue& writeBuf,
-      const SubscribeRequest& subscribeRequest) const noexcept;
+      const SubscribeRequest& subscribeRequest,
+      FrameType semanticFrameType = FrameType::SUBSCRIBE) const noexcept;
 
   // Legacy FETCH object writer (draft <= 14)
   void writeFetchObjectHeaderLegacy(

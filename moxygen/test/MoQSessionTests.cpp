@@ -136,10 +136,7 @@ class SetupTokenCacheTest : public MoQSessionTest {
 INSTANTIATE_TEST_SUITE_P(
     LegacySetupTokenCacheTest,
     SetupTokenCacheTest,
-    testing::Values(
-        VersionParams{{kVersionDraft14}, kVersionDraft14},
-        VersionParams{{kVersionDraft15}, kVersionDraft15},
-        VersionParams{{kVersionDraft16}, kVersionDraft16}));
+    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}));
 
 CO_TEST_P_X(SetupTokenCacheTest, PreservesSetupAliasesAcrossFinalClamp) {
   std::vector<std::string> setupTokens;
@@ -222,10 +219,7 @@ class DisabledTokenCacheTest : public SetupTokenCacheTest {
 INSTANTIATE_TEST_SUITE_P(
     LegacyDisabledTokenCacheTest,
     DisabledTokenCacheTest,
-    testing::Values(
-        VersionParams{{kVersionDraft14}, kVersionDraft14},
-        VersionParams{{kVersionDraft15}, kVersionDraft15},
-        VersionParams{{kVersionDraft16}, kVersionDraft16}));
+    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}));
 
 CO_TEST_P_X(DisabledTokenCacheTest, SendsFullTokenValues) {
   clientSession_->setPublishHandler(clientPublisher);

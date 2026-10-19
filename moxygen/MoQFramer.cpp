@@ -1931,11 +1931,14 @@ std::optional<SubscriptionFilter> MoQFrameParser::extractSubscriptionFilter(
 }
 
 folly::Expected<SubscribeRequest, ErrorCode>
-MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
-    const noexcept {
+MoQFrameParser::parseSubscribeRequest(
+    folly::io::Cursor& cursor,
+    size_t length,
+    FrameType semanticFrameType) const noexcept {
   XCHECK(version_.has_value())
       << "The version must be set before parsing a subscribe request";
   SubscribeRequest subscribeRequest;
+  subscribeRequest.params = TrackRequestParameters{semanticFrameType};
   auto requestID = decodeVarint(cursor, length);
   if (!requestID) {
     XLOG(DBG4) << "parseSubscribeRequest: UNDERFLOW on requestID";
@@ -2051,7 +2054,17 @@ MoQFrameParser::parseSubscribeRequest(folly::io::Cursor& cursor, size_t length)
               << folly::to_underlying(res2.error());
     return folly::makeUnexpected(res2.error());
   }
-  handleRequestSpecificParams(subscribeRequest, requestSpecificParams);
+  if (semanticFrameType == FrameType::TRACK_STATUS) {
+    if (getDraftMajorVersion(*version_) >= 18 &&
+        !requestSpecificParams.empty()) {
+      // Draft 18+ makes parameters outside their allowed message scope fatal.
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    handleIncludePropertiesParam(
+        subscribeRequest.includeProperties, subscribeRequest.params);
+  } else {
+    handleRequestSpecificParams(subscribeRequest, requestSpecificParams);
+  }
   if (length > 0) {
     XLOG(ERR) << "parseSubscribeRequest: leftover bytes after parsing: "
               << length;
@@ -3017,9 +3030,10 @@ folly::Expected<TrackStatus, ErrorCode> MoQFrameParser::parseTrackStatus(
   XCHECK(version_.has_value())
       << "version_ needs to be set to parse TrackStatus";
 
-  if (getDraftMajorVersion(*version_) >= 14) {
-    return parseSubscribeRequest(cursor, length);
+  if (getDraftMajorVersion(*version_) >= 16) {
+    return parseSubscribeRequest(cursor, length, FrameType::TRACK_STATUS);
   }
+
   TrackStatus trackStatus;
 
   // Fill in defaults for new fields added in v14
@@ -5385,13 +5399,27 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
 
 WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
     folly::IOBufQueue& writeBuf,
-    const SubscribeRequest& subscribeRequest) const noexcept {
+    const SubscribeRequest& subscribeRequest,
+    FrameType semanticFrameType) const noexcept {
   size_t size = 0;
   bool error = false;
   writeVarint(writeBuf, subscribeRequest.requestID.value, size, error);
   writeFullTrackName(writeBuf, subscribeRequest.fullTrackName, size, error);
 
-  if (getDraftMajorVersion(*version_) < 15) {
+  const auto majorVersion = getDraftMajorVersion(*version_);
+  const TrackRequestParameters* params = &subscribeRequest.params;
+  TrackRequestParameters trackStatusParams{semanticFrameType};
+  if (semanticFrameType == FrameType::TRACK_STATUS) {
+    trackStatusParams.setMajorVersion(majorVersion);
+    for (const auto& param : subscribeRequest.params) {
+      if (trackStatusParams.insertParam(param).hasError()) {
+        return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+      }
+    }
+    params = &trackStatusParams;
+  }
+
+  if (majorVersion < 15) {
     writeBuf.append(&subscribeRequest.priority, 1);
     size += 1;
 
@@ -5405,7 +5433,7 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
   }
 
   std::vector<Parameter> requestSpecificParams;
-  if (getDraftMajorVersion(*version_) >= 15) {
+  if (majorVersion >= 15 && semanticFrameType != FrameType::TRACK_STATUS) {
     Parameter subscriptionFilterParam;
     subscriptionFilterParam.key =
         folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
@@ -5453,16 +5481,10 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
       requestSpecificParams.push_back(newGroupRequestParam);
     }
 
-    appendIncludePropertiesParam(
-        requestSpecificParams,
-        subscribeRequest.params,
-        subscribeRequest.includeProperties,
-        *version_);
-  } else {
+  } else if (majorVersion < 15) {
     writeVarint(
         writeBuf,
-        getLocationTypeValue(
-            subscribeRequest.locType, getDraftMajorVersion(*version_)),
+        getLocationTypeValue(subscribeRequest.locType, majorVersion),
         size,
         error);
 
@@ -5486,8 +5508,13 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
     }
   }
 
+  appendIncludePropertiesParam(
+      requestSpecificParams,
+      *params,
+      subscribeRequest.includeProperties,
+      *version_);
   writeTrackRequestParams(
-      writeBuf, subscribeRequest.params, requestSpecificParams, size, error);
+      writeBuf, *params, requestSpecificParams, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
@@ -6077,8 +6104,12 @@ WriteResult MoQFrameWriter::writeTrackStatus(
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::TRACK_STATUS, error);
 
-  if (getDraftMajorVersion(*version_) >= 14) {
-    auto res = writeSubscribeRequestHelper(writeBuf, trackStatus);
+  const auto majorVersion = getDraftMajorVersion(*version_);
+  if (majorVersion >= 14) {
+    auto res = writeSubscribeRequestHelper(
+        writeBuf,
+        trackStatus,
+        majorVersion >= 16 ? FrameType::TRACK_STATUS : FrameType::SUBSCRIBE);
     if (!res) {
       return res;
     }
