@@ -5081,16 +5081,19 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
     return;
   }
 
-  // Extract delivery timeout from PUBLISH_OK params and update
-  // trackPublisher
   std::optional<FullTrackName> establishedTrack;
   auto trackIt = pubTracks_.find(publishOk.requestID);
   if (trackIt != pubTracks_.end()) {
     auto trackPublisher =
         std::static_pointer_cast<TrackPublisherImpl>(trackIt->second);
     trackPublisher->onPublishOk(publishOk);
-    pendingPublishTracks_.erase(trackIt->second->fullTrackName());
-    establishedTrack = trackIt->second->fullTrackName();
+    if (getDraftMajorVersion(*getNegotiatedVersion()) < 22) {
+      trackPublisher->setForward(publishOk.forward);
+      trackPublisher->setGroupOrder(publishOk.groupOrder);
+      trackPublisher->setSubPriority(publishOk.subscriberPriority);
+    }
+    pendingPublishTracks_.erase(trackPublisher->fullTrackName());
+    establishedTrack = trackPublisher->fullTrackName();
   }
   // No disarm: PUBLISH_OK is non-terminal; publishDone's flush(fin) disarms.
 
@@ -6786,28 +6789,10 @@ Subscriber::PublishResult MoQSession::publish(
   pending->setBidiControl(control);
   pendingRequests_.emplace(pub.requestID, std::move(pending));
 
-  // Build replyTask that co_awaits the future and handles cleanup
   auto replyTask = folly::coro::co_invoke(
-      [fut = std::move(contract.second),
-       rid = pub.requestID,
-       trackPublisher,
-       majorVersion = getDraftMajorVersion(*negotiatedVersion_),
-       this]() mutable
+      [fut = std::move(contract.second)]() mutable
           -> folly::coro::Task<folly::Expected<PublishOk, PublishError>> {
-        auto result = co_await std::move(fut);
-        if (result.hasValue() && majorVersion < 22) {
-          auto it = pubTracks_.find(rid);
-          if (it != pubTracks_.end()) {
-            // If Receive PublishOk is received, update the trackPublisher
-            // If Receive PublishError, the session is reset in
-            // onPublishError()
-            trackPublisher->setForward(result.value().forward);
-            trackPublisher->setGroupOrder(result.value().groupOrder);
-            trackPublisher->setSubPriority(result.value().subscriberPriority);
-          }
-        }
-        trackPublisher.reset();
-        co_return result;
+        co_return co_await std::move(fut);
       });
 
   // Return PublishConsumerAndReplyTask immediately (no co_await). forward, not
@@ -7078,9 +7063,23 @@ void MoQSession::unsubscribe(
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onUnsubscribe);
   auto trackAliasIt = reqIdToTrackAlias_.find(unsubscribe.requestID);
   if (trackAliasIt == reqIdToTrackAlias_.end()) {
-    // unknown
-    XLOG(ERR) << "No matching subscribe ID=" << unsubscribe.requestID
-              << " sess=" << this;
+    // An inbound PUBLISH whose reply is pending has no receive state yet.
+    if (!cancelInboundRequest(unsubscribe.requestID)) {
+      XLOG(ERR) << "No matching subscribe ID=" << unsubscribe.requestID
+                << " sess=" << this;
+      return;
+    }
+    // Before draft 18 an UNSUBSCRIBE is not a reply to the peer's PUBLISH.
+    if (control && getDraftMajorVersion(*negotiatedVersion_) >= 18) {
+      control->cancel(ResetStreamErrorCode::CANCELLED);
+    } else {
+      publishError(
+          PublishError{
+              unsubscribe.requestID,
+              PublishErrorCode::UNINTERESTED,
+              "Unsubscribed before reply"},
+          *controlStreamReplyContext());
+    }
     return;
   }
   auto trackIt = subTracks_.find(trackAliasIt->second);

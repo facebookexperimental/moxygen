@@ -567,6 +567,62 @@ CO_TEST_P_X(MoQSessionTest, PublishConnectionDropCleanup) {
     // (This test mainly ensures no crashes occur during cleanup)
   }
 }
+// The subscriber unsubscribes while its reply to the PUBLISH is still pending,
+// so the PUBLISH gets an error reply.
+CO_TEST_P_X(MoQSessionTest, PublishUnsubscribedBeforeReply) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  std::shared_ptr<SubscriptionHandle> serverHandle;
+  folly::coro::Baton serverSawPublish;
+  auto releaseReply = std::make_shared<folly::coro::Baton>();
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&](const PublishRequest& actualPub,
+              std::shared_ptr<SubscriptionHandle> handle)
+              -> Subscriber::PublishResult {
+            serverHandle = std::move(handle);
+            auto consumer =
+                std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+            auto requestID = actualPub.requestID;
+            serverSawPublish.post();
+            return Subscriber::PublishConsumerAndReplyTask{
+                std::static_pointer_cast<TrackConsumer>(consumer),
+                folly::coro::co_invoke(
+                    [releaseReply, requestID]()
+                        -> folly::coro::Task<
+                            folly::Expected<PublishOk, PublishError>> {
+                      co_await *releaseReply;
+                      co_return PublishOk{.requestID = requestID};
+                    })};
+          });
+
+  auto publishResult = clientSession_->publish(
+      PublishRequest{
+          .requestID = RequestID(0),
+          .fullTrackName =
+              FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+          .trackAlias = TrackAlias(100),
+          .groupOrder = GroupOrder::Default,
+          .largest = AbsoluteLocation{0, 100},
+          .forward = true},
+      makePublishHandle());
+  EXPECT_TRUE(publishResult.hasValue());
+  if (!publishResult.hasValue()) {
+    co_return;
+  }
+  co_await serverSawPublish;
+
+  serverHandle->unsubscribe();
+  auto reply = co_await folly::coro::co_awaitTry(
+      folly::coro::timeout(
+          std::move(publishResult.value().reply), std::chrono::seconds(1)));
+  EXPECT_TRUE(reply.hasValue() && reply->hasError());
+
+  releaseReply->post();
+  co_await rescheduleN(4);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, PublishHandleCancel) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
 
