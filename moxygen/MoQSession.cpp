@@ -10,6 +10,7 @@
 #include <folly/coro/Baton.h>
 #include <folly/coro/Collect.h>
 #include <folly/coro/FutureUtil.h>
+#include <folly/coro/SharedPromise.h>
 #include <quic/common/CircularDeque.h>
 #include <quic/priority/HTTPPriorityQueue.h>
 #include <moxygen/BidiStreamControl.h>
@@ -5264,14 +5265,62 @@ class MoQSession::ReceiverSubscriptionHandle
       SubscribeOk ok,
       TrackAlias alias,
       std::shared_ptr<MoQSession> session,
-      std::shared_ptr<BidiStreamControl> control = nullptr)
+      std::shared_ptr<BidiStreamControl> control = nullptr,
+      bool waitForPublishOk = false)
       : Publisher::SubscriptionHandle(std::move(ok)),
         trackAlias_(alias),
         session_(std::move(session)),
-        control_(std::move(control)) {}
+        control_(std::move(control)),
+        requestUpdateState_(
+            waitForPublishOk ? RequestUpdateState::PENDING
+                             : RequestUpdateState::READY) {
+    if (!waitForPublishOk) {
+      requestUpdatesReady_.setValue();
+    }
+  }
+
+  void publishOkSent() {
+    if (requestUpdateState_ == RequestUpdateState::PENDING) {
+      requestUpdateState_ = RequestUpdateState::READY;
+      requestUpdatesReady_.setValue();
+    }
+  }
+
+  void publishFailed() {
+    if (requestUpdateState_ == RequestUpdateState::PENDING) {
+      requestUpdateState_ = RequestUpdateState::REJECTED;
+      requestUpdatesReady_.setValue();
+    }
+  }
 
   folly::coro::Task<SubscriptionHandle::RequestUpdateResult> requestUpdate(
       RequestUpdate requestUpdate) override {
+    auto session = session_;
+    if (!session) {
+      co_return folly::makeUnexpected(
+          RequestError{
+              requestUpdate.requestID,
+              RequestErrorCode::INTERNAL_ERROR,
+              "Session closed"});
+    }
+    auto ready = co_await folly::coro::co_awaitTry(
+        folly::coro::co_withCancellation(
+            session->cancellationSource_.getToken(),
+            requestUpdatesReady_.getFuture()));
+    if (ready.hasException()) {
+      co_return folly::makeUnexpected(
+          RequestError{
+              requestUpdate.requestID,
+              RequestErrorCode::INTERNAL_ERROR,
+              "Session closed"});
+    }
+    if (requestUpdateState_ == RequestUpdateState::REJECTED) {
+      co_return folly::makeUnexpected(
+          RequestError{
+              requestUpdate.requestID,
+              RequestErrorCode::CANCELLED,
+              "PUBLISH was not accepted"});
+    }
     if (!session_) {
       co_return folly::makeUnexpected(
           RequestError{
@@ -5281,43 +5330,42 @@ class MoQSession::ReceiverSubscriptionHandle
     }
 
     requestUpdate.existingRequestID = subscribeOk_->requestID;
-    if (session_->shouldFailNewLocalRequestDueToGoaway()) {
+    if (session->shouldFailNewLocalRequestDueToGoaway()) {
       co_return folly::makeUnexpected(
           RequestError{
               MoQSession::failedLocalRequestID(),
               RequestErrorCode::GOING_AWAY,
               "Session received GOAWAY"});
     }
-    if (getDraftMajorVersion(*(session_->getNegotiatedVersion())) >= 14) {
-      requestUpdate.requestID = session_->getNextRequestID();
+    if (getDraftMajorVersion(*(session->getNegotiatedVersion())) >= 14) {
+      requestUpdate.requestID = session->getNextRequestID();
     } else {
       requestUpdate.requestID = subscribeOk_->requestID;
     }
 
     // For v15+, create promise and wait for REQUEST_OK response
     // For v14 and below, just send the message and return immediately
-    if (getDraftMajorVersion(*(session_->getNegotiatedVersion())) >= 15) {
+    if (getDraftMajorVersion(*(session->getNegotiatedVersion())) >= 15) {
       // Create promise/contract for tracking the response
       auto contract = folly::coro::makePromiseContract<
           folly::Expected<RequestOk, RequestError>>();
 
       // Register pending request
-      session_->pendingRequests_.emplace(
+      session->pendingRequests_.emplace(
           requestUpdate.requestID,
           PendingRequestState::makeRequestUpdate(std::move(contract.first)));
 
       // Send the REQUEST_UPDATE message
-      session_->requestUpdate(requestUpdate, control_);
+      session->requestUpdate(requestUpdate, control_);
 
       // Wait for REQUEST_OK or REQUEST_ERROR response
       // unsubscribe() can reset session_ while this waits.
-      auto session = session_;
       auto cancelGuard = session->cancelOnExit(requestUpdate.requestID);
       auto result = co_await std::move(contract.second);
       cancelGuard.dismiss();
       co_return result;
     } else {
-      session_->requestUpdate(requestUpdate, control_);
+      session->requestUpdate(requestUpdate, control_);
 
       // Version < 15: Return a constructed response. RequestUpdate is fire
       // and forget
@@ -5333,9 +5381,13 @@ class MoQSession::ReceiverSubscriptionHandle
   }
 
  private:
+  enum class RequestUpdateState { PENDING, READY, REJECTED };
+
   TrackAlias trackAlias_;
   std::shared_ptr<MoQSession> session_;
   std::shared_ptr<BidiStreamControl> control_;
+  RequestUpdateState requestUpdateState_;
+  folly::coro::SharedPromise<void> requestUpdatesReady_;
 };
 
 void MoQSession::onPublish(PublishRequest publish) {
@@ -5395,7 +5447,8 @@ void MoQSession::onPublishImpl(
       SubscribeOk{publish.requestID},
       publish.trackAlias,
       shared_from_this(),
-      std::move(control));
+      std::move(control),
+      /*waitForPublishOk=*/true);
 
   // Use single coroutine pattern like working onPublishNamespace
   auto requestID = publish.requestID;
@@ -5430,11 +5483,13 @@ bool MoQSession::installPublishReceiveState(
 
 folly::coro::Task<void> MoQSession::handlePublish(
     PublishRequest publish,
-    std::shared_ptr<Publisher::SubscriptionHandle> publishHandle,
+    std::shared_ptr<ReceiverSubscriptionHandle> publishHandle,
     std::shared_ptr<ReplyContext> replyContext) {
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
+  auto publishResponseGuard =
+      folly::makeGuard([publishHandle] { publishHandle->publishFailed(); });
   // Read what we need before publish is moved; copying Extensions clones IOBufs
   auto requestID = publish.requestID;
   auto alias = publish.trackAlias;
@@ -5491,6 +5546,8 @@ folly::coro::Task<void> MoQSession::handlePublish(
         auto pubOk = replyResult->value();
         pubOk.requestID = requestID;
         publishOk(pubOk, *replyContext);
+        publishHandle->publishOkSent();
+        publishResponseGuard.dismiss();
         co_return;
       }
     }
@@ -6689,10 +6746,11 @@ Subscriber::PublishResult MoQSession::publish(
       [fut = std::move(contract.second),
        rid = pub.requestID,
        trackPublisher,
+       majorVersion = getDraftMajorVersion(*negotiatedVersion_),
        this]() mutable
           -> folly::coro::Task<folly::Expected<PublishOk, PublishError>> {
         auto result = co_await std::move(fut);
-        if (result.hasValue()) {
+        if (result.hasValue() && majorVersion < 22) {
           auto it = pubTracks_.find(rid);
           if (it != pubTracks_.end()) {
             // If Receive PublishOk is received, update the trackPublisher

@@ -83,6 +83,7 @@ moxygen_add_library(moxygen_moq
     Folly::folly_coro_baton
     Folly::folly_coro_collect
     Folly::folly_coro_future_util
+    Folly::folly_coro_shared_promise
     Folly::folly_utility
   EXPORTED_DEPS
     moxygen_events_moq_delivery_timer

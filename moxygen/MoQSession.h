@@ -1000,9 +1000,10 @@ class MoQSession : public Subscriber,
       ResetStreamErrorCode consumerError = ResetStreamErrorCode::CANCELLED);
   void onFetchStalled(RequestID requestID);
 
+  class ReceiverSubscriptionHandle;
   folly::coro::Task<void> handlePublish(
       PublishRequest publish,
-      std::shared_ptr<Publisher::SubscriptionHandle> publishHandle,
+      std::shared_ptr<ReceiverSubscriptionHandle> publishHandle,
       std::shared_ptr<ReplyContext> replyContext);
   // Returns false if the peer reused a live track alias.
   bool installPublishReceiveState(
@@ -1016,7 +1017,6 @@ class MoQSession : public Subscriber,
       const PublishError& publishError,
       ReplyContext& replyContext);
 
-  class ReceiverSubscriptionHandle;
   class ReceiverFetchHandle;
 
   void onClientSetup(Setup clientSetup) override;
