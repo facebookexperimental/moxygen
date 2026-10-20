@@ -7,6 +7,8 @@
 #include <array>
 #include <stdexcept>
 
+#include <folly/coro/Timeout.h>
+
 #include "moxygen/test/MoQSessionTestCommon.h"
 
 using namespace moxygen;
@@ -1737,6 +1739,73 @@ CO_TEST_P_X(MoQSessionTest, RequestUpdateAfterPublishDone) {
 
   // Session is still alive (not closed) — verify we can still close cleanly
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A subscriber's REQUEST_UPDATE that is never sent must fail at once. Waiting
+// for a reply that cannot arrive holds the handle and the session forever.
+CO_TEST_P_X(MoQSessionTest, SubscriberRequestUpdateAfterPublishDoneFails) {
+  if (getDraftMajorVersion(getServerSelectedVersion()) < 15) {
+    co_return;
+  }
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectPublishDone();
+  expectSubscribe([&trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+    trackConsumer = pub;
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandle = res.value();
+
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  RequestUpdate update;
+  update.forward = false;
+  auto result = co_await folly::coro::timeout(
+      subscribeHandle->requestUpdate(std::move(update)),
+      std::chrono::seconds(1));
+  EXPECT_TRUE(result.hasError());
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, SubscriberRequestUpdateAfterCloseFails) {
+  if (getDraftMajorVersion(getServerSelectedVersion()) < 15) {
+    co_return;
+  }
+  co_await setupMoQSession();
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  expectSubscribe([](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    co_return;
+  }
+  auto subscribeHandle = res.value();
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+
+  RequestUpdate update;
+  update.forward = false;
+  auto result = co_await folly::coro::timeout(
+      subscribeHandle->requestUpdate(std::move(update)),
+      std::chrono::seconds(1));
+  EXPECT_TRUE(result.hasError());
 }
 
 // =============================================================================

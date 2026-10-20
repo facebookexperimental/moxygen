@@ -5321,7 +5321,9 @@ class MoQSession::ReceiverSubscriptionHandle
               RequestErrorCode::CANCELLED,
               "PUBLISH was not accepted"});
     }
-    if (!session_) {
+    // cleanup() has already failed every pending request, so nothing would
+    // fail one registered after close.
+    if (!session_ || session_->isClosed()) {
       co_return folly::makeUnexpected(
           RequestError{
               requestUpdate.requestID,
@@ -5355,8 +5357,14 @@ class MoQSession::ReceiverSubscriptionHandle
           requestUpdate.requestID,
           PendingRequestState::makeRequestUpdate(std::move(contract.first)));
 
-      // Send the REQUEST_UPDATE message
-      session->requestUpdate(requestUpdate, control_);
+      if (!session->requestUpdate(requestUpdate, control_)) {
+        session->pendingRequests_.erase(requestUpdate.requestID);
+        co_return folly::makeUnexpected(
+            RequestError{
+                requestUpdate.requestID,
+                RequestErrorCode::INTERNAL_ERROR,
+                "REQUEST_UPDATE not sent"});
+      }
 
       // Wait for REQUEST_OK or REQUEST_ERROR response
       // unsubscribe() can reset session_ while this waits.
@@ -7289,7 +7297,7 @@ void MoQSession::cleanupSubscribePublisherAfterGoawayReset(
   publisherDrained(requestID);
 }
 
-void MoQSession::requestUpdate(
+bool MoQSession::requestUpdate(
     const RequestUpdate& reqUpdate,
     const std::shared_ptr<BidiStreamControl>& control) {
   if (logger_) {
@@ -7305,7 +7313,7 @@ void MoQSession::requestUpdate(
     if (trackIt == subTracks_.end()) {
       XLOG(ERR) << "No matching track Alias=" << trackAliasIt->second
                 << " sess=" << this;
-      return;
+      return false;
     }
   } else {
     // Check if this is for a fetch
@@ -7313,32 +7321,43 @@ void MoQSession::requestUpdate(
     if (fetchIt == fetches_.end()) {
       XLOG(ERR) << "No matching request ID=" << reqUpdate.existingRequestID
                 << " sess=" << this;
-      return;
+      return false;
     }
   }
 
   auto* wh = control ? control->writeHandle() : nullptr;
   if (wh) {
+    if (control->readLoopExited()) {
+      XLOG(ERR) << "Request stream closed, REQUEST_UPDATE not sent sess="
+                << this;
+      return false;
+    }
     folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
     auto res = moqFrameWriter_.writeRequestUpdate(buf, reqUpdate);
     if (!res) {
       XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
-      return;
+      return false;
+    }
+    auto writeRes = wh->writeStreamData(buf.move(), /*fin=*/false, nullptr);
+    if (!writeRes) {
+      XLOG(ERR) << "REQUEST_UPDATE write error=" << uint64_t(writeRes.error())
+                << " sess=" << this;
+      return false;
     }
     // Draft 18+: response REQUEST_OK/ERROR has no wire requestID; record
     // this update's id so the response codec can correlate FIFO-order.
     if (getDraftMajorVersion(*negotiatedVersion_) >= 18) {
       control->responseIDQueue().push_back(reqUpdate.requestID);
     }
-    wh->writeStreamData(buf.move(), /*fin=*/false, nullptr);
   } else {
     auto res = moqFrameWriter_.writeRequestUpdate(controlWriteBuf_, reqUpdate);
     if (!res) {
       XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
-      return;
+      return false;
     }
     controlWriteEvent_.signal();
   }
+  return true;
 }
 
 class MoQSession::ReceiverFetchHandle : public Publisher::FetchHandle {
