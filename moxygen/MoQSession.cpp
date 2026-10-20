@@ -2586,10 +2586,14 @@ class MoQSession::FetchTrackReceiveState
     }
   }
 
-  void fetchOK(FetchOk ok) {
+  // Returns false if the fetch was already cancelled.
+  bool fetchOK(FetchOk ok) {
     XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
+    if (!promise_.trySetValue(std::move(ok))) {
+      return false;
+    }
     fetchEstablished_ = true;
-    promise_.setValue(std::move(ok));
+    return true;
   }
 
   void fetchError(FetchError fetchErr) {
@@ -6066,6 +6070,13 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
     return;
   }
   const auto& trackReceiveState = fetchIt->second;
+  auto requestID = fetchOk.requestID;
+  // If cancellation won, the caller's guard cancels the pending request.
+  if (!trackReceiveState->fetchOK(std::move(fetchOk))) {
+    XLOG(DBG1) << "FETCH_OK for cancelled fetch ID=" << requestID
+               << " sess=" << this;
+    return;
+  }
   // After FETCH_OK the fetch data streams drive completion; a subsequent
   // FIN/RST on the bidi is informational and must not synthesize an error.
   const auto& control = trackReceiveState->bidiControl();
@@ -6073,8 +6084,7 @@ void MoQSession::onFetchOk(FetchOk fetchOk) {
     control->disarmOnPeerTermination();
   }
   // The request is answered; fetches_ owns the state from here.
-  pendingRequests_.erase(fetchOk.requestID);
-  trackReceiveState->fetchOK(std::move(fetchOk));
+  pendingRequests_.erase(requestID);
   if (trackReceiveState->fetchOkAndAllDataReceived()) {
     // The data path already ran resetFetchCallback() before FETCH_OK arrived,
     // so it left without FINing. Mirror that FIN here so the bidi terminates.

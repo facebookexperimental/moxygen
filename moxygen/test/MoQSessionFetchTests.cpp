@@ -1371,3 +1371,98 @@ CO_TEST_P_X(MoQSessionTest, FetchWhoseDataKeepsArrivingIsNotReset) {
   EXPECT_FALSE(clientSession_->isClosed());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// Fetch Y's caller is cancelled from inside subscribe X's SUBSCRIBE_OK
+// processing while Y's FETCH_OK is already queued behind it. Y's FETCH_OK is
+// then processed before Y's coroutine resumes. The cancellation must still end
+// Y at the peer and reset Y's consumer.
+CO_TEST_P_X(MoQSessionTest, FetchCancelledWhileFetchOkQueued) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawX;
+  folly::coro::Baton serverSawY;
+  folly::coro::Baton releaseX;
+  folly::coro::Baton releaseY;
+  std::shared_ptr<MockFetchHandle> serverHandleY;
+  bool serverSawFetchCancelY = false;
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .WillOnce([&](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+        serverSawX.post();
+        co_await releaseX;
+        auto handle = makeSubscribeOkResult(sub);
+        EXPECT_CALL(*handle, unsubscribe()).Times(testing::AnyNumber());
+        co_return handle;
+      });
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce([&](Fetch fetch, auto /*pub*/) -> TaskFetchResult {
+        serverSawY.post();
+        co_await releaseY;
+        serverHandleY = makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+        EXPECT_CALL(*serverHandleY, fetchCancel()).WillRepeatedly([&] {
+          serverSawFetchCancelY = true;
+        });
+        co_return serverHandleY;
+      });
+
+  std::string trace;
+  folly::CancellationSource cancelY;
+  bool yCallerResumed = false;
+  bool cancelledWithYOkSent = false;
+  auto consumerX = std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+  ON_CALL(*consumerX, setTrackAlias(_)).WillByDefault([&](TrackAlias) {
+    // The server writes FETCH_OK right after its handler returns.
+    cancelledWithYOkSent = serverHandleY != nullptr && !yCallerResumed;
+    trace += folly::to<std::string>(
+        "[X SUBSCRIBE_OK: Y OK sent=",
+        serverHandleY != nullptr,
+        ", cancel Y] ");
+    cancelY.requestCancellation();
+    return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+  });
+  ON_CALL(*consumerX, publishDone(_))
+      .WillByDefault(
+          testing::Return(
+              folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+  auto consumerY = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+  EXPECT_CALL(*consumerY, reset(ResetStreamErrorCode::CANCELLED));
+
+  auto subscribeX =
+      folly::coro::co_withExecutor(
+          &eventBase_,
+          clientSession_->subscribe(getSubscribe(kTestTrackName), consumerX))
+          .start()
+          .via(&eventBase_);
+  auto fetchY = folly::coro::co_withExecutor(
+                    &eventBase_,
+                    folly::coro::co_withCancellation(
+                        cancelY.getToken(),
+                        folly::coro::co_invoke(
+                            [&]() -> folly::coro::Task<Publisher::FetchResult> {
+                              auto res = co_await folly::coro::co_awaitTry(
+                                  clientSession_->fetch(
+                                      getFetch({0, 0}, {0, 1}), consumerY));
+                              yCallerResumed = true;
+                              trace += "[Y caller resumed] ";
+                              co_return std::move(res).value();
+                            })))
+                    .start()
+                    .via(&eventBase_);
+  co_await serverSawX;
+  co_await serverSawY;
+
+  // Both handlers resume, in this order, before the client reads either reply.
+  releaseX.post();
+  releaseY.post();
+  auto resultX = co_await folly::coro::co_awaitTry(std::move(subscribeX));
+  EXPECT_TRUE(resultX.hasValue() && resultX->hasValue());
+  auto resultY = co_await folly::coro::co_awaitTry(std::move(fetchY));
+  EXPECT_TRUE(resultY.hasException<folly::OperationCancelled>()) << trace;
+  EXPECT_TRUE(cancelledWithYOkSent) << trace;
+  co_await folly::coro::sleep(std::chrono::milliseconds(200));
+
+  EXPECT_TRUE(serverSawFetchCancelY) << trace;
+  if (serverHandleY) {
+    testing::Mock::VerifyAndClearExpectations(serverHandleY.get());
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
