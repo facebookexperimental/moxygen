@@ -1567,6 +1567,59 @@ CO_TEST_P_X(Draft18Test, FetchRequestUpdateCoalescesCumulatively) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A REQUEST_UPDATE before FETCH_OK fails and tears down the fetch while the
+// application's fetch handler is still running. The session then cancels the
+// handle that the handler returns and does not send FETCH_OK.
+CO_TEST_P_X(Draft18Test, FetchRequestUpdateBeforeFetchOkCancelsHandler) {
+  co_await setupMoQSession();
+
+  folly::coro::Baton serverSawFetch;
+  folly::coro::Baton releaseHandler;
+  std::optional<RequestID> fetchRequestID;
+  std::shared_ptr<MockFetchHandle> serverHandle;
+  bool serverSawFetchCancel = false;
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce([&](Fetch fetch, auto /*pub*/) -> TaskFetchResult {
+        fetchRequestID = fetch.requestID;
+        serverSawFetch.post();
+        co_await releaseHandler;
+        serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+        EXPECT_CALL(*serverHandle, fetchCancel()).WillRepeatedly([&] {
+          serverSawFetchCancel = true;
+        });
+        co_return serverHandle;
+      });
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+
+  auto fetchFut =
+      folly::coro::co_withExecutor(
+          &eventBase_,
+          clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_))
+          .start()
+          .via(&eventBase_);
+  co_await serverSawFetch;
+
+  auto* cb =
+      static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get());
+  RequestUpdate update;
+  update.existingRequestID = *fetchRequestID;
+  update.requestID = RequestID(getRequestIDMultiplier());
+  update.priority = kDefaultPriority + 1;
+  cb->onRequestUpdate(std::move(update));
+  co_await rescheduleN(5);
+
+  releaseHandler.post();
+  auto fetchRes = co_await std::move(fetchFut);
+  EXPECT_TRUE(fetchRes.hasError());
+  co_await rescheduleN(5);
+
+  EXPECT_TRUE(serverSawFetchCancel);
+  if (serverHandle) {
+    testing::Mock::VerifyAndClearExpectations(serverHandle.get());
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, FetchRequestUpdateNotSupported) {
   co_await setupMoQSession();
   std::shared_ptr<MockFetchHandle> mockFetchHandle = nullptr;

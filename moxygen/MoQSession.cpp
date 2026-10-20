@@ -1224,6 +1224,104 @@ void mergeRequestUpdate(RequestUpdate& latest, const RequestUpdate& incoming) {
   }
 }
 
+// Answers REQUEST_UPDATE batches in arrival order, because draft-18 responses
+// do not carry a request ID. Updates that arrive before the pending batch is
+// dispatched coalesce into it. Several batches may be in the application at
+// once.
+class RequestUpdateSequencer {
+ public:
+  using Result = folly::Expected<RequestOk, RequestError>;
+
+  struct Batch {
+    RequestUpdate update;
+    std::vector<RequestID> requestIDs;
+    RequestID newestRequestID;
+    std::optional<Result> result;
+  };
+
+  // Returns true if the caller must schedule takeQueued().
+  bool add(RequestUpdate update, bool coalesce) {
+    if (coalesce && !queued_.empty()) {
+      auto& batch = *queued_.back();
+      batch.requestIDs.push_back(update.requestID);
+      batch.newestRequestID = update.requestID;
+      mergeRequestUpdate(batch.update, update);
+    } else {
+      auto batch = std::make_shared<Batch>();
+      batch->requestIDs.push_back(update.requestID);
+      batch->newestRequestID = update.requestID;
+      batch->update = std::move(update);
+      queued_.push_back(std::move(batch));
+    }
+    return !std::exchange(dispatchScheduled_, true);
+  }
+
+  std::vector<std::shared_ptr<Batch>> takeQueued() {
+    dispatchScheduled_ = false;
+    inFlight_.insert(inFlight_.end(), queued_.begin(), queued_.end());
+    return std::exchange(queued_, {});
+  }
+
+  // Returns the batches, in order, that can be answered now.
+  std::vector<std::shared_ptr<Batch>> complete(
+      const std::shared_ptr<Batch>& batch,
+      Result result) {
+    batch->result = std::move(result);
+    std::vector<std::shared_ptr<Batch>> ready;
+    while (!inFlight_.empty() && inFlight_.front()->result) {
+      ready.push_back(std::move(inFlight_.front()));
+      inFlight_.pop_front();
+    }
+    return ready;
+  }
+
+  void clear() {
+    queued_.clear();
+    inFlight_.clear();
+  }
+
+ private:
+  std::vector<std::shared_ptr<Batch>> queued_;
+  std::deque<std::shared_ptr<Batch>> inFlight_;
+  bool dispatchScheduled_{false};
+};
+
+// Runs a handle's requestUpdate on the session executor. An exception becomes
+// INTERNAL_ERROR with exceptionPhrase, or the exception text if that is empty.
+template <typename HandleT>
+void startRequestUpdate(
+    MoQSession& session,
+    std::shared_ptr<HandleT> handle,
+    RequestUpdate update,
+    std::string exceptionPhrase,
+    folly::Function<void(RequestUpdateSequencer::Result)> done) {
+  auto requestID = update.requestID;
+  auto task = handle->requestUpdate(std::move(update));
+  folly::coro::co_withExecutor(
+      session.getExecutor(),
+      folly::coro::co_withCancellation(
+          session.getCancelToken(), std::move(task)))
+      .start([requestID,
+              // The task may outlive the publisher's reference to the handle.
+              handle = std::move(handle),
+              exceptionPhrase = std::move(exceptionPhrase),
+              done = std::move(done)](
+                 folly::Try<RequestUpdateSequencer::Result>&& result) mutable {
+        if (result.hasException()) {
+          auto what = result.exception().what().toStdString();
+          XLOG(ERR) << "Exception in requestUpdate ex=" << what;
+          done(
+              folly::makeUnexpected(
+                  RequestError{
+                      requestID,
+                      RequestErrorCode::INTERNAL_ERROR,
+                      exceptionPhrase.empty() ? what : exceptionPhrase}));
+          return;
+        }
+        done(std::move(*result));
+      });
+}
+
 } // namespace
 
 class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
@@ -1333,71 +1431,38 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       return;
     }
 
-    auto trackPubImpl =
-        std::static_pointer_cast<TrackPublisherImpl>(shared_from_this());
-
-    // Accumulate the cumulative newest update so older queued ones coalesce.
-    // Only tracked for draft 18+, where handleRequestUpdate consumes/resets it;
-    // pre-18 there is no coalescing, so avoid growing state that is never read.
-    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18) {
-      if (latestRequest_.has_value()) {
-        mergeRequestUpdate(latestRequest_.value(), requestUpdate);
-      } else {
-        latestRequest_ = requestUpdate;
-      }
+    bool coalesce =
+        getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18;
+    if (updates_.add(std::move(requestUpdate), coalesce)) {
+      session_->getExecutor()->add(
+          [weakSelf = std::weak_ptr<PublisherImpl>(shared_from_this())] {
+            if (auto self = weakSelf.lock()) {
+              std::static_pointer_cast<TrackPublisherImpl>(self)
+                  ->dispatchRequestUpdates();
+            }
+          });
     }
-
-    // Handle asynchronously with shared ownership to prevent use-after-free
-    // if session closes before completion
-    co_withExecutor(
-        session_->getExecutor(),
-        co_withCancellation(
-            session_->cancellationSource_.getToken(),
-            folly::coro::co_invoke(
-                [trackPubImpl = std::move(trackPubImpl),
-                 update = std::move(
-                     requestUpdate)]() mutable -> folly::coro::Task<void> {
-                  co_await trackPubImpl->handleRequestUpdate(std::move(update));
-                })))
-        .start();
   }
 
-  folly::coro::Task<void> handleRequestUpdate(RequestUpdate requestUpdate) {
-    co_await folly::coro::co_safe_point;
-
-    // subscriptionHandle_ may have been reset by publishDone(),
-    // unsubscribe(), or terminatePublish() while this coroutine was queued.
-    if (!subscriptionHandle_) {
-      co_return;
+  void dispatchRequestUpdates() {
+    for (auto& batch : updates_.takeQueued()) {
+      // publishDone(), unsubscribe() or terminatePublish() may have reset the
+      // handle while the dispatch was queued or while applying a prior batch.
+      if (!subscriptionHandle_ || !session_) {
+        updates_.clear();
+        return;
+      }
+      applyRequestUpdate(std::move(batch));
     }
+  }
 
+  void applyRequestUpdate(
+      std::shared_ptr<RequestUpdateSequencer::Batch> batch) {
     folly::RequestContextScopeGuard guard;
     session_->setRequestSession();
 
-    auto updateRequestID = requestUpdate.requestID;
+    auto& requestUpdate = batch->update;
     auto existingRequestID = requestID_;
-    bool canCoalesce =
-        getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18;
-
-    // A newer update supersedes this one: ack it, but skip re-applying its
-    // intermediate state (draft 18+ coalescing).
-    if (canCoalesce && latestRequest_.has_value() &&
-        updateRequestID != latestRequest_.value().requestID) {
-      RequestOk requestOk{.requestID = updateRequestID, .trackProperties = {}};
-      requestOks_.push_back(requestOk);
-      co_return;
-    }
-
-    // Newest update of the burst: take the cumulative merged view so fields set
-    // by earlier (superseded) updates are not lost, and reset the accumulator
-    // so the next burst starts fresh instead of folding into stale state.
-    std::vector<RequestOk> currentOks;
-    if (canCoalesce && latestRequest_.has_value()) {
-      requestUpdate = std::move(latestRequest_.value());
-      currentOks = std::move(requestOks_);
-      latestRequest_.reset();
-      requestOks_.clear();
-    }
 
     // Update delivery timeout if present
     auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
@@ -1421,55 +1486,61 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       setForward(*requestUpdate.forward);
     }
 
-    // Call application's async requestUpdate handler with cancellation
-    auto updateResult = co_await co_awaitTry(co_withCancellation(
-        session_->cancellationSource_.getToken(),
-        subscriptionHandle_->requestUpdate(std::move(requestUpdate))));
-
-    // Re-check after the await — handle or session may have been reset
-    // by terminatePublish while this coroutine was suspended.
-    if (!subscriptionHandle_ || !session_) {
-      co_return;
-    }
-
-    // Only send responses for v15+
-    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
-      if (updateResult.hasException()) {
-        XLOG(ERR) << "Exception in requestUpdate ex="
-                  << updateResult.exception().what().toStdString();
-        session_->requestUpdateError(
-            SubscribeUpdateError{
-                updateRequestID,
-                RequestErrorCode::INTERNAL_ERROR,
-                updateResult.exception().what().toStdString()},
-            existingRequestID);
-        co_return;
-      }
-
-      if (updateResult->hasError()) {
-        XLOG(ERR) << "requestUpdate failed: "
-                  << updateResult->error().reasonPhrase
-                  << " requestID=" << existingRequestID;
-        auto updateErr = std::move(updateResult->error());
-        updateErr.requestID = updateRequestID; // In case app got it wrong
-        session_->requestUpdateError(updateErr, existingRequestID);
-      } else {
-        // Add final RequestOk
-        RequestOk requestOk{
-            .requestID = updateRequestID, .trackProperties = {}};
-        currentOks.push_back(requestOk);
-
-        for (RequestOk reqOk : currentOks) {
-          // send REQUEST_OK with the current LARGEST_OBJECT if available
-          std::vector<Parameter> requestSpecificParams;
-          if (largest_) {
-            reqOk.requestSpecificParams.emplace_back(
-                folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
-                largest_.value());
+    startRequestUpdate(
+        *session_,
+        subscriptionHandle_,
+        std::move(requestUpdate),
+        "",
+        [weakSelf = std::weak_ptr<PublisherImpl>(shared_from_this()),
+         batch](RequestUpdateSequencer::Result result) mutable {
+          if (auto self = weakSelf.lock()) {
+            std::static_pointer_cast<TrackPublisherImpl>(self)
+                ->onRequestUpdateDone(batch, std::move(result));
           }
-          session_->requestUpdateOk(reqOk, existingRequestID);
-        }
+        });
+  }
+
+  void onRequestUpdateDone(
+      const std::shared_ptr<RequestUpdateSequencer::Batch>& batch,
+      RequestUpdateSequencer::Result result) {
+    // terminatePublish() may have reset the handle or session meanwhile.
+    if (!subscriptionHandle_ || !session_) {
+      return;
+    }
+    for (auto& ready : updates_.complete(batch, std::move(result))) {
+      // A REQUEST_ERROR can end the subscription.
+      if (!session_) {
+        return;
       }
+      respondToRequestUpdates(*ready);
+    }
+  }
+
+  void respondToRequestUpdates(RequestUpdateSequencer::Batch& batch) {
+    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) < 15) {
+      return;
+    }
+    auto existingRequestID = requestID_;
+    if (batch.result->hasError()) {
+      // Only the newest update in a failed batch gets an error.
+      auto updateErr = std::move(batch.result->error());
+      XLOG(ERR) << "requestUpdate failed: " << updateErr.reasonPhrase
+                << " requestID=" << existingRequestID;
+      updateErr.requestID = batch.newestRequestID;
+      session_->requestUpdateError(updateErr, existingRequestID);
+      return;
+    }
+    for (auto updateRequestID : batch.requestIDs) {
+      RequestOk reqOk{
+          .requestID = updateRequestID,
+          .requestSpecificParams = {},
+          .trackProperties = {}};
+      if (largest_) {
+        reqOk.requestSpecificParams.emplace_back(
+            folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
+            largest_.value());
+      }
+      session_->requestUpdateOk(reqOk, existingRequestID);
     }
   }
 
@@ -1667,15 +1738,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   bool forward_;
   std::shared_ptr<DeliveryCallback> deliveryCallback_;
   MoQDeliveryTimeoutManager deliveryTimeoutManager_;
-
-  // Cumulative newest REQUEST_UPDATE; older queued handlers coalesce into it.
-  folly::Optional<RequestUpdate> latestRequest_;
-
-  // On coalesce REQUEST_UPDATES, the REQUEST_OKs for each update will be held
-  // until either the update is successful in which each will be sent, or the
-  // update results in an error, in which only a single REQUEST_ERROR will be
-  // sent
-  std::vector<RequestOk> requestOks_;
+  RequestUpdateSequencer updates_;
 
   // Largest object published so far; advances as objects are written and is
   // reported in REQUEST_UPDATE acks. Seeded from the SUBSCRIBE_OK largest.
@@ -1784,117 +1847,102 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
     logger_ = logger;
   }
 
-  void trackLatestRequestUpdate(const RequestUpdate& requestUpdate) {
-    // Only tracked for draft 18+, where onRequestUpdate consumes/resets it;
-    // pre-18 there is no coalescing, so avoid growing state that is never read.
-    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) < 18) {
-      return;
-    }
-    if (latestRequest_.has_value()) {
-      mergeRequestUpdate(latestRequest_.value(), requestUpdate);
-    } else {
-      latestRequest_ = requestUpdate;
-    }
-  }
-
-  folly::coro::Task<void> onRequestUpdate(RequestUpdate requestUpdate) {
-    if (!handle_) {
-      XLOG(ERR) << "Received RequestUpdate before sending FETCH_OK id="
-                << requestID_ << " fetchPub=" << this;
-      if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
-        session_->requestUpdateError(
-            RequestError{
-                requestUpdate.requestID,
-                RequestErrorCode::INTERNAL_ERROR,
-                "FETCH not yet initialized"},
-            requestID_);
-      }
-      co_return;
-    }
-
-    auto existingRequestID = requestID_;
-    auto updateRequestID = requestUpdate.requestID;
-
-    // Newer update supersedes this one
-    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18 &&
-        latestRequest_.has_value() &&
-        updateRequestID != latestRequest_.value().requestID) {
-      requestOks_.push_back(RequestOk{.requestID = updateRequestID});
-      co_return;
-    }
-
-    std::vector<RequestOk> currentOks;
-    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18 &&
-        latestRequest_.has_value()) {
-      requestUpdate = std::move(latestRequest_.value());
-      currentOks = std::move(requestOks_);
-      latestRequest_.reset();
-      requestOks_.clear();
-    }
-
-    // Claim this burst's place in the response order before the handler can
-    // suspend. Draft-18 responses carry no requestID, so the peer matches them
-    // to its outstanding updates in arrival order.
-    auto myTurn = std::make_shared<folly::coro::Baton>();
-    auto priorTurn = std::exchange(responseTurn_, myTurn);
-    SCOPE_EXIT {
-      myTurn->post();
-    };
-
-    // Call the handle's requestUpdate
-    auto updateResult = co_await co_awaitTry(co_withCancellation(
-        session_->cancellationSource_.getToken(),
-        handle_->requestUpdate(std::move(requestUpdate))));
-
-    // Bursts can finish out of order, so wait for every earlier one to respond.
-    if (priorTurn) {
-      co_await *priorTurn;
-    }
-
-    if (!session_) {
-      co_return;
-    }
-
-    // Only send responses for v15+
-    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
-      if (updateResult.hasException()) {
-        XLOG(ERR) << "Exception in requestUpdate ex="
-                  << updateResult.exception().what() << " fetchPub=" << this;
-        session_->requestUpdateError(
-            RequestError{
-                updateRequestID,
-                RequestErrorCode::INTERNAL_ERROR,
-                "Exception in requestUpdate"},
-            existingRequestID);
-      } else if (updateResult->hasError()) {
-        auto updateErr = updateResult->error();
-        updateErr.requestID = updateRequestID; // In case app got it wrong
-        session_->requestUpdateError(updateErr, existingRequestID);
-      } else {
-        // Newest succeeded: flush the held acks for the whole coalesced burst.
-        // On error/exception currentOks is dropped, so nothing is acked after a
-        // failed coalesced update.
-        currentOks.push_back(RequestOk{.requestID = updateRequestID});
-        for (const RequestOk& reqOk : currentOks) {
-          session_->requestUpdateOk(reqOk, existingRequestID);
-        }
-      }
+  void onRequestUpdate(RequestUpdate requestUpdate) {
+    bool coalesce =
+        getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18;
+    if (updates_.add(std::move(requestUpdate), coalesce)) {
+      session_->getExecutor()->add(
+          [weakSelf = std::weak_ptr<PublisherImpl>(shared_from_this())] {
+            if (auto self = weakSelf.lock()) {
+              std::static_pointer_cast<FetchPublisherImpl>(self)
+                  ->dispatchRequestUpdates();
+            }
+          });
     }
   }
 
  private:
+  void dispatchRequestUpdates() {
+    for (auto& batch : updates_.takeQueued()) {
+      // Rejecting a prior batch can end the fetch.
+      if (!session_) {
+        updates_.clear();
+        return;
+      }
+      if (!handle_) {
+        rejectUninitialized(batch);
+        continue;
+      }
+      folly::RequestContextScopeGuard guard;
+      session_->setRequestSession();
+      startRequestUpdate(
+          *session_,
+          handle_,
+          std::move(batch->update),
+          "Exception in requestUpdate",
+          [weakSelf = std::weak_ptr<PublisherImpl>(shared_from_this()),
+           batch](RequestUpdateSequencer::Result result) mutable {
+            if (auto self = weakSelf.lock()) {
+              std::static_pointer_cast<FetchPublisherImpl>(self)
+                  ->onRequestUpdateDone(batch, std::move(result));
+            }
+          });
+    }
+  }
+
+  void rejectUninitialized(
+      const std::shared_ptr<RequestUpdateSequencer::Batch>& batch) {
+    XLOG(ERR) << "Received RequestUpdate before sending FETCH_OK id="
+              << requestID_ << " fetchPub=" << this;
+    onRequestUpdateDone(
+        batch,
+        folly::makeUnexpected(
+            RequestError{
+                batch->newestRequestID,
+                RequestErrorCode::INTERNAL_ERROR,
+                "FETCH not yet initialized"}));
+  }
+
+  void onRequestUpdateDone(
+      const std::shared_ptr<RequestUpdateSequencer::Batch>& batch,
+      RequestUpdateSequencer::Result result) {
+    if (!session_) {
+      return;
+    }
+    for (auto& ready : updates_.complete(batch, std::move(result))) {
+      if (!session_) {
+        return;
+      }
+      respondToRequestUpdates(*ready);
+    }
+  }
+
+  void respondToRequestUpdates(RequestUpdateSequencer::Batch& batch) {
+    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) < 15) {
+      return;
+    }
+    if (batch.result->hasError()) {
+      // Only the newest update in a failed batch gets an error.
+      auto updateErr = std::move(batch.result->error());
+      updateErr.requestID = batch.newestRequestID;
+      session_->requestUpdateError(updateErr, requestID_);
+      return;
+    }
+    for (auto updateRequestID : batch.requestIDs) {
+      session_->requestUpdateOk(
+          RequestOk{
+              .requestID = updateRequestID,
+              .requestSpecificParams = {},
+              .trackProperties = {}},
+          requestID_);
+    }
+  }
+
   std::shared_ptr<MLogger> logger_;
   std::shared_ptr<Publisher::FetchHandle> handle_;
   std::shared_ptr<StreamPublisherImpl> streamPublisher_;
   bool cancelled_{false};
-  // Cumulative newest REQUEST_UPDATE; older queued handlers coalesce into it.
-  folly::Optional<RequestUpdate> latestRequest_;
-  // Held REQUEST_OKs for coalesced updates: flushed together once the newest
-  // update succeeds, or dropped if it fails, so none is acked prematurely.
-  std::vector<RequestOk> requestOks_;
-  // Posted by the most recent burst once it has responded; the next burst
-  // waits on it so responses stay in arrival order.
-  std::shared_ptr<folly::coro::Baton> responseTurn_;
+  RequestUpdateSequencer updates_;
 };
 
 // TrackPublisherImpl
@@ -4963,20 +5011,7 @@ void MoQSession::handleFetchRequestUpdate(
     return;
   }
 
-  fetchPublisher->trackLatestRequestUpdate(requestUpdate);
-
-  // Simple passthrough - just deliver to application and relay response
-  co_withExecutor(
-      getExecutor(),
-      co_withCancellation(
-          cancellationSource_.getToken(),
-          folly::coro::co_invoke(
-              [fetchPublisher = fetchPublisher,
-               update = requestUpdate]() mutable -> folly::coro::Task<void> {
-                co_await folly::coro::co_safe_point;
-                co_await fetchPublisher->onRequestUpdate(std::move(update));
-              })))
-      .start();
+  fetchPublisher->onRequestUpdate(requestUpdate);
 }
 
 void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
@@ -7216,6 +7251,7 @@ void MoQSession::terminateExistingRequest(
     // terminatePublish can retire the publisher and drop the map's reference
     // to it before returning, so hold one for the duration of the call.
     auto pubTrack = it->second;
+    cancelInboundRequest(existingRequestID);
     pubTrack->terminatePublish(pubDone, ResetStreamErrorCode::CANCELLED);
   } else {
     XLOG(ERR) << "requestUpdateError for invalid subscription id="
