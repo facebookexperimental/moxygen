@@ -464,6 +464,7 @@ void MoQRelaySession::onRequestUpdate(RequestUpdate requestUpdate) {
       if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
         return;
       }
+      retireRequestID(/*signalWriteLoop=*/true);
       if (shouldRejectNewPeerRequestDueToGoaway()) {
         XLOG(DBG1)
             << "Rejecting publishNamespace request update, GOAWAY/draining sess="
@@ -489,6 +490,7 @@ void MoQRelaySession::onRequestUpdate(RequestUpdate requestUpdate) {
       if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
         return;
       }
+      retireRequestID(/*signalWriteLoop=*/true);
       if (shouldRejectNewPeerRequestDueToGoaway()) {
         XLOG(DBG1)
             << "Rejecting subscribeNamespace request update, GOAWAY/draining sess="
@@ -513,6 +515,7 @@ void MoQRelaySession::onRequestUpdate(RequestUpdate requestUpdate) {
       if (closeSessionIfRequestIDInvalid(requestID, false, true)) {
         return;
       }
+      retireRequestID(/*signalWriteLoop=*/true);
       if (shouldRejectNewPeerRequestDueToGoaway()) {
         XLOG(DBG1)
             << "Rejecting subscribeTracks request update, GOAWAY/draining sess="

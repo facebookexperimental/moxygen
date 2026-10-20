@@ -4944,6 +4944,9 @@ void MoQSession::onRequestUpdate(RequestUpdate requestUpdate) {
     return;
   }
 
+  // The update's own ID opens no request, so nothing else retires it.
+  retireRequestID(/*signalWriteLoop=*/true);
+
   if (logger_) {
     logger_->logSubscribeUpdate(requestUpdate, ControlMessageType::PARSED);
   }
