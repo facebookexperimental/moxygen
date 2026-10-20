@@ -1898,15 +1898,30 @@ void MoQCache::clearMaxCacheDuration(const FullTrackName& ftn) {
   }
 }
 
-void MoQCache::setTrackExtensions(
-    const FullTrackName& ftn,
-    Extensions extensions) {
+MoQCache::CacheTrack& MoQCache::getOrCreateTrack(const FullTrackName& ftn) {
   auto it = cache_.find(ftn);
   if (it == cache_.end()) {
     it = cache_.emplace(ftn, std::make_shared<CacheTrack>()).first;
     addTrackToLRU(ftn, *it->second);
   }
-  it->second->extensions = std::move(extensions);
+  return *it->second;
+}
+
+void MoQCache::setTrackState(
+    const FullTrackName& ftn,
+    std::optional<AbsoluteLocation> largest,
+    Extensions extensions) {
+  auto& track = getOrCreateTrack(ftn);
+  track.extensions = std::move(extensions);
+  if (!largest) {
+    return;
+  }
+  auto res = track.updateLargest(*largest);
+  if (res.hasError()) {
+    // Upstream is past a cached end of track, which the writeback also
+    // rejects as malformed.
+    XLOG(ERR) << "setTrackState ftn=" << ftn << " err=" << res.error().msg;
+  }
 }
 
 MoQCache::FetchRangeIterator::FetchRangeIterator(

@@ -1773,7 +1773,7 @@ MoQRelay::subscribeToFirstRelaySubscription(
   auto& upstreamExtensions = subRes.value()->subscribeOk().extensions;
   forwarder->setExtensions(upstreamExtensions);
   if (cache_) {
-    cache_->setTrackExtensions(subReq.fullTrackName, upstreamExtensions);
+    cache_->setTrackState(subReq.fullTrackName, largest, upstreamExtensions);
   }
 
   auto it = subscriptions_.find(subReq.fullTrackName);

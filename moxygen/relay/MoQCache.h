@@ -129,7 +129,13 @@ class MoQCache {
     return defaultMaxCacheDuration_;
   }
 
-  void setTrackExtensions(const FullTrackName& ftn, Extensions extensions);
+  // Largest Object and extensions as upstream reported them, from SUBSCRIBE_OK
+  // or PUBLISH. A previously cached track otherwise trails upstream's Largest
+  // until a new object arrives.
+  void setTrackState(
+      const FullTrackName& ftn,
+      std::optional<AbsoluteLocation> largest,
+      Extensions extensions);
 
   TimePoint now() const {
     return clock_();
@@ -376,6 +382,8 @@ class MoQCache {
   static void recordUpstreamEndOfTrack(
       CacheTrack& track,
       const Publisher::FetchResult& upstreamResult);
+
+  CacheTrack& getOrCreateTrack(const FullTrackName& ftn);
 
   // Track LRU management helpers
   void addTrackToLRU(const FullTrackName& ftn, CacheTrack& track);

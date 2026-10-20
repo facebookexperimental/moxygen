@@ -810,6 +810,23 @@ CO_TEST_F(MoQCacheTest, TestFetchOnLiveTrackPastLargest) {
   expectFetchObjects({0, 0}, {0, 1}, false);
 }
 
+// With upstream's Largest applied, a live fetch runs to it instead of the
+// stale cached mark, and fetches the uncached part upstream.
+CO_TEST_F(MoQCacheTest, TestLiveFetchRunsToUpstreamLargest) {
+  populateCacheRange({0, 0}, {0, 5});
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  cache_.setTrackState(kTestTrackName, AbsoluteLocation{1, 4}, noExtensions());
+
+  expectUpstreamFetch({0, 5}, {1, 5}, 0, AbsoluteLocation{1, 5});
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {1, 5}), trackingConsumer_, upstream_);
+  CO_ASSERT_TRUE(res.hasValue());
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 5}));
+  expectFetchObjects({0, 0}, {1, 5}, true);
+  co_await folly::coro::co_reschedule_on_current_executor;
+  serveCacheRangeFromUpstream({0, 5}, {1, 5});
+}
+
 CO_TEST_F(MoQCacheTest, TestFetchEndBeyondEndOfTrack) {
   // Test case for fetch end beyond the end of track
   populateCacheRange({0, 0}, {0, 5});
@@ -4190,11 +4207,11 @@ TEST_F(MoQCacheTest, SubgroupWritebackBeginObjectCacheErrorResetsInner) {
 }
 
 CO_TEST_F(MoQCacheTest, TestFetchOkIncludesTrackExtensions) {
-  // Set extensions on the track via setTrackExtensions
+  // Set extensions on the track via setTrackState
   Extensions ext;
   ext.insertMutableExtension(Extension{kDeliveryTimeoutExtensionType, 5000});
   ext.insertMutableExtension(Extension{0xBEEF'0000, 42});
-  cache_.setTrackExtensions(kTestTrackName, ext);
+  cache_.setTrackState(kTestTrackName, std::nullopt, ext);
 
   // Populate cache so the fetch is a full cache hit
   populateCacheRange({0, 0}, {0, 10});
@@ -4229,7 +4246,7 @@ CO_TEST_F(MoQCacheTest, TestUpstreamFetchSavesExtensionsToTrack) {
 
   // Set extensions on the track (simulates what MoQRelay does after
   // SubscribeOk)
-  cache_.setTrackExtensions(kTestTrackName, upstreamExt);
+  cache_.setTrackState(kTestTrackName, std::nullopt, upstreamExt);
 
   // Serve data from upstream so the cache is populated
   expectFetchObjects({0, 0}, {0, 10}, true);
