@@ -65,11 +65,14 @@ moxygen_add_library(moxygen_proxy_moq_proxy_track
   SRCS
     MoQProxyTrack.cpp
   DEPS
+    moxygen_moq_location
     moxygen_relay_moq_forwarder
     Folly::folly_coro_result
+    Folly::folly_scope_guard
     fmt::fmt
   EXPORTED_DEPS
     moxygen_moq
+    moxygen_proxy_moq_group_cache
     moxygen_proxy_moq_upstream_provider
     Folly::folly_coro_shared_promise
     Folly::folly_coro_task
@@ -81,13 +84,19 @@ moxygen_add_library(moxygen_proxy_moq_proxy
     MoQProxy.cpp
   DEPS
     moxygen_moq_consumers
-    moxygen_relay_moq_cache
+    moxygen_proxy_moq_join_replay
+    Folly::folly_coro_current_executor
+    Folly::folly_coro_invoke
     Folly::folly_coro_result
+    Folly::folly_coro_with_cancellation
   EXPORTED_DEPS
     moxygen_moq
+    moxygen_proxy_moq_group_cache
     moxygen_proxy_moq_proxy_track
     moxygen_proxy_moq_upstream_provider
+    Folly::folly_cancellation_token
     Folly::folly_container_f14_hash
+    Folly::folly_futures_core
 )
 
 add_subdirectory(cache)

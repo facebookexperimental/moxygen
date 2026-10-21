@@ -6,17 +6,176 @@
 
 #include "moxygen/proxy/MoQProxy.h"
 
+#include <folly/coro/CurrentExecutor.h>
+#include <folly/coro/Invoke.h>
 #include <folly/coro/Result.h>
+#include <folly/coro/WithCancellation.h>
 #include <stdexcept>
 #include <utility>
 #include <variant>
 
 #include "moxygen/MoQFilters.h"
 #include "moxygen/MoQSession.h"
+#include "moxygen/proxy/MoQJoinReplay.h"
 #include "moxygen/proxy/MoQProxyTrack.h"
-#include "moxygen/relay/MoQCache.h"
 
 namespace moxygen {
+namespace {
+
+FetchError
+fetchFailure(RequestID requestID, FetchErrorCode code, std::string reason) {
+  return FetchError{requestID, code, std::move(reason)};
+}
+
+// The standalone wire form of an exclusive end: an end object of zero asks
+// for all of the end group.
+AbsoluteLocation toWireFetchEnd(AbsoluteLocation exclusiveEnd) {
+  if (exclusiveEnd.object != 0) {
+    return exclusiveEnd;
+  }
+  return AbsoluteLocation{exclusiveEnd.group - 1, 0};
+}
+
+// Forwards every callback and records whether any response data, status or
+// framing reached the downstream consumer.
+class ExposureTrackingFetchConsumer final : public FetchConsumer {
+ public:
+  explicit ExposureTrackingFetchConsumer(
+      std::shared_ptr<FetchConsumer> consumer)
+      : consumer_(std::move(consumer)) {}
+
+  bool exposed() const {
+    return exposed_;
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> object(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      Payload payload,
+      Extensions extensions,
+      bool finFetch,
+      bool forwardingPreferenceIsDatagram) override {
+    exposed_ = true;
+    return consumer_->object(
+        groupID,
+        subgroupID,
+        objectID,
+        std::move(payload),
+        std::move(extensions),
+        finFetch,
+        forwardingPreferenceIsDatagram);
+  }
+
+  void checkpoint() override {
+    consumer_->checkpoint();
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> beginObject(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      uint64_t length,
+      Payload initialPayload,
+      Extensions extensions) override {
+    exposed_ = true;
+    return consumer_->beginObject(
+        groupID,
+        subgroupID,
+        objectID,
+        length,
+        std::move(initialPayload),
+        std::move(extensions));
+  }
+
+  folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
+      Payload payload,
+      bool finSubgroup) override {
+    exposed_ = true;
+    return consumer_->objectPayload(std::move(payload), finSubgroup);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      bool finFetch) override {
+    exposed_ = true;
+    return consumer_->endOfGroup(groupID, subgroupID, objectID, finFetch);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID) override {
+    exposed_ = true;
+    return consumer_->endOfTrackAndGroup(groupID, subgroupID, objectID);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {
+    exposed_ = true;
+    return consumer_->endOfFetch();
+  }
+
+  void reset(ResetStreamErrorCode error) override {
+    exposed_ = true;
+    consumer_->reset(error);
+  }
+
+  void goaway(Goaway goaway) override {
+    consumer_->goaway(std::move(goaway));
+  }
+
+  folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
+  awaitReadyToConsume() override {
+    return consumer_->awaitReadyToConsume();
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfUnknownRange(
+      uint64_t groupID,
+      uint64_t objectID,
+      bool finFetch) override {
+    exposed_ = true;
+    return consumer_->endOfUnknownRange(groupID, objectID, finFetch);
+  }
+
+ private:
+  std::shared_ptr<FetchConsumer> consumer_;
+  bool exposed_{false};
+};
+
+// The handle for a joining FETCH served by one upstream FETCH.
+class UpstreamJoiningFetchHandle final : public Publisher::FetchHandle {
+ public:
+  UpstreamJoiningFetchHandle(
+      std::shared_ptr<Publisher::FetchHandle> upstream,
+      std::shared_ptr<MoQSession> session)
+      : Publisher::FetchHandle(upstream->fetchOk()),
+        upstream_(std::move(upstream)),
+        session_(std::move(session)) {}
+
+  void fetchCancel() override {
+    if (auto upstream = std::exchange(upstream_, nullptr)) {
+      upstream->fetchCancel();
+    }
+    session_.reset();
+  }
+
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate requestUpdate) override {
+    co_return folly::makeUnexpected(
+        RequestError{
+            requestUpdate.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "REQUEST_UPDATE not supported for a joining FETCH"});
+  }
+
+ private:
+  std::shared_ptr<Publisher::FetchHandle> upstream_;
+  std::shared_ptr<MoQSession> session_;
+};
+
+} // namespace
 
 template <
     typename Result,
@@ -107,14 +266,21 @@ class MoQProxy::LateBoundPublishConsumer final : public TrackConsumerFilter {
 };
 
 std::shared_ptr<MoQProxy> MoQProxy::create(
-    std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders) {
-  return std::shared_ptr<MoQProxy>(new MoQProxy(std::move(upstreamProviders)));
+    std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders,
+    MoQProxyOptions options) {
+  return std::shared_ptr<MoQProxy>(
+      new MoQProxy(std::move(upstreamProviders), std::move(options)));
 }
 
 MoQProxy::MoQProxy(
-    std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders)
+    std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders,
+    MoQProxyOptions options)
     : upstreamProviders_(std::move(upstreamProviders)),
-      cache_(std::make_shared<MoQCache>()) {
+      options_(std::move(options)),
+      budget_(std::make_shared<MoQCacheBudget>(options_.maxCacheBytes)) {
+  if (options_.replayStallTimeout.count() <= 0) {
+    throw std::invalid_argument("MoQProxy requires a positive stall timeout");
+  }
   if (upstreamProviders_.empty()) {
     throw std::invalid_argument("MoQProxy requires upstream providers");
   }
@@ -155,30 +321,258 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::fetch(
     std::shared_ptr<FetchConsumer> consumer) {
   auto self = shared_from_this();
   if (closed_) {
-    co_return folly::makeUnexpected(
-        FetchError{
-            fetch.requestID, FetchErrorCode::GOING_AWAY, "proxy is closed"});
+    co_return folly::makeUnexpected(fetchFailure(
+        fetch.requestID, FetchErrorCode::GOING_AWAY, "proxy is closed"));
   }
-  if (!std::holds_alternative<StandaloneFetch>(fetch.args)) {
-    co_return folly::makeUnexpected(
-        FetchError{
-            fetch.requestID,
-            FetchErrorCode::NOT_SUPPORTED,
-            "joining fetch is not supported"});
+  if (std::holds_alternative<StandaloneFetch>(fetch.args)) {
+    co_return co_await forwardStandaloneFetch(
+        std::move(fetch), std::move(consumer));
   }
+  co_return co_await joiningFetch(std::move(fetch), std::move(consumer));
+}
 
-  co_return co_await tryUpstreams<std::shared_ptr<Publisher::FetchHandle>>(
-      fetch.requestID,
+folly::coro::Task<Publisher::FetchResult> MoQProxy::forwardStandaloneFetch(
+    Fetch fetch,
+    std::shared_ptr<FetchConsumer> consumer) {
+  const auto requestID = fetch.requestID;
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  auto failure = fetchFailure(
+      requestID, FetchErrorCode::INTERNAL_ERROR, "no upstream available");
+  auto cancelled = [&] {
+    return folly::makeUnexpected(
+        fetchFailure(requestID, FetchErrorCode::CANCELLED, "fetch cancelled"));
+  };
+  for (size_t i = 0; i < upstreamProviders_.size(); ++i) {
+    if (token.isCancellationRequested()) {
+      co_return cancelled();
+    }
+    auto sessionResult = co_await folly::coro::co_awaitTry(
+        upstreamProviders_[i]->getSession(
+            fetch.fullTrackName,
+            fetch.params,
+            i + 1 < upstreamProviders_.size()));
+    if (closed_) {
+      co_return folly::makeUnexpected(fetchFailure(
+          requestID, FetchErrorCode::GOING_AWAY, "proxy is closed"));
+    }
+    if (token.isCancellationRequested()) {
+      co_return cancelled();
+    }
+    if (sessionResult.hasException() || sessionResult->hasError()) {
+      failure.reasonPhrase = sessionResult.hasException()
+          ? sessionResult.exception().what().toStdString()
+          : sessionResult->error().message;
+      continue;
+    }
+    auto upstreamSession = std::move(sessionResult->value());
+    if (!upstreamSession) {
+      failure.reasonPhrase = "upstream provider returned a null session";
+      continue;
+    }
+    auto exposure = std::make_shared<ExposureTrackingFetchConsumer>(consumer);
+    auto result = co_await folly::coro::co_awaitTry(
+        upstreamSession->fetch(fetch, exposure));
+    if (closed_ || token.isCancellationRequested()) {
+      if (result.hasValue() && result->hasValue()) {
+        result->value()->fetchCancel();
+      }
+      if (closed_) {
+        co_return folly::makeUnexpected(fetchFailure(
+            requestID, FetchErrorCode::GOING_AWAY, "proxy is closed"));
+      }
+      co_return cancelled();
+    }
+    if (result.hasValue() && result->hasValue()) {
+      co_return std::move(result->value());
+    }
+    if (result.hasException()) {
+      failure = fetchFailure(
+          requestID,
+          FetchErrorCode::INTERNAL_ERROR,
+          result.exception().what().toStdString());
+    } else {
+      failure = std::move(result->error());
+      failure.requestID = requestID;
+    }
+    // Another provider may only be tried before this one exposed anything.
+    if (token.isCancellationRequested() || exposure->exposed() ||
+        failure.errorCode == FetchErrorCode::CANCELLED) {
+      co_return folly::makeUnexpected(std::move(failure));
+    }
+  }
+  co_return folly::makeUnexpected(std::move(failure));
+}
+
+folly::coro::Task<Publisher::FetchResult> MoQProxy::joiningFetch(
+    Fetch fetch,
+    std::shared_ptr<FetchConsumer> consumer) {
+  const auto requestID = fetch.requestID;
+  const auto downstream = MoQSession::getRequestContext();
+  const auto& joining = std::get<JoiningFetch>(fetch.args);
+  auto track = findTrack(fetch.fullTrackName);
+  if (!track) {
+    co_return folly::makeUnexpected(fetchFailure(
+        requestID,
+        FetchErrorCode::INVALID_JOINING_REQUEST_ID,
+        "no such subscription"));
+  }
+  auto range =
+      track->resolveJoiningFetch(downstream.sessionId, requestID, joining);
+  if (range.hasError()) {
+    co_return folly::makeUnexpected(std::move(range.error()));
+  }
+  // A FETCH that omits its group order is ascending from draft 15, and
+  // MoQSession writes and reads a Default-order FETCH stream oldest first.
+  const auto groupOrder = fetch.groupOrder == GroupOrder::Default
+      ? GroupOrder::OldestFirst
+      : fetch.groupOrder;
+  fetch.groupOrder = groupOrder;
+  auto cache = track->groupCache();
+  auto coverage = cache ? cache->inspect(range->start, range->end)
+                        : MoQGroupCache::Coverage::Miss;
+  const bool waited = coverage == MoQGroupCache::Coverage::AwaitIngress;
+  if (waited) {
+    auto token = folly::cancellation_token_merge(
+        co_await folly::coro::co_current_cancellation_token,
+        shutdown_.getToken());
+    const auto waitStart = std::chrono::steady_clock::now();
+    coverage = co_await folly::coro::co_withCancellation(
+        token,
+        awaitCacheCoverage(
+            cache,
+            range->start,
+            range->end,
+            options_.cacheCompletionWait,
+            options_.timekeeper.get()));
+    joinStats_->completionWaitTime +=
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - waitStart);
+    if (closed_) {
+      co_return folly::makeUnexpected(fetchFailure(
+          requestID, FetchErrorCode::GOING_AWAY, "proxy is closed"));
+    }
+    if (token.isCancellationRequested()) {
+      co_return folly::makeUnexpected(fetchFailure(
+          requestID, FetchErrorCode::CANCELLED, "fetch cancelled"));
+    }
+  }
+  switch (coverage) {
+    case MoQGroupCache::Coverage::Ready:
+      // Nothing has been written yet, so a plan that cannot be charged
+      // still falls back upstream.
+      if (auto plan = cache->snapshot(range->start, range->end, groupOrder)) {
+        (waited ? joinStats_->hitsAfterWait : joinStats_->immediateHits)++;
+        co_return co_await startLocalReplay(
+            track,
+            requestID,
+            groupOrder,
+            std::move(*plan),
+            std::move(consumer));
+      }
+      joinStats_->fallbacksPlanRejected++;
+      break;
+    case MoQGroupCache::Coverage::AwaitIngress:
+      joinStats_->fallbacksWaitExpired++;
+      break;
+    case MoQGroupCache::Coverage::Miss:
+      joinStats_->fallbacksMiss++;
+      break;
+  }
+  co_return co_await upstreamJoiningFetch(
+      std::move(track), std::move(fetch), *range, std::move(consumer));
+}
+
+folly::coro::Task<Publisher::FetchResult> MoQProxy::startLocalReplay(
+    const std::shared_ptr<MoQProxyTrack>& track,
+    RequestID requestID,
+    GroupOrder groupOrder,
+    MoQReplayPlan plan,
+    std::shared_ptr<FetchConsumer> consumer) {
+  auto handle = std::make_shared<MoQLocalFetchHandle>(FetchOk{
+      .requestID = requestID,
+      .groupOrder = groupOrder,
+      .endOfTrack = plan.endOfTrack,
+      .endLocation = plan.endLocation,
+      .extensions = track->trackExtensions()});
+  // The replay owns the plan but never the handle, so dropping the handle
+  // cancels it.
+  auto token = folly::cancellation_token_merge(
+      handle->getToken(),
+      shutdown_.getToken(),
+      co_await folly::coro::co_current_cancellation_token);
+  // Awaited separately: GCC 11 destroys a closure that shares a
+  // full-expression with co_await twice.
+  auto executor = co_await folly::coro::co_current_executor;
+  co_withExecutor(
+      executor,
+      folly::coro::co_withCancellation(
+          std::move(token),
+          folly::coro::co_invoke(
+              [stats = joinStats_,
+               replay = runReplay(
+                   std::move(plan),
+                   std::move(consumer),
+                   MoQReplayConfig{
+                       .stallTimeout = options_.replayStallTimeout,
+                       .timekeeper = options_.timekeeper})]() mutable
+                  -> folly::coro::Task<void> {
+                if (co_await std::move(replay) == MoQReplayOutcome::Stalled) {
+                  stats->replayStallResets++;
+                }
+              })))
+      .start();
+  co_return handle;
+}
+
+folly::coro::Task<Publisher::FetchResult> MoQProxy::upstreamJoiningFetch(
+    std::shared_ptr<MoQProxyTrack> track,
+    Fetch fetch,
+    MoQProxyTrack::JoiningRange range,
+    std::shared_ptr<FetchConsumer> consumer) {
+  const auto requestID = fetch.requestID;
+  // History comes from the established upstream only, never another
+  // publisher generation.
+  auto upstream = track->upstreamSession();
+  if (!upstream) {
+    co_return folly::makeUnexpected(fetchFailure(
+        requestID,
+        FetchErrorCode::INTERNAL_ERROR,
+        "upstream for history is unavailable"));
+  }
+  Fetch upstreamFetch(
+      requestID,
       fetch.fullTrackName,
-      fetch.params,
-      [this, fetch, consumer](std::shared_ptr<MoQSession> upstreamSession) {
-        return cache_->fetch(fetch, consumer, std::move(upstreamSession));
-      },
-      [](std::shared_ptr<Publisher::FetchHandle>& handle) {
-        if (handle) {
-          handle->fetchCancel();
-        }
-      });
+      range.start,
+      toWireFetchEnd(range.end),
+      fetch.priority,
+      fetch.groupOrder);
+  upstreamFetch.params = fetch.params;
+  auto token = folly::cancellation_token_merge(
+      co_await folly::coro::co_current_cancellation_token,
+      shutdown_.getToken());
+  auto result = co_await folly::coro::co_awaitTry(
+      folly::coro::co_withCancellation(
+          token,
+          upstream->fetch(std::move(upstreamFetch), std::move(consumer))));
+  if (result.hasException()) {
+    co_return folly::makeUnexpected(fetchFailure(
+        requestID,
+        FetchErrorCode::INTERNAL_ERROR,
+        result.exception().what().toStdString()));
+  }
+  if (result->hasError()) {
+    auto error = std::move(result->error());
+    error.requestID = requestID;
+    co_return folly::makeUnexpected(std::move(error));
+  }
+  auto upstreamHandle = std::move(result->value());
+  if (token.isCancellationRequested()) {
+    upstreamHandle->fetchCancel();
+    co_return folly::makeUnexpected(
+        fetchFailure(requestID, FetchErrorCode::CANCELLED, "fetch cancelled"));
+  }
+  co_return std::make_shared<UpstreamJoiningFetchHandle>(
+      std::move(upstreamHandle), std::move(upstream));
 }
 
 Subscriber::PublishResult MoQProxy::publish(
@@ -306,10 +700,20 @@ std::shared_ptr<MoQProxyTrack> MoQProxy::getOrCreateTrack(
     return it->second;
   }
 
-  auto track = MoQProxyTrack::create(fullTrackName, upstreamProviders_);
+  auto track = MoQProxyTrack::create(
+      fullTrackName,
+      upstreamProviders_,
+      MoQProxyTrack::CacheConfig{
+          .maxGroups = options_.maxGroupsPerTrack, .budget = budget_});
   track->setCallback(shared_from_this());
   tracks_.emplace(fullTrackName, track);
   return track;
+}
+
+std::shared_ptr<MoQProxyTrack> MoQProxy::findTrack(
+    const FullTrackName& fullTrackName) const {
+  auto it = tracks_.find(fullTrackName);
+  return it == tracks_.end() ? nullptr : it->second;
 }
 
 void MoQProxy::onNoSubscribers(MoQProxyTrack* track) {
@@ -324,13 +728,13 @@ void MoQProxy::close() {
     return;
   }
   closed_ = true;
+  shutdown_.requestCancellation();
 
   auto tracks = std::move(tracks_);
   for (auto& [_, track] : tracks) {
     track->setCallback({});
     track->close();
   }
-  cache_->clear();
 }
 
 } // namespace moxygen

@@ -161,8 +161,16 @@ TEST_F(MoQProxyTrackTest, FirstSubscriberEstablishesUpstreamSubscription) {
   EXPECT_EQ(upstreamRequest.priority, kDefaultPriority);
   EXPECT_EQ(upstreamRequest.groupOrder, GroupOrder::Default);
   EXPECT_EQ(upstreamRequest.locType, LocationType::LargestObject);
-  EXPECT_NE(std::dynamic_pointer_cast<MoQForwarder>(upstreamConsumer), nullptr);
   EXPECT_EQ(result.value()->subscribeOk().largest, AbsoluteLocation(10, 2));
+  // The upstream subscription feeds the downstream subscriber.
+  ASSERT_NE(upstreamConsumer, nullptr);
+  EXPECT_CALL(*consumer, datagram(_, _, _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_TRUE(upstreamConsumer
+                  ->datagram(
+                      ObjectHeader(11, 0, 0, 0, uint64_t(1)),
+                      folly::IOBuf::copyBuffer("x"))
+                  .hasValue());
 
   EXPECT_CALL(*upstreamHandle, unsubscribe());
   result.value()->unsubscribe();
