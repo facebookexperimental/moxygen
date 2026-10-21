@@ -581,15 +581,17 @@ std::unique_ptr<MoQRelayClient> createRelayClient(
               alpns))
           .start());
 
-  relayClient->run(/*publisher=*/publisher, {TrackNamespace(FLAGS_ns, "/")})
-      .scheduleOn(moqEvb.get())
+  co_withExecutor(
+      moqEvb.get(),
+      relayClient->run(/*publisher=*/publisher,
+                       {TrackNamespace(FLAGS_ns, "/")}))
       .start();
 
   if (FLAGS_publish) {
-    publisher
-        ->callPublish(
-            relayClient.get(), TrackNamespace(FLAGS_ns, "/"), 0, moqEvb)
-        .scheduleOn(workerEvb)
+    co_withExecutor(
+        workerEvb,
+        publisher->callPublish(
+            relayClient.get(), TrackNamespace(FLAGS_ns, "/"), 0, moqEvb))
         .start();
   }
 
