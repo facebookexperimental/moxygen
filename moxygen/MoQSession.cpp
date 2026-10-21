@@ -1608,7 +1608,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     subscribeLocType_ = locType;
   }
 
-  // Drafts 14-16 only allow a joining FETCH against a Largest Object
+  // Draft 16 only allows a joining FETCH against a Largest Object
   // subscription. PUBLISH-initiated subscriptions carry no SUBSCRIBE filter.
   bool allowsPreDraft18JoiningFetch() const {
     return !subscribeLocType_ ||
@@ -2836,8 +2836,6 @@ MoQSession::MoQSession(
       exec_(std::move(exec)),
       controlCodec_(std::make_unique<MoQControlCodec>(dir_, this)),
       nextRequestID_(0),
-
-      nextExpectedPeerRequestID_(1),
       nextPeerRequestIDForGoaway_(1) {
   controlCodec_->setTokenCache(&receiveTokenCache_);
 }
@@ -2852,7 +2850,6 @@ MoQSession::MoQSession(
       exec_(std::move(exec)),
       controlCodec_(std::make_unique<MoQControlCodec>(dir_, this)),
       nextRequestID_(1),
-      nextExpectedPeerRequestID_(0),
       nextPeerRequestIDForGoaway_(0),
       serverSetupCallback_(&serverSetupCallback),
       authTokenCacheEnabled_(authTokenCacheEnabled),
@@ -6217,7 +6214,6 @@ folly::coro::Task<void> MoQSession::handleTrackStatus(
   } else {
     auto trackStatOk = std::move(trackStatusResult->value());
     trackStatOk.requestID = trackStatus.requestID;
-    trackStatOk.fullTrackName = trackStatus.fullTrackName;
     if (!sendTrackProperties) {
       trackStatOk.trackProperties = Extensions{};
     }
@@ -6428,8 +6424,7 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
 }
 
 void MoQSession::onTrackStatusOk(TrackStatusOk trackStatusOk) {
-  XLOG(DBG1) << __func__ << " ftn=" << trackStatusOk.fullTrackName
-             << " code=" << uint64_t(trackStatusOk.statusCode)
+  XLOG(DBG1) << __func__ << " reqID=" << trackStatusOk.requestID
              << " sess=" << this;
   auto reqID = trackStatusOk.requestID;
   auto trackStatusIt = pendingRequests_.find(reqID);
@@ -6443,7 +6438,7 @@ void MoQSession::onTrackStatusOk(TrackStatusOk trackStatusOk) {
   if (trackStatusIt == pendingRequests_.end()) {
     XLOG(ERR) << __func__
               << " Couldn't find a pending TrackStatusRequest for reqID="
-              << reqID << " ftn=" << trackStatusOk.fullTrackName;
+              << reqID;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
@@ -7855,7 +7850,7 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
         return BidiStreamConfig{
             {wireType, FrameType::REQUEST_UPDATE},
             [this](RequestID id, std::optional<ResetStreamErrorCode>) {
-              onUnsubscribeNamespace(UnsubscribeNamespace{id, std::nullopt});
+              onUnsubscribeNamespace(UnsubscribeNamespace{id});
             },
             finIsCancellation};
       };
@@ -7888,7 +7883,7 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
             [this](RequestID id, std::optional<ResetStreamErrorCode>) {
               PublishNamespaceDone done;
               done.requestID = id;
-              onPublishNamespaceDone(std::move(done));
+              onPublishNamespaceDone(done);
             }};
       case FrameType::TRACK_STATUS:
         return BidiStreamConfig{{FrameType::TRACK_STATUS}, nullptr};
@@ -8161,7 +8156,8 @@ bool MoQSession::closeSessionIfRequestIDInvalid(
       close(SessionCloseErrorCode::TOO_MANY_REQUESTS);
       return true;
     }
-    // Draft 16+: request IDs can come out of order; no strict-sequence check.
+    // Request IDs can arrive out of order, so there is no strict-sequence
+    // check.
     const auto majorVersion = getDraftMajorVersion(*getNegotiatedVersion());
     if (majorVersion >= 18) {
       // Draft 18 dropped MAX_REQUEST_ID, so nothing else keeps the cutoff
@@ -8461,7 +8457,8 @@ void MoQSession::onPublishNamespaceDone(
 
 void MoQSession::onPublishNamespaceCancel(
     PublishNamespaceCancel publishNamespaceCancel) {
-  XLOG(DBG1) << __func__ << " ns=" << publishNamespaceCancel.trackNamespace
+  XLOG(DBG1) << __func__ << " requestID="
+             << publishNamespaceCancel.requestID.value_or(RequestID(0))
              << " - ignored by simple client, sess=" << this;
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onPublishNamespaceCancel);
 }

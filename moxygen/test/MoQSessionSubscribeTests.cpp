@@ -413,9 +413,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
 
         mockSubscriptionHandle = makeSubscribeOkResult(sub, expectedLargest);
 
-        // Set up mock expectations for subscribeUpdate for both versions
-        // For v<15: fire-and-forget, async processing
-        // For v15+: request-response, will return the mock result
+        // Set up mock expectations for subscribeUpdate; it is
+        // request-response and returns the mock result.
         expectSubscribeUpdate(mockSubscriptionHandle, subscribeUpdateProcessed);
 
         co_return mockSubscriptionHandle;
@@ -1076,41 +1075,36 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithRequestID) {
         mockSubscriptionHandle =
             makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
 
-        // Set up mock expectations for subscribeUpdate for both versions.
-        // For v15+, verify the session-assigned requestID (= original + 2).
-        // The existingRequestID field is only carried on the wire in v15-17;
+        // Set up mock expectations for subscribeUpdate. Verify the
+        // session-assigned requestID (= original + 2).
+        // The existingRequestID field is only carried on the wire in v16-17;
         // draft 18+ moves SUBSCRIBE_UPDATE to a per-request bidi stream so the
         // original requestID is stream-implicit and not reconstructable
         // server-side.
         const auto majorVersion =
             getDraftMajorVersion(getServerSelectedVersion());
-        if (majorVersion >= 15) {
-          // Capture original requestID by value: at v18 the bidi-stream
-          // codepath fires this lambda after `sub` is destroyed.
-          const auto originalRequestID = sub.requestID.value;
-          EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
-              .WillOnce(
-                  testing::Invoke([originalRequestID,
-                                   &subscribeUpdateProcessed,
-                                   majorVersion](const auto& actualUpdate) {
-                    if (majorVersion < 18) {
-                      EXPECT_EQ(
-                          actualUpdate.existingRequestID.value,
-                          originalRequestID);
-                    }
+        // Capture original requestID by value: at v18 the bidi-stream
+        // codepath fires this lambda after `sub` is destroyed.
+        const auto originalRequestID = sub.requestID.value;
+        EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
+            .WillOnce(
+                testing::Invoke([originalRequestID,
+                                 &subscribeUpdateProcessed,
+                                 majorVersion](const auto& actualUpdate) {
+                  if (majorVersion < 18) {
                     EXPECT_EQ(
-                        actualUpdate.requestID.value, originalRequestID + 2);
+                        actualUpdate.existingRequestID.value,
+                        originalRequestID);
+                  }
+                  EXPECT_EQ(
+                      actualUpdate.requestID.value, originalRequestID + 2);
 
-                    subscribeUpdateProcessed.post();
-                  }));
-          EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
-              .WillOnce(
-                  testing::Return(
-                      folly::Expected<RequestOk, RequestError>(RequestOk{})));
-        } else {
-          expectSubscribeUpdate(
-              mockSubscriptionHandle, subscribeUpdateProcessed);
-        }
+                  subscribeUpdateProcessed.post();
+                }));
+        EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+            .WillOnce(
+                testing::Return(
+                    folly::Expected<RequestOk, RequestError>(RequestOk{})));
 
         co_return mockSubscriptionHandle;
       });

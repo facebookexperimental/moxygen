@@ -595,8 +595,8 @@ CO_TEST_F(MoQCacheTest, TestFetchAllHitEOG) {
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{1, 0}));
 }
 
-// A zero-length object arrives from the codec with a null payload. Draft 16+
-// dropped Object Status from FETCH, so this is the ordinary encoding for an
+// A zero-length object arrives from the codec with a null payload. FETCH
+// objects carry no Object Status, so this is the ordinary encoding for an
 // empty object rather than something only a misbehaving peer sends.
 CO_TEST_F(MoQCacheTest, TestFetchZeroLengthObjectFromUpstream) {
   expectUpstreamFetch({0, 0}, {0, 1}, 0, AbsoluteLocation{0, 1});

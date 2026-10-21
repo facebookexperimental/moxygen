@@ -14,13 +14,12 @@
 namespace moxygen {
 
 /**
- * Track Property Accessors for Draft-16+
+ * Track Property Accessors
  *
- * Draft-16 moves several track properties from parameters to extensions.
- * These accessor functions abstract the param/extension details, storing
- * values in extensions (canonical for v16+) and allowing transparent access.
+ * Track properties are carried as extensions. These accessor functions hide
+ * the extension details.
  *
- * Properties migrated:
+ * Properties:
  * - DELIVERY_TIMEOUT (0x02)
  * - MAX_CACHE_DURATION (0x04)
  * - PUBLISHER_PRIORITY (0x0E) - renamed DEFAULT_PUBLISHER_PRIORITY
@@ -58,7 +57,7 @@ inline std::optional<uint64_t> getIntExtension(
 } // namespace detail
 
 // ============================================================================
-// Setters - store in extensions (canonical for v16+)
+// Setters - store in extensions
 // immutable defaults to false, set to true for immutable extensions
 // ============================================================================
 

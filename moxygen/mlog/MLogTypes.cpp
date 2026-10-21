@@ -342,9 +342,6 @@ folly::dynamic MOQTPublishNamespaceError::toDynamic() const {
 folly::dynamic MOQTPublishNamespaceCancel::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
-  obj["track_namespace"] =
-      folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
   if (requestId.has_value()) {
     obj["request_id"] = requestId.value();
   }
@@ -411,16 +408,8 @@ folly::dynamic MOQTUnsubscribeNamespace::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
 
-  // v15+: Include requestID if present
-  if (requestID.has_value()) {
-    obj["requestID"] = requestID.value();
-  }
-
-  // <v15: Include trackNamespace if present
-  if (!trackNamespace.empty()) {
-    auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
-    obj["trackNamespace"] = folly::dynamic::array(
-        trackNamespaceStr.begin(), trackNamespaceStr.end());
+  if (requestId.has_value()) {
+    obj["request_id"] = requestId.value();
   }
 
   return obj;
@@ -548,9 +537,6 @@ folly::dynamic MOQTPublishNamespace::toDynamic() const {
 folly::dynamic MOQTPublishNamespaceDone::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  auto trackNamespaceStr = parseTrackNamespace(trackNamespace);
-  obj["trackNamespace"] =
-      folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
   if (requestId.has_value()) {
     obj["request_id"] = requestId.value();
   }

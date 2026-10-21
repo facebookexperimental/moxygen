@@ -567,7 +567,7 @@ folly::coro::Task<void> MoQTestPublisher::sendDatagram(
       Payload objectPayload;
       uint64_t objectSize = 0;
       if (endOfGroupMarker) {
-        // Draft 15+ rejects extensions on a non-NORMAL status object.
+        // The framer rejects extensions on a non-NORMAL status object.
         header.status = ObjectStatus::END_OF_GROUP;
         header.length = 0;
       } else {
@@ -743,8 +743,7 @@ folly::coro::Task<void> MoQTestPublisher::fetchObjects(
   // what already exists, so it does not pace at all.
   uint32_t objectsSent = 0;
   // A datagram track fetches back through here because its objects have no
-  // subgroup.  From draft 16 the flag tells the framer to omit the subgroup
-  // field entirely; on draft 15 there is no flag and subgroup 0 is written.
+  // subgroup.  The flag tells the framer to omit the subgroup field.
   const bool isDatagram =
       params.forwardingPreference == ForwardingPreference::DATAGRAM;
   // FetchConsumer::endOfGroup() has no datagram flag to set, so a marker here

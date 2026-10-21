@@ -32,8 +32,7 @@ std::shared_ptr<MockFetchHandle> makeFetchOkResult(
 std::shared_ptr<MockSubscriptionHandle> makeSubscribeOkResult(
     const SubscribeRequest& sub,
     const std::optional<AbsoluteLocation>& largest,
-    const std::optional<uint8_t>& publisherPriority,
-    uint64_t majorVersion) {
+    const std::optional<uint8_t>& publisherPriority) {
   SubscribeOk subscribeOk;
   subscribeOk.requestID = sub.requestID;
   subscribeOk.trackAlias = TrackAlias(sub.requestID.value);
@@ -41,16 +40,7 @@ std::shared_ptr<MockSubscriptionHandle> makeSubscribeOkResult(
   subscribeOk.groupOrder = GroupOrder::OldestFirst;
   subscribeOk.largest = largest;
   if (publisherPriority.has_value()) {
-    if (majorVersion >= 16) {
-      setPublisherPriority(subscribeOk, publisherPriority.value());
-    } else {
-      ParamBuilder paramBuilder;
-      paramBuilder.add(
-          TrackRequestParamKey::PUBLISHER_PRIORITY, publisherPriority.value());
-      for (const auto& param : paramBuilder.build()) {
-        subscribeOk.params.insertParam(param);
-      }
-    }
+    setPublisherPriority(subscribeOk, publisherPriority.value());
   }
   return std::make_shared<MockSubscriptionHandle>(std::move(subscribeOk));
 }
@@ -160,9 +150,6 @@ VersionParams::VersionParams(std::vector<uint64_t> cv, uint64_t sv)
     : clientVersions(std::move(cv)), serverVersion(sv) {}
 
 std::vector<VersionParams> getSupportedVersionParams() {
-  // In this, the client and the server will negotiate the exact same version
-  // (the client vector will have just one element, and the server version will
-  // be that element)
   std::vector<VersionParams> result;
   result.reserve(kSupportedVersions.size() + 1);
   for (auto supportedVersion : kSupportedVersions) {
@@ -640,10 +627,6 @@ moxygen::Setup MoQSessionTest::getClientSetup(uint64_t initialMaxRequestID) {
       SetupParameter{
           folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
   return setup;
-}
-
-std::vector<uint64_t> MoQSessionTest::getClientSupportedVersions() {
-  return GetParam().clientVersions;
 }
 
 uint64_t MoQSessionTest::getServerSelectedVersion() {

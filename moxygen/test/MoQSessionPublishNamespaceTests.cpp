@@ -324,10 +324,7 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceCallerCancelledBeforeOk) {
   co_await folly::coro::sleep(std::chrono::milliseconds(200));
 
   EXPECT_TRUE(weakCallback.expired());
-  // Before draft 16, PUBLISH_NAMESPACE_DONE has no request ID to match.
-  if (getDraftMajorVersion(getServerSelectedVersion()) >= 16) {
-    EXPECT_TRUE(serverSawDone);
-  }
+  EXPECT_TRUE(serverSawDone);
   if (serverHandle) {
     testing::Mock::VerifyAndClearExpectations(serverHandle.get());
   }
@@ -402,10 +399,7 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceCancelledWhileOkQueued) {
   co_await folly::coro::sleep(std::chrono::milliseconds(200));
 
   EXPECT_TRUE(weakCallback.expired());
-  // Before draft 16, PUBLISH_NAMESPACE_DONE does not carry a request ID.
-  if (getDraftMajorVersion(getServerSelectedVersion()) >= 16) {
-    EXPECT_TRUE(serverSawDone);
-  }
+  EXPECT_TRUE(serverSawDone);
   if (serverHandle) {
     testing::Mock::VerifyAndClearExpectations(serverHandle.get());
   }

@@ -183,9 +183,7 @@ class DatePublisher : public Publisher {
         .requestID = trackStatus.requestID,
         .expires = std::chrono::milliseconds(0),
         .groupOrder = GroupOrder::OldestFirst,
-        .largest = *forwarder_.largest(),
-        .fullTrackName = trackStatus.fullTrackName,
-        .statusCode = TrackStatusCode(0)};
+        .largest = *forwarder_.largest()};
   }
 
   folly::coro::Task<SubscribeResult> subscribe(

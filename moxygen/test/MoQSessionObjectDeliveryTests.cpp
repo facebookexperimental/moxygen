@@ -303,24 +303,22 @@ CO_TEST_P_X(MoQSessionTest, SubgroupEndOfGroupHintRoundTrips) {
 }
 CO_TEST_P_X(MoQSessionTest, AdvertisedPublisherPriorityRoundTrips) {
   // The publisher advertises a non-default priority on the SubscribeOk (a
-  // track property extension from draft 16, a param before that) and then
-  // publishes at exactly that priority, so draft-15+ elides it from the
-  // subgroup header.  Both ends have to resolve the advertised value: if only
-  // the sender honours it, the subscriber backfills the protocol default and
-  // the two disagree about every object's priority.
+  // track property extension) and then publishes at exactly that priority, so
+  // the framer elides it from the subgroup header.  Both ends have to resolve
+  // the advertised value: if only the sender honours it, the subscriber
+  // backfills the protocol default and the two disagree about every object's
+  // priority.
   constexpr uint8_t kAdvertisedPriority = 100;
-  auto majorVersion = getDraftMajorVersion(GetParam().serverVersion);
   co_await setupMoQSession();
   expectSubscribe(
-      [this, majorVersion, priority = kAdvertisedPriority](
+      [this, priority = kAdvertisedPriority](
           auto sub, auto pub) -> TaskSubscribeResult {
         eventBase_.add([pub, sub, priority] {
           auto sgp = pub->beginSubgroup(0, 0, priority).value();
           sgp->object(0, moxygen::test::makeBuf(10), noExtensions(), true);
           pub->publishDone(getTrackEndedPublishDone(sub.requestID));
         });
-        co_return makeSubscribeOkResult(
-            sub, std::nullopt, priority, majorVersion);
+        co_return makeSubscribeOkResult(sub, std::nullopt, priority);
       },
       MoQControlCodec::Direction::CLIENT);
 
@@ -344,20 +342,12 @@ CO_TEST_P_X(MoQSessionTest, ElidedPriorityResolvesToAdvertisedPriority) {
   // priority rather than falling back to the protocol default.
   constexpr uint8_t kAdvertisedPriority = 100;
   auto version = GetParam().serverVersion;
-  if (getDraftMajorVersion(version) < 16) {
-    // Before draft 16 the priority rides a param, not a track property
-    co_return;
-  }
   co_await setupMoQSession();
 
   expectSubscribe(
-      [version, priority = kAdvertisedPriority](
+      [priority = kAdvertisedPriority](
           auto sub, auto /*pub*/) -> TaskSubscribeResult {
-        co_return makeSubscribeOkResult(
-            sub,
-            AbsoluteLocation{0, 0},
-            priority,
-            getDraftMajorVersion(version));
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0}, priority);
       },
       MoQControlCodec::Direction::CLIENT);
 
@@ -1114,15 +1104,15 @@ CO_TEST_P_X(MoQSessionTest, DeliveryCallbackMultipleStreams) {
   co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-using V15PlusTests = MoQSessionTest;
+using PublisherPriorityTest = MoQSessionTest;
 
 INSTANTIATE_TEST_SUITE_P(
-    V15PlusTests,
-    V15PlusTests,
+    PublisherPriorityTest,
+    PublisherPriorityTest,
     testing::Values(
         VersionParams{{kVersionDraft16}, kVersionDraft16},
         VersionParams{{kVersionDraft18}, kVersionDraft18}));
-CO_TEST_P_X(V15PlusTests, SubgroupPriorityFallback) {
+CO_TEST_P_X(PublisherPriorityTest, SubgroupPriorityFallback) {
   co_await setupMoQSession();
   std::shared_ptr<TrackConsumer> trackConsumer;
 
@@ -1142,13 +1132,8 @@ CO_TEST_P_X(V15PlusTests, SubgroupPriorityFallback) {
           sgp->endOfTrackAndGroup(1);
           pub->publishDone(getTrackEndedPublishDone(sub.requestID));
         });
-        // Return SubscribeOk with PUBLISHER_PRIORITY (param at v15, extension
-        // at v16+).
-        co_return makeSubscribeOkResult(
-            sub,
-            std::nullopt,
-            kPublisherPriority,
-            getDraftMajorVersion(getServerSelectedVersion()));
+        // Return SubscribeOk with PUBLISHER_PRIORITY (extension).
+        co_return makeSubscribeOkResult(sub, std::nullopt, kPublisherPriority);
       });
 
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
@@ -1172,7 +1157,7 @@ CO_TEST_P_X(V15PlusTests, SubgroupPriorityFallback) {
   co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(V15PlusTests, SubgroupExplicitPriority) {
+CO_TEST_P_X(PublisherPriorityTest, SubgroupExplicitPriority) {
   co_await setupMoQSession();
   std::shared_ptr<TrackConsumer> trackConsumer;
 
@@ -1189,14 +1174,9 @@ CO_TEST_P_X(V15PlusTests, SubgroupExplicitPriority) {
           sgp->endOfTrackAndGroup(1);
           pub->publishDone(getTrackEndedPublishDone(sub.requestID));
         });
-        // Return SubscribeOk with PUBLISHER_PRIORITY (param at v15, extension
-        // at v16+).
+        // Return SubscribeOk with PUBLISHER_PRIORITY (extension).
         constexpr uint8_t kPublisherPriority = 64;
-        co_return makeSubscribeOkResult(
-            sub,
-            std::nullopt,
-            kPublisherPriority,
-            getDraftMajorVersion(getServerSelectedVersion()));
+        co_return makeSubscribeOkResult(sub, std::nullopt, kPublisherPriority);
       });
 
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
@@ -1221,7 +1201,7 @@ CO_TEST_P_X(V15PlusTests, SubgroupExplicitPriority) {
   co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(V15PlusTests, ObjectStatusPriorityFallback) {
+CO_TEST_P_X(PublisherPriorityTest, ObjectStatusPriorityFallback) {
   co_await setupMoQSession();
   std::shared_ptr<TrackConsumer> trackConsumer;
 
@@ -1237,13 +1217,8 @@ CO_TEST_P_X(V15PlusTests, ObjectStatusPriorityFallback) {
           sgp->endOfTrackAndGroup(0);
           pub->publishDone(getTrackEndedPublishDone(sub.requestID));
         });
-        // Return SubscribeOk with PUBLISHER_PRIORITY (param at v15, extension
-        // at v16+).
-        co_return makeSubscribeOkResult(
-            sub,
-            std::nullopt,
-            kPublisherPriority,
-            getDraftMajorVersion(getServerSelectedVersion()));
+        // Return SubscribeOk with PUBLISHER_PRIORITY (extension).
+        co_return makeSubscribeOkResult(sub, std::nullopt, kPublisherPriority);
       });
 
   auto sg1 = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
@@ -1265,7 +1240,7 @@ CO_TEST_P_X(V15PlusTests, ObjectStatusPriorityFallback) {
   co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
-CO_TEST_P_X(V15PlusTests, PublisherPriorityDefaultValue) {
+CO_TEST_P_X(PublisherPriorityTest, PublisherPriorityDefaultValue) {
   co_await setupMoQSession();
   std::shared_ptr<TrackConsumer> trackConsumer;
 

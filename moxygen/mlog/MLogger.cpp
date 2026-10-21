@@ -380,12 +380,10 @@ void MLogger::logPublishNamespaceError(
 
 void MLogger::logPublishNamespaceCancel(
     const PublishNamespaceCancel& req,
-    const MOQTByteStringType& type,
+    const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTPublishNamespaceCancel>();
-  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-      req.trackNamespace.trackNamespace, type);
-  if (req.requestID) {
+  if (req.requestID.has_value()) {
     baseMsg->requestId = req.requestID->value;
   }
   baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
@@ -447,16 +445,11 @@ void MLogger::logSubscribeNamespace(
 
 void MLogger::logUnsubscribeNamespace(
     const UnsubscribeNamespace& req,
-    const MOQTByteStringType& type,
+    const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTUnsubscribeNamespace>();
-  if (req.trackNamespacePrefix.has_value()) {
-    baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-        req.trackNamespacePrefix.value().trackNamespace, type);
-  }
-
   if (req.requestID.has_value()) {
-    baseMsg->requestID = req.requestID->value;
+    baseMsg->requestId = req.requestID->value;
   }
 
   logControlMessage(
@@ -558,12 +551,10 @@ void MLogger::logPublishDone(
 
 void MLogger::logPublishNamespaceDone(
     const PublishNamespaceDone& req,
-    const MOQTByteStringType& type,
+    const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTPublishNamespaceDone>();
-  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
-      req.trackNamespace.trackNamespace, type);
-  if (req.requestID) {
+  if (req.requestID.has_value()) {
     baseMsg->requestId = req.requestID->value;
   }
 

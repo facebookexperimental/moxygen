@@ -62,13 +62,10 @@ std::shared_ptr<MockFetchHandle> makeFetchOkResult(
     const Fetch& fetch,
     const AbsoluteLocation& location);
 
-// At draft 16+, PUBLISHER_PRIORITY moves from param to extension; pass
-// majorVersion so the helper picks the correct mechanism.
 std::shared_ptr<MockSubscriptionHandle> makeSubscribeOkResult(
     const SubscribeRequest& sub,
     const std::optional<AbsoluteLocation>& largest = std::nullopt,
-    const std::optional<uint8_t>& publisherPriority = std::nullopt,
-    uint64_t majorVersion = 0);
+    const std::optional<uint8_t>& publisherPriority = std::nullopt);
 
 TrackStatusOk makeTrackStatusOkResult(
     const TrackStatus& req,
@@ -242,8 +239,6 @@ class MoQSessionTest : public testing::TestWithParam<VersionParams>,
   // GCC barfs when using struct brace initializers inside a coroutine?
   // Helper function to make ClientSetup with MAX_REQUEST_ID
   moxygen::Setup getClientSetup(uint64_t initialMaxRequestID);
-
-  std::vector<uint64_t> getClientSupportedVersions();
 
   uint64_t getServerSelectedVersion();
 

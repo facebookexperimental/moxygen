@@ -165,10 +165,9 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::FETCH_ERROR:
         return negotiatedVersion_ &&
             !useBidiRequestStreams(*negotiatedVersion_);
-      // Setup frames are version-gated; allow before negotiation.
       case FrameType::CLIENT_SETUP:
       case FrameType::SERVER_SETUP:
-        return !negotiatedVersion_ || major < 17;
+        return negotiatedVersion_ && major < 17;
       case FrameType::SETUP:
         return negotiatedVersion_ && major >= 17;
       // Removed in draft 18: replaced by per-stream RESET, by bidi
@@ -185,9 +184,8 @@ class MoQControlCodec : public MoQCodec {
       case FrameType::SUBSCRIBE_NAMESPACE_OK:
       case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
       case FrameType::UNSUBSCRIBE_NAMESPACE:
-      // In draft 16, NAMESPACE is PUBLISH_NAMESPACE_ERROR (0x8) and
-      // NAMESPACE_DONE is TRACK_STATUS_OK (0xE). They must be on a
-      // separate bidi stream, not the control stream.
+      // NAMESPACE (0x8) and NAMESPACE_DONE (0xE) only appear on a
+      // SUBSCRIBE_NAMESPACE bidi stream, never on the control stream.
       case FrameType::NAMESPACE:
       case FrameType::NAMESPACE_DONE:
         return false;

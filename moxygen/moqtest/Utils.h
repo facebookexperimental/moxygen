@@ -23,7 +23,7 @@ constexpr uint64_t kTimestampExtensionType = 0xC000;
 
 // The priority the server advertises as the track's publisher priority.  It is
 // deliberately not kDefaultPriority, so a subscriber that mishandles the
-// draft-15+ priority elision surfaces the protocol default instead of this
+// priority elision surfaces the protocol default instead of this
 // value.
 constexpr uint8_t kMoQTestPublisherPriority = 200;
 
@@ -92,11 +92,11 @@ struct MoQTestFetchWindow {
 };
 
 // How the objects of a track with `preference` are grouped into subgroups when
-// they are delivered over a FETCH.  A datagram object carries no subgroup: from
-// draft 16 the FETCH object sets the datagram flag and omits the subgroup
-// field, and the receiver reports 0, so the track arrives shaped like one
-// subgroup per group.  Publisher and subscriber must agree on this or the
-// subscriber will reject a conformant response.
+// they are delivered over a FETCH.  A datagram object carries no subgroup: the
+// FETCH object sets the datagram flag and omits the subgroup field, and the
+// receiver reports 0, so the track arrives shaped like one subgroup per group.
+// Publisher and subscriber must agree on this or the subscriber will reject a
+// conformant response.
 ForwardingPreference fetchForwardingPreference(ForwardingPreference preference);
 
 // The subgroup a fetched object is delivered on, which follows the track's

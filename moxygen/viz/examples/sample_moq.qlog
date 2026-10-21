@@ -26,13 +26,11 @@
         [1000, "transport", "moqt:control_message_created", {
           "message_type": "CLIENT_SETUP",
           "vantage_point": "client",
-          "supported_versions": [1, 2],
           "num_params": 0
         }],
         [1050, "transport", "moqt:control_message_parsed", {
           "message_type": "SERVER_SETUP",
           "vantage_point": "server",
-          "selected_version": 2,
           "num_params": 1
         }],
         [1100, "transport", "moqt:control_message_created", {

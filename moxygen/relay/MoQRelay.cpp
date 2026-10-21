@@ -217,21 +217,6 @@ MoQRelay::publishNamespace(
   co_return nodePtr;
 }
 
-folly::coro::Task<void> MoQRelay::publishNamespaceToSession(
-    std::shared_ptr<MoQSession> session,
-    PublishNamespace pubNs,
-    std::shared_ptr<NamespaceNode> nodePtr) {
-  auto publishNamespaceHandle = co_await session->publishNamespace(pubNs);
-  if (publishNamespaceHandle.hasError()) {
-    XLOG(ERR) << "PublishNamespace failed err="
-              << publishNamespaceHandle.error().reasonPhrase;
-  } else {
-    // This can race with unsubscribeNamespace
-    nodePtr->namespacesPublished[session] =
-        std::move(publishNamespaceHandle.value());
-  }
-}
-
 // NamespaceNode ref count management methods for pruning
 void MoQRelay::NamespaceNode::incrementActiveChildren() {
   activeChildCount_++;
@@ -351,7 +336,6 @@ void MoQRelay::publishNamespaceDone(
       }
     }
   }
-  nodePtr->namespacesPublished.clear();
 
   // Prune if node became empty and has a parent
   if (hadLocalContent && !nodePtr->shouldKeep() && nodePtr->parent_ &&
@@ -711,8 +695,6 @@ MoQRelay::subscribeNamespace(
   XLOG(DBG1) << __func__ << " nsp=" << subNs.trackNamespacePrefix;
 
   auto session = MoQSession::getRequestSession();
-  auto maybeNegotiatedVersion = session->getNegotiatedVersion();
-  XCHECK(maybeNegotiatedVersion.has_value());
 
   // Per-session overlap restriction: the prefix must not share a common prefix
   // with another active SUBSCRIBE_NAMESPACE in the same session.
@@ -806,8 +788,6 @@ void MoQRelay::publishExistingMatchingNamespaces(
     SubscribeNamespaceOptions options,
     const std::shared_ptr<Publisher::NamespacePublishHandle>&
         namespacePublishHandle,
-    RequestID /*requestID*/,
-    uint64_t /*negotiatedVersion*/,
     const TrackNamespace* skipUnderPrefix) {
   auto exec = session->getExecutor();
   std::deque<std::tuple<TrackNamespace, std::shared_ptr<NamespaceNode>>> nodes;
@@ -1207,23 +1187,16 @@ MoQRelay::updateNamespaceSubscriptionPrefix(
   // The registration now covers newPrefix; replay existing PUBLISH_NAMESPACEs
   // and matching PUBLISHes newly matched by it (skipping the oldPrefix subtree,
   // already delivered), mirroring the initial SUBSCRIBE_NAMESPACE backfill.
-  auto negotiatedVersion = session->getNegotiatedVersion();
-  if (negotiatedVersion) {
-    if (auto node = findNamespaceNode(newPrefix)) {
-      auto it = node->sessions.find(session);
-      if (it != node->sessions.end()) {
-        publishExistingMatchingNamespaces(
-            session,
-            newPrefix,
-            it->second.forward,
-            it->second.options,
-            it->second.namespacePublishHandle,
-            // A prefix update carrying TRACK_NAMESPACE_PREFIX is draft 18+, so
-            // the requestID-based (draft <=15) replay path is never taken here.
-            /*requestID=*/RequestID(0),
-            *negotiatedVersion,
-            &oldPrefix);
-      }
+  if (auto node = findNamespaceNode(newPrefix)) {
+    auto it = node->sessions.find(session);
+    if (it != node->sessions.end()) {
+      publishExistingMatchingNamespaces(
+          session,
+          newPrefix,
+          it->second.forward,
+          it->second.options,
+          it->second.namespacePublishHandle,
+          &oldPrefix);
     }
   }
   return folly::unit;
@@ -1836,29 +1809,13 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
     auto& subscription = subscriptionIt->second;
     auto& forwarder = subscription.forwarder;
 
-    TrackStatusCode statusCode = TrackStatusCode::TRACK_NOT_STARTED;
-    // forwarder->largest() being set means: we have actually
-    // received at least one object for this track.
-    // subscription.handle being non-null means: the relay still has a
-    // live upstream Publisher::SubscriptionHandle for this track
-    if (forwarder->largest()) {
-      if (subscription.handle) {
-        statusCode = TrackStatusCode::IN_PROGRESS;
-      } else {
-        statusCode = TrackStatusCode::UNKNOWN;
-      }
-    }
-
     TrackStatusOk trackStatusOk;
     trackStatusOk.requestID = trackStatus.requestID;
     trackStatusOk.groupOrder = forwarder->groupOrder();
     trackStatusOk.largest = forwarder->largest();
-    trackStatusOk.fullTrackName = trackStatus.fullTrackName;
-    trackStatusOk.statusCode = statusCode;
 
     XLOG(DBG1) << "Returning local track status for "
-               << trackStatus.fullTrackName
-               << " statusCode=" << (uint32_t)statusCode;
+               << trackStatus.fullTrackName;
     co_return trackStatusOk;
   } else {
     // No subscription - forward to upstream

@@ -751,7 +751,6 @@ class MoQSession : public Subscriber,
       proxygen::WebTransport::StreamData initialData) noexcept;
 
   // Used to tease apart the control stream from subscribe namespace streams.
-  // This is only called for draft >= 16.
   folly::coro::Task<void> bidiStreamDemuxer(
       ReadHandleRef readHandle,
       proxygen::WebTransport::StreamWriteHandle* writeHandle) noexcept;
@@ -1544,7 +1543,7 @@ class MoQSession : public Subscriber,
   std::optional<uint64_t> negotiatedVersion_;
 
   // Shared receive-side auth token cache. All codecs that parse auth tokens
-  // (control stream, draft16+ SUBSCRIBE_NAMESPACE bidi streams, etc.) point to
+  // (control stream, SUBSCRIBE_NAMESPACE bidi streams, etc.) point to
   // this cache so that aliases registered on one stream are visible on all
   // others and the total budget is enforced once rather than per-codec.
   static constexpr uint64_t kMaxReceiveTokenCacheSize{4096};
@@ -1630,7 +1629,6 @@ class MoQSession : public Subscriber,
   std::optional<RequestID> receivedGoawayRequestID_;
 
   uint64_t nextRequestID_{0};
-  uint64_t nextExpectedPeerRequestID_{0};
   uint64_t nextPeerRequestIDForGoaway_{0};
   uint64_t maxRequestID_{0};
 

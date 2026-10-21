@@ -919,7 +919,7 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
 
       // Datagram objects carry no subgroup: the object is flagged and sits in
-      // subgroup 0, which the framer omits from draft 16 onwards.
+      // subgroup 0, which the framer omits.
       EXPECT_CALL(
           *mockConsumer,
           object(
@@ -1439,7 +1439,7 @@ CO_TEST_F(MoQTrackServerTest, FetchOfADatagramTrackFlagsEachObject) {
   co_await done;
 
   // A datagram object carries no subgroup, so every object is flagged and sits
-  // in subgroup 0 -- the framer omits the field entirely from draft 16.
+  // in subgroup 0 -- the framer omits the field entirely.
   const std::vector<std::tuple<uint64_t, uint64_t, uint64_t, bool>> expected{
       {0, 0, 0, true}, {0, 0, 1, true}, {1, 0, 0, true}, {1, 0, 1, true}};
   EXPECT_EQ(received, expected);
@@ -2261,7 +2261,7 @@ TEST_F(MoQTrackServerTest, DatagramEndOfGroupMarkerIsAnEmptyStatusObject) {
   folly::coro::blockingWait(
       publisher_->sendDatagram(moxygen::RequestID(0), params_, mockConsumer));
 
-  // The marker lands on object 2, drops the extensions that draft 15+ rejects
+  // The marker lands on object 2, drops the extensions the framer rejects
   // on a non-NORMAL status object, and leaves the end-of-group bit clear
   // because the type byte cannot carry it alongside a status.
   const std::vector<std::tuple<uint64_t, moxygen::ObjectStatus, bool, bool>>

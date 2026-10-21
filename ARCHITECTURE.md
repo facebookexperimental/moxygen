@@ -419,8 +419,6 @@ MOQT supports extensions via parameter/extension fields:
 
 ### Version Negotiation
 
-Supports multiple MOQT protocol versions:
-- Version negotiation during setup
-- `setVersion()` to configure supported versions
-- Protocol adapts behavior based on negotiated version
-- Some features (like request IDs for publishes) vary by version
+- The MOQT version comes from the negotiated ALPN (raw QUIC) or WebTransport protocol
+- Supported drafts are listed in `kSupportedVersions` in `MoQVersions.h`
+- Behavior differs between drafts 16 and 18

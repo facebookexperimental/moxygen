@@ -1938,11 +1938,6 @@ class OutOfOrderFetchRequestUpdateHandle : public MockFetchHandle {
 // runs while requestUpdate is suspended, session_ is nulled but handle_ is
 // not, so there is no existing guard.
 CO_TEST_P_X(MoQSessionTest, FetchRequestUpdateNullSessionAfterAwait) {
-  // This test only applies to v16+ which supports fetch REQUEST_UPDATE.
-  if (getDraftMajorVersion(getServerSelectedVersion()) < 16) {
-    co_return;
-  }
-
   co_await setupMoQSession();
   std::shared_ptr<SuspendingFetchHandle> suspendingHandle;
   std::shared_ptr<FetchConsumer> heldFetchConsumer;
@@ -2436,10 +2431,6 @@ CO_TEST_P_X(Draft18Test, SubscribeNamespaceRequestUpdatePrefixRoundTrip) {
 CO_TEST_P_X(PreDraft18Test, SubscribeNamespaceRequestUpdateRoundTrip) {
   co_await setupMoQSession();
   const auto version = *clientSession_->getNegotiatedVersion();
-  if (getDraftMajorVersion(version) < 16) {
-    // REQUEST_UPDATE for SUBSCRIBE_NAMESPACE only exists at draft 16+.
-    co_return;
-  }
 
   std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
   RequestID serverRequestID{0};
@@ -2492,10 +2483,6 @@ CO_TEST_P_X(
     SubscribeNamespaceRequestUpdateRetiresItsRequestID) {
   co_await setupMoQSession();
   const auto version = *clientSession_->getNegotiatedVersion();
-  if (getDraftMajorVersion(version) < 16) {
-    // REQUEST_UPDATE for SUBSCRIBE_NAMESPACE only exists at draft 16+.
-    co_return;
-  }
 
   std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
   RequestID serverRequestID{0};
@@ -2926,10 +2913,6 @@ CO_TEST_P_X(Draft18Test, SubscribeTracksRequestUpdateFailureClosesBidi) {
 CO_TEST_P_X(PreDraft18Test, SubscribeNamespaceRequestUpdateNormalizesErrorID) {
   co_await setupMoQSession();
   const auto version = *clientSession_->getNegotiatedVersion();
-  if (getDraftMajorVersion(version) < 16) {
-    // REQUEST_UPDATE for SUBSCRIBE_NAMESPACE only exists at draft 16+.
-    co_return;
-  }
 
   std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))

@@ -1667,11 +1667,9 @@ TEST_F(MoQRelayTest, TrackStatusSuccessfulForward) {
     auto task = relay_->trackStatus(trackStatus);
     auto res = folly::coro::blockingWait(std::move(task), exec_.get());
 
-    // Should return status from local forwarder
-    // Since no data was sent, statusCode should be TRACK_NOT_STARTED
+    // Answered from the local forwarder, which has no objects yet.
     EXPECT_TRUE(res.hasValue());
-    EXPECT_EQ(res.value().statusCode, TrackStatusCode::TRACK_NOT_STARTED);
-    EXPECT_EQ(res.value().fullTrackName, kTestTrackName);
+    EXPECT_FALSE(res.value().largest.has_value());
   });
 
   removeSession(clientSession);

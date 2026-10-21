@@ -561,8 +561,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::FETCH_ERROR:
-    case FrameType::PUBLISH_NAMESPACE_ERROR: // same value as
-                                             // FrameType::NAMESPACE
+    case FrameType::NAMESPACE:
     case FrameType::SUBSCRIBE_NAMESPACE_ERROR:
     case FrameType::PUBLISH_ERROR: {
       auto res = moqFrameParser_.parseNamespace(cursor, curFrameLength_);
@@ -724,6 +723,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       break;
     }
     case FrameType::SUBSCRIBE_NAMESPACE_OK:
+    case FrameType::UNSUBSCRIBE_NAMESPACE:
       XLOG(ERR) << "Old frame type=" << folly::to_underlying(curFrameType_);
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     // case FrameType::PUBLISH_NAMESPACE_OK:
@@ -799,18 +799,6 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::UNSUBSCRIBE_NAMESPACE: {
-      auto res =
-          moqFrameParser_.parseUnsubscribeNamespace(cursor, curFrameLength_);
-      if (res) {
-        if (callback_) {
-          callback_->onUnsubscribeNamespace(std::move(res.value()));
-        }
-      } else {
-        return folly::makeUnexpected(res.error());
-      }
-      break;
-    }
     case FrameType::TRACK_STATUS: {
       auto res = moqFrameParser_.parseTrackStatus(cursor, curFrameLength_);
       if (res) {
@@ -823,8 +811,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQControlCodec::parseFrame(
       }
       break;
     }
-    case FrameType::TRACK_STATUS_OK: { // same value as
-                                       // FrameType::NAMESPACE_DONE
+    case FrameType::NAMESPACE_DONE: {
       auto res = moqFrameParser_.parseNamespaceDone(cursor, curFrameLength_);
       if (res) {
         if (callback_) {

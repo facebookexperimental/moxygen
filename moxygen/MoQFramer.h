@@ -90,18 +90,13 @@ bool datagramPriorityPresent(uint64_t version, DatagramType datagramType);
 bool subgroupPriorityPresent(uint64_t version, StreamType streamType);
 
 inline DatagramType getDatagramType(
-    uint64_t version,
+    uint64_t /*version*/,
     bool status,
     bool includeExtensions,
     bool endOfGroup,
     bool isObjectIdZero,
     bool priorityPresent = true) {
-  auto majorVersion = getDraftMajorVersion(version);
-  if (majorVersion == 11) {
-    return DatagramType(
-        (status ? DG_HAS_STATUS_V11 : 0) |
-        (includeExtensions ? DG_HAS_EXTENSIONS : 0));
-  } else if (status) {
+  if (status) {
     return DatagramType(
         DG_IS_STATUS | (includeExtensions ? DG_HAS_EXTENSIONS : 0) |
         (isObjectIdZero ? DG_OBJECT_ID_ZERO : 0) |
@@ -237,10 +232,6 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
 
-  folly::Expected<TrackStatusOk, ErrorCode> parseTrackStatusOk(
-      folly::io::Cursor& cursor,
-      size_t length) const noexcept;
-
   folly::Expected<TrackStatusError, ErrorCode> parseTrackStatusError(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
@@ -294,11 +285,7 @@ class MoQFrameParser {
       size_t length,
       FrameType frameType) const noexcept;
 
-  folly::Expected<UnsubscribeNamespace, ErrorCode> parseUnsubscribeNamespace(
-      folly::io::Cursor& cursor,
-      size_t length) const noexcept;
-
-  // v16+ messages for SUBSCRIBE_NAMESPACE response stream
+  // Messages on the SUBSCRIBE_NAMESPACE response stream
   folly::Expected<Namespace, ErrorCode> parseNamespace(
       folly::io::Cursor& cursor,
       size_t length) const noexcept;
@@ -481,11 +468,6 @@ class MoQFrameParser {
   void handleForwardParam(
       std::optional<bool>& forwardField,
       const std::vector<Parameter>& requestSpecificParams) const noexcept;
-
-  // Version translation: convert track property params to extensions for < v16
-  void convertTrackPropertyParamsToExtensions(
-      const TrackRequestParameters& params,
-      Extensions& extensions) const noexcept;
 
   folly::Expected<std::string, ErrorCode> parseFixedString(
       folly::io::Cursor& cursor,
@@ -720,11 +702,7 @@ class MoQFrameWriter {
       folly::IOBufQueue& writeBuf,
       const SubscribeNamespaceOk& subscribeNamespaceOk) const noexcept;
 
-  WriteResult writeUnsubscribeNamespace(
-      folly::IOBufQueue& writeBuf,
-      const UnsubscribeNamespace& unsubscribeNamespace) const noexcept;
-
-  // v16+ messages for SUBSCRIBE_NAMESPACE response stream
+  // Messages on the SUBSCRIBE_NAMESPACE response stream
   WriteResult writeNamespace(folly::IOBufQueue& writeBuf, const Namespace& ns)
       const noexcept;
 
@@ -920,11 +898,6 @@ class MoQFrameWriter {
       bool forwardingPreferenceIsDatagram = false) const noexcept;
 
   void resetWriterFetchContext() const noexcept;
-
-  // Version translation: convert track property extensions to params for < v16
-  void convertTrackPropertyExtensionsToParams(
-      const Extensions& extensions,
-      TrackRequestParameters& params) const noexcept;
 
   std::optional<uint64_t> version_;
   bool useMoQVarint_{false};

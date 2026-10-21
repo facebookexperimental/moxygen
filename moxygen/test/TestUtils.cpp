@@ -70,14 +70,6 @@ std::vector<Parameter> getTestTrackRequestParams(
           3600000)};
 }
 
-std::vector<Parameter> getTestPublisherTrackRequestParams(
-    const MoQFrameWriter& moqFrameWriter) {
-  auto params = getTestTrackRequestParams(moqFrameWriter);
-  params.emplace_back(
-      folly::to_underlying(TrackRequestParamKey::PUBLISHER_PRIORITY), 100);
-  return params;
-}
-
 // Helper to add test params to a Parameters object
 static void addTestParams(
     TrackRequestParameters& params,
@@ -150,11 +142,8 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   subscribeOk.expires = std::chrono::milliseconds(0);
   subscribeOk.groupOrder = GroupOrder::OldestFirst;
   subscribeOk.largest = AbsoluteLocation{2, 5};
-  // Draft 16+: Add extensions
-  if (getDraftMajorVersion(version) >= 16) {
-    subscribeOk.extensions.insertMutableExtensions(getTestExtensions());
-  }
-  // Use setter which stores in extensions; framer converts to params for < v16
+  subscribeOk.extensions.insertMutableExtensions(getTestExtensions());
+  // Use setter which stores in extensions
   setPublisherMaxCacheDuration(subscribeOk, std::chrono::milliseconds(3600000));
   res = moqFrameWriter.writeSubscribeOk(writeBuf, subscribeOk);
 
@@ -183,13 +172,10 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   publishRequest.groupOrder = GroupOrder::Default;
   publishRequest.largest = std::nullopt;
   publishRequest.forward = true;
-  // Draft 16+: Add extensions
-  if (getDraftMajorVersion(version) >= 16) {
-    publishRequest.extensions.insertMutableExtensions(getTestExtensions());
-  }
+  publishRequest.extensions.insertMutableExtensions(getTestExtensions());
   // Auth param stays as param (not a track property)
   publishRequest.params.insertParam(getTestAuthParam(moqFrameWriter, "binky"));
-  // Use setters which store in extensions; framer converts to params for < v16
+  // Use setters which store in extensions
   setPublisherDeliveryTimeout(publishRequest, std::chrono::milliseconds(1000));
   setPublisherMaxCacheDuration(
       publishRequest, std::chrono::milliseconds(3600000));
@@ -236,21 +222,13 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
            "server error"}),
       FrameType::PUBLISH_NAMESPACE_ERROR);
   PublishNamespaceCancel publishNamespaceCancel;
-  if (getDraftMajorVersion(version) >= 16) {
-    publishNamespaceCancel.requestID = RequestID(1);
-  } else {
-    publishNamespaceCancel.trackNamespace = TrackNamespace({"hello"});
-  }
+  publishNamespaceCancel.requestID = RequestID(1);
   publishNamespaceCancel.errorCode = PublishNamespaceErrorCode::INTERNAL_ERROR;
   publishNamespaceCancel.reasonPhrase = "internal error";
   res = moqFrameWriter.writePublishNamespaceCancel(
       writeBuf, publishNamespaceCancel);
   PublishNamespaceDone publishNamespaceDone;
-  if (getDraftMajorVersion(version) >= 16) {
-    publishNamespaceDone.requestID = RequestID(1);
-  } else {
-    publishNamespaceDone.trackNamespace = TrackNamespace({"hello"});
-  }
+  publishNamespaceDone.requestID = RequestID(1);
   res =
       moqFrameWriter.writePublishNamespaceDone(writeBuf, publishNamespaceDone);
 
@@ -261,18 +239,13 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
       FullTrackName({TrackNamespace({"hello"}), "world"});
   trackStatus.groupOrder = GroupOrder::OldestFirst;
   trackStatus.locType = LocationType::LargestObject;
-  if (getDraftMajorVersion(version) >= 16) {
-    trackStatus.params = TrackRequestParameters{FrameType::TRACK_STATUS};
-  }
+  trackStatus.params = TrackRequestParameters{FrameType::TRACK_STATUS};
   addTestParams(trackStatus.params, moqFrameWriter, version);
   res = moqFrameWriter.writeTrackStatus(writeBuf, trackStatus);
 
   // TrackStatusOk
   TrackStatusOk trackStatusOk;
   trackStatusOk.requestID = 3;
-  trackStatusOk.fullTrackName =
-      FullTrackName({TrackNamespace({"hello"}), "world"});
-  trackStatusOk.statusCode = TrackStatusCode::IN_PROGRESS;
   trackStatusOk.largest = AbsoluteLocation({19, 77});
   trackStatusOk.groupOrder = GroupOrder::OldestFirst;
   addTestParams(trackStatusOk.params, moqFrameWriter, version);
@@ -283,33 +256,6 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
     goaway.requestID = RequestID(in == TestControlMessages::CLIENT ? 1 : 0);
   }
   res = moqFrameWriter.writeGoaway(writeBuf, goaway);
-
-  // SubscribeNamespace - not on control stream for draft 16+
-  if (getDraftMajorVersion(version) < 16) {
-    SubscribeNamespace subscribeNamespace;
-    subscribeNamespace.requestID = 2;
-    subscribeNamespace.trackNamespacePrefix = TrackNamespace({"hello"});
-    subscribeNamespace.forward = true;
-    subscribeNamespace.params.insertParam(
-        getTestAuthParam(moqFrameWriter, "binky"));
-    res = moqFrameWriter.writeSubscribeNamespace(writeBuf, subscribeNamespace);
-
-    // SubscribeNamespaceOk
-    SubscribeNamespaceOk subscribeNamespaceOk;
-    subscribeNamespaceOk.requestID = 2;
-    res = moqFrameWriter.writeSubscribeNamespaceOk(
-        writeBuf, subscribeNamespaceOk);
-    res = moqFrameWriter.writeRequestError(
-        writeBuf,
-        SubscribeNamespaceError(
-            {RequestID(2),
-             SubscribeNamespaceErrorCode::INTERNAL_ERROR,
-             "server error"}),
-        FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-    res = moqFrameWriter.writeUnsubscribeNamespace(
-        writeBuf,
-        UnsubscribeNamespace({RequestID(2), TrackNamespace({"hello"})}));
-  }
 
   // Fetch - using StandaloneFetch variant
   Fetch fetch;
@@ -330,11 +276,8 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   fetchOk.groupOrder = GroupOrder::NewestFirst;
   fetchOk.endOfTrack = 1;
   fetchOk.endLocation = AbsoluteLocation({0, 0});
-  // Draft 16+: Add extensions
-  if (getDraftMajorVersion(version) >= 16) {
-    fetchOk.extensions.insertMutableExtensions(getTestExtensions());
-  }
-  // Use setter which stores in extensions; framer converts to params for < v16
+  fetchOk.extensions.insertMutableExtensions(getTestExtensions());
+  // Use setter which stores in extensions
   setPublisherMaxCacheDuration(fetchOk, std::chrono::milliseconds(1000));
   res = moqFrameWriter.writeFetchOk(writeBuf, fetchOk);
   res = moqFrameWriter.writeRequestError(
@@ -388,11 +331,9 @@ std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
 }
 
 std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
-    const MoQFrameWriter& moqFrameWriter,
-    uint64_t /*version*/) {
+    const MoQFrameWriter& moqFrameWriter) {
   // writes a fetch header, object without extensions, object with
   // extensions, then two empty objects. FETCH objects have no status field.
-  const auto emptyStatus = ObjectStatus::NORMAL;
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   auto res = moqFrameWriter.writeFetchHeader(writeBuf, RequestID(1));
   ObjectHeader obj(2, 3, 4, 5, 11);
@@ -421,7 +362,7 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
       obj.subgroup,
       obj.id,
       obj.priority,
-      emptyStatus,
+      ObjectStatus::NORMAL,
       Extensions({}, {}));
   res = moqFrameWriter.writeStreamObject(
       writeBuf, StreamType::FETCH_HEADER, objNoExts2, nullptr);
@@ -432,7 +373,7 @@ std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
       obj.subgroup,
       obj.id,
       obj.priority,
-      emptyStatus,
+      ObjectStatus::NORMAL,
       Extensions({}, {}));
   res = moqFrameWriter.writeStreamObject(
       writeBuf, StreamType::FETCH_HEADER, objWithExts4, nullptr);

@@ -1340,10 +1340,10 @@ void MoQTestClient::startReceiving(
   // datagram, so the marker arrives as an ordinary object instead.
   const bool datagramFetch = type == ReceivingType::FETCH &&
       params_.forwardingPreference == ForwardingPreference::DATAGRAM;
-  // From draft 16 a FETCH object has no status field, so a marker has no
-  // encoding at all and the object it sits on is left out of the response.
+  // A FETCH object has no status field, so a marker has no encoding at all
+  // and the object it sits on is left out of the response.
   state.endOfGroupOmitted = params_.sendEndOfGroupMarkers && !datagramFetch &&
-      type == ReceivingType::FETCH && draftMajorVersion() >= 16;
+      type == ReceivingType::FETCH;
   state.expectEndOfGroup = params_.sendEndOfGroupMarkers && !datagramFetch &&
       !state.endOfGroupOmitted;
 }

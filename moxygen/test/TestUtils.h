@@ -19,8 +19,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
 std::unique_ptr<folly::IOBuf> writeAllObjectMessages(
     const MoQFrameWriter& moqFrameWriter);
 std::unique_ptr<folly::IOBuf> writeAllFetchMessages(
-    const MoQFrameWriter& moqFrameWriter,
-    uint64_t version);
+    const MoQFrameWriter& moqFrameWriter);
 
 inline std::unique_ptr<folly::IOBuf> writeAllMessages(
     const MoQFrameWriter& moqFrameWriter,
@@ -28,7 +27,7 @@ inline std::unique_ptr<folly::IOBuf> writeAllMessages(
   auto buf = writeAllControlMessages(
       TestControlMessages::BOTH, moqFrameWriter, version);
   buf->appendToChain(writeAllObjectMessages(moqFrameWriter));
-  buf->appendToChain(writeAllFetchMessages(moqFrameWriter, version));
+  buf->appendToChain(writeAllFetchMessages(moqFrameWriter));
   return buf;
 }
 
@@ -47,8 +46,6 @@ std::unique_ptr<folly::IOBuf> makeBuf(uint32_t size = 10);
 
 std::vector<Extension> getTestExtensions();
 std::vector<Parameter> getTestTrackRequestParams(
-    const MoQFrameWriter& moqFrameWriter);
-std::vector<Parameter> getTestPublisherTrackRequestParams(
     const MoQFrameWriter& moqFrameWriter);
 
 } // namespace moxygen::test

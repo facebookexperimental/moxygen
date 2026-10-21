@@ -5,6 +5,7 @@
  */
 
 #include <moxygen/mlog/FileMLogger.h>
+#include <moxygen/mlog/MLogTypes.h>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/ManualExecutor.h>
@@ -436,7 +437,7 @@ TEST_F(FileMLoggerTest, PublishNamespaceDoneByRequestId) {
   const auto event = parseSingleEvent(path);
   const auto& message = event["data"]["message"];
   EXPECT_EQ(message["request_id"].asInt(), 7);
-  EXPECT_TRUE(message["trackNamespace"].empty());
+  EXPECT_EQ(message.count("trackNamespace"), 0);
 }
 
 TEST_F(FileMLoggerTest, PublishNamespaceCancelByRequestId) {
@@ -452,7 +453,25 @@ TEST_F(FileMLoggerTest, PublishNamespaceCancelByRequestId) {
   const auto event = parseSingleEvent(path);
   const auto& message = event["data"]["message"];
   EXPECT_EQ(message["request_id"].asInt(), 9);
-  EXPECT_TRUE(message["track_namespace"].empty());
+  EXPECT_EQ(message.count("track_namespace"), 0);
+}
+
+// These messages carry only a request ID, so it is the one field that
+// identifies them in the log.
+TEST(MLogTypesTest, NamespaceMessagesLogRequestId) {
+  MOQTPublishNamespaceDone done;
+  done.requestId = 3;
+  EXPECT_EQ(done.toDynamic()["request_id"], 3);
+
+  MOQTPublishNamespaceCancel cancel;
+  cancel.requestId = 5;
+  EXPECT_EQ(cancel.toDynamic()["request_id"], 5);
+
+  MOQTUnsubscribeNamespace unsubscribe;
+  unsubscribe.requestId = 7;
+  auto obj = unsubscribe.toDynamic();
+  EXPECT_EQ(obj["request_id"], 7);
+  EXPECT_EQ(obj.count("requestID"), 0);
 }
 
 } // namespace moxygen

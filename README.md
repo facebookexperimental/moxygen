@@ -32,8 +32,6 @@ coroutine-based, and built on [folly](https://github.com/facebook/folly),
 |-------|--------|
 | draft-18 | Supported, in experimental interop testing. |
 | draft-16 | Supported. |
-| draft-15 | Deprecated, scheduled for removal. |
-| draft-14 | Deprecated, scheduled for removal. |
 
 New integrations should target draft-16 until draft-18 interop testing completes.
 

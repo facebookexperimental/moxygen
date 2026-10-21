@@ -522,7 +522,7 @@ CO_TEST_P_X(MoQSessionTest, CancellingAHeldJoiningFetchFreesItsSlot) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// Drafts 14-16 only define a joining FETCH for a Largest Object subscription;
+// Draft 16 only defines a joining FETCH for a Largest Object subscription;
 // anything else is a session-level protocol violation.
 CO_TEST_P_X(PreDraft18Test, JoiningFetchOnNonLargestObjectSubscriptionCloses) {
   co_await setupMoQSession();

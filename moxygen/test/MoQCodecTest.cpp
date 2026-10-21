@@ -11,32 +11,20 @@
 #include <folly/portability/GTest.h>
 
 namespace {
-moxygen::FrameType getErrorFrameType(
-    uint64_t /*version*/,
-    moxygen::FrameType /*frameType*/) {
-  return moxygen::FrameType::REQUEST_ERROR;
-}
-
 void expectOnRequestError(
-    testing::NiceMock<moxygen::MockMoQCodecCallback>& callback,
-    uint64_t version,
-    moxygen::FrameType frameType) {
+    testing::NiceMock<moxygen::MockMoQCodecCallback>& callback) {
   EXPECT_CALL(
-      callback,
-      onRequestError(testing::_, getErrorFrameType(version, frameType)))
+      callback, onRequestError(testing::_, moxygen::FrameType::REQUEST_ERROR))
       .RetiresOnSaturation();
 }
 void expectOnRequestOk(
-    testing::NiceMock<moxygen::MockMoQCodecCallback>& callback,
-    uint64_t /*version*/,
-    moxygen::FrameType /*frameType*/) {
+    testing::NiceMock<moxygen::MockMoQCodecCallback>& callback) {
   EXPECT_CALL(callback, onRequestOk(testing::_, moxygen::FrameType::REQUEST_OK))
       .RetiresOnSaturation();
 }
 
 void expectOnTrackStatusOk(
-    testing::NiceMock<moxygen::MockMoQCodecCallback>& callback,
-    uint64_t /*version*/) {
+    testing::NiceMock<moxygen::MockMoQCodecCallback>& callback) {
   EXPECT_CALL(callback, onRequestOk(testing::_, moxygen::FrameType::REQUEST_OK))
       .RetiresOnSaturation();
 }
@@ -105,37 +93,27 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onSubscribe(testing::_));
     EXPECT_CALL(callback, onRequestUpdate(testing::_));
     EXPECT_CALL(callback, onSubscribeOk(testing::_));
-    expectOnRequestError(callback, GetParam(), FrameType::SUBSCRIBE_ERROR);
+    expectOnRequestError(callback);
     EXPECT_CALL(callback, onUnsubscribe(testing::_));
     EXPECT_CALL(callback, onPublishDone(testing::_));
     EXPECT_CALL(callback, onPublish(testing::_));
     EXPECT_CALL(callback, onPublishOk(testing::_));
-    expectOnRequestError(callback, GetParam(), FrameType::PUBLISH_ERROR);
+    expectOnRequestError(callback);
     EXPECT_CALL(callback, onPublishNamespace(testing::_));
-    expectOnRequestOk(callback, GetParam(), FrameType::PUBLISH_NAMESPACE_OK);
-    expectOnRequestError(
-        callback, GetParam(), FrameType::PUBLISH_NAMESPACE_ERROR);
+    expectOnRequestOk(callback);
+    expectOnRequestError(callback);
     EXPECT_CALL(callback, onPublishNamespaceDone(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
-    expectOnTrackStatusOk(callback, GetParam());
+    expectOnTrackStatusOk(callback);
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
-    // SubscribeNamespace messages are not on the control stream for draft 16+
-    if (getDraftMajorVersion(GetParam()) < 16) {
-      EXPECT_CALL(callback, onSubscribeNamespace(testing::_));
-      expectOnRequestOk(
-          callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_OK);
-      expectOnRequestError(
-          callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-      EXPECT_CALL(callback, onUnsubscribeNamespace(testing::_));
-    }
     EXPECT_CALL(callback, onFetch(testing::_));
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));
-    expectOnRequestError(callback, GetParam(), FrameType::FETCH_ERROR);
+    expectOnRequestError(callback);
 
-    // 28 frames for draft < 16, 24 for draft 16+ (no subscribe namespace msgs)
-    int expectedFrames = (getDraftMajorVersion(GetParam()) < 16) ? 28 : 24;
+    // No subscribe namespace messages on the control stream.
+    int expectedFrames = 24;
     EXPECT_CALL(callback, onFrame(testing::_)).Times(expectedFrames);
 
     codec.onIngress(std::move(allMsgs), true);
@@ -164,37 +142,27 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_CALL(callback, onSubscribe(testing::_));
     EXPECT_CALL(callback, onRequestUpdate(testing::_));
     EXPECT_CALL(callback, onSubscribeOk(testing::_));
-    expectOnRequestError(callback, GetParam(), FrameType::SUBSCRIBE_ERROR);
+    expectOnRequestError(callback);
     EXPECT_CALL(callback, onUnsubscribe(testing::_));
     EXPECT_CALL(callback, onPublishDone(testing::_));
     EXPECT_CALL(callback, onPublish(testing::_));
     EXPECT_CALL(callback, onPublishOk(testing::_));
-    expectOnRequestError(callback, GetParam(), FrameType::PUBLISH_ERROR);
+    expectOnRequestError(callback);
     EXPECT_CALL(callback, onPublishNamespace(testing::_));
-    expectOnRequestOk(callback, GetParam(), FrameType::PUBLISH_NAMESPACE_OK);
+    expectOnRequestOk(callback);
 
-    expectOnRequestError(
-        callback, GetParam(), FrameType::PUBLISH_NAMESPACE_ERROR);
+    expectOnRequestError(callback);
     EXPECT_CALL(callback, onPublishNamespaceDone(testing::_));
     EXPECT_CALL(callback, onTrackStatus(testing::_));
-    expectOnTrackStatusOk(callback, GetParam());
+    expectOnTrackStatusOk(callback);
     EXPECT_CALL(callback, onGoaway(testing::_));
     EXPECT_CALL(callback, onMaxRequestID(testing::_));
-    // SubscribeNamespace messages are not on the control stream for draft 16+
-    if (getDraftMajorVersion(GetParam()) < 16) {
-      EXPECT_CALL(callback, onSubscribeNamespace(testing::_));
-      expectOnRequestOk(
-          callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_OK);
-      expectOnRequestError(
-          callback, GetParam(), FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-      EXPECT_CALL(callback, onUnsubscribeNamespace(testing::_));
-    }
     EXPECT_CALL(callback, onFetch(testing::_));
     EXPECT_CALL(callback, onFetchCancel(testing::_));
     EXPECT_CALL(callback, onFetchOk(testing::_));
-    expectOnRequestError(callback, GetParam(), FrameType::FETCH_ERROR);
-    // 28 frames for draft < 16, 24 for draft 16+ (no subscribe namespace msgs)
-    int expectedFrames = (getDraftMajorVersion(GetParam()) < 16) ? 28 : 24;
+    expectOnRequestError(callback);
+    // No subscribe namespace messages on the control stream.
+    int expectedFrames = 24;
     EXPECT_CALL(callback, onFrame(testing::_)).Times(expectedFrames);
     while (!readBuf.empty()) {
       codec.onIngress(readBuf.split(1), false);
@@ -265,6 +233,27 @@ TEST_P(MoQCodecTest, AllObject) {
       onObjectStatus(
           testing::_, testing::_, testing::_, testing::_, testing::_));
   objectStreamCodec_.onIngress(std::move(allMsgs), true);
+}
+
+// The version comes only from the ALPN, so a control codec that has none must
+// reject setup frames rather than parse them with a guessed version.
+TEST(MoQCodecSetupTest, SetupRejectedWithoutVersion) {
+  for (auto dir :
+       {MoQControlCodec::Direction::SERVER,
+        MoQControlCodec::Direction::CLIENT}) {
+    testing::NiceMock<MockMoQCodecCallback> callback;
+    MoQControlCodec codec(dir, &callback);
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    auto result = dir == MoQControlCodec::Direction::SERVER
+        ? writeClientSetup(writeBuf, moxygen::Setup{}, kVersionDraft16)
+        : writeServerSetup(writeBuf, moxygen::Setup{}, kVersionDraft16);
+    ASSERT_TRUE(result.hasValue());
+
+    EXPECT_CALL(callback, onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
+    EXPECT_EQ(
+        codec.onIngress(writeBuf.move(), false),
+        MoQCodec::ParseResult::ERROR_TERMINATE);
+  }
 }
 
 TEST(MoQCodecPaddingTest, PaddingStreamIsDiscarded) {
@@ -1055,10 +1044,6 @@ TEST_P(MoQCodecTest, ZeroLengthObjectFollowedByNormalObject) {
 
 // Test that onEndOfRange callback is invoked for End of Unknown Range (0x10C)
 TEST_P(MoQCodecTest, FetchEndOfUnknownRange) {
-  // End of Range markers require varint encoding, only supported in v16+
-  if (getDraftMajorVersion(GetParam()) < 16) {
-    GTEST_SKIP() << "End of Range not supported in draft < 16";
-  }
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   RequestID requestID(1);
   ObjectHeader obj(2, 3, 4, 5);
@@ -1095,10 +1080,6 @@ TEST_P(MoQCodecTest, FetchEndOfUnknownRange) {
 // Test that onEndOfRange callback is invoked for End of Non-Existent Range
 // (0x8C)
 TEST_P(MoQCodecTest, FetchEndOfNonExistentRange) {
-  // End of Range markers require varint encoding, only supported in v16+
-  if (getDraftMajorVersion(GetParam()) < 16) {
-    GTEST_SKIP() << "End of Range not supported in draft < 16";
-  }
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   RequestID requestID(1);
   ObjectHeader obj(2, 3, 4, 5);
@@ -1133,9 +1114,6 @@ TEST_P(MoQCodecTest, FetchEndOfNonExistentRange) {
 }
 
 TEST_P(MoQCodecTest, NamespaceFrame) {
-  if (getDraftMajorVersion(GetParam()) < 16) {
-    GTEST_SKIP() << "NAMESPACE not supported in draft < 16";
-  }
   folly::IOBufQueue controlWriteBuf{folly::IOBufQueue::cacheChainLength()};
   folly::IOBufQueue subNsWriteBuf{folly::IOBufQueue::cacheChainLength()};
 
@@ -1165,9 +1143,6 @@ TEST_P(MoQCodecTest, NamespaceFrame) {
 }
 
 TEST_P(MoQCodecTest, NamespaceDoneFrame) {
-  if (getDraftMajorVersion(GetParam()) < 16) {
-    GTEST_SKIP() << "NAMESPACE_DONE not supported in draft < 16";
-  }
   folly::IOBufQueue controlWriteBuf{folly::IOBufQueue::cacheChainLength()};
   folly::IOBufQueue subNsWriteBuf{folly::IOBufQueue::cacheChainLength()};
 

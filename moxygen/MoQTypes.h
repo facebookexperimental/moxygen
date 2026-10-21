@@ -31,7 +31,7 @@ const uint64_t kImmutableExtensionType = 0xB;
 const uint64_t kPriorGroupIdGapExtensionType = 0x3C;
 const uint64_t kPriorObjectIdGapExtensionType = 0x3E;
 
-// Track Property Extension Types (Draft-16+)
+// Track Property Extension Types
 constexpr uint64_t kDeliveryTimeoutExtensionType = 0x02;
 constexpr uint64_t kMaxCacheDurationExtensionType = 0x04;
 constexpr uint64_t kPublisherPriorityExtensionType = 0x0E;
@@ -110,14 +110,6 @@ PublishDoneStatusCode fromWirePublishDoneStatusCode(
     uint32_t statusCode,
     uint64_t negotiatedVersion);
 
-enum class TrackStatusCode : uint32_t {
-  IN_PROGRESS = 0x0,
-  TRACK_NOT_EXIST = 0x1,
-  TRACK_NOT_STARTED = 0x2,
-  TRACK_ENDED = 0x3,
-  UNKNOWN = 0x4
-};
-
 // FetchErrorCode is now an alias for RequestErrorCode - see below
 
 // SubscribeNamespaceErrorCode is now an alias for RequestErrorCode - see below
@@ -190,17 +182,16 @@ enum class FrameType : uint64_t {
   PUBLISH_NAMESPACE = 0x6,
   PUBLISH_NAMESPACE_OK = 0x7,
   REQUEST_OK = 0x7,
-  PUBLISH_NAMESPACE_ERROR = 0x8, // Draft 15 and below
-  NAMESPACE = 0x8,               // Draft 16 and above
+  PUBLISH_NAMESPACE_ERROR = 0x8, // semantic type for PUBLISH_NAMESPACE errors;
+                                 // 0x8 on the wire is NAMESPACE
+  NAMESPACE = 0x8,
   PUBLISH_NAMESPACE_DONE = 9,
   UNSUBSCRIBE = 0xA,
   PUBLISH_DONE = 0xB,
   PUBLISH_NAMESPACE_CANCEL = 0xC,
   TRACK_STATUS = 0xD,
-  TRACK_STATUS_OK = 0xE, // semantic type used by callers; shares wire value
-                         // with NAMESPACE_DONE (drafts 16+ use NAMESPACE_DONE
-                         // on the wire)
-  NAMESPACE_DONE = 0xE,  // Draft 16 and above
+  TRACK_STATUS_OK = 0xE, // semantic type; 0xE on the wire is NAMESPACE_DONE
+  NAMESPACE_DONE = 0xE,
   TRACK_STATUS_ERROR = 0xF, // Draft 16 and below
   PUBLISH_BLOCKED = 0xF,    // Draft 18 and above
   GOAWAY = 0x10,
@@ -238,7 +229,7 @@ enum class DatagramType : uint64_t {
   OBJECT_DATAGRAM_STATUS_ID_ZERO = 0x24,
   OBJECT_DATAGRAM_STATUS_EXT_ID_ZERO = 0x25,
 
-  // Version 15+ datagram types without priority
+  // Datagram types without priority
   OBJECT_DATAGRAM_NO_EXT_NO_PRI = 0x8,
   OBJECT_DATAGRAM_EXT_NO_PRI = 0x9,
   OBJECT_DATAGRAM_NO_EXT_EOG_NO_PRI = 0xA,
@@ -272,7 +263,7 @@ enum class StreamType : uint64_t {
   SUBGROUP_HEADER_SG_EOG = 0x1C,
   SUBGROUP_HEADER_SG_EXT_EOG = 0x1D,
 
-  // Version 15+ subgroup types without priority
+  // Subgroup types without priority
   SUBGROUP_HEADER_SG_ZERO_NO_PRI = 0x30,
   SUBGROUP_HEADER_SG_ZERO_EXT_NO_PRI = 0x31,
   SUBGROUP_HEADER_SG_FIRST_NO_PRI = 0x32,
@@ -297,7 +288,6 @@ constexpr uint8_t SG_FIRST_OBJECT = 0x40;
 
 // Datagram Type Bit Fields
 constexpr uint8_t DG_HAS_EXTENSIONS = 0x1;
-constexpr uint8_t DG_HAS_STATUS_V11 = 0x2;
 constexpr uint8_t DG_HAS_END_OF_GROUP = 0x2;
 constexpr uint8_t DG_OBJECT_ID_ZERO = 0x4;
 constexpr uint8_t DG_PRIORITY_NOT_PRESENT = 0x8;
@@ -1167,8 +1157,8 @@ struct RequestUpdate {
   std::optional<AbsoluteLocation> start;
   std::optional<uint64_t> endGroup;
   std::optional<uint8_t> priority;
-  // Draft 15+: Optional forward field. When absent, existing forward state is
-  // preserved. For earlier drafts, this is always set during parsing.
+  // Optional forward field. When absent, existing forward state is
+  // preserved.
   std::optional<bool> forward;
   TrackRequestParameters params{FrameType::SUBSCRIBE_UPDATE};
 };
@@ -1183,7 +1173,7 @@ struct SubscribeOk {
   GroupOrder groupOrder{GroupOrder::OldestFirst};
   // context exists is inferred from presence of largest
   std::optional<AbsoluteLocation> largest;
-  Extensions extensions; // Draft 16+
+  Extensions extensions;
   TrackRequestParameters params{FrameType::SUBSCRIBE_OK};
 };
 
@@ -1207,7 +1197,7 @@ struct PublishRequest {
   GroupOrder groupOrder{GroupOrder::OldestFirst};
   std::optional<AbsoluteLocation> largest;
   bool forward{false};
-  Extensions extensions; // Draft 16+
+  Extensions extensions;
   TrackRequestParameters params{FrameType::PUBLISH};
 };
 
@@ -1233,21 +1223,18 @@ struct PublishNamespace {
 // PublishNamespaceError is now an alias for RequestError - see below
 
 struct PublishNamespaceDone {
-  TrackNamespace trackNamespace;      // Used in v15 and below
-  std::optional<RequestID> requestID; // Used in v16+
+  std::optional<RequestID> requestID;
 };
 
 struct PublishNamespaceCancel {
-  TrackNamespace trackNamespace;      // Used in v15 and below
-  std::optional<RequestID> requestID; // Used in v16+
+  std::optional<RequestID> requestID;
   RequestErrorCode errorCode;
   std::string reasonPhrase;
 };
 
 using TrackStatus = SubscribeRequest;
 
-// There are fields in the pre v14 TrackStatusOk (previously named TrackStatus)
-// which are not present in SubscribeOk, so we cannot alias directly yet.
+// Has fields that are not in SubscribeOk, so it cannot alias it.
 struct TrackStatusOk {
   RequestID requestID;
   TrackAlias trackAlias;
@@ -1259,9 +1246,6 @@ struct TrackStatusOk {
   // Track Properties block at the end of REQUEST_OK in draft 18+. Carried via
   // the same Extensions container used for SUBSCRIBE_OK/PUBLISH/FETCH_OK.
   Extensions trackProperties;
-  // < v14 parameters maintained for compatibility
-  FullTrackName fullTrackName;
-  TrackStatusCode statusCode{};
 };
 
 struct Goaway {
@@ -1360,7 +1344,7 @@ struct FetchOk {
   GroupOrder groupOrder{GroupOrder::OldestFirst};
   uint8_t endOfTrack{0};
   AbsoluteLocation endLocation;
-  Extensions extensions; // Draft 16+
+  Extensions extensions;
   TrackRequestParameters params{FrameType::FETCH_OK};
 };
 
@@ -1377,7 +1361,7 @@ struct SubscribeNamespace {
   bool forward{true};
   TrackRequestParameters params{FrameType::SUBSCRIBE_NAMESPACE};
   SubscribeNamespaceOptions options{
-      SubscribeNamespaceOptions::BOTH}; // Only used in draft-16 and above
+      SubscribeNamespaceOptions::BOTH}; // On the wire only in drafts 16-17
 };
 
 // Draft 18+ only
@@ -1395,12 +1379,10 @@ struct PublishBlocked {
   std::string trackName;
 };
 
-// Only used in draft-16 and above
 struct NamespaceDone {
   TrackNamespace trackNamespaceSuffix;
 };
 
-// Only used in draft-16 and above
 struct Namespace {
   TrackNamespace trackNamespaceSuffix;
 };
@@ -1408,9 +1390,7 @@ struct Namespace {
 // SubscribeNamespaceError is now an alias for RequestError - see below
 
 struct UnsubscribeNamespace {
-  // Keeping both to maintain compatibility between v15 and v15-
   std::optional<RequestID> requestID;
-  std::optional<TrackNamespace> trackNamespacePrefix;
 };
 
 struct RequestOk {

@@ -100,7 +100,7 @@ CO_TEST_P_X(MoQSessionTest, Fetch) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// endOfGroup on a FETCH stream serializes nothing in draft 16+. If it did, the
+// endOfGroup on a FETCH stream serializes nothing. If it did, the
 // subscriber would read those bytes as the next object and desync.
 CO_TEST_P_X(MoQSessionTest, FetchEndOfGroupBetweenObjects) {
   co_await setupMoQSession();
