@@ -42,6 +42,25 @@ moxygen_add_library(moxygen_proxy_moq_group_cache
     Folly::folly_function
 )
 
+moxygen_add_library(moxygen_proxy_moq_join_replay
+  SRCS
+    MoQJoinReplay.cpp
+  DEPS
+    Folly::folly_coro_current_executor
+    Folly::folly_coro_detach_on_cancel
+    Folly::folly_coro_future_util
+    Folly::folly_coro_timeout
+    Folly::folly_logging_logging
+    Folly::folly_scope_guard
+  EXPORTED_DEPS
+    moxygen_moq
+    moxygen_moq_consumers
+    moxygen_proxy_moq_group_cache
+    Folly::folly_cancellation_token
+    Folly::folly_coro_task
+    Folly::folly_futures_core
+)
+
 moxygen_add_library(moxygen_proxy_moq_proxy_track
   SRCS
     MoQProxyTrack.cpp
