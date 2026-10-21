@@ -98,6 +98,7 @@ moxygen_add_library(moxygen_moq
     mvfst::mvfst_config
     Folly::folly_cancellation_token
     Folly::folly_container_f14_hash
+    Folly::folly_container_intrusive_list
     Folly::folly_coro_promise
     Folly::folly_coro_task
     Folly::folly_coro_timeout
@@ -105,6 +106,7 @@ moxygen_add_library(moxygen_moq
     Folly::folly_io_iobuf
     Folly::folly_logging_logging
     Folly::folly_maybe_managed_ptr
+    Folly::folly_scope_guard
 )
 
 moxygen_add_library(moxygen_moq_relay_session

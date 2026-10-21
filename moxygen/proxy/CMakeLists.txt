@@ -44,9 +44,15 @@ moxygen_add_library(moxygen_proxy_moq_proxy_track
 moxygen_add_library(moxygen_proxy_moq_proxy
   SRCS
     MoQProxy.cpp
+  DEPS
+    moxygen_moq_consumers
+    moxygen_relay_moq_cache
+    Folly::folly_coro_result
   EXPORTED_DEPS
     moxygen_moq
     moxygen_proxy_moq_proxy_track
     moxygen_proxy_moq_upstream_provider
     Folly::folly_container_f14_hash
 )
+
+add_subdirectory(cache)
