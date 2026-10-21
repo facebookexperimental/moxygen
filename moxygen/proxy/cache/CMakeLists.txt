@@ -33,3 +33,16 @@ moxygen_add_library(moxygen_proxy_cache_moq_prior_gap_ranges
     moxygen_moq_types
     moxygen_proxy_cache_moq_id_intervals
 )
+
+moxygen_add_library(moxygen_proxy_cache_moq_cached_group
+  SRCS
+    MoQCachedGroup.cpp
+  DEPS
+    Folly::folly_cpp_attributes
+  EXPORTED_DEPS
+    moxygen_proxy_cache_moq_cache_types
+    moxygen_proxy_cache_moq_id_intervals
+    Folly::folly_container_f14_hash
+    Folly::folly_expected
+    Folly::folly_io_iobuf
+)

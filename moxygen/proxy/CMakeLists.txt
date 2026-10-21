@@ -26,6 +26,22 @@ moxygen_add_library(moxygen_proxy_moq_webtransport_bootstrap_handler
     Folly::folly_coro_task
 )
 
+moxygen_add_library(moxygen_proxy_moq_group_cache
+  SRCS
+    MoQGroupCache.cpp
+  DEPS
+    moxygen_proxy_cache_moq_prior_gap_ranges
+    Folly::folly_cpp_attributes
+    Folly::folly_logging_logging
+  EXPORTED_DEPS
+    moxygen_moq_types
+    moxygen_proxy_cache_moq_cache_budget
+    moxygen_proxy_cache_moq_cache_types
+    moxygen_proxy_cache_moq_cached_group
+    moxygen_proxy_cache_moq_id_intervals
+    Folly::folly_function
+)
+
 moxygen_add_library(moxygen_proxy_moq_proxy_track
   SRCS
     MoQProxyTrack.cpp
