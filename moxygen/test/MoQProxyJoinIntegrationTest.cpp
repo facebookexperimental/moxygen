@@ -15,6 +15,11 @@
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/webtransport/test/FakeSharedWebTransport.h>
+#include <cinttypes>
+#include <cstdio>
+#include <map>
+#include <random>
+#include <set>
 
 #include "moxygen/MoQRelaySession.h"
 #include "moxygen/MoQVersions.h"
@@ -50,7 +55,8 @@ SubscribeRequest liveSubscribe() {
   return request;
 }
 
-// The origin: serves one live track and has no history to FETCH.
+// The origin: serves one live track. It answers FETCH only from history a
+// test provides, as published location to subgroup.
 class OriginPublisher : public Publisher {
  public:
   folly::coro::Task<SubscribeResult> subscribe(
@@ -75,13 +81,46 @@ class OriginPublisher : public Publisher {
 
   folly::coro::Task<FetchResult> fetch(
       Fetch fetch,
-      std::shared_ptr<FetchConsumer>) override {
+      std::shared_ptr<FetchConsumer> consumer) override {
     fetches.push_back(fetch);
-    co_return folly::makeUnexpected(
-        FetchError{
-            fetch.requestID,
-            FetchErrorCode::NOT_SUPPORTED,
-            "no history at the origin"});
+    const auto* range = std::get_if<StandaloneFetch>(&fetch.args);
+    if (!history || !range) {
+      co_return folly::makeUnexpected(
+          FetchError{
+              fetch.requestID,
+              FetchErrorCode::NOT_SUPPORTED,
+              "no history at the origin"});
+    }
+    // An end object of 0 selects all of the end group.
+    auto inRange = [&](const AbsoluteLocation& location) {
+      return !(location < range->start) &&
+          (range->end.object == 0 ? location.group <= range->end.group
+                                  : location < range->end);
+    };
+    std::vector<std::pair<AbsoluteLocation, uint64_t>> served;
+    for (const auto& [location, subgroup] : *history) {
+      if (inRange(location)) {
+        served.emplace_back(location, subgroup);
+      }
+    }
+    for (size_t i = 0; i < served.size(); i++) {
+      const auto& [location, subgroup] = served[i];
+      consumer->object(
+          location.group,
+          subgroup,
+          location.object,
+          payloadOf(10),
+          noExtensions(),
+          /*finFetch=*/i + 1 == served.size());
+    }
+    if (served.empty()) {
+      consumer->endOfFetch();
+    }
+    co_return std::make_shared<testing::NiceMock<MockFetchHandle>>(FetchOk{
+        fetch.requestID,
+        GroupOrder::OldestFirst,
+        /*endOfTrack=*/0,
+        range->end});
   }
 
   std::shared_ptr<TrackConsumer> track;
@@ -89,6 +128,7 @@ class OriginPublisher : public Publisher {
   std::optional<AbsoluteLocation> largest{AbsoluteLocation{40, 0}};
   std::vector<Fetch> fetches;
   folly::coro::Baton* gate{nullptr};
+  const std::map<AbsoluteLocation, uint64_t>* history{nullptr};
 };
 
 class FixedUpstreamProvider : public MoQUpstreamProvider {
@@ -206,9 +246,8 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t>,
     co_return links_.back().get();
   }
 
-  folly::coro::Task<void> startProxy() {
+  folly::coro::Task<void> startProxy(MoQProxyOptions options = {}) {
     upstreamLink_ = co_await connect(origin_);
-    MoQProxyOptions options;
     // Generous, so the completion below always lands inside the wait.
     options.cacheCompletionWait = 5s;
     proxy_ = MoQProxy::create(
@@ -264,13 +303,25 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t>,
 
   // Objects [0, count) of a group, ended with the subgroup's last-in-group
   // flag and a clean FIN; no END_OF_GROUP status is sent.
-  void publishGroup(uint64_t group, uint64_t count) {
+  void publishGroup(uint64_t group, uint64_t count, size_t objectBytes = 10) {
     auto subgroup = origin_->track->beginSubgroup(
         group, 0, kDefaultPriority, lastInGroup());
     ASSERT_TRUE(subgroup.hasValue());
     for (uint64_t objectID = 0; objectID < count; objectID++) {
       (*subgroup)->object(
-          objectID, payloadOf(10), noExtensions(), objectID + 1 == count);
+          objectID,
+          payloadOf(objectBytes),
+          noExtensions(),
+          objectID + 1 == count);
+    }
+  }
+
+  // Unblocks every FETCH stream the proxy is holding for this viewer.
+  static void makeWritable(Link& viewer) {
+    for (auto& [_, handle] : viewer.serverWt->writeHandles) {
+      if (handle->pendingWritableWaiters() > 0) {
+        handle->setWritable(true);
+      }
     }
   }
 
@@ -285,6 +336,56 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t>,
   std::vector<std::unique_ptr<Link>> links_;
   std::vector<std::shared_ptr<Publisher::SubscriptionHandle>> handles_;
 };
+
+std::vector<AbsoluteLocation> historyLocations(
+    const std::vector<std::string>& log) {
+  std::vector<AbsoluteLocation> locations;
+  for (const auto& entry : log) {
+    uint64_t group = 0;
+    uint64_t object = 0;
+    if (std::sscanf(
+            entry.c_str(), "object %" SCNu64 "/%" SCNu64, &group, &object) ==
+        2) {
+      locations.push_back({group, object});
+    }
+  }
+  return locations;
+}
+
+// One subgroup of a scripted group: its objects in publishing order.
+struct ScriptedSubgroup {
+  uint64_t group;
+  uint64_t subgroup;
+  bool containsLastInGroup;
+  std::vector<uint64_t> objects;
+  size_t next{0};
+  std::shared_ptr<SubgroupConsumer> consumer;
+};
+
+// Groups of one to six objects spread over one to three subgroups.
+std::vector<std::vector<ScriptedSubgroup>>
+scriptGroups(std::mt19937& rng, uint64_t firstGroup, uint64_t groupCount) {
+  std::vector<std::vector<ScriptedSubgroup>> groups;
+  for (uint64_t group = firstGroup; group < firstGroup + groupCount; group++) {
+    const uint64_t objectCount = 1 + rng() % 6;
+    const uint64_t subgroupCount =
+        1 + rng() % std::min<uint64_t>(3, objectCount);
+    std::vector<ScriptedSubgroup> subgroups;
+    for (uint64_t subgroup = 0; subgroup < subgroupCount; subgroup++) {
+      subgroups.push_back(
+          ScriptedSubgroup{
+              .group = group,
+              .subgroup = subgroup,
+              .containsLastInGroup =
+                  (objectCount - 1) % subgroupCount == subgroup});
+    }
+    for (uint64_t objectID = 0; objectID < objectCount; objectID++) {
+      subgroups[objectID % subgroupCount].objects.push_back(objectID);
+    }
+    groups.push_back(std::move(subgroups));
+  }
+  return groups;
+}
 
 std::vector<std::string> historyThrough432() {
   return {
@@ -485,6 +586,244 @@ TEST_P(
         co_await waitUntil([&] { return !origin_->fetches.empty(); }));
     EXPECT_EQ(origin_->fetches.size(), 1);
     EXPECT_NE(std::get_if<StandaloneFetch>(&origin_->fetches[0].args), nullptr);
+  }));
+}
+
+// The publisher interleaves the subgroups of adjacent groups, so objects
+// reach the proxy out of location order, and viewers join at random points.
+// Whether its history comes from the cache or upstream, each viewer receives
+// exactly the track: history is every object from its start group through
+// its Joining Location, live is every later object, with nothing missing or
+// duplicated.
+TEST_P(ProxyJoinIntegrationTest, RandomizedPublisherJoinsSeeExactlyTheTrack) {
+  // Both paths must have run: local replay, and upstream FETCH for ranges
+  // the cache cannot prove.
+  uint64_t localJoins = 0;
+  uint64_t upstreamJoins = 0;
+  for (uint32_t seed = 1; seed <= 8; seed++) {
+    SCOPED_TRACE(fmt::format("seed={}", seed));
+    run(folly::coro::co_invoke([&, seed]() -> folly::coro::Task<void> {
+      std::mt19937 rng(seed);
+      co_await startProxy(MoQProxyOptions{.maxGroupsPerTrack = 64});
+      co_await warmViewer();
+      CO_ASSERT_TRUE(origin_->track != nullptr);
+      struct Viewer {
+        uint64_t joiningStart;
+        std::shared_ptr<LiveViewerConsumer> live;
+        std::shared_ptr<RecordingFetchConsumer> history;
+        folly::SemiFuture<MoQSession::JoinResult> join;
+      };
+      std::vector<Viewer> viewers;
+      std::set<AbsoluteLocation> published;
+      auto groups = scriptGroups(rng, 41, 8);
+      // The origin has produced every object it has not sent yet, so its
+      // FETCH answers from the whole script.
+      std::map<AbsoluteLocation, uint64_t> script;
+      for (const auto& group : groups) {
+        for (const auto& subgroup : group) {
+          for (auto objectID : subgroup.objects) {
+            script[{subgroup.group, objectID}] = subgroup.subgroup;
+          }
+        }
+      }
+      origin_->history = &script;
+      std::vector<ScriptedSubgroup*> active;
+      size_t nextGroup = 0;
+      uint64_t newestGroup = 41;
+      while (nextGroup < groups.size() || !active.empty()) {
+        if (nextGroup < groups.size() &&
+            (active.empty() || (rng() % 3 == 0 && active.size() < 4))) {
+          for (auto& subgroup : groups[nextGroup]) {
+            active.push_back(&subgroup);
+          }
+          nextGroup++;
+        }
+        auto* subgroup = active[rng() % active.size()];
+        if (!subgroup->consumer) {
+          TrackConsumer::BeginSubgroupOptions options;
+          options.containsLastInGroup = subgroup->containsLastInGroup;
+          subgroup->consumer = origin_->track
+                                   ->beginSubgroup(
+                                       subgroup->group,
+                                       subgroup->subgroup,
+                                       kDefaultPriority,
+                                       options)
+                                   .value();
+        }
+        const auto objectID = subgroup->objects[subgroup->next++];
+        const bool lastInSubgroup = subgroup->next == subgroup->objects.size();
+        subgroup->consumer->object(
+            objectID, payloadOf(10), noExtensions(), lastInSubgroup);
+        published.insert({subgroup->group, objectID});
+        newestGroup = std::max(newestGroup, subgroup->group);
+        if (lastInSubgroup) {
+          std::erase(active, subgroup);
+        }
+        co_await folly::coro::co_reschedule_on_current_executor;
+        if (rng() % 6 == 0) {
+          // Let the proxy see everything so far before the join is sent.
+          co_await settle();
+          auto* link = co_await connect(proxy_);
+          const uint64_t joiningStart =
+              newestGroup - std::min<uint64_t>(newestGroup - 41, rng() % 3);
+          auto live = std::make_shared<LiveViewerConsumer>();
+          auto history = std::make_shared<RecordingFetchConsumer>();
+          auto join = startJoin(*link, live, history, joiningStart);
+          viewers.push_back(
+              Viewer{
+                  joiningStart,
+                  std::move(live),
+                  std::move(history),
+                  std::move(join)});
+        }
+      }
+      co_await settle();
+
+      for (auto& viewer : viewers) {
+        auto res = co_await std::move(viewer.join);
+        CO_ASSERT_TRUE(res.subscribeResult.hasValue());
+        CO_ASSERT_TRUE(res.fetchResult.hasValue());
+        const auto joiningLocation =
+            res.subscribeResult.value()->subscribeOk().largest;
+        CO_ASSERT_TRUE(joiningLocation.has_value());
+        SCOPED_TRACE(
+            fmt::format(
+                "joiningStart={} joiningLocation={{{},{}}}",
+                viewer.joiningStart,
+                joiningLocation->group,
+                joiningLocation->object));
+        CO_ASSERT_TRUE(co_await waitUntil([&] {
+          return !viewer.history->log.empty() &&
+              viewer.history->log.back() == "endOfFetch";
+        }));
+        std::vector<AbsoluteLocation> expectedHistory;
+        std::vector<AbsoluteLocation> expectedLive;
+        for (const auto& location : published) {
+          if (location > *joiningLocation) {
+            expectedLive.push_back(location);
+          } else if (location.group >= viewer.joiningStart) {
+            expectedHistory.push_back(location);
+          }
+        }
+        EXPECT_EQ(historyLocations(viewer.history->log), expectedHistory);
+        auto live = viewer.live->received;
+        std::sort(live.begin(), live.end());
+        EXPECT_EQ(live, expectedLive);
+      }
+      const auto& stats = proxy_->joinStats();
+      localJoins += stats.immediateHits + stats.hitsAfterWait;
+      upstreamJoins += stats.fallbacksMiss + stats.fallbacksWaitExpired +
+          stats.fallbacksPlanRejected;
+      EXPECT_EQ(
+          stats.immediateHits + stats.hitsAfterWait + stats.fallbacksMiss +
+              stats.fallbacksWaitExpired + stats.fallbacksPlanRejected,
+          viewers.size());
+      origin_->history = nullptr;
+    }));
+    TearDown();
+    proxy_.reset();
+    links_.clear();
+    handles_.clear();
+    origin_ = std::make_shared<OriginPublisher>();
+  }
+  EXPECT_GT(localJoins, 0);
+  EXPECT_GT(upstreamJoins, 0);
+}
+
+// Groups held by an accepted replay are evicted while the viewer is not
+// reading. The replay still delivers the whole history, and its bytes return
+// to the budget once it finishes.
+TEST_P(ProxyJoinIntegrationTest, ReplayOutlivesEvictionUnderBudgetPressure) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await startProxy(
+        MoQProxyOptions{.maxGroupsPerTrack = 3, .maxCacheBytes = 16 * 1024});
+    auto warmLive = co_await warmViewer();
+    for (uint64_t group = 41; group <= 43; group++) {
+      publishGroup(group, 3, 1000);
+    }
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return warmLive->received.size() == 9; }));
+    auto* viewer = co_await connect(proxy_);
+    viewer->serverWt->setNewStreamsWritable(false);
+    auto history = std::make_shared<RecordingFetchConsumer>();
+
+    auto res = co_await startJoin(
+        *viewer, std::make_shared<LiveViewerConsumer>(), history, 41);
+    CO_ASSERT_TRUE(res.fetchResult.hasValue());
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return history->log.size() == 1; }));
+    for (uint64_t group = 44; group <= 46; group++) {
+      publishGroup(group, 3, 1000);
+    }
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return warmLive->received.size() == 18; }));
+    auto cache = proxy_->findTrack(kTrack)->groupCache();
+    EXPECT_GE(cache->retiredThrough().value_or(0), 43);
+    const auto usedWhileReplaying = proxy_->cacheBudget()->used();
+    makeWritable(*viewer);
+
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return history->log.size() == 10; }));
+    std::vector<AbsoluteLocation> expected;
+    for (uint64_t group = 41; group <= 43; group++) {
+      for (uint64_t objectID = 0; objectID < 3; objectID++) {
+        expected.push_back({group, objectID});
+      }
+    }
+    EXPECT_EQ(historyLocations(history->log), expected);
+    EXPECT_EQ(history->log.back(), "endOfFetch");
+    co_await settle();
+    EXPECT_LT(proxy_->cacheBudget()->used(), usedWhileReplaying);
+    EXPECT_TRUE(origin_->fetches.empty());
+  }));
+}
+
+// A viewer that cancels its join while its replay is held stops receiving
+// history; another viewer's replay of the same range completes, and both
+// plans' bytes return to the budget.
+TEST_P(ProxyJoinIntegrationTest, CancelledJoinStopsOnlyItsOwnReplay) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await startProxy();
+    co_await warmViewer();
+    publishGroup(41, 3);
+    publishGroup(42, 3);
+    co_await settle();
+    const auto usedBeforeJoins = proxy_->cacheBudget()->used();
+    auto* cancelling = co_await connect(proxy_);
+    auto* staying = co_await connect(proxy_);
+    cancelling->serverWt->setNewStreamsWritable(false);
+    staying->serverWt->setNewStreamsWritable(false);
+    auto cancelledHistory = std::make_shared<RecordingFetchConsumer>();
+    auto stayingHistory = std::make_shared<RecordingFetchConsumer>();
+
+    auto cancelledRes = co_await startJoin(
+        *cancelling,
+        std::make_shared<LiveViewerConsumer>(),
+        cancelledHistory,
+        41);
+    auto stayingRes = co_await startJoin(
+        *staying, std::make_shared<LiveViewerConsumer>(), stayingHistory, 41);
+    CO_ASSERT_TRUE(cancelledRes.fetchResult.hasValue());
+    CO_ASSERT_TRUE(stayingRes.fetchResult.hasValue());
+    CO_ASSERT_TRUE(co_await waitUntil([&] {
+      return cancelledHistory->log.size() == 1 &&
+          stayingHistory->log.size() == 1;
+    }));
+    cancelledRes.fetchResult.value()->fetchCancel();
+    co_await settle();
+    makeWritable(*cancelling);
+    makeWritable(*staying);
+
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return stayingHistory->log.size() == 7; }));
+    EXPECT_EQ(stayingHistory->log.back(), "endOfFetch");
+    co_await settle();
+    EXPECT_LT(cancelledHistory->log.size(), 7);
+    EXPECT_TRUE(
+        cancelledHistory->log.empty() ||
+        cancelledHistory->log.back() != "endOfFetch");
+    EXPECT_EQ(proxy_->cacheBudget()->used(), usedBeforeJoins);
+    EXPECT_TRUE(origin_->fetches.empty());
   }));
 }
 
