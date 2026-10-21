@@ -1978,6 +1978,67 @@ TEST_F(MoQForwarderTest, JoiningFetchNonForwardingSubscriptionIsRequestError) {
   EXPECT_EQ(res.error().errorCode, FetchErrorCode::INVALID_RANGE);
 }
 
+// Test: the Joining Location follows the last Forward State 0 -> 1 transition,
+// so a subscription that pauses while the track advances rejoins at the point
+// where delivery resumes. REQUEST_UPDATE_OK carries the same Location.
+TEST_F(MoQForwarderTest, JoiningFetchAfterResumeAnchorsAtResumeLargest) {
+  auto forwarder = std::make_shared<MoQForwarder>(
+      kFwdTestTrackName, AbsoluteLocation{10, 5});
+  auto session = createMockSession();
+
+  SubscribeRequest sub;
+  sub.fullTrackName = kFwdTestTrackName;
+  sub.requestID = RequestID(1);
+  sub.locType = LocationType::LargestObject;
+  sub.forward = true;
+  auto subscriber =
+      forwarder->addSubscriber(session->sessionId(), sub, createMockConsumer());
+  ASSERT_NE(subscriber, nullptr);
+
+  ASSERT_TRUE(applyForwardUpdate(subscriber, RequestID(2), false));
+  forwarder->updateLargest(14, 2);
+
+  RequestUpdate resume;
+  resume.requestID = RequestID(3);
+  resume.existingRequestID = RequestID(1);
+  resume.forward = true;
+  auto ok = folly::coro::blockingWait(subscriber->requestUpdate(resume));
+  ASSERT_TRUE(ok.hasValue());
+  ASSERT_EQ(ok->requestSpecificParams.size(), 1);
+  EXPECT_EQ(
+      ok->requestSpecificParams[0].key,
+      folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT));
+  EXPECT_EQ(
+      ok->requestSpecificParams[0].largestObject, (AbsoluteLocation{14, 2}));
+
+  JoiningFetch joining(RequestID(1), 2, FetchType::RELATIVE_JOINING);
+  auto res = forwarder->resolveJoiningFetch(session->sessionId(), joining);
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_EQ(res->start, (AbsoluteLocation{12, 0}));
+  EXPECT_EQ(res->end, (AbsoluteLocation{14, 3}));
+}
+
+// Test: a subscription established by PUBLISH with Forward State 1 joins at
+// the Largest that the PUBLISH carried, even after the track moves past it.
+TEST_F(MoQForwarderTest, JoiningFetchOnPublishUsesPublishedLargest) {
+  auto forwarder = std::make_shared<MoQForwarder>(
+      kFwdTestTrackName, AbsoluteLocation{10, 5});
+  auto session = createMockSession();
+
+  auto subscriber =
+      forwarder->addSubscriber(session->sessionId(), /*forward=*/true);
+  ASSERT_NE(subscriber, nullptr);
+  EXPECT_EQ(subscriber->getPublishRequest().largest, (AbsoluteLocation{10, 5}));
+
+  forwarder->updateLargest(12, 0);
+
+  JoiningFetch joining(RequestID(0), 0, FetchType::RELATIVE_JOINING);
+  auto res = forwarder->resolveJoiningFetch(session->sessionId(), joining);
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_EQ(res->start, (AbsoluteLocation{10, 0}));
+  EXPECT_EQ(res->end, (AbsoluteLocation{10, 6}));
+}
+
 // Test: a hard error removes the only subscriber while forEachSubscriber is
 // still iterating. With no open subgroups the forwarder is now empty, so
 // onEmpty fires and drops the last reference to it. forEachSubscriber reads

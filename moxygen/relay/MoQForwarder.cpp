@@ -303,17 +303,18 @@ folly::Expected<SubscribeRange, FetchError> MoQForwarder::resolveJoiningFetch(
             FetchErrorCode::INVALID_RANGE,
             "Joining Fetch requires a forwarding subscription"});
   }
-  if (!subIt->second->subscribeOk().largest) {
-    // No content exists, fetch error
-    // Relay caller verifies upstream SubscribeOK has been processed before
-    // calling resolveJoiningFetch()
+  if (!subIt->second->joiningLocation) {
+    // The track had no objects when the subscription started forwarding.
     return folly::makeUnexpected(
-        FetchError{RequestID(0), FetchErrorCode::INTERNAL_ERROR, "No largest"});
+        FetchError{
+            RequestID(0),
+            FetchErrorCode::INVALID_RANGE,
+            "No objects published for track"});
   }
   XCHECK(
       joining.fetchType == FetchType::RELATIVE_JOINING ||
       joining.fetchType == FetchType::ABSOLUTE_JOINING);
-  auto& largest = *subIt->second->subscribeOk().largest;
+  auto& largest = *subIt->second->joiningLocation;
   if (joining.fetchType == FetchType::RELATIVE_JOINING) {
     AbsoluteLocation start{largest};
     start.group -=
@@ -767,7 +768,11 @@ MoQForwarder::Subscriber::Subscriber(
       range(r),
       trackConsumer(std::move(tc)),
       forwarder(&f),
-      shouldForward(shouldForwardIn) {}
+      shouldForward(shouldForwardIn) {
+  if (shouldForward) {
+    joiningLocation = subscribeOk_->largest;
+  }
+}
 
 void MoQForwarder::Subscriber::setPublisherGroupOrder(
     GroupOrder pubGroupOrder) {
@@ -777,6 +782,9 @@ void MoQForwarder::Subscriber::setPublisherGroupOrder(
 
 void MoQForwarder::Subscriber::updateLargest(AbsoluteLocation largest) {
   subscribeOk_->largest = largest;
+  if (shouldForward) {
+    joiningLocation = largest;
+  }
 }
 
 void MoQForwarder::Subscriber::setExtensions(Extensions extensions) {
@@ -820,6 +828,8 @@ void MoQForwarder::Subscriber::updateForwardState(bool newForward) {
   auto wasForwarding = shouldForward;
   shouldForward = newForward;
   if (shouldForward && !wasForwarding) {
+    // The joining FETCH covers objects published while paused.
+    joiningLocation = forwarder->largest();
     forwarder->addForwardingSubscriber();
   } else if (wasForwarding && !shouldForward) {
     forwarder->removeForwardingSubscriber();
@@ -874,6 +884,10 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
   }
   range.start = newStart;
 
+  RequestOk ok{
+      .requestID = requestUpdate.requestID,
+      .requestSpecificParams = {},
+      .trackProperties = {}};
   if (forwarder) {
     // Only update forward state if explicitly provided (per draft 15+)
     if (requestUpdate.forward.has_value()) {
@@ -882,13 +896,19 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
       // forwarding, so the clear cannot wait for a false->true flip.
       if (shouldForward) {
         tombstonedSubgroups.clear();
+        if (joiningLocation) {
+          // The end of the gap that the subscriber can now fetch.
+          ok.requestSpecificParams.emplace_back(
+              folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
+              *joiningLocation);
+        }
       }
     }
     // Only update new group request if provided
     forwarder->tryProcessNewGroupRequest(requestUpdate.params);
   }
 
-  co_return RequestOk{.requestID = requestUpdate.requestID};
+  co_return ok;
 }
 
 void MoQForwarder::Subscriber::unsubscribe() {

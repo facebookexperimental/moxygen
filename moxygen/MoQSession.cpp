@@ -1322,6 +1322,13 @@ void startRequestUpdate(
       });
 }
 
+bool hasLargestObject(const std::vector<Parameter>& params) {
+  return std::any_of(params.begin(), params.end(), [](const auto& param) {
+    return param.key ==
+        folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT);
+  });
+}
+
 } // namespace
 
 class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
@@ -1535,7 +1542,13 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
           .requestID = updateRequestID,
           .requestSpecificParams = {},
           .trackProperties = {}};
-      if (largest_) {
+      if (updateRequestID == batch.newestRequestID) {
+        reqOk.requestSpecificParams =
+            std::move(batch.result->value().requestSpecificParams);
+      }
+      // On a resume the params already hold the track's largest, which can be
+      // ahead of what this subscription delivered.
+      if (largest_ && !hasLargestObject(reqOk.requestSpecificParams)) {
         reqOk.requestSpecificParams.emplace_back(
             folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT),
             largest_.value());
