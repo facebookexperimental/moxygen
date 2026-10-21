@@ -398,6 +398,30 @@ TEST_F(FileMLoggerTest, ObjectPayloadLengthUsesEntireSuppliedChain) {
   EXPECT_TRUE(violations.empty()) << violations;
 }
 
+TEST_F(FileMLoggerTest, ObjectsWithoutAPayloadLogZeroLength) {
+  std::string violations;
+  for (size_t i = 0; i < kObjectEvents.size(); ++i) {
+    const auto& testCase = kObjectEvents[i];
+    if (testCase.datagram) {
+      continue;
+    }
+    SCOPED_TRACE(testCase.name);
+    const auto path =
+        (dir_ / ("empty-" + std::to_string(i) + ".mlog")).string();
+    FileMLogger logger(VantagePoint::SERVER, path);
+    logObjectEvent(logger, testCase.event, nullptr);
+    logger.outputLogs();
+
+    const auto event = parseSingleEvent(path);
+    expectEventControls(event, testCase);
+    const auto* length = payloadLength(event["data"], testCase);
+    if (!length || length->asString() != "0") {
+      appendViolation(violations, testCase, "payload length not zero");
+    }
+  }
+  EXPECT_TRUE(violations.empty()) << violations;
+}
+
 TEST_F(FileMLoggerTest, LoggerDoesNotRetainObjectBackingStorage) {
   std::string violations;
   for (size_t i = 0; i < kObjectEvents.size(); ++i) {
