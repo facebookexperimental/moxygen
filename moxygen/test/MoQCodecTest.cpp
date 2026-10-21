@@ -12,11 +12,9 @@
 
 namespace {
 moxygen::FrameType getErrorFrameType(
-    uint64_t version,
-    moxygen::FrameType frameType) {
-  return (moxygen::getDraftMajorVersion(version) < 15)
-      ? frameType
-      : moxygen::FrameType::REQUEST_ERROR;
+    uint64_t /*version*/,
+    moxygen::FrameType /*frameType*/) {
+  return moxygen::FrameType::REQUEST_ERROR;
 }
 
 void expectOnRequestError(
@@ -30,25 +28,17 @@ void expectOnRequestError(
 }
 void expectOnRequestOk(
     testing::NiceMock<moxygen::MockMoQCodecCallback>& callback,
-    uint64_t version,
-    moxygen::FrameType frameType) {
-  auto expectedFrameType = (moxygen::getDraftMajorVersion(version) < 15)
-      ? frameType
-      : moxygen::FrameType::REQUEST_OK;
-  EXPECT_CALL(callback, onRequestOk(testing::_, expectedFrameType))
+    uint64_t /*version*/,
+    moxygen::FrameType /*frameType*/) {
+  EXPECT_CALL(callback, onRequestOk(testing::_, moxygen::FrameType::REQUEST_OK))
       .RetiresOnSaturation();
 }
 
 void expectOnTrackStatusOk(
     testing::NiceMock<moxygen::MockMoQCodecCallback>& callback,
-    uint64_t version) {
-  if (moxygen::getDraftMajorVersion(version) < 15) {
-    EXPECT_CALL(callback, onTrackStatusOk(testing::_)).RetiresOnSaturation();
-  } else {
-    EXPECT_CALL(
-        callback, onRequestOk(testing::_, moxygen::FrameType::REQUEST_OK))
-        .RetiresOnSaturation();
-  }
+    uint64_t /*version*/) {
+  EXPECT_CALL(callback, onRequestOk(testing::_, moxygen::FrameType::REQUEST_OK))
+      .RetiresOnSaturation();
 }
 
 void writeVarintTo(folly::IOBufQueue& q, uint64_t value) {
@@ -589,26 +579,6 @@ TEST_P(MoQCodecTest, Fetch) {
       objectStreamCodecCallback_,
       onObjectBegin(2, 3, 4, testing::_, 5, _, true, false, testing::_));
 
-  if (fetchObjectsHaveStatus(GetParam())) {
-    obj.group++;
-    obj.id = 0;
-    obj.status = ObjectStatus::END_OF_TRACK;
-    obj.length = 0;
-    res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
-    obj.id++;
-    obj.status = ObjectStatus::END_OF_GROUP;
-    obj.length = 0;
-    res = moqFrameWriter_.writeStreamObject(writeBuf, streamType, obj, nullptr);
-
-    EXPECT_CALL(
-        objectStreamCodecCallback_,
-        onObjectStatus(
-            3, 3, 0, std::optional<uint8_t>(5), ObjectStatus::END_OF_TRACK));
-    // object after terminal status
-    EXPECT_CALL(
-        objectStreamCodecCallback_,
-        onConnectionError(ErrorCode::PROTOCOL_VIOLATION));
-  }
   objectStreamCodec_.onIngress(writeBuf.move(), false);
 }
 
@@ -1804,60 +1774,10 @@ TEST_P(MoQCodecTest, ObjectPayloadBlockedPropagation) {
   EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
 }
 
-// Test that onObjectStatus returning BLOCKED propagates on a fetch stream
-TEST_P(MoQCodecTest, FetchObjectStatusBlockedPropagation) {
-  if (!fetchObjectsHaveStatus(GetParam())) {
-    GTEST_SKIP() << "FETCH objects have no Object Status in draft 16+";
-  }
-  testing::NiceMock<MockMoQCodecCallback> callback;
-  MoQObjectStreamCodec codec(&callback);
-  codec.initializeVersion(GetParam());
-
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  RequestID requestID(1);
-  StreamType streamType = StreamType::FETCH_HEADER;
-  auto res = moqFrameWriter_.writeFetchHeader(writeBuf, requestID);
-
-  // First object: END_OF_GROUP status — callback returns BLOCKED
-  ObjectHeader statusObj(2, 3, 4, 5);
-  statusObj.status = ObjectStatus::END_OF_GROUP;
-  statusObj.length = 0;
-  res = moqFrameWriter_.writeStreamObject(
-      writeBuf, streamType, statusObj, nullptr);
-
-  // Second object: normal — should be delivered on re-entry
-  ObjectHeader normalObj(3, 3, 0, 5, 5);
-  res = moqFrameWriter_.writeStreamObject(
-      writeBuf, streamType, normalObj, folly::IOBuf::copyBuffer("hello"));
-
-  EXPECT_CALL(callback, onFetchHeader(testing::_))
-      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
-
-  // First: status object returns BLOCKED
-  EXPECT_CALL(
-      callback,
-      onObjectStatus(
-          2, 3, 4, std::optional<uint8_t>(5), ObjectStatus::END_OF_GROUP))
-      .WillOnce(testing::Return(MoQCodec::ParseResult::BLOCKED));
-
-  auto result = codec.onIngress(writeBuf.move(), false);
-  EXPECT_EQ(result, MoQCodec::ParseResult::BLOCKED);
-  EXPECT_TRUE(codec.hasBufferedIngress());
-
-  // Re-entry: second object should be delivered
-  EXPECT_CALL(
-      callback,
-      onObjectBegin(3, 3, 0, testing::_, 5, testing::_, true, false, false))
-      .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
-
-  result = codec.onIngress(nullptr, false);
-  EXPECT_EQ(result, MoQCodec::ParseResult::CONTINUE);
-}
-
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
-    ::testing::Values(kVersionDraft14, kVersionDraft15, kVersionDraft16));
+    ::testing::Values(kVersionDraft16));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecControlMessagesTest,

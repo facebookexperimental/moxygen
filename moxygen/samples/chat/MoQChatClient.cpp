@@ -28,7 +28,7 @@ DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
 DEFINE_string(
     versions,
     "",
-    "Comma-separated MoQ draft versions (e.g. \"14,16\"). Empty = all supported.");
+    "Comma-separated MoQ draft versions (e.g. \"16,18\"). Empty = all supported.");
 DEFINE_bool(
     qmux,
     false,

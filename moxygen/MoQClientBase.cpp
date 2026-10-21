@@ -145,6 +145,17 @@ void MoQClientBase::completeSetupMoQSession(
     const std::optional<std::string>& pathParam,
     std::shared_ptr<Publisher> publishHandler,
     std::shared_ptr<Subscriber> subscribeHandler) {
+  // The ALPN or WT protocol is the only source of the MoQT version.
+  if (!negotiatedProtocol_ || !getVersionFromAlpn(*negotiatedProtocol_)) {
+    XLOG(ERR)
+        << "MoQClientBase: no supported MoQT version negotiated, protocol="
+        << negotiatedProtocol_.value_or("<none>");
+    wt->closeSession(
+        folly::to_underlying(
+            SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED));
+    throw std::runtime_error("No supported MoQT version negotiated");
+  }
+
   //  Create MoQSession and Setup MoQSession parameters
   moqSession_ =
       createSession(folly::MaybeManagedPtr<proxygen::WebTransport>(wt));
@@ -158,12 +169,7 @@ void MoQClientBase::completeSetupMoQSession(
   moqSession_->setPath(url_.getPath());
   moqSession_->setAuthority(url_.getHostAndPortOmitDefault());
 
-  // Configure session based on negotiated ALPN
-  // If there is no ALPN negotiation, the negotiation will be done in the
-  // Setup messages.
-  if (negotiatedProtocol_) {
-    moqSession_->validateAndSetVersionFromAlpn(*negotiatedProtocol_);
-  }
+  moqSession_->validateAndSetVersionFromAlpn(*negotiatedProtocol_);
 
   moqSession_->setPublishHandler(std::move(publishHandler));
   moqSession_->setSubscribeHandler(std::move(subscribeHandler));
@@ -173,7 +179,7 @@ void MoQClientBase::completeSetupMoQSession(
   if (logger_) {
     logger_->logClientSetup(
         clientSetup,
-        moqSession_->getNegotiatedVersion().value_or(kVersionDraft14));
+        moqSession_->getNegotiatedVersion().value_or(kVersionDraft16));
   }
   moqSession_->sendSetup(clientSetup);
 }

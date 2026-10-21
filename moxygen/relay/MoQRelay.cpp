@@ -202,19 +202,13 @@ MoQRelay::publishNamespace(
         (info.options == SubscribeNamespaceOptions::NAMESPACE ||
          info.options == SubscribeNamespaceOptions::BOTH)) {
       if (info.namespacePublishHandle) {
-        // Draft 16+: send NAMESPACE message on the bidi stream
+        // Send NAMESPACE message on the bidi stream
         TrackNamespace suffix(
             std::vector<std::string>(
                 pubNs.trackNamespace.trackNamespace.begin() +
                     info.trackNamespacePrefix.size(),
                 pubNs.trackNamespace.trackNamespace.end()));
         info.namespacePublishHandle->namespaceMsg(suffix);
-      } else {
-        // Draft <= 15: send PUBLISH_NAMESPACE on a new stream
-        auto exec = outSession->getExecutor();
-        co_withExecutor(
-            exec, publishNamespaceToSession(outSession, pubNs, nodePtr))
-            .start();
       }
     }
   }
@@ -346,27 +340,14 @@ void MoQRelay::publishNamespaceDone(
     if (outSession != session &&
         (info.options == SubscribeNamespaceOptions::NAMESPACE ||
          info.options == SubscribeNamespaceOptions::BOTH)) {
-      auto maybeVersion = outSession->getNegotiatedVersion();
-      if (maybeVersion.has_value() &&
-          getDraftMajorVersion(*maybeVersion) >= 16) {
-        // Draft 16+: send NAMESPACE_DONE on the bidi stream
-        if (info.namespacePublishHandle) {
-          TrackNamespace suffix(
-              std::vector<std::string>(
-                  trackNamespace.trackNamespace.begin() +
-                      info.trackNamespacePrefix.size(),
-                  trackNamespace.trackNamespace.end()));
-          info.namespacePublishHandle->namespaceDoneMsg(suffix);
-        }
-      } else {
-        // Draft <= 15: send PUBLISH_NAMESPACE_DONE on the existing stream
-        auto it = nodePtr->namespacesPublished.find(outSession);
-        if (it != nodePtr->namespacesPublished.end()) {
-          auto exec = outSession->getExecutor();
-          exec->add([publishNamespaceHandle = it->second] {
-            publishNamespaceHandle->publishNamespaceDone();
-          });
-        }
+      // Send NAMESPACE_DONE on the bidi stream.
+      if (info.namespacePublishHandle) {
+        TrackNamespace suffix(
+            std::vector<std::string>(
+                trackNamespace.trackNamespace.begin() +
+                    info.trackNamespacePrefix.size(),
+                trackNamespace.trackNamespace.end()));
+        info.namespacePublishHandle->namespaceDoneMsg(suffix);
       }
     }
   }
@@ -733,17 +714,6 @@ MoQRelay::subscribeNamespace(
   auto maybeNegotiatedVersion = session->getNegotiatedVersion();
   XCHECK(maybeNegotiatedVersion.has_value());
 
-  // check auth
-  // Allow empty namespace prefix only for draft-16 and above.
-  if (subNs.trackNamespacePrefix.empty() &&
-      getDraftMajorVersion(*maybeNegotiatedVersion) < 16) {
-    co_return folly::makeUnexpected(
-        SubscribeNamespaceError{
-            subNs.requestID,
-            SubscribeNamespaceErrorCode::NAMESPACE_PREFIX_UNKNOWN,
-            "empty"});
-  }
-
   // Per-session overlap restriction: the prefix must not share a common prefix
   // with another active SUBSCRIBE_NAMESPACE in the same session.
   if (hasOverlappingSubscription(
@@ -786,24 +756,16 @@ MoQRelay::subscribeNamespace(
     auto [prefix, nodePtr] = std::move(*nodes.begin());
     nodes.pop_front();
     if (nodePtr->sourceSession && nodePtr->sourceSession != session) {
-      if (getDraftMajorVersion(*maybeNegotiatedVersion) >= 16) {
-        if (subNs.options == SubscribeNamespaceOptions::NAMESPACE ||
-            subNs.options == SubscribeNamespaceOptions::BOTH) {
-          // Compute the suffix: prefix minus subNs.trackNamespacePrefix
-          TrackNamespace suffix(
-              std::vector<std::string>(
-                  prefix.trackNamespace.begin() +
-                      subNs.trackNamespacePrefix.size(),
-                  prefix.trackNamespace.end()));
-          namespacePublishHandle->namespaceMsg(suffix);
-        }
-      } else {
-        // TODO: Auth/params
-        co_withExecutor(
-            exec,
-            publishNamespaceToSession(
-                session, {subNs.requestID, prefix}, nodePtr))
-            .start();
+      if (namespacePublishHandle &&
+          (subNs.options == SubscribeNamespaceOptions::NAMESPACE ||
+           subNs.options == SubscribeNamespaceOptions::BOTH)) {
+        // Compute the suffix: prefix minus subNs.trackNamespacePrefix
+        TrackNamespace suffix(
+            std::vector<std::string>(
+                prefix.trackNamespace.begin() +
+                    subNs.trackNamespacePrefix.size(),
+                prefix.trackNamespace.end()));
+        namespacePublishHandle->namespaceMsg(suffix);
       }
     }
     for (auto& publishEntry : nodePtr->publishes) {
@@ -815,11 +777,8 @@ MoQRelay::subscribeNamespace(
         continue;
       }
       auto& forwarder = subscriptionIt->second.forwarder;
-      auto maybeVersion = session->getNegotiatedVersion();
-      XCHECK(maybeVersion.has_value());
-      if (getDraftMajorVersion(*maybeVersion) <= 15 ||
-          (subNs.options == SubscribeNamespaceOptions::BOTH ||
-           subNs.options == SubscribeNamespaceOptions::PUBLISH)) {
+      if (subNs.options == SubscribeNamespaceOptions::BOTH ||
+          subNs.options == SubscribeNamespaceOptions::PUBLISH) {
         if (publishSession != session) {
           co_withExecutor(
               exec, publishToSession(session, forwarder, subNs.forward))
@@ -847,8 +806,8 @@ void MoQRelay::publishExistingMatchingNamespaces(
     SubscribeNamespaceOptions options,
     const std::shared_ptr<Publisher::NamespacePublishHandle>&
         namespacePublishHandle,
-    RequestID requestID,
-    uint64_t negotiatedVersion,
+    RequestID /*requestID*/,
+    uint64_t /*negotiatedVersion*/,
     const TrackNamespace* skipUnderPrefix) {
   auto exec = session->getExecutor();
   std::deque<std::tuple<TrackNamespace, std::shared_ptr<NamespaceNode>>> nodes;
@@ -864,23 +823,15 @@ void MoQRelay::publishExistingMatchingNamespaces(
       continue;
     }
     if (nodePtr->sourceSession && nodePtr->sourceSession != session) {
-      if (getDraftMajorVersion(negotiatedVersion) >= 16) {
-        if (options == SubscribeNamespaceOptions::NAMESPACE ||
-            options == SubscribeNamespaceOptions::BOTH) {
-          // Compute the suffix: nodePrefix minus prefix.
-          TrackNamespace suffix(
-              std::vector<std::string>(
-                  nodePrefix.trackNamespace.begin() + prefix.size(),
-                  nodePrefix.trackNamespace.end()));
-          namespacePublishHandle->namespaceMsg(suffix);
-        }
-      } else {
-        // TODO: Auth/params
-        co_withExecutor(
-            exec,
-            publishNamespaceToSession(
-                session, {requestID, nodePrefix}, nodePtr))
-            .start();
+      if (namespacePublishHandle &&
+          (options == SubscribeNamespaceOptions::NAMESPACE ||
+           options == SubscribeNamespaceOptions::BOTH)) {
+        // Compute the suffix: nodePrefix minus prefix.
+        TrackNamespace suffix(
+            std::vector<std::string>(
+                nodePrefix.trackNamespace.begin() + prefix.size(),
+                nodePrefix.trackNamespace.end()));
+        namespacePublishHandle->namespaceMsg(suffix);
       }
     }
     for (auto& publishEntry : nodePtr->publishes) {
@@ -892,9 +843,8 @@ void MoQRelay::publishExistingMatchingNamespaces(
         continue;
       }
       auto& forwarder = subscriptionIt->second.forwarder;
-      if (getDraftMajorVersion(negotiatedVersion) <= 15 ||
-          (options == SubscribeNamespaceOptions::BOTH ||
-           options == SubscribeNamespaceOptions::PUBLISH)) {
+      if (options == SubscribeNamespaceOptions::BOTH ||
+          options == SubscribeNamespaceOptions::PUBLISH) {
         if (publishSession != session) {
           co_withExecutor(exec, publishToSession(session, forwarder, forward))
               .start();

@@ -100,7 +100,7 @@ MoQQmuxServer::MoQQmuxServer(
   CHECK(fizzContext_) << "MoQQmuxServer requires a non-null FizzServerContext";
   const auto& alpns = fizzContext_->getSupportedAlpns();
   CHECK(std::any_of(alpns.begin(), alpns.end(), [](const std::string& a) {
-    return isLegacyAlpn(a) || getVersionFromAlpn(a).has_value();
+    return getVersionFromAlpn(a).has_value();
   })) << "FizzServerContext must advertise at least one MoQ ALPN";
 }
 
@@ -396,10 +396,9 @@ folly::coro::Task<void> MoQQmuxServer::handleAccept(
         }
 
         // Grab the negotiated ALPN before fizzServer is moved away. The
-        // MoQ draft version selected during the TLS handshake is
-        // announced here as e.g. "moqt-16"; we hand it to the MoQSession
-        // below so the server doesn't silently fall back to draft-14 in
-        // onClientSetup.
+        // MoQ draft version selected during the TLS handshake is announced
+        // here as e.g. "moqt-16"; we hand it to the MoQSession below since
+        // ALPN is mandatory for MoQT session setup.
         std::string alpn = fizzServer->getApplicationProtocol();
 
         // Step 2: QMUX handshake.
@@ -432,8 +431,7 @@ folly::coro::Task<void> MoQQmuxServer::runQmuxAndSession(
     std::chrono::milliseconds qmuxTimeout,
     WorkerShutdownState* state,
     folly::Function<void(MoQSession*)> postCreateHook) {
-  if (!isLegacyAlpn(negotiatedAlpn) &&
-      !getVersionFromAlpn(negotiatedAlpn).has_value()) {
+  if (!getVersionFromAlpn(negotiatedAlpn).has_value()) {
     XLOG(WARN) << "MoQQmuxServer: rejecting session; "
                << (negotiatedAlpn.empty()
                        ? "no negotiated ALPN"

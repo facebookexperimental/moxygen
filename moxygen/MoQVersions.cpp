@@ -8,7 +8,9 @@
 
 #include <folly/Conv.h>
 #include <folly/String.h>
+#include <folly/logging/xlog.h>
 #include <algorithm>
+#include <stdexcept>
 
 namespace {
 
@@ -35,22 +37,8 @@ bool isSupportedVersion(uint64_t version) {
       kSupportedVersions.end());
 }
 
-bool isLegacyAlpn(std::string_view alpn) {
-  return alpn == kAlpnMoqtLegacy;
-}
-
-std::vector<uint64_t> getSupportedLegacyVersions() {
-  std::vector<uint64_t> supportedLegacyVers;
-  for (auto& version : kSupportedVersions) {
-    if (getDraftMajorVersion(version) < 15) {
-      supportedLegacyVers.push_back(version);
-    }
-  }
-  return supportedLegacyVers;
-}
-
 std::optional<uint64_t> getVersionFromAlpn(std::string_view alpn) {
-  // Parse "[moqt-{N} | moqt-{N}-meta-{NN}]" format (for draft 15+)
+  // Parse "[moqt-{N} | moqt-{N}-meta-{NN}]" format
   if (alpn.starts_with("moqt-")) {
     auto draftStr = alpn.substr(5); // skip "moqt-"
 
@@ -61,8 +49,11 @@ std::optional<uint64_t> getVersionFromAlpn(std::string_view alpn) {
     }
 
     auto draftNum = folly::tryTo<uint64_t>(draftStr);
-    if (draftNum.hasValue() && draftNum.value() >= 15) {
-      return 0xff000000 | draftNum.value();
+    if (draftNum.hasValue()) {
+      uint64_t version = 0xff000000 | draftNum.value();
+      if (isSupportedVersion(version)) {
+        return version;
+      }
     }
   }
   return std::nullopt;
@@ -71,40 +62,32 @@ std::optional<uint64_t> getVersionFromAlpn(std::string_view alpn) {
 std::optional<std::string> getAlpnFromVersion(
     uint64_t version,
     bool useStandard) {
-  uint64_t draftNum = getDraftMajorVersion(version);
-
-  // Drafts < 15 use legacy ALPN "moq-00"
-  if (draftNum < 15) {
-    return std::string(kAlpnMoqtLegacy);
+  if (!isSupportedVersion(version)) {
+    return std::nullopt;
   }
+  uint64_t draftNum = getDraftMajorVersion(version);
   if (useStandard) {
     return "moqt-" + folly::to<std::string>(draftNum);
-  }
-  if (draftNum == 15) {
-    return std::string(kAlpnMoqtDraft15Latest);
   }
   if (draftNum == 18) {
     return std::string(kAlpnMoqtDraft18Latest);
   }
-  return std::string(kAlpnMoqtDraft16Latest);
+  if (draftNum == 16) {
+    return std::string(kAlpnMoqtDraft16Latest);
+  }
+  return std::nullopt;
 }
 
 std::vector<std::string> getDefaultMoqtProtocols(
     bool includeExperimental,
     bool useStandard) {
-  // Highest version first so TLS ALPN negotiation prefers it. moq-00 (draft
-  // 14) stays last as a fallback for peers that have not moved to draft 16.
+  // Highest version first so TLS ALPN negotiation prefers it.
   std::vector<std::string> protocols;
   if (includeExperimental) {
     protocols.push_back(
         getAlpnFromVersion(kVersionDraft18, useStandard).value());
   }
   protocols.push_back(getAlpnFromVersion(kVersionDraft16, useStandard).value());
-  if (includeExperimental) {
-    protocols.push_back(
-        getAlpnFromVersion(kVersionDraft15, useStandard).value());
-  }
-  protocols.emplace_back(kAlpnMoqtLegacy);
   return protocols;
 }
 
@@ -124,12 +107,19 @@ std::vector<std::string> getMoqtProtocols(
       uint64_t versionCode =
           0xff000000 | static_cast<uint64_t>(draftNum.value());
       auto alpn = getAlpnFromVersion(versionCode, useStandard);
-      if (alpn.has_value() &&
-          std::find(protocols.begin(), protocols.end(), alpn.value()) ==
-              protocols.end()) {
+      if (!alpn.has_value()) {
+        XLOG(ERR) << "Skipping unsupported MoQT draft version " << trimmed;
+        continue;
+      }
+      if (std::find(protocols.begin(), protocols.end(), alpn.value()) ==
+          protocols.end()) {
         protocols.push_back(alpn.value());
       }
     }
+  }
+  if (protocols.empty()) {
+    throw std::invalid_argument(
+        "no supported MoQT draft version in '" + versions + "'");
   }
   return protocols;
 }
@@ -140,10 +130,6 @@ bool useUniControlStreams(uint64_t version) {
 
 bool useBidiRequestStreams(uint64_t version) {
   return getDraftMajorVersion(version) >= 18;
-}
-
-bool fetchObjectsHaveStatus(uint64_t version) {
-  return getDraftMajorVersion(version) < 16;
 }
 
 std::string getSupportedVersionsString() {

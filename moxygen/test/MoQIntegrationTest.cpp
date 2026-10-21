@@ -630,6 +630,7 @@ class TestServer : public MoQServer {
             return session.lock() == clientSession;
           });
     }));
+    sessionsCreated++;
     if (publisher_) {
       clientSession->setPublishHandler(publisher_);
     }
@@ -651,6 +652,7 @@ class TestServer : public MoQServer {
   // Session path seen by each onSessionTransportReady call.
   folly::Synchronized<std::vector<std::string>> transportReadyPaths;
   std::atomic<size_t> observersAdded{0};
+  std::atomic<int> sessionsCreated{0};
 
  protected:
   void onSessionTransportReady(
@@ -1110,8 +1112,14 @@ TEST_P(MoQIntegrationTest, TransportReady_WebTransportSessionsShareObservers) {
       session->dropConnection();
     };
 
-    auto firstStatus = co_await sendWebTransportConnect(session, first);
-    auto secondStatus = co_await sendWebTransportConnect(session, second);
+    std::vector<std::string> wtProtocols;
+    if (auto alpn = getAlpnFromVersion(GetParam())) {
+      wtProtocols.push_back(*alpn);
+    }
+    auto firstStatus =
+        co_await sendWebTransportConnect(session, first, wtProtocols);
+    auto secondStatus =
+        co_await sendWebTransportConnect(session, second, wtProtocols);
 
     EXPECT_EQ(firstStatus, 200);
     EXPECT_EQ(secondStatus, 200);
@@ -1714,6 +1722,46 @@ TEST_P(MoQProductionVersionTest, SessionSetup_ServerRejectsClient) {
                   SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED)));
         }
       }));
+}
+
+// A WebTransport CONNECT that negotiates no MoQT protocol is refused with a
+// 400 instead of creating a session with no version, and the server keeps
+// serving well-formed clients.
+TEST_P(MoQProductionVersionTest, WebTransport_NoMoqtProtocolRejected) {
+  runTest(folly::coro::co_invoke([this]() -> folly::coro::Task<void> {
+    auto exec =
+        std::make_shared<MoQFollyExecutorImpl>(clientEvbThread_.getEventBase());
+    auto wtClient = std::make_unique<MoQWebTransportClient>(
+        exec,
+        proxygen::URL(
+            fmt::format("https://localhost:{}{}", serverPort_, kTestEndpoint)),
+        std::make_shared<InsecureVerifierDangerousDoNotUseInProduction>());
+    auto res = co_await folly::coro::co_awaitTry(wtClient->setupMoQSession(
+        5s, 5s, nullptr, nullptr, quic::TransportSettings(), {"h3"}));
+    EXPECT_TRUE(res.hasException());
+    if (res.hasException()) {
+      EXPECT_NE(
+          res.exception().what().toStdString().find("400"), std::string::npos)
+          << res.exception().what();
+    }
+    EXPECT_EQ(wtClient->moqSession_, nullptr);
+    EXPECT_EQ(server_->sessionsCreated.load(), 0);
+
+    {
+      ConnectResponseHandler handler;
+      auto* h3Session = co_await connectH3();
+      SCOPE_EXIT {
+        h3Session->dropConnection();
+      };
+      auto status = co_await sendWebTransportConnect(h3Session, handler);
+      EXPECT_EQ(status, 400);
+      EXPECT_EQ(server_->sessionsCreated.load(), 0);
+    }
+
+    co_await connectClient();
+    EXPECT_TRUE(client_->moqSession_->getNegotiatedVersion().has_value());
+    EXPECT_EQ(server_->sessionsCreated.load(), 1);
+  }));
 }
 
 // ============================================================================

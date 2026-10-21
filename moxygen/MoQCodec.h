@@ -190,7 +190,7 @@ class MoQControlCodec : public MoQCodec {
       // separate bidi stream, not the control stream.
       case FrameType::NAMESPACE:
       case FrameType::NAMESPACE_DONE:
-        return negotiatedVersion_ && major < 16;
+        return false;
       // Draft 18+ only, and never on the control stream. The renumbered
       // SUBSCRIBE_NAMESPACE wire type (0x50) replaces
       // LEGACY_SUBSCRIBE_NAMESPACE (0x11) in draft 18 and only ever appears on

@@ -53,17 +53,7 @@ constexpr uint64_t kVersionDraft20 = 0xff000014;
 constexpr uint64_t kVersionDraft21 = 0xff000015;
 constexpr uint64_t kVersionDraft22 = 0xff000016;
 
-constexpr uint64_t kVersionDraftCurrent = kVersionDraft14;
-
-// ALPN constants for version negotiation
-constexpr std::string_view kAlpnMoqtLegacy = "moq-00";
-constexpr std::string_view kAlpnMoqtDraft15Meta00 = "moqt-15-meta-00";
-constexpr std::string_view kAlpnMoqtDraft15Meta01 = "moqt-15-meta-01";
-constexpr std::string_view kAlpnMoqtDraft15Meta02 = "moqt-15-meta-02";
-constexpr std::string_view kAlpnMoqtDraft15Meta03 = "moqt-15-meta-03";
-constexpr std::string_view kAlpnMoqtDraft15Meta04 = "moqt-15-meta-04";
-constexpr std::string_view kAlpnMoqtDraft15Meta05 = "moqt-15-meta-05";
-constexpr std::string_view kAlpnMoqtDraft15Latest = kAlpnMoqtDraft15Meta05;
+constexpr uint64_t kVersionDraftCurrent = kVersionDraft16;
 
 // ALPN constants for draft 16 version negotiations
 constexpr std::string_view kAlpnMoqtDraft16Meta00 = "moqt-16-meta-00";
@@ -73,9 +63,7 @@ constexpr std::string_view kAlpnMoqtDraft16Latest = kAlpnMoqtDraft16Meta00;
 constexpr std::string_view kAlpnMoqtDraft18 = "moqt-18";
 constexpr std::string_view kAlpnMoqtDraft18Latest = kAlpnMoqtDraft18;
 
-constexpr std::array<uint64_t, 4> kSupportedVersions{
-    kVersionDraft14,
-    kVersionDraft15,
+constexpr std::array<uint64_t, 2> kSupportedVersions{
     kVersionDraft16,
     kVersionDraft18};
 
@@ -85,8 +73,7 @@ constexpr std::array<uint64_t, 4> kSupportedVersions{
 uint64_t getDraftMajorVersion(uint64_t version);
 
 // ALPN utility functions
-bool isLegacyAlpn(std::string_view alpn);
-std::vector<uint64_t> getSupportedLegacyVersions();
+// Returns the supported MoQT version an ALPN or WT protocol names, if any.
 std::optional<uint64_t> getVersionFromAlpn(std::string_view alpn);
 std::optional<std::string> getAlpnFromVersion(
     uint64_t version,
@@ -100,9 +87,10 @@ std::vector<std::string> getDefaultMoqtProtocols(
     bool useStandard = false);
 
 // Returns a list of MoQT ALPNs for the given draft versions.
-// versions: comma-separated draft numbers (e.g. "14,16"). Empty = all
-// supported. useStandard: if true, uses standard ALPNs (moqt-NN) instead of
-// Meta-specific
+// versions: comma-separated draft numbers (e.g. "16,18"). Empty = all
+// supported; unsupported versions are skipped, and a list with none supported
+// throws std::invalid_argument. useStandard: if true, uses standard ALPNs
+// (moqt-NN) instead of Meta-specific
 std::vector<std::string> getMoqtProtocols(
     const std::string& versions = "",
     bool useStandard = false);
@@ -118,10 +106,6 @@ bool useUniControlStreams(uint64_t version);
 // draft 18); also disables request-order-dependent encodings (e.g. auth
 // token aliasing) and request-frame-on-control-stream patterns.
 bool useBidiRequestStreams(uint64_t version);
-
-// True if Objects on a FETCH stream carry an Object Status field. Draft 16
-// removed it; gaps in the serialized Object IDs now mean "does not exist".
-bool fetchObjectsHaveStatus(uint64_t version);
 
 // Returns a comma-separated list of supported versions, useful for logging.
 std::string getSupportedVersionsString();

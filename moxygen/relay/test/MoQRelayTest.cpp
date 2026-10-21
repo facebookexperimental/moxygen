@@ -1098,28 +1098,6 @@ TEST_F(MoQRelayTest, SubscribeNamespaceDoesntAddDrainingPublish) {
   removeSession(subscriber2);
 }
 
-TEST_F(MoQRelayTest, SubscribeNamespaceEmptyPrefixRejectedPreV16) {
-  // Default session uses kVersionDraftCurrent (draft-14, which is < 16)
-  auto session = createMockSession();
-
-  TrackNamespace emptyNs{{}};
-  SubscribeNamespace subNs;
-  subNs.trackNamespacePrefix = emptyNs;
-
-  withSessionContext(session, [&]() {
-    auto task = relay_->subscribeNamespace(std::move(subNs), nullptr);
-    auto res = folly::coro::blockingWait(std::move(task), exec_.get());
-    ASSERT_FALSE(res.hasValue())
-        << "Empty namespace prefix should be rejected for pre-v16 sessions";
-    EXPECT_EQ(
-        res.error().errorCode,
-        SubscribeNamespaceErrorCode::NAMESPACE_PREFIX_UNKNOWN);
-    EXPECT_EQ(res.error().reasonPhrase, "empty");
-  });
-
-  removeSession(session);
-}
-
 TEST_F(MoQRelayTest, SubscribeNamespaceEmptyPrefixAllowedV16) {
   auto session = createMockSession();
   // Override the negotiated version to draft-16
@@ -1623,31 +1601,25 @@ TEST_F(MoQRelayTest, RelaySubscribePreservesFirstSubscriberRequest) {
   removeSession(subscriberSession);
 }
 
-TEST_F(MoQRelayTest, ExactNamespaceSubscriberReceivesPublishNamespace) {
+TEST_F(MoQRelayTest, ExactNamespaceSubscriberReceivesNamespace) {
   auto subscriber = createMockSession();
   auto publisher = createMockSession();
 
   // Subscriber subscribes to exact namespace {"test", "namespace"}
-  doSubscribeNamespace(subscriber, kTestNamespace);
+  auto nsHandle = std::make_shared<NiceMock<MockNamespacePublishHandle>>();
+  SubscribeNamespace subNs;
+  subNs.trackNamespacePrefix = kTestNamespace;
+  withSessionContext(subscriber, [&]() {
+    auto res = folly::coro::blockingWait(
+        relay_->subscribeNamespace(std::move(subNs), nsHandle), exec_.get());
+    ASSERT_TRUE(res.hasValue());
+    getOrCreateMockState(subscriber)->subscribeNamespaceHandles.push_back(*res);
+  });
 
-  // Expect the subscriber to receive a publishNamespace forwarding when
-  // the publisher publishes the same exact namespace
-  EXPECT_CALL(*subscriber, publishNamespace(_, _))
-      .WillOnce(
-          [](PublishNamespace pubNs,
-             auto) -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
-            EXPECT_EQ(pubNs.trackNamespace, kTestNamespace);
-            co_return folly::makeUnexpected(
-                PublishNamespaceError{
-                    pubNs.requestID,
-                    PublishNamespaceErrorCode::UNINTERESTED,
-                    "test"});
-          });
-
-  // Publisher publishes the same exact namespace
+  // The announcement is forwarded on the subscriber's response stream; an
+  // exact match carries an empty suffix.
+  EXPECT_CALL(*nsHandle, namespaceMsg(TrackNamespace{})).Times(1);
   doPublishNamespace(publisher, kTestNamespace);
-
-  // Drive the executor so the async publishNamespace forwarding runs
   exec_->drive();
 
   removeSession(publisher);
@@ -3046,7 +3018,7 @@ class MoQRelayTracksTest : public MoQRelayTest {
 
 // Pre-draft-18 sessions can't issue SUBSCRIBE_TRACKS at all.
 TEST_F(MoQRelayTracksTest, SubscribeTracksRejectsPreV18) {
-  auto session = createMockSession(); // defaults to kVersionDraftCurrent (v14)
+  auto session = createMockSession();
   auto res = subscribeTracks(session, TrackNamespace{{"test"}});
   ASSERT_FALSE(res.hasValue());
   EXPECT_EQ(res.error().errorCode, SubscribeTracksErrorCode::NOT_SUPPORTED);

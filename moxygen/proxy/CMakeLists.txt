@@ -17,6 +17,7 @@ moxygen_add_library(moxygen_proxy_moq_webtransport_bootstrap_handler
   SRCS
     MoQWebTransportBootstrapHandler.cpp
   DEPS
+    moxygen_moq_versions
     Folly::folly_maybe_managed_ptr
   EXPORTED_DEPS
     moxygen_moq

@@ -41,7 +41,7 @@ DEFINE_string(ns, "moq-date", "Namespace for date track");
 DEFINE_string(
     versions,
     "",
-    "Comma-separated MoQ draft versions (e.g. \"14,16\"). Empty = all supported.");
+    "Comma-separated MoQ draft versions (e.g. \"16,18\"). Empty = all supported.");
 DEFINE_int32(delivery_timeout, 0, "the delivery timeout in ms for server");
 DEFINE_bool(
     insecure,

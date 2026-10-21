@@ -122,17 +122,12 @@ CO_TEST_P_X(MoQSessionTest, FetchEndOfGroupBetweenObjects) {
   });
 
   folly::coro::Baton baton;
-  const bool hasStatus = fetchObjectsHaveStatus(getServerSelectedVersion());
   {
     testing::InSequence seq;
     EXPECT_CALL(
         *fetchCallback_,
         object(0, 0, 0, HasChainDataLengthOf(100), _, false, _))
         .WillOnce(testing::Return(folly::unit));
-    if (hasStatus) {
-      EXPECT_CALL(*fetchCallback_, endOfGroup(0, 0, 1, false))
-          .WillOnce(testing::Return(folly::unit));
-    }
     EXPECT_CALL(
         *fetchCallback_, object(1, 0, 0, HasChainDataLengthOf(100), _, true, _))
         .WillOnce([&] {

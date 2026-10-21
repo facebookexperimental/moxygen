@@ -44,7 +44,7 @@ if [ $# -eq 0 ]; then
     echo "Example: $0 http://localhost:9999"
     echo "         $0 http://localhost:9999 16 Q   # raw QUIC"
     echo "         $0 http://localhost:9999 16 X   # QMUX-on-TCP"
-    echo "         $0 http://localhost:9999 14,16"
+    echo "         $0 http://localhost:9999 16,18"
     exit 1
 fi
 

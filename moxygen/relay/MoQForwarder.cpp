@@ -889,7 +889,7 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
       .requestSpecificParams = {},
       .trackProperties = {}};
   if (forwarder) {
-    // Only update forward state if explicitly provided (per draft 15+)
+    // Only update forward state if explicitly provided
     if (requestUpdate.forward.has_value()) {
       updateForwardState(*requestUpdate.forward);
       // A subscriber can ask for a refused subgroup again while it is still

@@ -144,8 +144,7 @@ class MoQRelay : public Publisher,
     struct NamespaceSubscriberInfo {
       bool forward{true};
       SubscribeNamespaceOptions options{SubscribeNamespaceOptions::BOTH};
-      // Handle for sending NAMESPACE / NAMESPACE_DONE on the bidi stream
-      // (draft 16+). Null for draft <= 15.
+      // Handle for sending NAMESPACE / NAMESPACE_DONE on the bidi stream.
       std::shared_ptr<Publisher::NamespacePublishHandle> namespacePublishHandle;
       // Draft 18+ only: handle for SUBSCRIBE_TRACKS response-stream followups.
       std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle;

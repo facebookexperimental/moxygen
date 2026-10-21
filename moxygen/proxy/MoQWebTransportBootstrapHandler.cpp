@@ -9,7 +9,10 @@
 #include <folly/MaybeManagedPtr.h>
 
 #include <stdexcept>
+#include <string>
 #include <utility>
+
+#include "moxygen/MoQVersions.h"
 
 namespace moxygen {
 namespace {
@@ -145,12 +148,14 @@ folly::coro::Task<std::shared_ptr<MoQSession>> establishMoQWebTransportSession(
     std::shared_ptr<MoQSession> session,
     std::string authority,
     std::string path,
-    std::optional<std::string> negotiatedProtocol) {
+    std::string negotiatedProtocol) {
+  if (!getVersionFromAlpn(negotiatedProtocol)) {
+    throw std::invalid_argument(
+        "unsupported MoQT protocol: '" + negotiatedProtocol + "'");
+  }
   session->setAuthority(std::move(authority));
   session->setPath(std::move(path));
-  if (negotiatedProtocol) {
-    session->validateAndSetVersionFromAlpn(*negotiatedProtocol);
-  }
+  session->validateAndSetVersionFromAlpn(negotiatedProtocol);
   session->start();
 
   const auto sendResult = session->sendSetup(makeClientSetup());

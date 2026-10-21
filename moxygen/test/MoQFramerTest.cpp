@@ -60,48 +60,6 @@ void writeFetchObjectWithSerializationFlags(
   writeMoQVarintTo(q, payloadLength);
 }
 
-// Build a legacy CLIENT_SETUP frame (versions array + 0 params).
-// Returns the IOBuf and positions a cursor at the payload (past frame header).
-// Usage: auto [buf, len] = makeLegacyClientSetupFrame({kVersionDraft14});
-//        auto result = parser.parseClientSetup(cursor, len);
-std::pair<std::unique_ptr<folly::IOBuf>, size_t> makeLegacyClientSetupFrame(
-    const std::vector<uint64_t>& versions) {
-  folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
-  size_t payloadSize = 0;
-  bool error = false;
-  writeVarint(payloadBuf, versions.size(), payloadSize, error);
-  for (auto v : versions) {
-    writeVarint(payloadBuf, v, payloadSize, error);
-  }
-  writeVarint(payloadBuf, 0, payloadSize, error); // num_params
-
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  size_t size = 0;
-  writeVarint(
-      writeBuf, folly::to_underlying(FrameType::CLIENT_SETUP), size, error);
-  writeVarint(writeBuf, payloadSize, size, error);
-  writeBuf.append(payloadBuf.move());
-  return {writeBuf.move(), payloadSize};
-}
-
-// Build a legacy SERVER_SETUP frame (selected version + 0 params).
-std::pair<std::unique_ptr<folly::IOBuf>, size_t> makeLegacyServerSetupFrame(
-    uint64_t selectedVersion) {
-  folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
-  size_t payloadSize = 0;
-  bool error = false;
-  writeVarint(payloadBuf, selectedVersion, payloadSize, error);
-  writeVarint(payloadBuf, 0, payloadSize, error); // num_params
-
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  size_t size = 0;
-  writeVarint(
-      writeBuf, folly::to_underlying(FrameType::SERVER_SETUP), size, error);
-  writeVarint(writeBuf, payloadSize, size, error);
-  writeBuf.append(payloadBuf.move());
-  return {writeBuf.move(), payloadSize};
-}
-
 size_t writeSetupParams(
     folly::IOBufQueue& buf,
     std::vector<Parameter> params,
@@ -137,12 +95,6 @@ size_t writeSetupParams(
     }
   }
   return size;
-}
-
-// Skip the frame type and length varints; return payload length.
-size_t skipFrameHeader(folly::io::Cursor& cursor) {
-  quic::follyutils::decodeQuicInteger(cursor); // frame type
-  return quic::follyutils::decodeQuicInteger(cursor)->first;
 }
 
 class TestUnderflow : public std::exception {};
@@ -301,14 +253,9 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     }
 
     skipFrameType(cursor);
-    if (getDraftMajorVersion(GetParam()) < 15) {
-      auto r14b = parser_.parseTrackStatusOk(cursor, frameLength(cursor));
-      testUnderflowResult(r14b);
-    } else {
-      auto r14b = parser_.parseRequestOk(
-          cursor, frameLength(cursor), FrameType::REQUEST_OK);
-      testUnderflowResult(r14b);
-    }
+    auto r14b = parser_.parseRequestOk(
+        cursor, frameLength(cursor), FrameType::REQUEST_OK);
+    testUnderflowResult(r14b);
 
     skipFrameType(cursor);
     auto r14 = parser_.parseGoaway(cursor, frameLength(cursor));
@@ -404,9 +351,7 @@ class MoQFramerTest : public ::testing::TestWithParam<uint64_t> {
     EXPECT_EQ(r22aobj.extensions, Extensions(test::getTestExtensions(), {}));
     skip(cursor, *r22aobj.length);
 
-    const auto emptyStatus = fetchObjectsHaveStatus(GetParam())
-        ? ObjectStatus::END_OF_GROUP
-        : ObjectStatus::NORMAL;
+    const auto emptyStatus = ObjectStatus::NORMAL;
     auto r23 =
         parser_.parseFetchObjectHeader(cursor, cursor.totalLength(), obj);
     testUnderflowResult(r23);
@@ -937,6 +882,7 @@ TEST(MoQFramerTest, ParseServerSetupQuicIntegerLength) {
   auto buf = writeBuf.move();
   folly::io::Cursor cursor(buf.get());
   MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraftCurrent);
   parser.parseServerSetup(cursor, sizeToGive);
 }
 
@@ -975,67 +921,8 @@ TEST(MoQFramerTest, ParseServerSetupLengthParseParam) {
   auto buf = writeBuf.move();
   folly::io::Cursor cursor(buf.get());
   MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraftCurrent);
   parser.parseServerSetup(cursor, sizeToGive);
-}
-
-TEST(MoQFramerTest, ParseClientSetupWithUnknownAndSupportedVersions) {
-  // Hand-roll a CLIENT_SETUP frame with 2 versions: one unsupported, one
-  // supported (draft-14), plus 2 params (MAX_REQUEST_ID=42, PATH="/foo/bar").
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  size_t size = 0;
-  bool error = false;
-
-  // Build the payload first to compute its length
-  folly::IOBufQueue payloadBuf{folly::IOBufQueue::cacheChainLength()};
-  size_t payloadSize = 0;
-
-  // num_versions = 2
-  writeVarint(payloadBuf, 2, payloadSize, error);
-  // version 1: unsupported (draft-03)
-  writeVarint(payloadBuf, kVersionDraft03, payloadSize, error);
-  // version 2: supported (draft-14)
-  writeVarint(payloadBuf, kVersionDraft14, payloadSize, error);
-  // num_params = 2
-  writeVarint(payloadBuf, 2, payloadSize, error);
-  // param 1: MAX_REQUEST_ID = 42 (even key -> varint value, no length prefix)
-  writeVarint(
-      payloadBuf,
-      folly::to_underlying(SetupKey::MAX_REQUEST_ID),
-      payloadSize,
-      error);
-  writeVarint(payloadBuf, 42, payloadSize, error);
-  // param 2: PATH = "/foo/bar" (odd key -> length-prefixed string)
-  writeVarint(
-      payloadBuf, folly::to_underlying(SetupKey::PATH), payloadSize, error);
-  std::string path = "/foo/bar";
-  writeVarint(payloadBuf, path.size(), payloadSize, error);
-  payloadBuf.append(path.data(), path.size());
-  payloadSize += path.size();
-
-  EXPECT_FALSE(error);
-
-  // Write frame header: type + length
-  writeVarint(
-      writeBuf, folly::to_underlying(FrameType::CLIENT_SETUP), size, error);
-  writeVarint(writeBuf, payloadSize, size, error);
-  writeBuf.append(payloadBuf.move());
-
-  auto buffer = writeBuf.move();
-  folly::io::Cursor cursor(buffer.get());
-  MoQFrameParser parser;
-  auto len = skipFrameHeader(cursor);
-
-  auto result = parser.parseClientSetup(cursor, len);
-  EXPECT_TRUE(result.hasValue())
-      << "Parsing CLIENT_SETUP with mixed versions should succeed";
-  // Check parameters
-  ASSERT_EQ(result->params.size(), 2);
-  auto it = result->params.begin();
-  EXPECT_EQ(it->key, folly::to_underlying(SetupKey::MAX_REQUEST_ID));
-  EXPECT_EQ(it->asUint64, 42);
-  ++it;
-  EXPECT_EQ(it->key, folly::to_underlying(SetupKey::PATH));
-  EXPECT_EQ(it->asString, "/foo/bar");
 }
 
 TEST(MoQFramerTest, Draft16AllowsZeroMaxRequestIDSetupParam) {
@@ -1067,35 +954,30 @@ TEST(MoQFramerTest, Draft16AllowsZeroMaxRequestIDSetupParam) {
   }
 }
 
-TEST(MoQFramerTest, ParseClientSetupWithOnlyUnsupportedVersionsFails) {
-  auto [buf, len] = makeLegacyClientSetupFrame({kVersionDraft03});
+TEST(MoQFramerTest, ParseClientSetupWithoutAlpnFails) {
+  // Without ALPN there is no way to negotiate the version; parseClientSetup
+  // must reject with VERSION_NEGOTIATION_FAILED.
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, 0, size, error); // num_params
+  auto buf = writeBuf.move();
+  folly::io::Cursor cursor(buf.get());
+  MoQFrameParser parser; // no ALPN
+  auto result = parser.parseClientSetup(cursor, size);
+  EXPECT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::VERSION_NEGOTIATION_FAILED);
+}
+
+TEST(MoQFramerTest, ParseServerSetupWithoutAlpnFails) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  size_t size = 0;
+  bool error = false;
+  writeVarint(writeBuf, 0, size, error); // num_params
+  auto buf = writeBuf.move();
   folly::io::Cursor cursor(buf.get());
   MoQFrameParser parser;
-  skipFrameHeader(cursor);
-  auto result = parser.parseClientSetup(cursor, len);
-  EXPECT_TRUE(result.hasError());
-  EXPECT_EQ(result.error(), ErrorCode::VERSION_NEGOTIATION_FAILED);
-}
-
-TEST(MoQFramerTest, ParseClientSetupWithOnlyDraft15InLegacyModeFails) {
-  // Client offers only draft-15 without ALPN — should fail because
-  // legacy mode only supports draft-14
-  auto [buf, len] = makeLegacyClientSetupFrame({kVersionDraft15});
-  folly::io::Cursor cursor(buf.get());
-  MoQFrameParser parser; // no ALPN set — legacy mode
-  skipFrameHeader(cursor);
-  auto result = parser.parseClientSetup(cursor, len);
-  EXPECT_TRUE(result.hasError());
-  EXPECT_EQ(result.error(), ErrorCode::VERSION_NEGOTIATION_FAILED);
-}
-
-TEST(MoQFramerTest, ParseServerSetupWithNon14VersionInLegacyModeFails) {
-  // SERVER_SETUP selecting draft-15 without ALPN — should error
-  auto [buf, len] = makeLegacyServerSetupFrame(kVersionDraft15);
-  folly::io::Cursor cursor(buf.get());
-  MoQFrameParser parser; // no ALPN set — legacy mode
-  skipFrameHeader(cursor);
-  auto result = parser.parseServerSetup(cursor, len);
+  auto result = parser.parseServerSetup(cursor, size);
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error(), ErrorCode::VERSION_NEGOTIATION_FAILED);
 }
@@ -1146,12 +1028,6 @@ TEST_P(MoQFramerTest, TestSetupAcceptUnknownParams) {
 
     folly::IOBufQueue frameBuf{folly::IOBufQueue::cacheChainLength()};
     size_t payloadSize = 0;
-    if (getDraftMajorVersion(version) < 15) {
-      if (isClient) {
-        writer_.writeVarint(frameBuf, 1, payloadSize, error);
-      }
-      writer_.writeVarint(frameBuf, kVersionDraft14, payloadSize, error);
-    }
     frameBuf.append(paramBlock->clone());
     payloadSize += paramSize;
     ASSERT_FALSE(error);
@@ -1411,16 +1287,6 @@ TEST_P(MoQFramerTest, ParseFetchHeader) {
       folly::IOBuf::copyBuffer("EFGH"));
   EXPECT_TRUE(result.hasValue());
 
-  // Test ObjectStatus::END_OF_GROUP. v16+ FETCH objects have no status field.
-  const bool hasStatus = fetchObjectsHaveStatus(GetParam());
-  if (hasStatus) {
-    expectedObjectHeader.status = ObjectStatus::END_OF_GROUP;
-    expectedObjectHeader.length = 0;
-    result = writer_.writeStreamObject(
-        writeBuf, StreamType::FETCH_HEADER, expectedObjectHeader, nullptr);
-    EXPECT_TRUE(result.hasValue());
-  }
-
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
 
@@ -1441,19 +1307,8 @@ TEST_P(MoQFramerTest, ParseFetchHeader) {
   EXPECT_EQ(*obj1.length, 4);
   cursor.skip(*obj1.length);
 
-  if (!hasStatus) {
-    EXPECT_EQ(cursor.totalLength(), 0);
-    return;
-  }
-  parseResult = parser_.parseFetchObjectHeader(
-      cursor, cursor.totalLength(), headerTemplate);
-  EXPECT_TRUE(parseResult.hasValue());
-  ASSERT_TRUE(std::holds_alternative<ObjectHeader>(parseResult->value));
-  auto& obj2 = std::get<ObjectHeader>(parseResult->value);
-  EXPECT_EQ(obj2.group, 33);
-  EXPECT_EQ(obj2.id, 44);
-  EXPECT_EQ(obj2.priority, 55);
-  EXPECT_EQ(obj2.status, ObjectStatus::END_OF_GROUP);
+  // FETCH objects have no Object Status field.
+  EXPECT_EQ(cursor.totalLength(), 0);
 }
 
 TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
@@ -1501,28 +1356,6 @@ TEST_P(MoQFramerTest, ParseClientSetupForMaxRequestID) {
   }
 }
 
-TEST(MoQFramerTest, ParseClientSetupParamsUnderflow) {
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  size_t size = 0;
-  bool error = false;
-
-  // Add version
-  writeVarint(writeBuf, 1, size, error);
-  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
-
-  // Signify 2 bytes Varint but append only 1 byte to trigger underflow
-  writeVarint(writeBuf, 2, size, error);
-  writeBuf.append("\x40", 1);
-  auto buffer = writeBuf.move();
-  folly::io::Cursor cursor(buffer.get());
-
-  MoQFrameParser parser;
-  auto result =
-      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
-  EXPECT_TRUE(result.hasError());
-  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
-}
-
 TEST(MoQFramerTest, ParseClientSetupNoOfVersionsUnderflow) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeBuf.append("\xC0\x00", 2);
@@ -1530,24 +1363,25 @@ TEST(MoQFramerTest, ParseClientSetupNoOfVersionsUnderflow) {
   folly::io::Cursor cursor(buffer.get());
 
   MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraftCurrent);
   auto result =
       parser.parseClientSetup(cursor, buffer->computeChainDataLength());
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
 }
 
-TEST(MoQFramerTest, ParseClientSetupVersionUnderflow) {
+TEST(MoQFramerTest, ParseClientSetupParamUnderflow) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   size_t size = 0;
   bool error = false;
   writeVarint(writeBuf, 2, size, error);
-  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
   writeBuf.append("\xC0\x00", 2);
 
   auto buffer = writeBuf.move();
   folly::io::Cursor cursor(buffer.get());
 
   MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraftCurrent);
   auto result =
       parser.parseClientSetup(cursor, buffer->computeChainDataLength());
   EXPECT_TRUE(result.hasError());
@@ -1556,40 +1390,13 @@ TEST(MoQFramerTest, ParseClientSetupVersionUnderflow) {
 
 TEST(MoQFramerTest, ParseClientSetupNoOfParamsUnderflow) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  size_t size = 0;
-  bool error = false;
-  writeVarint(writeBuf, 1, size, error);
-  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
-
   writeBuf.append("\xC0\x00", 2);
 
   auto buffer = writeBuf.move();
   folly::io::Cursor cursor(buffer.get());
 
   MoQFrameParser parser;
-  auto result =
-      parser.parseClientSetup(cursor, buffer->computeChainDataLength());
-  EXPECT_TRUE(result.hasError());
-  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
-}
-
-TEST(MoQFramerTest, ParseClientSetupParamsUnderflowString) {
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  size_t size = 0;
-  bool error = false;
-  writeVarint(writeBuf, 1, size, error);
-  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
-  writeVarint(writeBuf, 1, size, error);
-  writeVarint(writeBuf, folly::to_underlying(SetupKey::PATH), size, error);
-
-  // Signify 2 byte string but append only 1 byte to trigger underflow
-  writeVarint(writeBuf, 2, size, error);
-  writeBuf.append("s", 1);
-
-  auto buffer = writeBuf.move();
-  folly::io::Cursor cursor(buffer.get());
-
-  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraftCurrent);
   auto result =
       parser.parseClientSetup(cursor, buffer->computeChainDataLength());
   EXPECT_TRUE(result.hasError());
@@ -1601,8 +1408,6 @@ TEST(MoQFramerTest, ParseClientSetupParamsIncorrectLength) {
   size_t size = 0;
   bool error = false;
   writeVarint(writeBuf, 1, size, error);
-  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
-  writeVarint(writeBuf, 1, size, error);
   writeVarint(writeBuf, folly::to_underlying(SetupKey::PATH), size, error);
 
   writeVarint(writeBuf, 1, size, error);
@@ -1612,39 +1417,22 @@ TEST(MoQFramerTest, ParseClientSetupParamsIncorrectLength) {
   folly::io::Cursor cursor(buffer.get());
 
   MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraftCurrent);
   auto result =
       parser.parseClientSetup(cursor, buffer->computeChainDataLength() + 1);
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
-TEST(MoQFramerTest, ParseServerSetupVersionUnderflow) {
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-
-  writeBuf.append("\xC0\x00", 2);
-
-  auto buffer = writeBuf.move();
-  folly::io::Cursor cursor(buffer.get());
-
-  MoQFrameParser parser;
-  auto result =
-      parser.parseServerSetup(cursor, buffer->computeChainDataLength());
-  EXPECT_TRUE(result.hasError());
-  EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
-}
-
 TEST(MoQFramerTest, ParseServerSetupNoOfParamsUnderflow) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  size_t size = 0;
-  bool error = false;
-  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
-
   writeBuf.append("\xC0\x00", 2);
 
   auto buffer = writeBuf.move();
   folly::io::Cursor cursor(buffer.get());
 
   MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraftCurrent);
   auto result =
       parser.parseServerSetup(cursor, buffer->computeChainDataLength());
   EXPECT_TRUE(result.hasError());
@@ -1665,7 +1453,7 @@ TEST(MoQFramerTest, ParsePublishOkOrderUnderflow) {
   folly::io::Cursor cursor(buffer.get());
 
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft14);
+  parser.initializeVersion(kVersionDraft16);
   auto result = parser.parsePublishOk(cursor, buffer->computeChainDataLength());
   EXPECT_TRUE(result.hasError());
   EXPECT_EQ(result.error(), ErrorCode::PARSE_UNDERFLOW);
@@ -1974,19 +1762,12 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   auto serialized = writeBuf.move();
   folly::io::Cursor cursor(serialized.get());
   auto frameType = quic::follyutils::decodeQuicInteger(cursor);
-  folly::Expected<TrackStatusOk, ErrorCode> parseResult;
-  if (getDraftMajorVersion(GetParam()) < 15) {
-    EXPECT_EQ(
-        frameType->first, folly::to_underlying(FrameType::TRACK_STATUS_OK));
-    parseResult = parser_.parseTrackStatusOk(cursor, frameLength(cursor));
-    EXPECT_TRUE(parseResult.hasValue());
-  } else {
-    EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::REQUEST_OK));
-    auto result = parser_.parseRequestOk(
-        cursor, frameLength(cursor), FrameType::REQUEST_OK);
-    EXPECT_TRUE(result.hasValue());
-    parseResult = result->toTrackStatusOk();
-  }
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::REQUEST_OK));
+  auto result = parser_.parseRequestOk(
+      cursor, frameLength(cursor), FrameType::REQUEST_OK);
+  EXPECT_TRUE(result.hasValue());
+  folly::Expected<TrackStatusOk, ErrorCode> parseResult =
+      result->toTrackStatusOk();
   // Draft 18+ removed requestID from the REQUEST_OK wire format; it is
   // populated from the bidi stream context by the codec, not the parser.
   if (getDraftMajorVersion(GetParam()) < 18) {
@@ -2311,13 +2092,9 @@ TEST_P(MoQFramerTest, SubscribeUpdateWithSubscribeReqIDSerialization) {
     // update travels on; it is not on the wire, so the parser leaves it
     // default-initialized (the codec substitutes the stream's id on ingress).
     EXPECT_EQ(parseResult->existingRequestID.value, 0);
-  } else if (getDraftMajorVersion(GetParam()) >= 14) {
-    // Versions 14-17: both requestID and existingRequestID are written/parsed.
-    EXPECT_EQ(parseResult->existingRequestID.value, 456);
   } else {
-    // Version < 14: only requestID is on wire, existingRequestID not set by
-    // parser.
-    EXPECT_EQ(parseResult->existingRequestID.value, 0);
+    // Drafts 16-17: both requestID and existingRequestID are on the wire.
+    EXPECT_EQ(parseResult->existingRequestID.value, 456);
   }
 
   EXPECT_EQ(parseResult->start->group, 10);
@@ -2328,13 +2105,13 @@ TEST_P(MoQFramerTest, SubscribeUpdateWithSubscribeReqIDSerialization) {
   EXPECT_EQ(*parseResult->forward, true);
 }
 
-TEST(MoQFramerTest, SubscribeUpdateDraft15ForwardUnset) {
-  // Test that in draft 15+, a SUBSCRIBE_UPDATE without forward parameter
+TEST(MoQFramerTest, SubscribeUpdateForwardUnset) {
+  // Test that a SUBSCRIBE_UPDATE without forward parameter
   // is correctly serialized and parsed with forward field unset
   MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft15);
+  writer.initializeVersion(kVersionDraft16);
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft15);
+  parser.initializeVersion(kVersionDraft16);
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
@@ -2371,7 +2148,7 @@ TEST(MoQFramerTest, SubscribeUpdateDraft15ForwardUnset) {
   EXPECT_EQ(parseResult->endGroup, 0);
   // An explicit priority (even the default) is serialized and round-trips.
   EXPECT_EQ(parseResult->priority, kDefaultPriority);
-  // Verify forward field is NOT set (preserves existing state per draft 15+)
+  // Verify forward field is NOT set (preserves existing state)
   EXPECT_FALSE(parseResult->forward.has_value());
 }
 
@@ -2711,20 +2488,12 @@ TEST(MoQFramerSubscriptionFilter, EndGroupDeltaOverflowRejectedV18) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
-    ::testing::Values(
-        kVersionDraft14,
-        kVersionDraft15,
-        kVersionDraft16,
-        kVersionDraft18));
+    ::testing::Values(kVersionDraft16, kVersionDraft18));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerAuthTest,
     MoQFramerAuthTest,
-    ::testing::Values(
-        kVersionDraft14,
-        kVersionDraft15,
-        kVersionDraft16,
-        kVersionDraft18));
+    ::testing::Values(kVersionDraft16, kVersionDraft18));
 
 TEST(MoQFramerTestUtils, DraftMajorVersion) {
   EXPECT_EQ(getDraftMajorVersion(0xff080001), 0x8);
@@ -2733,32 +2502,13 @@ TEST(MoQFramerTestUtils, DraftMajorVersion) {
   EXPECT_EQ(getDraftMajorVersion(0xff00ffff), 0xffff);
 }
 
-TEST(MoQFramerTestUtils, IsLegacyAlpn) {
-  EXPECT_FALSE(isLegacyAlpn(""));
-
-  EXPECT_TRUE(isLegacyAlpn("moq-00"));
-  EXPECT_FALSE(isLegacyAlpn("moq-01"));
-
-  EXPECT_FALSE(isLegacyAlpn("moqt-15"));
-  EXPECT_FALSE(isLegacyAlpn("moqt-16"));
-  EXPECT_FALSE(isLegacyAlpn("moqt-14"));
-}
-
 TEST(MoQFramerTestUtils, GetVersionFromAlpn) {
-  auto legacyVersion = getVersionFromAlpn("moq-00");
-  EXPECT_FALSE(legacyVersion.has_value());
-
-  auto draft15Meta = getVersionFromAlpn("moqt-15-meta-01");
-  ASSERT_TRUE(draft15Meta.has_value());
-  EXPECT_EQ(*draft15Meta, 0xff00000f);
-
-  auto draft15Meta02 = getVersionFromAlpn("moqt-15-meta-02");
-  ASSERT_TRUE(draft15Meta02.has_value());
-  EXPECT_EQ(*draft15Meta02, 0xff00000f);
-
   auto draft16Meta = getVersionFromAlpn("moqt-16-meta-00");
   ASSERT_TRUE(draft16Meta.has_value());
   EXPECT_EQ(*draft16Meta, 0xff000010);
+
+  EXPECT_EQ(getVersionFromAlpn("moqt-18"), kVersionDraft18);
+  EXPECT_FALSE(getVersionFromAlpn("moqt-17").has_value());
 
   auto invalidAlpn1 = getVersionFromAlpn("h3");
   EXPECT_FALSE(invalidAlpn1.has_value());
@@ -2774,71 +2524,59 @@ TEST(MoQFramerTestUtils, GetVersionFromAlpn) {
 }
 
 TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
-  auto alpnDraft14 = getAlpnFromVersion(kVersionDraft14);
-  ASSERT_TRUE(alpnDraft14.has_value());
-  EXPECT_EQ(*alpnDraft14, "moq-00");
-
-  auto alpnDraft15 = getAlpnFromVersion(0xff00000f);
-  ASSERT_TRUE(alpnDraft15.has_value());
-  EXPECT_EQ(*alpnDraft15, kAlpnMoqtDraft15Latest);
-
   auto alpnDraft16 = getAlpnFromVersion(kVersionDraft16);
   ASSERT_TRUE(alpnDraft16.has_value());
   EXPECT_EQ(*alpnDraft16, kAlpnMoqtDraft16Latest);
 
+  auto alpnDraft18 = getAlpnFromVersion(kVersionDraft18);
+  ASSERT_TRUE(alpnDraft18.has_value());
+  EXPECT_EQ(*alpnDraft18, kAlpnMoqtDraft18Latest);
+
   // Standard ALPNs (moqt-NN format)
-  auto stdAlpnDraft14 = getAlpnFromVersion(kVersionDraft14, true);
-  ASSERT_TRUE(stdAlpnDraft14.has_value());
-  EXPECT_EQ(*stdAlpnDraft14, "moq-00"); // legacy always
-
-  auto stdAlpnDraft15 = getAlpnFromVersion(kVersionDraft15, true);
-  ASSERT_TRUE(stdAlpnDraft15.has_value());
-  EXPECT_EQ(*stdAlpnDraft15, "moqt-15");
-
   auto stdAlpnDraft16 = getAlpnFromVersion(kVersionDraft16, true);
   ASSERT_TRUE(stdAlpnDraft16.has_value());
   EXPECT_EQ(*stdAlpnDraft16, "moqt-16");
+
+  // An unsupported draft has no ALPN under either name.
+  EXPECT_FALSE(getAlpnFromVersion(kVersionDraft17).has_value());
+  EXPECT_FALSE(getAlpnFromVersion(kVersionDraft17, true).has_value());
 }
 
 TEST(MoQFramerTestUtils, GetMoqtProtocols) {
   // Empty = all supported versions
   auto all = getMoqtProtocols("", true);
-  EXPECT_EQ(all.size(), 4);
+  EXPECT_EQ(all.size(), 2);
   EXPECT_EQ(all[0], "moqt-18");
   EXPECT_EQ(all[1], "moqt-16");
-  EXPECT_EQ(all[2], "moqt-15");
-  EXPECT_EQ(all[3], "moq-00");
 
   // Single version
   auto just16 = getMoqtProtocols("16", true);
   EXPECT_EQ(just16.size(), 1);
   EXPECT_EQ(just16[0], "moqt-16");
 
-  // Multiple versions
-  auto v14and16 = getMoqtProtocols("14,16", true);
-  EXPECT_EQ(v14and16.size(), 2);
-  EXPECT_EQ(v14and16[0], "moq-00");
-  EXPECT_EQ(v14and16[1], "moqt-16");
-
   // Meta-specific ALPNs
   auto meta16 = getMoqtProtocols("16");
   EXPECT_EQ(meta16.size(), 1);
   EXPECT_EQ(meta16[0], kAlpnMoqtDraft16Latest);
+
+  // Unsupported versions are skipped; a list with none supported throws.
+  EXPECT_EQ(getMoqtProtocols("13,16,17"), meta16);
+  EXPECT_THROW(getMoqtProtocols("14"), std::invalid_argument);
+  EXPECT_THROW(getMoqtProtocols("17", true), std::invalid_argument);
 }
 
-// The default prefers draft 16 and keeps moq-00 last, so a peer that has not
-// moved to draft 16 still shares an ALPN.
 TEST(MoQFramerTestUtils, GetDefaultMoqtProtocols) {
   EXPECT_EQ(
       getDefaultMoqtProtocols(false),
-      (std::vector<std::string>{
-          std::string(kAlpnMoqtDraft16Latest), std::string(kAlpnMoqtLegacy)}));
+      std::vector<std::string>{std::string(kAlpnMoqtDraft16Latest)});
   EXPECT_EQ(
-      getDefaultMoqtProtocols(false, /*useStandard=*/true),
-      (std::vector<std::string>{"moqt-16", "moq-00"}));
+      getDefaultMoqtProtocols(true),
+      (std::vector<std::string>{
+          std::string(kAlpnMoqtDraft18Latest),
+          std::string(kAlpnMoqtDraft16Latest)}));
   EXPECT_EQ(
       getDefaultMoqtProtocols(true, /*useStandard=*/true),
-      (std::vector<std::string>{"moqt-18", "moqt-16", "moqt-15", "moq-00"}));
+      (std::vector<std::string>{"moqt-18", "moqt-16"}));
 }
 
 // Test class for immutable extensions feature (draft 14+)
@@ -3145,7 +2883,7 @@ TEST_P(MoQImmutableExtensionsTest, WriteOnlyImmutableExtensionsDraft) {
 INSTANTIATE_TEST_SUITE_P(
     MoQImmutableExtensionsTest,
     MoQImmutableExtensionsTest,
-    ::testing::Values(kVersionDraft14, kVersionDraft15, kVersionDraft16));
+    ::testing::Values(kVersionDraft16));
 
 TEST_P(MoQFramerTest, DatagramWithExtensionsAndNonNormalStatus) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
@@ -3172,16 +2910,10 @@ TEST_P(MoQFramerTest, DatagramWithExtensionsAndNonNormalStatus) {
   auto parseResult = parser_.parseDatagramObjectHeader(
       cursor, DatagramType(datagramType->first), length);
 
-  if (GetParam() >= kVersionDraft15) {
-    EXPECT_TRUE(parseResult.hasError());
-    EXPECT_EQ(parseResult.error(), ErrorCode::PROTOCOL_VIOLATION)
-        << "Datagram with extensions and non-NORMAL status should return "
-           "PROTOCOL_VIOLATION in v15+";
-  } else {
-    EXPECT_TRUE(parseResult.hasValue())
-        << "Datagram with extensions and non-NORMAL status should succeed in "
-           "v14";
-  }
+  EXPECT_TRUE(parseResult.hasError());
+  EXPECT_EQ(parseResult.error(), ErrorCode::PROTOCOL_VIOLATION)
+      << "Datagram with extensions and non-NORMAL status should return "
+         "PROTOCOL_VIOLATION";
 }
 
 TEST_P(MoQFramerTest, SubgroupObjectWithExtensionsAndNonNormalStatus) {
@@ -3223,16 +2955,10 @@ TEST_P(MoQFramerTest, SubgroupObjectWithExtensionsAndNonNormalStatus) {
       headerParseResult->value.objectHeader,
       sgOptions);
 
-  if (GetParam() >= kVersionDraft15) {
-    EXPECT_TRUE(objParseResult.hasError());
-    EXPECT_EQ(objParseResult.error(), ErrorCode::PROTOCOL_VIOLATION)
-        << "Subgroup object with extensions and non-NORMAL status should "
-           "return PROTOCOL_VIOLATION in v15+";
-  } else {
-    EXPECT_TRUE(objParseResult.hasValue())
-        << "Subgroup object with extensions and non-NORMAL status should "
-           "succeed in v14";
-  }
+  EXPECT_TRUE(objParseResult.hasError());
+  EXPECT_EQ(objParseResult.error(), ErrorCode::PROTOCOL_VIOLATION)
+      << "Subgroup object with extensions and non-NORMAL status should "
+         "return PROTOCOL_VIOLATION";
 }
 
 TEST_P(MoQFramerTest, FetchObjectWithExtensionsAndNonNormalStatus) {
@@ -3251,40 +2977,8 @@ TEST_P(MoQFramerTest, FetchObjectWithExtensionsAndNonNormalStatus) {
 
   auto objResult = writer_.writeStreamObject(
       writeBuf, StreamType::FETCH_HEADER, obj, nullptr);
-
-  if (!fetchObjectsHaveStatus(GetParam())) {
-    EXPECT_TRUE(objResult.hasError())
-        << "v16+ FETCH objects have no Object Status field to write";
-    return;
-  }
-  EXPECT_TRUE(objResult.hasValue());
-
-  auto buffer = writeBuf.move();
-  folly::io::Cursor cursor(buffer.get());
-
-  auto parsedStreamType = quic::follyutils::decodeQuicInteger(cursor);
-  ASSERT_TRUE(parsedStreamType.has_value());
-  EXPECT_EQ(
-      parsedStreamType->first, folly::to_underlying(StreamType::FETCH_HEADER));
-
-  auto fetchHeaderResult =
-      parser_.parseFetchHeader(cursor, cursor.totalLength());
-  EXPECT_TRUE(fetchHeaderResult.hasValue());
-
-  ObjectHeader headerTemplate;
-  auto objParseResult = parser_.parseFetchObjectHeader(
-      cursor, cursor.totalLength(), headerTemplate);
-
-  if (GetParam() >= kVersionDraft15) {
-    EXPECT_TRUE(objParseResult.hasError());
-    EXPECT_EQ(objParseResult.error(), ErrorCode::PROTOCOL_VIOLATION)
-        << "Fetch object with extensions and non-NORMAL status should return "
-           "PROTOCOL_VIOLATION in v15+";
-  } else {
-    EXPECT_TRUE(objParseResult.hasValue())
-        << "Fetch object with extensions and non-NORMAL status should succeed "
-           "in v14";
-  }
+  EXPECT_TRUE(objResult.hasError())
+      << "FETCH objects have no Object Status field to write";
 }
 
 TEST_P(MoQFramerTest, DatagramWithExtensionsAndNormalStatusSucceeds) {
@@ -3369,7 +3063,7 @@ TEST(MoQFramerTest, ParseClientSetupWithAlpnVersion15NoVersionArray) {
 
   // When version >= 15 is pre-initialized via ALPN, CLIENT_SETUP should not
   // have version array in wire format
-  parser.initializeVersion(kVersionDraft15);
+  parser.initializeVersion(kVersionDraft16);
   auto result =
       parser.parseClientSetup(cursor, buffer->computeChainDataLength());
 
@@ -3382,7 +3076,7 @@ TEST(MoQFramerTest, WriteClientSetupWithAlpnVersion15NoVersionArray) {
   auto clientSetup = moxygen::Setup{};
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeClientSetup(writeBuf, clientSetup, kVersionDraft15);
+  auto result = writeClientSetup(writeBuf, clientSetup, kVersionDraft16);
   EXPECT_TRUE(result.hasValue()) << "Failed to write CLIENT_SETUP";
 
   auto buffer = writeBuf.move();
@@ -3421,7 +3115,7 @@ TEST(MoQFramerTest, ParseServerSetupWithAlpnVersion15NoVersionField) {
   folly::io::Cursor cursor(buffer.get());
 
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft15);
+  parser.initializeVersion(kVersionDraft16);
   auto result =
       parser.parseServerSetup(cursor, buffer->computeChainDataLength());
 
@@ -3434,10 +3128,10 @@ TEST(MoQFramerTest, WriteServerSetupWithAlpnVersion15NoVersionField) {
   auto serverSetup = moxygen::Setup{};
 
   MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft15);
+  writer.initializeVersion(kVersionDraft16);
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto result = writeServerSetup(writeBuf, serverSetup, kVersionDraft15);
+  auto result = writeServerSetup(writeBuf, serverSetup, kVersionDraft16);
   EXPECT_TRUE(result.hasValue()) << "Failed to write SERVER_SETUP";
 
   auto buffer = writeBuf.move();
@@ -3527,8 +3221,6 @@ TEST(MoQFramerTest, ClientSetupRejectsDelete) {
   bool error = false;
 
   // Write CLIENT_SETUP header
-  writeVarint(writeBuf, 1, size, error); // 1 version
-  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
   writeVarint(writeBuf, 1, size, error); // 1 parameter
 
   // Write AUTHORIZATION_TOKEN parameter with DELETE alias type
@@ -3577,8 +3269,6 @@ TEST(MoQFramerTest, ClientSetupRejectsUseAlias) {
   bool error = false;
 
   // Write CLIENT_SETUP header
-  writeVarint(writeBuf, 1, size, error); // 1 version
-  writeVarint(writeBuf, kVersionDraftCurrent, size, error);
   writeVarint(writeBuf, 1, size, error); // 1 parameter
 
   // Write AUTHORIZATION_TOKEN parameter with USE_ALIAS alias type
@@ -3690,8 +3380,7 @@ TEST(MoQFramerTest, ServerSetupDeleteAliasIsNotExported) {
   size_t size = 0;
   bool error = false;
 
-  writeVarint(writeBuf, kVersionDraftCurrent, size, error); // selected version
-  writeVarint(writeBuf, 1, size, error);                    // 1 parameter
+  writeVarint(writeBuf, 1, size, error); // 1 parameter
   writeVarint(
       writeBuf,
       folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN),
@@ -3783,7 +3472,7 @@ static auto parseAndCheckDatagram(
 
 // Test datagram types without priority (v15+)
 TEST(MoQFramerTest, DatagramWithoutPriority) {
-  uint64_t version = kVersionDraft15;
+  uint64_t version = kVersionDraft16;
   MoQFrameWriter writer;
   writer.initializeVersion(version);
   MoQFrameParser parser;
@@ -3811,7 +3500,7 @@ TEST(MoQFramerTest, DatagramWithoutPriority) {
 
 // Test datagram with priority present in v15
 TEST(MoQFramerTest, DatagramWithPriority) {
-  uint64_t version = kVersionDraft15;
+  uint64_t version = kVersionDraft16;
   MoQFrameWriter writer;
   writer.initializeVersion(version);
   MoQFrameParser parser;
@@ -3830,7 +3519,7 @@ TEST(MoQFramerTest, DatagramWithPriority) {
 
 // Test status datagram with Object ID
 TEST(MoQFramerTest, StatusDatagramWithObjectID) {
-  uint64_t version = kVersionDraft15;
+  uint64_t version = kVersionDraft16;
   MoQFrameWriter writer;
   writer.initializeVersion(version);
   MoQFrameParser parser;
@@ -3869,7 +3558,7 @@ TEST(MoQFramerTest, StatusDatagramWithObjectID) {
 
 // Test status datagram without priority
 TEST(MoQFramerTest, StatusDatagramWithoutPriority) {
-  uint64_t version = kVersionDraft15;
+  uint64_t version = kVersionDraft16;
   MoQFrameWriter writer;
   writer.initializeVersion(version);
   MoQFrameParser parser;
@@ -3900,22 +3589,9 @@ TEST(MoQFramerTest, StatusDatagramWithoutPriority) {
       0);
 }
 
-// Test that v14 doesn't support priority-less datagrams
-TEST(MoQFramerTest, V14DoesNotSupportPriorityNotPresent) {
-  uint64_t version = kVersionDraft14;
-  auto dgType = getDatagramType(
-      version,
-      false,
-      false,
-      false,
-      false,
-      false); // priority NOT present (should be ignored in v14)
-  EXPECT_EQ(dgType, DatagramType::OBJECT_DATAGRAM_NO_EXT);
-}
-
 // Test isValidDatagramType for v15 types
 TEST(MoQFramerTest, ValidDatagramTypesV15) {
-  uint64_t version = kVersionDraft15;
+  uint64_t version = kVersionDraft16;
   // All payload types (0x00-0x0F) should be valid
   for (uint64_t type = 0x00; type <= 0x0F; ++type) {
     EXPECT_TRUE(isValidDatagramType(version, type))
@@ -3939,31 +3615,8 @@ TEST(MoQFramerTest, ValidDatagramTypesV15) {
   EXPECT_FALSE(isValidDatagramType(version, 0x30));
 }
 
-// Test isValidDatagramType for v14 types
-TEST(MoQFramerTest, ValidDatagramTypesV14) {
-  uint64_t version = kVersionDraft14;
-  // Only types 0x00-0x07 and 0x20-0x21 should be valid
-  for (uint64_t type = 0x00; type <= 0x07; ++type) {
-    EXPECT_TRUE(isValidDatagramType(version, type))
-        << "Type 0x" << std::hex << type << " should be valid in v14";
-  }
-  EXPECT_TRUE(isValidDatagramType(version, 0x20));
-  EXPECT_TRUE(isValidDatagramType(version, 0x21));
-  // Types 0x08-0x0F should NOT be valid in v14
-  for (uint64_t type = 0x08; type <= 0x0F; ++type) {
-    EXPECT_FALSE(isValidDatagramType(version, type))
-        << "Type 0x" << std::hex << type << " should NOT be valid in v14";
-  }
-  // Status types with Object ID should NOT be valid in v14
-  EXPECT_FALSE(isValidDatagramType(version, 0x24));
-  EXPECT_FALSE(isValidDatagramType(version, 0x25));
-  EXPECT_FALSE(isValidDatagramType(version, 0x28));
-}
-
 TEST(MoQFramerTestUtils, IsValidSubgroupTypeSetBased) {
-  static const std::set<uint64_t> validV14 = {
-      0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D};
-  static const std::set<uint64_t> validV15 = {
+  static const std::set<uint64_t> validV16 = {
       0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D,
       0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D};
   static const std::set<uint64_t> validV18 = {
@@ -3972,17 +3625,13 @@ TEST(MoQFramerTestUtils, IsValidSubgroupTypeSetBased) {
       0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D,
       0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D};
 
-  uint64_t version14 = kVersionDraft14;
-  uint64_t version15 = kVersionDraft15;
+  uint64_t version16 = kVersionDraft16;
   uint64_t version18 = kVersionDraft18;
 
   for (uint64_t t = 0; t <= 255; ++t) {
-    bool shouldBeValidV14 = validV14.count(t) > 0;
-    EXPECT_EQ(isValidSubgroupType(version14, t), shouldBeValidV14)
-        << "v14: 0x" << std::hex << t;
-    bool shouldBeValidV15 = validV15.count(t) > 0;
-    EXPECT_EQ(isValidSubgroupType(version15, t), shouldBeValidV15)
-        << "v15: 0x" << std::hex << t;
+    bool shouldBeValidV16 = validV16.count(t) > 0;
+    EXPECT_EQ(isValidSubgroupType(version16, t), shouldBeValidV16)
+        << "v16: 0x" << std::hex << t;
     bool shouldBeValidV18 = validV18.count(t) > 0;
     EXPECT_EQ(isValidSubgroupType(version18, t), shouldBeValidV18)
         << "v18: 0x" << std::hex << t;
@@ -4026,14 +3675,14 @@ void testDatagramPriorityRoundTrip(
 // Then each test becomes a one-liner:
 TEST(MoQFramerTest, OptionalPriorityDatagramRoundTripNone) {
   testDatagramPriorityRoundTrip(
-      kVersionDraft15,
+      kVersionDraft16,
       std::nullopt,
       DatagramType::OBJECT_DATAGRAM_NO_EXT_NO_PRI,
       std::nullopt);
 }
 TEST(MoQFramerTest, OptionalPriorityDatagramRoundTripValue) {
   testDatagramPriorityRoundTrip(
-      kVersionDraft15, 64, DatagramType::OBJECT_DATAGRAM_NO_EXT, 64);
+      kVersionDraft16, 64, DatagramType::OBJECT_DATAGRAM_NO_EXT, 64);
 }
 
 // Helper for round-trip subgroup header test
@@ -4075,7 +3724,7 @@ void testSubgroupPriorityRoundTrip(
 // Test round-trip write/read with std::nullopt priority in subgroup (v15)
 TEST(MoQFramerTest, OptionalPrioritySubgroupRoundTripNone) {
   testSubgroupPriorityRoundTrip(
-      kVersionDraft15,
+      kVersionDraft16,
       std::nullopt,
       StreamType::SUBGROUP_HEADER_SG_NO_PRI,
       std::nullopt);
@@ -4084,7 +3733,7 @@ TEST(MoQFramerTest, OptionalPrioritySubgroupRoundTripNone) {
 // Test round-trip write/read with explicit priority in subgroup (v15)
 TEST(MoQFramerTest, OptionalPrioritySubgroupRoundTripValue) {
   testSubgroupPriorityRoundTrip(
-      kVersionDraft15, 80, StreamType::SUBGROUP_HEADER_SG, 80);
+      kVersionDraft16, 80, StreamType::SUBGROUP_HEADER_SG, 80);
 }
 
 TEST(MoQFramerTest, FirstObjectSubgroupHeaderRoundTripDraft18) {
@@ -4674,12 +4323,12 @@ TEST_P(MoQFramerV15PlusTest, SubscribeOkWithLargestLocation) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV15PlusTest,
     MoQFramerV15PlusTest,
-    ::testing::Values(kVersionDraft15, kVersionDraft16, kVersionDraft18));
+    ::testing::Values(kVersionDraft16, kVersionDraft18));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV15_17Test,
     MoQFramerV15_17Test,
-    ::testing::Values(kVersionDraft15, kVersionDraft16, kVersionDraft17));
+    ::testing::Values(kVersionDraft16, kVersionDraft17));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV16_17Test,
@@ -6599,7 +6248,7 @@ TEST(MoQFramerV16DeathTest, PublishNamespaceDoneWithoutRequestIDDies) {
 
   EXPECT_DEATH(
       writer.writePublishNamespaceDone(writeBuf, publishNamespaceDone),
-      "RequestID required for v16\\+ PublishNamespaceDone");
+      "RequestID required for PublishNamespaceDone");
 }
 
 TEST(MoQFramerV16DeathTest, PublishNamespaceCancelWithoutRequestIDDies) {
@@ -6616,7 +6265,7 @@ TEST(MoQFramerV16DeathTest, PublishNamespaceCancelWithoutRequestIDDies) {
 
   EXPECT_DEATH(
       writer.writePublishNamespaceCancel(writeBuf, publishNamespaceCancel),
-      "RequestID required for v16\\+ PublishNamespaceCancel");
+      "RequestID required for PublishNamespaceCancel");
 }
 
 // Tests for Parameters::isParamAllowed()
@@ -6651,7 +6300,6 @@ TEST_F(ParametersIsParamAllowedTest, ParamAllowedForAllFrameTypes) {
       paramsFetch.isParamAllowed(TrackRequestParamKey::PUBLISHER_PRIORITY));
 }
 
-// TODO: Should return false when we drop v15- support
 TEST_F(ParametersIsParamAllowedTest, UnknownParamKeyReturnsTrue) {
   Parameters params(FrameType::SUBSCRIBE);
   // Cast an unknown value to TrackRequestParamKey
@@ -6947,8 +6595,8 @@ TEST_F(ParametersIsParamAllowedTest, StableParamKeysKnownAcrossVersions) {
 class ParameterValidationFlowTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    writer_.initializeVersion(kVersionDraft15);
-    parser_.initializeVersion(kVersionDraft15);
+    writer_.initializeVersion(kVersionDraft16);
+    parser_.initializeVersion(kVersionDraft16);
   }
 
   size_t frameLength(folly::io::Cursor& cursor) {
@@ -7187,26 +6835,6 @@ TEST_F(UnknownParamTest, UnknownParamRejectedInV16) {
   EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
-TEST_F(UnknownParamTest, UnknownParamAcceptedInV15) {
-  auto buf = buildSubscribeWithUnknownParam(kVersionDraft15);
-  auto data = buf.move();
-  folly::io::Cursor cursor(data.get());
-
-  MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft15);
-
-  // Skip frame type
-  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
-  ASSERT_TRUE(frameType.has_value());
-  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::SUBSCRIBE));
-
-  // Read length
-  auto length = static_cast<size_t>(cursor.readBE<uint16_t>());
-
-  auto result = parser.parseSubscribeRequest(cursor, length);
-  EXPECT_TRUE(result.hasValue());
-}
-
 namespace {
 folly::Expected<SubscribeRequest, ErrorCode> roundtripSubscribeWithRendezvous(
     uint64_t version,
@@ -7254,17 +6882,6 @@ TEST(RendezvousTimeoutParamTest, V18SubscribeExposesParam) {
       parsed->params, TrackRequestParamKey::RENDEZVOUS_TIMEOUT);
   ASSERT_TRUE(val.has_value());
   EXPECT_EQ(*val, 1500u);
-}
-
-// In drafts < 18, key 0x04 still means MAX_CACHE_DURATION. In v14 it is a
-// param allowed on all frame types and must roundtrip unchanged.
-TEST(RendezvousTimeoutParamTest, PreV18Key0x04PreservesMaxCacheDuration) {
-  auto parsed = roundtripSubscribeWithRendezvous(kVersionDraft14, 4242);
-  ASSERT_TRUE(parsed.hasValue());
-  auto val = getFirstIntParam(
-      parsed->params, TrackRequestParamKey::MAX_CACHE_DURATION);
-  ASSERT_TRUE(val.has_value());
-  EXPECT_EQ(*val, 4242u);
 }
 
 // v18 non-SUBSCRIBE frames must not accept key 0x04 — insertParam rejects.
@@ -7413,15 +7030,6 @@ TEST_F(ParametersIsParamAllowedTest, TrackPropertyParamRejectedInV16) {
   EXPECT_FALSE(params.isParamAllowed(TrackRequestParamKey::PUBLISHER_PRIORITY));
 }
 
-TEST_F(ParametersIsParamAllowedTest, TrackPropertyParamAcceptedInV15) {
-  // Same params should be allowed in v15
-  Parameters params(FrameType::SUBSCRIBE_OK);
-  params.setMajorVersion(15);
-
-  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::MAX_CACHE_DURATION));
-  EXPECT_TRUE(params.isParamAllowed(TrackRequestParamKey::PUBLISHER_PRIORITY));
-}
-
 TEST_F(ParametersIsParamAllowedTest, DeliveryTimeoutAllowedInV16Subscribe) {
   Parameters params(FrameType::SUBSCRIBE);
   params.setMajorVersion(16);
@@ -7492,10 +7100,6 @@ TEST_F(ParametersIsParamAllowedTest, GroupOrderStillAllowedInV16PublishOk) {
 // Verify that a parse underflow doesn't corrupt delta-encoded object ID
 // state.
 TEST_P(MoQFramerTest, SubgroupObjectUnderflowDoesNotCorruptDeltaState) {
-  if (getDraftMajorVersion(GetParam()) < 14) {
-    return;
-  }
-
   auto streamType =
       getSubgroupStreamType(GetParam(), SubgroupIDFormat::Zero, false, false);
   auto sgOptions = getSubgroupOptions(GetParam(), streamType);

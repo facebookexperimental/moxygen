@@ -85,7 +85,7 @@ from ti.experimental.moxygen.samples.text_client.moq_client_pybinding import (
 @click.option(
     "--use_legacy_setup/--no-use_legacy_setup",
     default=False,
-    help="Use legacy moq-00 ALPN (C++ --use_legacy_setup)",
+    help="Offer only the stable draft ALPN (C++ --use_legacy_setup)",
 )
 @click.option(
     "--insecure/--no-insecure",

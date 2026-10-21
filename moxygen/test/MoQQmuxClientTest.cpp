@@ -237,7 +237,7 @@ TEST(MoQQmuxClientTest, UsesInjectedTransportFactoryOnLibevExecutor) {
       proxygen::URL("moqt://example.com:4443/path"),
       transportFactory);
   const auto expectedTimeout = std::chrono::milliseconds(321);
-  const std::vector<std::string> expectedAlpns{"moq-00", "moq-01"};
+  const std::vector<std::string> expectedAlpns{"moqt-16-meta-00", "moqt-18"};
   folly::exception_wrapper error;
   bool done = false;
 
@@ -270,14 +270,19 @@ TEST(MoQQmuxClientTest, AdoptedTransportSkipsTransportFactory) {
       executor,
       proxygen::URL("moqt://example.com:4443/path"),
       transportFactory);
-  client->setQmuxTransport(std::make_unique<StubQmuxTransport>(), "moq-00");
+  client->setQmuxTransport(
+      std::make_unique<StubQmuxTransport>(), "moqt-16-meta-00");
 
   folly::exception_wrapper error;
   bool done = false;
   folly::coro::co_withExecutor(
       executor.get(),
       setupAndCapture(
-          client, std::chrono::milliseconds(321), {"moq-00"}, &error, &done))
+          client,
+          std::chrono::milliseconds(321),
+          {"moqt-16-meta-00"},
+          &error,
+          &done))
       .start();
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(1);

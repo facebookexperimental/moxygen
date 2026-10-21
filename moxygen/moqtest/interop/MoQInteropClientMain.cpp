@@ -31,7 +31,7 @@ DEFINE_bool(verbose, false, "Enable verbose output (env: VERBOSE=1)");
 DEFINE_string(
     versions,
     "",
-    "Comma-separated MoQ draft versions (e.g. '14,16'). Empty = all "
+    "Comma-separated MoQ draft versions (e.g. '16,18'). Empty = all "
     "supported. (env: MOQT_VERSIONS)");
 DEFINE_int32(connect_timeout, 2000, "Connect timeout in milliseconds");
 DEFINE_int32(transaction_timeout, 2000, "Transaction timeout in milliseconds");

@@ -984,8 +984,7 @@ StreamPublisherImpl::publishStatus(
   if (!validateRes) {
     return validateRes;
   }
-  if (streamType_ == StreamType::FETCH_HEADER &&
-      !fetchObjectsHaveStatus(publisher_->getVersion())) {
+  if (streamType_ == StreamType::FETCH_HEADER) {
     // Nothing to serialize: leaving objectID out of the response is what tells
     // the subscriber it doesn't exist.
     header_.id = objectID;
@@ -1430,16 +1429,13 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       XLOG(ERR) << "Received RequestUpdate before sending SUBSCRIBE_OK id="
                 << requestID_ << " trackPub=" << this;
 
-      // Only send error response for v15+
-      if (getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 15) {
-        session_->requestUpdateError(
-            SubscribeUpdateError{
-                requestUpdate.requestID,
-                static_cast<RequestErrorCode>(
-                    folly::to_underlying(SubscribeErrorCode::INTERNAL_ERROR)),
-                "No subscription handle or track publisher"},
-            requestID_);
-      }
+      session_->requestUpdateError(
+          SubscribeUpdateError{
+              requestUpdate.requestID,
+              static_cast<RequestErrorCode>(
+                  folly::to_underlying(SubscribeErrorCode::INTERNAL_ERROR)),
+              "No subscription handle or track publisher"},
+          requestID_);
       return;
     }
 
@@ -1493,7 +1489,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     }
 
     // Only update forward state if the parameter was explicitly provided
-    // Otherwise, preserve existing forward state (per draft 15+)
+    // Otherwise, preserve existing forward state
     if (requestUpdate.forward.has_value()) {
       setForward(*requestUpdate.forward);
     }
@@ -1529,9 +1525,6 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   }
 
   void respondToRequestUpdates(RequestUpdateSequencer::Batch& batch) {
-    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) < 15) {
-      return;
-    }
     auto existingRequestID = requestID_;
     if (batch.result->hasError()) {
       // Only the newest update in a failed batch gets an error.
@@ -1936,9 +1929,6 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
   }
 
   void respondToRequestUpdates(RequestUpdateSequencer::Batch& batch) {
-    if (getDraftMajorVersion(*session_->getNegotiatedVersion()) < 15) {
-      return;
-    }
     if (batch.result->hasError()) {
       // Only the newest update in a failed batch gets an error.
       auto updateErr = std::move(batch.result->error());
@@ -3381,6 +3371,10 @@ folly::coro::Task<Setup> MoQSession::setup(Setup setup) {
 folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
     Setup setup) {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  if (!negotiatedVersion_) {
+    XLOG(ERR) << "sendSetup without a negotiated version sess=" << this;
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
 
   // Server may also call awaitPeerSetup() after sending SERVER_SETUP
   // proactively, to negotiate setup parameters with the client.
@@ -3393,10 +3387,7 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
       {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
        getMoQTImplementationString()}));
 
-  uint64_t setupSerializationVersion = kVersionDraft14;
-  if (negotiatedVersion_) {
-    setupSerializationVersion = *negotiatedVersion_;
-  }
+  uint64_t setupSerializationVersion = *negotiatedVersion_;
 
   bool isClient = (dir_ == MoQControlCodec::Direction::CLIENT);
   if (isClient) {
@@ -3474,9 +3465,6 @@ folly::coro::Task<Setup> MoQSession::awaitPeerSetup() {
               << folly::exceptionStr(serverSetup.exception());
     co_yield folly::coro::co_error(serverSetup.exception());
   }
-  // The framer/codec only invokes onServerSetup in legacy mode after
-  // validating the server selected draft-14.
-
   setupComplete_ = true;
   auto negotiatedVersion = *getNegotiatedVersion();
   XLOG(DBG1) << "Negotiated Version=0x" << std::hex << negotiatedVersion
@@ -3495,7 +3483,7 @@ void MoQSession::onServerSetup(Setup serverSetup) {
   if (logger_) {
     logger_->logServerSetup(
         serverSetup,
-        negotiatedVersion_.value_or(kVersionDraft14),
+        negotiatedVersion_.value_or(kVersionDraft16),
         ControlMessageType::PARSED);
   }
 
@@ -3514,9 +3502,10 @@ void MoQSession::onServerSetup(Setup serverSetup) {
     return;
   }
 
-  // In LEGACY mode: initialize version from SERVER_SETUP
   if (!negotiatedVersion_) {
-    initializeNegotiatedVersion(kVersionDraft14);
+    XLOG(ERR) << "SERVER_SETUP without a negotiated version sess=" << this;
+    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
+    return;
   }
 
   initPeerMaxRequestID(serverSetup.params);
@@ -3537,7 +3526,7 @@ void MoQSession::onClientSetup(Setup clientSetup) {
   if (logger_) {
     logger_->logClientSetup(
         clientSetup,
-        negotiatedVersion_.value_or(kVersionDraft14),
+        negotiatedVersion_.value_or(kVersionDraft16),
         ControlMessageType::PARSED);
   }
 
@@ -3549,7 +3538,7 @@ void MoQSession::onClientSetup(Setup clientSetup) {
 
   initPeerMaxRequestID(clientSetup.params);
   auto peerAuthCacheSize = getMaxAuthTokenCacheSizeIfPresent(
-      clientSetup.params, negotiatedVersion_.value_or(kVersionDraft14));
+      clientSetup.params, negotiatedVersion_.value_or(kVersionDraft16));
   tokenCache_.setMaxSize(
       authTokenCacheEnabled_
           ? std::min(kMaxSendTokenCacheSize, peerAuthCacheSize)
@@ -3591,10 +3580,9 @@ void MoQSession::onClientSetup(Setup clientSetup) {
   }
 
   if (!getNegotiatedVersion()) {
-    // Version negotiation has not happened at alpn
-    // In legacy mode, always use draft-14. If the client didn't offer
-    // draft-14, the framer would have returned VERSION_NEGOTIATION_FAILED.
-    initializeNegotiatedVersion(kVersionDraft14);
+    XLOG(ERR) << "CLIENT_SETUP without a negotiated version sess=" << this;
+    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
+    return;
   }
 
   // Validate authority with the negotiated version
@@ -4921,9 +4909,6 @@ void MoQSession::setPublisherPriorityFromParams(
     const TrackRequestParameters& params,
     const Extensions& trackProperties,
     const std::shared_ptr<TrackPublisherImpl>& trackPublisher) {
-  if (getDraftMajorVersion(*getNegotiatedVersion()) < 15) {
-    return;
-  }
   auto advertised = getPublisherPriorityProperty(trackProperties, params);
   if (!advertised) {
     // Naming the default lets objects published at it elide the priority byte.
@@ -4948,7 +4933,7 @@ void MoQSession::setPublisherPriorityFromParams(
 void MoQSession::applyResolvedPublisherPriority(
     std::optional<uint64_t> advertised,
     const std::shared_ptr<SubscribeTrackReceiveState>& trackReceiveState) {
-  if (getDraftMajorVersion(*getNegotiatedVersion()) < 15 || !advertised) {
+  if (!advertised) {
     return;
   }
   auto publisherPriority = toPublisherPriority(*advertised);
@@ -4996,24 +4981,19 @@ void MoQSession::onRequestUpdate(RequestUpdate requestUpdate) {
       handleSubscribeRequestUpdate(std::move(requestUpdate), trackPub);
       return;
     }
-    // v16+: FETCH supports REQUEST_UPDATE
-    if (getDraftMajorVersion(*getNegotiatedVersion()) >= 16) {
-      if (auto fetchPub =
-              std::dynamic_pointer_cast<FetchPublisherImpl>(pubIt->second)) {
-        handleFetchRequestUpdate(requestUpdate, fetchPub);
-        return;
-      }
+    if (auto fetchPub =
+            std::dynamic_pointer_cast<FetchPublisherImpl>(pubIt->second)) {
+      handleFetchRequestUpdate(requestUpdate, fetchPub);
+      return;
     }
   }
 
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-    requestUpdateError(
-        SubscribeUpdateError{
-            requestID,
-            RequestErrorCode::NOT_SUPPORTED,
-            "REQUEST_UPDATE not supported for this message type"},
-        existingRequestID);
-  }
+  requestUpdateError(
+      SubscribeUpdateError{
+          requestID,
+          RequestErrorCode::NOT_SUPPORTED,
+          "REQUEST_UPDATE not supported for this message type"},
+      existingRequestID);
 }
 
 void MoQSession::handleSubscribeRequestUpdate(
@@ -5155,10 +5135,8 @@ void MoQSession::onRequestError(RequestError error, FrameType frameType) {
       control->disarmOnPeerTermination();
       control->writeFin();
     }
-    if (getDraftMajorVersion(*getNegotiatedVersion()) > 14) {
-      // determine real frame type from pendingRequest
-      frameType = pendingState->getErrorFrameType();
-    }
+    // determine real frame type from pendingRequest
+    frameType = pendingState->getErrorFrameType();
 
     if (error.errorCode == RequestErrorCode::REDIRECT) {
       using PRStateType = PendingRequestState::Type;
@@ -5406,40 +5384,26 @@ class MoQSession::ReceiverSubscriptionHandle
               RequestErrorCode::GOING_AWAY,
               "Session received GOAWAY"});
     }
-    if (getDraftMajorVersion(*(session->getNegotiatedVersion())) >= 14) {
-      requestUpdate.requestID = session->getNextRequestID();
-    } else {
-      requestUpdate.requestID = subscribeOk_->requestID;
-    }
+    requestUpdate.requestID = session->getNextRequestID();
 
-    // For v15+, create promise and wait for REQUEST_OK response
-    // For v14 and below, just send the message and return immediately
-    if (getDraftMajorVersion(*(session->getNegotiatedVersion())) >= 15) {
-      // Create promise/contract for tracking the response
-      auto contract = folly::coro::makePromiseContract<
-          folly::Expected<RequestOk, RequestError>>();
+    // Create promise/contract for tracking the response
+    auto contract = folly::coro::makePromiseContract<
+        folly::Expected<RequestOk, RequestError>>();
 
-      // Register pending request
-      session->pendingRequests_.emplace(
-          requestUpdate.requestID,
-          PendingRequestState::makeRequestUpdate(std::move(contract.first)));
+    // Register pending request
+    session->pendingRequests_.emplace(
+        requestUpdate.requestID,
+        PendingRequestState::makeRequestUpdate(std::move(contract.first)));
 
-      // Send the REQUEST_UPDATE message
-      session->requestUpdate(requestUpdate, control_);
+    // Send the REQUEST_UPDATE message
+    session->requestUpdate(requestUpdate, control_);
 
-      // Wait for REQUEST_OK or REQUEST_ERROR response
-      // unsubscribe() can reset session_ while this waits.
-      auto cancelGuard = session->cancelOnExit(requestUpdate.requestID);
-      auto result = co_await std::move(contract.second);
-      cancelGuard.dismiss();
-      co_return result;
-    } else {
-      session->requestUpdate(requestUpdate, control_);
-
-      // Version < 15: Return a constructed response. RequestUpdate is fire
-      // and forget
-      co_return RequestOk{.requestID = requestUpdate.requestID};
-    }
+    // Wait for REQUEST_OK or REQUEST_ERROR response
+    // unsubscribe() can reset session_ while this waits.
+    auto cancelGuard = session->cancelOnExit(requestUpdate.requestID);
+    auto result = co_await std::move(contract.second);
+    cancelGuard.dismiss();
+    co_return result;
   }
 
   void unsubscribe() override {
@@ -7752,22 +7716,21 @@ void MoQSession::onNewBidiStream(
   XLOG(DBG1) << __func__ << " sess=" << this;
   ReadHandleRef readHandle(this, bh.readHandle);
 
-  // In draft 16 and above, the version is negotiated through the ALPN, so we
-  // would know what it is by this point.
-  if (negotiatedVersion_ && getDraftMajorVersion(*negotiatedVersion_) >= 16) {
-    co_withExecutor(
-        exec_.get(),
-        co_withCancellation(
-            cancellationSource_.getToken(),
-            bidiStreamDemuxer(std::move(readHandle), bh.writeHandle)))
-        .start();
+  // The version comes from the ALPN or WT protocol. A transport that let the
+  // peer in without one must not bring the process down.
+  if (!negotiatedVersion_) {
+    XLOG(ERR) << "Bidi stream without a negotiated version sess=" << this;
+    bh.writeHandle->resetStream(/*error=*/0);
+    readHandle.stopSending(/*error=*/0);
+    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     return;
   }
-
-  handleClientSetup(
-      std::move(readHandle),
-      bh.writeHandle,
-      proxygen::WebTransport::StreamData{nullptr, false});
+  co_withExecutor(
+      exec_.get(),
+      co_withCancellation(
+          cancellationSource_.getToken(),
+          bidiStreamDemuxer(std::move(readHandle), bh.writeHandle)))
+      .start();
 }
 
 void MoQSession::replayBufferedUniStreams() {
@@ -8198,15 +8161,7 @@ bool MoQSession::closeSessionIfRequestIDInvalid(
       close(SessionCloseErrorCode::TOO_MANY_REQUESTS);
       return true;
     }
-    if (getDraftMajorVersion(*getNegotiatedVersion()) < 16) {
-      if (requestID.value != nextExpectedPeerRequestID_) {
-        XLOG(ERR) << "Invalid next requestID: " << requestID
-                  << " sess=" << this;
-        close(SessionCloseErrorCode::INVALID_REQUEST_ID);
-        return true;
-      }
-      nextExpectedPeerRequestID_ += getRequestIDMultiplier();
-    } // in draft 16+, request IDs can come out of order
+    // Draft 16+: request IDs can come out of order; no strict-sequence check.
     const auto majorVersion = getDraftMajorVersion(*getNegotiatedVersion());
     if (majorVersion >= 18) {
       // Draft 18 dropped MAX_REQUEST_ID, so nothing else keeps the cutoff
@@ -8446,10 +8401,8 @@ void MoQSession::onRequestOk(RequestOk requestOk, FrameType frameType) {
     return;
   }
 
-  // In v15+, convert REQUEST_OK back to specific frame type
-  if (*getNegotiatedVersion() > 14) {
-    frameType = reqIt->second->getOkFrameType();
-  }
+  // Convert REQUEST_OK back to the specific frame type.
+  frameType = reqIt->second->getOkFrameType();
 
   if (!validateRequestOkTrackProperties(requestOk, frameType)) {
     return;
@@ -8546,29 +8499,15 @@ void MoQSession::onSubscribeNamespaceImpl(
 
 void MoQSession::onUnsubscribeNamespace(
     UnsubscribeNamespace unsubscribeNamespace) {
-  // v15+: Use Request ID
-  if (getDraftMajorVersion(*getNegotiatedVersion()) >= 15) {
-    if (!unsubscribeNamespace.requestID.has_value()) {
-      XLOG(ERR) << __func__ << " sess=" << this
-                << " - missing requestID for v15+";
-      return;
-    }
-    XLOG(DBG1) << __func__
-               << " requestID=" << unsubscribeNamespace.requestID.value()
-               << " sess=" << this;
-    // TODO: Implement actual unsubscribe logic when SUBSCRIBE_NAMESPACE
-    // tracking is added For now, just log and update stats
-  } else {
-    // <v15: Use Track Namespace Prefix
-    if (!unsubscribeNamespace.trackNamespacePrefix.has_value()) {
-      XLOG(ERR) << __func__ << " sess=" << this
-                << " - missing trackNamespacePrefix for <v15";
-      return;
-    }
-    XLOG(DBG1) << __func__ << " prefix="
-               << unsubscribeNamespace.trackNamespacePrefix.value()
-               << " - ignored by simple client, sess=" << this;
+  if (!unsubscribeNamespace.requestID.has_value()) {
+    XLOG(ERR) << __func__ << " sess=" << this << " - missing requestID";
+    return;
   }
+  XLOG(DBG1) << __func__
+             << " requestID=" << unsubscribeNamespace.requestID.value()
+             << " sess=" << this;
+  // TODO: Implement actual unsubscribe logic when SUBSCRIBE_NAMESPACE
+  // tracking is added For now, just log and update stats
 
   if (logger_) {
     logger_->logUnsubscribeNamespace(
@@ -8770,11 +8709,15 @@ std::shared_ptr<ReplyContext> MoQSession::controlStreamReplyContext() {
   return controlStreamReplyContext_;
 }
 
-void MoQSession::validateAndSetVersionFromAlpn(const std::string& alpn) {
+bool MoQSession::validateAndSetVersionFromAlpn(const std::string& alpn) {
   auto version = getVersionFromAlpn(std::string_view(alpn));
-  if (version) {
-    initializeNegotiatedVersion(*version);
+  if (!version) {
+    XLOG(ERR) << "No supported MoQT version for ALPN '" << alpn
+              << "' sess=" << this;
+    return false;
   }
+  initializeNegotiatedVersion(*version);
+  return true;
 }
 
 WriteResult SubNSReply::ok(const SubscribeNamespaceOk& subNsOk) {

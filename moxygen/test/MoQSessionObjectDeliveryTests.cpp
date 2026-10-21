@@ -1120,7 +1120,7 @@ INSTANTIATE_TEST_SUITE_P(
     V15PlusTests,
     V15PlusTests,
     testing::Values(
-        VersionParams{{kVersionDraft15}, kVersionDraft15},
+        VersionParams{{kVersionDraft16}, kVersionDraft16},
         VersionParams{{kVersionDraft18}, kVersionDraft18}));
 CO_TEST_P_X(V15PlusTests, SubgroupPriorityFallback) {
   co_await setupMoQSession();

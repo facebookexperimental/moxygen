@@ -56,7 +56,7 @@ DEFINE_uint64(unsubscribe_time, 30, "Time to unsubscribe in seconds");
 DEFINE_string(
     versions,
     "",
-    "Comma-separated MoQ draft versions (e.g. \"14,16\"). Empty = all supported.");
+    "Comma-separated MoQ draft versions (e.g. \"16,18\"). Empty = all supported.");
 DEFINE_uint64(
     delivery_timeout,
     0,

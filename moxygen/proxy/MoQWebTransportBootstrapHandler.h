@@ -11,7 +11,6 @@
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 
 #include <memory>
-#include <optional>
 #include <string>
 
 #include "moxygen/MoQSession.h"
@@ -27,10 +26,13 @@ PendingMoQWebTransportSession makeMoQWebTransportSession(
     std::shared_ptr<MoQExecutor> executor,
     std::shared_ptr<void> keepalive = nullptr);
 
+// negotiatedProtocol is the WT protocol the peer negotiated; it sets the
+// session's MoQT version. Throws std::invalid_argument if it names no supported
+// version.
 folly::coro::Task<std::shared_ptr<MoQSession>> establishMoQWebTransportSession(
     std::shared_ptr<MoQSession> session,
     std::string authority,
     std::string path,
-    std::optional<std::string> negotiatedProtocol);
+    std::string negotiatedProtocol);
 
 } // namespace moxygen

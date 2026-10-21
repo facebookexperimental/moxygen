@@ -45,7 +45,7 @@ DEFINE_string(key, "", "Path to TLS private key file");
 DEFINE_string(
     versions,
     "",
-    "Comma-separated MoQ draft versions (e.g. '14,16'). Empty = all supported.");
+    "Comma-separated MoQ draft versions (e.g. '16,18'). Empty = all supported.");
 DEFINE_bool(
     include_timestamp_extension,
     false,

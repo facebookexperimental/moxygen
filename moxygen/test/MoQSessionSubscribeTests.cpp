@@ -386,12 +386,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   folly::coro::Baton subscribeUpdateProcessed;
 
-  // For v15+, we set the largest location in subscribeOk so the session
-  // will include it in the response to SubscribeUpdate
+  // The largest location set in subscribeOk is echoed in the response to
+  // SubscribeUpdate.
   const std::optional<AbsoluteLocation> expectedLargest =
-      (getDraftMajorVersion(getServerSelectedVersion()) >= 15)
-      ? std::optional<AbsoluteLocation>(AbsoluteLocation{100, 200})
-      : std::optional<AbsoluteLocation>(AbsoluteLocation{0, 0});
+      AbsoluteLocation{100, 200};
 
   expectPublishDone();
   expectSubscribe(
@@ -456,26 +454,22 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
   auto updateResult = co_await subscribeHandler->requestUpdate(subscribeUpdate);
   EXPECT_TRUE(updateResult.hasValue());
 
-  // For v15+, verify that the response contains the LARGEST_OBJECT parameter
-  if (getDraftMajorVersion(getServerSelectedVersion()) >= 15) {
-    const auto& response = updateResult.value();
-    EXPECT_EQ(response.requestSpecificParams.size(), 1)
-        << "Response should contain LARGEST_OBJECT parameter";
-    EXPECT_EQ(
-        response.requestSpecificParams.at(0).key,
-        folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT));
-    // The LARGEST_OBJECT should match what was set in the SubscribeOk
-    EXPECT_EQ(
-        response.requestSpecificParams.at(0).largestObject->group,
-        expectedLargest->group);
-    EXPECT_EQ(
-        response.requestSpecificParams.at(0).largestObject->object,
-        expectedLargest->object);
-  }
+  // Verify that the response contains the LARGEST_OBJECT parameter
+  const auto& response = updateResult.value();
+  EXPECT_EQ(response.requestSpecificParams.size(), 1)
+      << "Response should contain LARGEST_OBJECT parameter";
+  EXPECT_EQ(
+      response.requestSpecificParams.at(0).key,
+      folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT));
+  // The LARGEST_OBJECT should match what was set in the SubscribeOk
+  EXPECT_EQ(
+      response.requestSpecificParams.at(0).largestObject->group,
+      expectedLargest->group);
+  EXPECT_EQ(
+      response.requestSpecificParams.at(0).largestObject->object,
+      expectedLargest->object);
 
   // Wait for subscribe update to be processed on the server side
-  // For v<15, this waits for the async processing to complete
-  // For v15+, this waits for the response handling to complete
   co_await subscribeUpdateProcessed;
 
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamClosed());
@@ -1066,15 +1060,7 @@ CO_TEST_P_X(MoQSessionTest, PublishDoneIgnoredAfterClose) {
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   EXPECT_FALSE(res.hasError());
 }
-using V14PlusTests = MoQSessionTest;
-
-INSTANTIATE_TEST_SUITE_P(
-    V14PlusTests,
-    V14PlusTests,
-    testing::Values(
-        VersionParams{{kVersionDraft14}, kVersionDraft14},
-        VersionParams{{kVersionDraft18}, kVersionDraft18}));
-CO_TEST_P_X(V14PlusTests, SubscribeUpdateWithRequestID) {
+CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithRequestID) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
   std::shared_ptr<TrackConsumer> trackConsumer = nullptr;

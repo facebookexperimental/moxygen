@@ -9,6 +9,7 @@ moxygen_add_library(moxygen_moq_versions
     MoQVersions.cpp
   DEPS
     Folly::folly_conv
+    Folly::folly_logging_logging
     Folly::folly_string
 )
 
@@ -149,6 +150,7 @@ moxygen_add_library(moxygen_moq_server
   DEPS
     moxygen_events_moq_folly_executor_impl
     moxygen_moq_types
+    moxygen_moq_versions
     proxygen::proxygen_http_session_hq_session
     proxygen::proxygen_http_webtransport_httpwebtransport
     proxygen::proxygen_http_webtransport_quic_wt_session
@@ -301,6 +303,7 @@ moxygen_add_library(moxygen_moq_webtransport_client
   SRCS
     MoQWebTransportClient.cpp
   DEPS
+    proxygen::proxygen_http_header_constants
     proxygen::proxygen_http_hq_connector
     proxygen::proxygen_http_session_quic_protocol_info
     proxygen::proxygen_http_webtransport_httpwebtransport

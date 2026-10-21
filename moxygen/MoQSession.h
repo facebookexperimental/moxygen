@@ -369,7 +369,15 @@ class MoQSession : public Subscriber,
     return maxRequestID_;
   }
 
-  void validateAndSetVersionFromAlpn(const std::string& alpn);
+  // Sets the negotiated version from the ALPN or WT protocol. Returns false,
+  // leaving the version unset, if the protocol maps to no supported version.
+  bool validateAndSetVersionFromAlpn(const std::string& alpn);
+
+  // Sets a version no ALPN maps to, such as a draft that is implemented but
+  // not yet supported.
+  void setNegotiatedVersionForTesting(uint64_t version) {
+    initializeNegotiatedVersion(version);
+  }
 
   static GroupOrder resolveGroupOrder(GroupOrder pubOrder, GroupOrder subOrder);
 

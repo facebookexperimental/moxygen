@@ -90,20 +90,16 @@ void MoQTestPublisher::cancelAll() {
 
 std::shared_ptr<MoQForwarder> MoQTestPublisher::makeForwarder(
     const FullTrackName& ftn,
-    uint64_t version) {
+    uint64_t /*version*/) {
   auto forwarder = std::make_shared<MoQForwarder>(ftn);
 
   // Advertise the priority even-numbered groups are published at, so the
-  // draft-15+ subgroup and datagram encodings elide it for those and write it
-  // explicitly for the odd ones.  The framer downgrades the extension to a
-  // PUBLISHER_PRIORITY param for draft 15; earlier drafts have no way to carry
-  // it, so the priority always stays on the wire instead.
-  if (getDraftMajorVersion(version) >= 15) {
-    Extensions trackProperties;
-    trackProperties.insertMutableExtension(
-        Extension{kPublisherPriorityExtensionType, kMoQTestPublisherPriority});
-    forwarder->setExtensions(std::move(trackProperties));
-  }
+  // subgroup and datagram encodings elide it for those and write it
+  // explicitly for the odd ones.
+  Extensions trackProperties;
+  trackProperties.insertMutableExtension(
+      Extension{kPublisherPriorityExtensionType, kMoQTestPublisherPriority});
+  forwarder->setExtensions(std::move(trackProperties));
 
   auto cb = std::make_shared<TrackCallback>();
   cb->publisher = shared_from_this();

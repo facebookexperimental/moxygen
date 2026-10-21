@@ -197,8 +197,10 @@ enum class FrameType : uint64_t {
   PUBLISH_DONE = 0xB,
   PUBLISH_NAMESPACE_CANCEL = 0xC,
   TRACK_STATUS = 0xD,
-  TRACK_STATUS_OK = 0xE,    // Draft 15 and below
-  NAMESPACE_DONE = 0xE,     // Draft 16 and above
+  TRACK_STATUS_OK = 0xE, // semantic type used by callers; shares wire value
+                         // with NAMESPACE_DONE (drafts 16+ use NAMESPACE_DONE
+                         // on the wire)
+  NAMESPACE_DONE = 0xE,  // Draft 16 and above
   TRACK_STATUS_ERROR = 0xF, // Draft 16 and below
   PUBLISH_BLOCKED = 0xF,    // Draft 18 and above
   GOAWAY = 0x10,
@@ -1372,7 +1374,7 @@ enum SubscribeNamespaceOptions {
 struct SubscribeNamespace {
   RequestID requestID;
   TrackNamespace trackNamespacePrefix;
-  bool forward{true}; // Only used in draft-15 and above
+  bool forward{true};
   TrackRequestParameters params{FrameType::SUBSCRIBE_NAMESPACE};
   SubscribeNamespaceOptions options{
       SubscribeNamespaceOptions::BOTH}; // Only used in draft-16 and above

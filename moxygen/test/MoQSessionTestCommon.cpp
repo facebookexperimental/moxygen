@@ -225,16 +225,17 @@ void MoQSessionTest::SetUp() {
       std::make_shared<testing::NiceMock<MockPublisherStats>>();
   serverSession_->setPublisherStatsCallback(serverPublisherStatsCallback_);
 
-  // For Draft15+, initialize version via ALPN since it's required
-  if (getDraftMajorVersion(getServerSelectedVersion()) >= 15) {
-    auto alpn = getAlpnFromVersion(
-        getServerSelectedVersion(),
-        /*useStandard=*/
-        getDraftMajorVersion(getServerSelectedVersion()) >= 22);
-    if (alpn.has_value()) {
-      clientSession_->validateAndSetVersionFromAlpn(alpn.value());
-      serverSession_->validateAndSetVersionFromAlpn(alpn.value());
-    }
+  // The version comes from the ALPN, except for a draft that is implemented
+  // but not yet supported, which no ALPN maps to.
+  auto version = getServerSelectedVersion();
+  if (isSupportedVersion(version)) {
+    auto alpn = getAlpnFromVersion(version);
+    ASSERT_TRUE(alpn.has_value());
+    ASSERT_TRUE(clientSession_->validateAndSetVersionFromAlpn(*alpn));
+    ASSERT_TRUE(serverSession_->validateAndSetVersionFromAlpn(*alpn));
+  } else {
+    clientSession_->setNegotiatedVersionForTesting(version);
+    serverSession_->setNegotiatedVersionForTesting(version);
   }
 }
 

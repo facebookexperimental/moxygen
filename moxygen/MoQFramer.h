@@ -54,7 +54,7 @@ inline StreamType getSubgroupStreamType(
       (format == SubgroupIDFormat::FirstObject ? SG_SUBGROUP_VALUE : 0) |
       (includeExtensions ? SG_HAS_EXTENSIONS : 0) |
       (endOfGroup ? SG_HAS_END_OF_GROUP : 0) |
-      (majorVersion >= 15 && !priorityPresent ? SG_PRIORITY_NOT_PRESENT : 0) |
+      (!priorityPresent ? SG_PRIORITY_NOT_PRESENT : 0) |
       (majorVersion >= 18 && beginsWithFirstObject ? SG_FIRST_OBJECT : 0));
 }
 
@@ -79,10 +79,7 @@ inline SubgroupOptions getSubgroupOptions(
                                             : SubgroupIDFormat::Zero;
   options.hasEndOfGroup =
       folly::to_underlying(streamType) & SG_HAS_END_OF_GROUP;
-  // In Draft 15+, check if priority is not present
-  if (majorVersion >= 15) {
-    options.priorityPresent = !(streamTypeInt & SG_PRIORITY_NOT_PRESENT);
-  }
+  options.priorityPresent = !(streamTypeInt & SG_PRIORITY_NOT_PRESENT);
   options.beginsWithFirstObject =
       majorVersion >= 18 && (streamTypeInt & SG_FIRST_OBJECT);
   return options;
@@ -108,13 +105,13 @@ inline DatagramType getDatagramType(
     return DatagramType(
         DG_IS_STATUS | (includeExtensions ? DG_HAS_EXTENSIONS : 0) |
         (isObjectIdZero ? DG_OBJECT_ID_ZERO : 0) |
-        (majorVersion >= 15 && !priorityPresent ? DG_PRIORITY_NOT_PRESENT : 0));
+        (!priorityPresent ? DG_PRIORITY_NOT_PRESENT : 0));
   } else {
     return DatagramType(
         (includeExtensions ? DG_HAS_EXTENSIONS : 0) |
         (endOfGroup ? DG_HAS_END_OF_GROUP : 0) |
         (isObjectIdZero ? DG_OBJECT_ID_ZERO : 0) |
-        (majorVersion >= 15 && !priorityPresent ? DG_PRIORITY_NOT_PRESENT : 0));
+        (!priorityPresent ? DG_PRIORITY_NOT_PRESENT : 0));
   }
 }
 
@@ -387,14 +384,8 @@ class MoQFrameParser {
     return tokenCache_ ? *tokenCache_ : fallbackTokenCache_;
   }
 
-  // Legacy FETCH object parser (draft <= 14)
-  folly::Expected<ObjectHeader, ErrorCode> parseFetchObjectHeaderLegacy(
-      folly::io::Cursor& cursor,
-      size_t& length,
-      const ObjectHeader& headerTemplate) const noexcept;
-
-  // Draft-15+ FETCH object parser with Serialization Flags
-  folly::Expected<FetchObjectParseResult, ErrorCode> parseFetchObjectDraft15(
+  // FETCH object parser with Serialization Flags
+  folly::Expected<FetchObjectParseResult, ErrorCode> parseFetchObjectHeaderImpl(
       folly::io::Cursor& cursor,
       size_t& length,
       const ObjectHeader& headerTemplate) const noexcept;
@@ -555,12 +546,12 @@ class MoQFrameParser {
   mutable MoQTokenCache fallbackTokenCache_;
   MoQTokenCache* tokenCache_{nullptr};
   mutable std::optional<uint64_t> previousObjectID_;
-  // Context for FETCH object delta encoding (draft-15+)
+  // Context for FETCH object delta encoding
   mutable std::optional<uint64_t> previousFetchGroup_;
   mutable std::optional<uint64_t> previousFetchSubgroup_;
   mutable std::optional<uint8_t> previousFetchPriority_;
   mutable GroupOrder fetchGroupOrder_{GroupOrder::OldestFirst};
-  // Context for extension delta decoding (draft-16+)
+  // Context for extension delta decoding
   mutable uint64_t previousExtensionType_ = 0;
 };
 
@@ -920,15 +911,8 @@ class MoQFrameWriter {
       const SubscribeRequest& subscribeRequest,
       FrameType semanticFrameType = FrameType::SUBSCRIBE) const noexcept;
 
-  // Legacy FETCH object writer (draft <= 14)
-  void writeFetchObjectHeaderLegacy(
-      folly::IOBufQueue& writeBuf,
-      const ObjectHeader& objectHeader,
-      size_t& size,
-      bool& error) const noexcept;
-
-  // Draft-15+ FETCH object writer with Serialization Flags
-  void writeFetchObjectDraft15(
+  // FETCH object writer with Serialization Flags
+  void writeFetchObjectHeaderImpl(
       folly::IOBufQueue& writeBuf,
       const ObjectHeader& objectHeader,
       size_t& size,
@@ -945,7 +929,7 @@ class MoQFrameWriter {
   std::optional<uint64_t> version_;
   bool useMoQVarint_{false};
   mutable std::optional<uint64_t> previousObjectID_;
-  // Context for FETCH object delta encoding (draft-15+)
+  // Context for FETCH object delta encoding
   mutable std::optional<uint64_t> previousFetchGroup_;
   mutable std::optional<uint64_t> previousFetchSubgroup_;
   mutable std::optional<uint8_t> previousFetchPriority_;

@@ -56,7 +56,7 @@ class PyMoQSimplePublisher:
             connect_timeout: Connect timeout in ms (default: 1000)
             transaction_timeout: Transaction timeout in seconds (default: 120)
             quic_transport: Use raw QUIC transport instead of WebTransport (default: False)
-            use_legacy_setup: Use legacy moq-00 ALPN (default: False)
+            use_legacy_setup: Offer only the stable draft ALPN (default: False)
             insecure: Skip certificate validation (default: False)
 
         Raises:

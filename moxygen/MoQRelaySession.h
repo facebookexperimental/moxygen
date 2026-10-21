@@ -258,18 +258,6 @@ class MoQRelaySession : public MoQSession {
       RequestID::hash>
       subscribeTracksHandles_;
 
-  // Legacy TrackNamespace → RequestID translation maps.
-  // Remove these once we drop support for the respective legacy versions.
-  // legacyPublisherPublishNamespaceNsToReqId_: v15- (publisher side)
-  // legacySubscriberPublishNamespaceNsToReqId_: v15- (subscriber side)
-  // legacySubscribeNamespaceNsToReqId_: v14- (subscribe namespace)
-  folly::F14FastMap<TrackNamespace, RequestID, TrackNamespace::hash>
-      legacyPublisherNamespaceToReqId_;
-  folly::F14FastMap<TrackNamespace, RequestID, TrackNamespace::hash>
-      legacySubscriberNamespaceToReqId_;
-  folly::F14FastMap<TrackNamespace, RequestID, TrackNamespace::hash>
-      legacySubscribeNamespaceToReqId_;
-
   // Extended PendingRequestState for publishNamespace support
   class MoQRelayPendingRequestState;
 };

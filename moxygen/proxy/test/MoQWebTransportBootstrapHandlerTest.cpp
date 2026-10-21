@@ -46,4 +46,26 @@ TEST(MoQWebTransportBootstrapHandlerTest, RejectsNullExecutor) {
   EXPECT_THROW(makeMoQWebTransportSession(nullptr), std::invalid_argument);
 }
 
+TEST(MoQWebTransportBootstrapHandlerTest, RejectsUnsupportedProtocol) {
+  folly::EventBase eventBase;
+  auto pendingSession = makeMoQWebTransportSession(
+      std::make_shared<MoQFollyExecutorImpl>(&eventBase));
+  auto [clientTransport, serverTransport] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  pendingSession.handler->onWebTransportSession(
+      std::shared_ptr<proxygen::test::FakeSharedWebTransport>(
+          std::move(clientTransport)));
+  auto session =
+      folly::coro::blockingWait(std::move(pendingSession.session), &eventBase);
+
+  EXPECT_THROW(
+      folly::coro::blockingWait(
+          establishMoQWebTransportSession(session, "", "", "h3"), &eventBase),
+      std::invalid_argument);
+  EXPECT_THROW(
+      folly::coro::blockingWait(
+          establishMoQWebTransportSession(session, "", "", ""), &eventBase),
+      std::invalid_argument);
+}
+
 } // namespace moxygen::test

@@ -87,14 +87,12 @@ folly::Try<Setup> MoQServerBase::onClientSetup(
     const std::shared_ptr<MoQSession>& session) {
   XLOG(DBG1) << "MoQServerBase::ClientSetup";
 
-  // Version is either negotiated via ALPN or defaults to draft-14
+  // Version is negotiated via ALPN.
   auto sessionVersion = session->getNegotiatedVersion();
   if (sessionVersion) {
     XLOG(DBG1)
         << "MoQServerBase::ClientSetup: Using ALPN-negotiated version: moqt-"
         << getDraftMajorVersion(*sessionVersion);
-  } else {
-    XLOG(DBG1) << "MoQServerBase::ClientSetup: No ALPN, using draft-14";
   }
 
   auto serverSetup = makeServerSetup();
@@ -102,7 +100,7 @@ folly::Try<Setup> MoQServerBase::onClientSetup(
   // Log Server Setup
   if (auto logger = session->getLogger()) {
     logger->logServerSetup(
-        serverSetup, sessionVersion.value_or(kVersionDraft14));
+        serverSetup, sessionVersion.value_or(kVersionDraft16));
   }
 
   return folly::Try<Setup>(serverSetup);
@@ -111,32 +109,29 @@ folly::Try<Setup> MoQServerBase::onClientSetup(
 folly::Expected<folly::Unit, SessionCloseErrorCode>
 MoQServerBase::validateAuthority(
     const Setup& setup,
-    uint64_t negotiatedVersion,
+    uint64_t /*negotiatedVersion*/,
     std::shared_ptr<MoQSession>) {
-  if (getDraftMajorVersion(negotiatedVersion) >= 14) {
-    // Find and validate AUTHORITY
-    auto authorityParam = std::find_if(
-        setup.params.begin(), setup.params.end(), [](const SetupParameter& p) {
-          return p.key == folly::to_underlying(SetupKey::AUTHORITY);
-        });
+  // Find and validate AUTHORITY
+  auto authorityParam = std::find_if(
+      setup.params.begin(), setup.params.end(), [](const SetupParameter& p) {
+        return p.key == folly::to_underlying(SetupKey::AUTHORITY);
+      });
 
-    bool hasAuthority = (authorityParam != setup.params.end());
+  bool hasAuthority = (authorityParam != setup.params.end());
 
-    if (hasAuthority) {
-      const std::string& authority = authorityParam->asString;
+  if (hasAuthority) {
+    const std::string& authority = authorityParam->asString;
 
-      // MALFORMED_AUTHORITY validation
-      if (!isValidAuthorityFormat(authority)) {
-        XLOG(ERR) << "Malformed authority format: " << authority;
-        return folly::makeUnexpected(
-            SessionCloseErrorCode::MALFORMED_AUTHORITY);
-      }
+    // MALFORMED_AUTHORITY validation
+    if (!isValidAuthorityFormat(authority)) {
+      XLOG(ERR) << "Malformed authority format: " << authority;
+      return folly::makeUnexpected(SessionCloseErrorCode::MALFORMED_AUTHORITY);
+    }
 
-      // INVALID_AUTHORITY validation
-      if (!isSupportedAuthority(authority)) {
-        XLOG(ERR) << "Unsupported authority: " << authority;
-        return folly::makeUnexpected(SessionCloseErrorCode::INVALID_AUTHORITY);
-      }
+    // INVALID_AUTHORITY validation
+    if (!isSupportedAuthority(authority)) {
+      XLOG(ERR) << "Unsupported authority: " << authority;
+      return folly::makeUnexpected(SessionCloseErrorCode::INVALID_AUTHORITY);
     }
   }
 

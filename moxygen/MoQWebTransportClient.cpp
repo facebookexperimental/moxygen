@@ -155,8 +155,8 @@ void MoQWebTransportClient::HTTPHandler::onHeadersComplete(
     XLOG(DBG1) << "WebTransport client: Negotiated protocol: "
                << *client_.negotiatedProtocol_;
   } else {
-    XLOG(WARN) << "WebTransport: No WT-Protocol header in response, "
-               << "will use legacy version negotiation";
+    // completeSetupMoQSession refuses the session without a protocol.
+    XLOG(WARN) << "WebTransport: No WT-Protocol header in response";
   }
 
   auto wt = txn_->getWebTransport();

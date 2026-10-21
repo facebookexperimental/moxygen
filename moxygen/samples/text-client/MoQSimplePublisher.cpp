@@ -30,7 +30,8 @@ DEFINE_bool(
 DEFINE_bool(
     use_legacy_setup,
     false,
-    "If true, use only moq-00 ALPN (legacy). If false, use latest draft ALPN with fallback to legacy");
+    "If true, offer only the stable draft ALPN. If false, also offer "
+    "experimental drafts");
 
 namespace {
 using namespace moxygen;
@@ -88,7 +89,7 @@ class MoQSimplePublisher
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     try {
-      // Default to experimental protocols, override to legacy if flag set
+      // Offer experimental drafts unless restricted to the stable one
       std::vector<std::string> alpns =
           getDefaultMoqtProtocols(!FLAGS_use_legacy_setup);
       // Register as subscriber (to receive PUBLISH response)

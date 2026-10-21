@@ -79,7 +79,7 @@ class PyMoQTestClient:
             connect_timeout: Connect timeout in ms (C++ --connect_timeout)
             transaction_timeout: Transaction timeout in seconds (C++ --transaction_timeout)
             quic_transport: Use raw QUIC transport (C++ --quic_transport)
-            use_legacy_setup: Use legacy moq-00 ALPN (C++ --use_legacy_setup)
+            use_legacy_setup: Offer only the stable draft ALPN (C++ --use_legacy_setup)
             insecure: Skip certificate validation (C++ --insecure)
             forward: Forward flag for subscriptions (C++ --forward)
             delivery_timeout: Delivery timeout in ms, 0=disabled (C++ --delivery_timeout)
