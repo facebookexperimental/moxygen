@@ -20,6 +20,7 @@
 #include <folly/container/F14Set.h>
 #include <folly/container/IntrusiveList.h>
 #include <folly/coro/Promise.h>
+#include <folly/coro/SharedPromise.h>
 #include <folly/coro/Task.h>
 #include <folly/logging/xlog.h>
 #include <quic/mvfst-config.h>
@@ -916,6 +917,7 @@ class MoQSession : public Subscriber,
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
 
   void replayBufferedUniStreams();
+  void markSetupComplete();
 
   folly::coro::Task<void> handlePreSetupUniStream(
       std::shared_ptr<MoQSession> session,
@@ -1619,6 +1621,8 @@ class MoQSession : public Subscriber,
   folly::coro::Promise<Setup> setupPromise_;
   folly::coro::Future<Setup> setupFuture_;
   bool setupComplete_{false};
+  // Fulfilled when setupComplete_ is set. Request streams wait on it.
+  folly::coro::SharedPromise<void> setupDone_;
   bool peerControlStreamReceived_{false};
   struct BufferedUniStream {
     ReadHandleRef readHandle;
