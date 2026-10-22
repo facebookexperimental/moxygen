@@ -3462,7 +3462,7 @@ folly::coro::Task<Setup> MoQSession::awaitPeerSetup() {
               << folly::exceptionStr(serverSetup.exception());
     co_yield folly::coro::co_error(serverSetup.exception());
   }
-  setupComplete_ = true;
+  markSetupComplete();
   auto negotiatedVersion = *getNegotiatedVersion();
   XLOG(DBG1) << "Negotiated Version=0x" << std::hex << negotiatedVersion
              << std::dec << " (draft-"
@@ -3608,7 +3608,7 @@ void MoQSession::onClientSetup(Setup clientSetup) {
     // MAX_REQUEST_ID is no longer derived from setup params in draft-18+; the
     // QUIC bidi stream limit governs request flow control instead.
     setupPromise_.setValue(clientSetup);
-    setupComplete_ = true;
+    markSetupComplete();
     replayBufferedUniStreams();
   } else {
     auto res = sendSetup(std::move(*serverSetup));
@@ -3616,7 +3616,7 @@ void MoQSession::onClientSetup(Setup clientSetup) {
       close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
       return;
     }
-    setupComplete_ = true;
+    markSetupComplete();
   }
 }
 
@@ -7728,6 +7728,13 @@ void MoQSession::onNewBidiStream(
       .start();
 }
 
+void MoQSession::markSetupComplete() {
+  if (!setupComplete_) {
+    setupComplete_ = true;
+    setupDone_.setValue();
+  }
+}
+
 void MoQSession::replayBufferedUniStreams() {
   for (auto& buffered : bufferedPreSetupUniStreams_) {
     co_withExecutor(
@@ -7926,6 +7933,15 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
       folly::cancellation_token_merge(sessionToken, std::move(streamToken));
   if (token.isCancellationRequested()) {
     co_return;
+  }
+  // Request streams wait for the peer's SETUP, since processing it installs
+  // the handlers. Before draft 18, SETUP itself can arrive on a bidi stream.
+  if (!setupComplete_ && useUniControlStreams(*negotiatedVersion_)) {
+    auto ready = co_await folly::coro::co_awaitTry(
+        folly::coro::co_withCancellation(token, setupDone_.getFuture()));
+    if (ready.hasException() || token.isCancellationRequested()) {
+      co_return;
+    }
   }
   std::optional<FrameType> frameType = std::nullopt;
 
@@ -8645,7 +8661,7 @@ void MoQSession::setMaxConcurrentRequests(uint64_t maxConcurrent) {
 
 void MoQSession::setVersion(uint64_t version) {
   negotiatedVersion_ = version;
-  setupComplete_ = true;
+  markSetupComplete();
 }
 
 void MoQSession::setMoqSettings(MoQSettings settings) {

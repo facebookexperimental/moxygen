@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/coro/Timeout.h>
 #include <quic/client/QuicClientTransport.h>
 #include <quic/common/events/FollyQuicEventBase.h>
 #include <quic/common/udpsocket/FollyQuicAsyncUDPSocket.h>
@@ -2232,6 +2233,57 @@ CO_TEST_P_X(MoQUniControlTest, BidiSetupRejectedInUniControlMode) {
     co_await folly::coro::co_reschedule_on_current_executor;
   }
   EXPECT_TRUE(serverWt_->isSessionClosed());
+}
+
+CO_TEST_P_X(MoQUniControlTest, BidiRequestBeforeClientSetupWaitsForSetup) {
+  // A SUBSCRIBE that arrives before CLIENT_SETUP waits for it. Servers install
+  // their handlers while processing CLIENT_SETUP.
+  // The client side is raw frames and reads none of the server's streams.
+  NullWebTransportHandler nullHandler;
+  serverWt_->setPeerHandler(&nullHandler);
+  // serverWt_ outlives nullHandler and calls back into it on session end.
+  auto peerHandlerGuard =
+      folly::makeGuard([this] { serverWt_->setPeerHandler(nullptr); });
+  serverSession_->start();
+  serverSession_->sendSetup(moxygen::Setup{});
+
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto bidi = clientWt_->createBidiStream();
+  EXPECT_TRUE(bidi.hasValue());
+  if (!bidi.hasValue()) {
+    co_return;
+  }
+  EXPECT_TRUE(
+      writer.writeSubscribeRequest(writeBuf, getSubscribe(kTestTrackName))
+          .hasValue());
+  bidi->writeHandle->writeStreamData(writeBuf.move(), false, nullptr);
+  for (int i = 0; i < 10; ++i) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+
+  // Stands in for the server's validateAuthority during SETUP.
+  serverSession_->setPublishHandler(serverPublisher);
+  auto [subscribedPromise, subscribed] =
+      folly::coro::makePromiseContract<void>();
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .WillOnce([&](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+        subscribedPromise.setValue();
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+      });
+
+  auto* controlWh =
+      CHECK_NOTNULL(clientWt_->createUniStream().value_or(nullptr));
+  writeClientSetup(
+      writeBuf, getClientSetup(initialMaxRequestID_), kVersionDraft18);
+  controlWh->writeStreamData(writeBuf.move(), false, nullptr);
+  // Time out if the publisher never sees the request.
+  auto reached = co_await folly::coro::co_awaitTry(
+      folly::coro::timeout(std::move(subscribed), std::chrono::seconds(1)));
+  EXPECT_FALSE(reached.hasException());
+
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
 CO_TEST_P_X(MoQUniControlTest, BidiRequestStreamFinWithFirstFrame) {
