@@ -1651,9 +1651,13 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   }
 
   void sessionClosed(ResetStreamErrorCode code) override {
+    // A subscription ends with PUBLISH_DONE or an unsubscribe, and the closed
+    // session cannot send PUBLISH_DONE.
+    if (auto handle = std::exchange(subscriptionHandle_, nullptr)) {
+      handle->unsubscribe();
+    }
     // Clear session_ last: each subgroup reports onSubscriptionStreamClosed.
     resetAllSubgroups(code);
-    subscriptionHandle_.reset();
     setSession(nullptr);
   }
 
