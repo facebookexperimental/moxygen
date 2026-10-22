@@ -8,6 +8,7 @@
 #include <quic/common/events/FollyQuicEventBase.h>
 #include <quic/common/udpsocket/FollyQuicAsyncUDPSocket.h>
 #include <quic/fizz/client/handshake/FizzClientQuicHandshakeContext.h>
+#include "moxygen/MoQServerBase.h"
 #include "moxygen/test/MoQSessionTestCommon.h"
 
 #include <quic/api/test/MockQuicSocket.h>
@@ -2077,6 +2078,39 @@ class NullWebTransportHandler : public proxygen::WebTransportHandler {
   void onSessionEnd(folly::Optional<uint32_t>) noexcept override {}
   void onSessionDrain() noexcept override {}
 };
+
+namespace {
+class SetupTimeoutServer : public MoQServerBase {
+ public:
+  SetupTimeoutServer() : MoQServerBase("/test") {}
+  void onNewSession(std::shared_ptr<MoQSession> /*session*/) override {}
+  void start(const folly::SocketAddress& /*addr*/) override {}
+  void stop() override {}
+  using MoQServerBase::handleClientSession;
+};
+} // namespace
+
+CO_TEST_P_X(MoQUniControlTest, ServerClosesSessionWithoutClientSetup) {
+  // The client never starts and reads none of the server's streams.
+  NullWebTransportHandler nullHandler;
+  serverWt_->setPeerHandler(&nullHandler);
+  // serverWt_ outlives nullHandler and calls back into it on session end.
+  auto peerHandlerGuard =
+      folly::makeGuard([this] { serverWt_->setPeerHandler(nullptr); });
+  MoQSettings moqSettings;
+  moqSettings.setupTimeout = std::chrono::milliseconds(50);
+  serverSession_->setMoqSettings(moqSettings);
+
+  // handleClientSession keeps the server alive until the session ends.
+  auto server = std::make_shared<SetupTimeoutServer>();
+  co_withExecutor(&eventBase_, server->handleClientSession(serverSession_))
+      .start();
+  for (int i = 0; i < 40 && !serverWt_->isSessionClosed(); ++i) {
+    co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  }
+  EXPECT_TRUE(serverWt_->isSessionClosed());
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 
 CO_TEST_P_X(MoQUniControlTest, UniControlSetupStreamFinBeforeSetup) {
   // A peer that packs SETUP and the FIN into one write finishes its control
