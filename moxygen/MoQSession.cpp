@@ -4957,7 +4957,9 @@ void MoQSession::onRequestUpdate(RequestUpdate requestUpdate) {
     logger_->logSubscribeUpdate(requestUpdate, ControlMessageType::PARSED);
   }
 
-  if (shouldRejectNewPeerRequestDueToGoaway()) {
+  if (shouldRejectNewPeerRequestDueToGoaway() &&
+      !(moqSettings_.acceptRequestUpdatesAfterReceivedGoaway && !draining_ &&
+        pubTracks_.contains(existingRequestID))) {
     XLOG(DBG1) << "Rejecting request update, GOAWAY/draining sess=" << this;
     requestUpdateError(
         RequestError{

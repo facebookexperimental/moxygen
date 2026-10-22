@@ -65,6 +65,7 @@ struct MoQSettings {
   std::chrono::milliseconds joiningDependencyTimeout{std::chrono::seconds(2)};
   // Joining FETCHes held while their subscription is unseen or pending.
   size_t maxDeferredJoiningFetches{16};
+  bool acceptRequestUpdatesAfterReceivedGoaway{false};
 };
 
 class ReplyContext;

@@ -76,6 +76,68 @@ class Draft18RequestUpdateGoawayTest : public MoQSessionTest {
     co_return keepAlive.value();
   }
 
+  struct OpenPublish {
+    std::shared_ptr<MockSubscriptionHandle> clientHandle;
+    std::shared_ptr<SubscriptionHandle> serverHandle;
+    std::shared_ptr<MockTrackConsumer> serverConsumer;
+  };
+
+  folly::coro::Task<OpenPublish> openClientPublish() {
+    co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+    OpenPublish publish;
+    EXPECT_CALL(*serverSubscriber, publish(_, _))
+        .WillOnce(
+            [&publish](
+                const PublishRequest& actualPub,
+                std::shared_ptr<SubscriptionHandle> subHandle)
+                -> Subscriber::PublishResult {
+              publish.serverHandle = std::move(subHandle);
+              auto result = makePublishOkResult(actualPub, false);
+              publish.serverConsumer =
+                  std::static_pointer_cast<MockTrackConsumer>(result->consumer);
+              return result;
+            });
+
+    publish.clientHandle = makePublishHandle();
+    auto publishResult = clientSession_->publish(
+        PublishRequest{
+            RequestID(0),
+            FullTrackName{TrackNamespace{{"test"}}, "test-track"},
+            TrackAlias(100),
+            GroupOrder::Default,
+            AbsoluteLocation{0, 100},
+            true,
+            {},
+        },
+        publish.clientHandle);
+    EXPECT_TRUE(publishResult.hasValue());
+    if (!publishResult.hasValue()) {
+      co_return publish;
+    }
+    auto replyRes = co_await std::move(publishResult.value().reply);
+    EXPECT_TRUE(replyRes.hasValue());
+    co_return publish;
+  }
+
+  folly::coro::Task<void> sendGoawayToClient() {
+    folly::coro::Baton goawayReceived;
+    EXPECT_CALL(*clientPublisher, goaway(_))
+        .WillOnce([&goawayReceived](const Goaway&) { goawayReceived.post(); });
+    serverSession_->goaway(Goaway{});
+    co_await goawayReceived;
+  }
+
+  static SubscribeUpdate stopForwardingUpdate() {
+    return SubscribeUpdate{
+        RequestID(0),
+        RequestID(0),
+        AbsoluteLocation{0, 0},
+        10,
+        kDefaultPriority,
+        false};
+  }
+
   void expectTrackEndedPublishDone(
       std::optional<PublishDoneStatusCode>& statusCode,
       folly::coro::Baton& publishDone) {
@@ -198,6 +260,113 @@ CO_TEST_P_X(
       getTrackEndedPublishDone(subscription.subscribeRequest.requestID));
   co_await publishDone;
   EXPECT_EQ(publishDoneStatusCode, PublishDoneStatusCode::TRACK_ENDED);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    Draft18RequestUpdateGoawayTest,
+    ReceivedGoawayRejectsInboundRequestUpdate) {
+  auto publish = co_await openClientPublish();
+  if (!publish.serverHandle || !publish.serverConsumer) {
+    co_return;
+  }
+  co_await sendGoawayToClient();
+
+  std::optional<PublishDoneStatusCode> publishDoneStatusCode;
+  folly::coro::Baton publishDone;
+  EXPECT_CALL(*publish.serverConsumer, publishDone(_))
+      .WillOnce(
+          [&publishDoneStatusCode, &publishDone](const PublishDone& done) {
+            publishDoneStatusCode = done.statusCode;
+            publishDone.post();
+            return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+          });
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*clientPublisherStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*publish.clientHandle, requestUpdateCalled).Times(0);
+
+  auto result =
+      co_await publish.serverHandle->requestUpdate(stopForwardingUpdate());
+  EXPECT_TRUE(result.hasError());
+  if (result.hasError()) {
+    EXPECT_EQ(result.error().errorCode, RequestErrorCode::GOING_AWAY);
+  }
+  co_await publishDone;
+  EXPECT_EQ(publishDoneStatusCode, PublishDoneStatusCode::UPDATE_FAILED);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    Draft18RequestUpdateGoawayTest,
+    ReceivedGoawayAcceptsInboundRequestUpdateWhenEnabled) {
+  auto publish = co_await openClientPublish();
+  if (!publish.serverHandle || !publish.serverConsumer) {
+    co_return;
+  }
+  MoQSettings moqSettings;
+  moqSettings.acceptRequestUpdatesAfterReceivedGoaway = true;
+  clientSession_->setMoqSettings(moqSettings);
+  co_await sendGoawayToClient();
+
+  folly::coro::Baton updateProcessed;
+  expectSubscribeUpdate(publish.clientHandle, updateProcessed);
+  EXPECT_CALL(*serverSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*clientPublisherStatsCallback_, onRequestUpdate());
+
+  auto result =
+      co_await publish.serverHandle->requestUpdate(stopForwardingUpdate());
+  EXPECT_TRUE(result.hasValue());
+  co_await updateProcessed;
+
+  EXPECT_CALL(*publish.serverConsumer, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    Draft18RequestUpdateGoawayTest,
+    DrainingRejectsInboundRequestUpdateWhenAcceptingAfterGoaway) {
+  auto subscription = co_await openSubscription();
+  if (!subscription.clientHandle || !subscription.serverConsumer) {
+    co_return;
+  }
+  auto keepAlive = co_await openServerSubscriptionToKeepDrainOpen();
+  if (!keepAlive) {
+    co_return;
+  }
+  MoQSettings moqSettings;
+  moqSettings.acceptRequestUpdatesAfterReceivedGoaway = true;
+  serverSession_->setMoqSettings(moqSettings);
+
+  std::optional<PublishDoneStatusCode> publishDoneStatusCode;
+  folly::coro::Baton publishDone;
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(
+          [&publishDoneStatusCode, &publishDone](const PublishDone& done) {
+            publishDoneStatusCode = done.statusCode;
+            publishDone.post();
+            return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+          });
+  serverSession_->drain();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*subscription.serverHandle, requestUpdateCalled).Times(0);
+
+  SubscribeUpdate update{
+      subscription.subscribeRequest.requestID,
+      RequestID(0),
+      AbsoluteLocation{1, 0},
+      2,
+      kDefaultPriority + 1,
+      true};
+  auto result = co_await subscription.clientHandle->requestUpdate(update);
+  EXPECT_TRUE(result.hasError());
+  if (result.hasError()) {
+    EXPECT_EQ(result.error().errorCode, RequestErrorCode::GOING_AWAY);
+  }
+  co_await publishDone;
+  EXPECT_EQ(publishDoneStatusCode, PublishDoneStatusCode::UPDATE_FAILED);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
