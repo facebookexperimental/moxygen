@@ -6,9 +6,12 @@
 
 #include "moxygen/moqtest/interop/MoQInteropClient.h"
 
+#include <folly/CancellationToken.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Collect.h>
+#include <folly/coro/CurrentExecutor.h>
+#include <folly/coro/Error.h>
 #include <folly/coro/Sleep.h>
 #include <folly/coro/Timeout.h>
 #include "moxygen/MoQRelaySession.h"
@@ -146,8 +149,15 @@ class NamespaceEventRecorder final : public Publisher::NamespacePublishHandle {
   bool syncDone_{false};
 };
 
+// folly::coro::Baton is not cancellation-aware: post it on cancellation so
+// a folly::coro::timeout around the wait can complete.
 folly::coro::Task<void> waitFor(folly::coro::Baton& event) {
+  auto token = co_await folly::coro::co_current_cancellation_token;
+  folly::CancellationCallback onCancel(token, [&event] { event.post(); });
   co_await event;
+  if (token.isCancellationRequested()) {
+    co_yield folly::coro::co_cancelled;
+  }
 }
 
 folly::coro::Task<std::shared_ptr<Publisher::SubscribeNamespaceHandle>>
