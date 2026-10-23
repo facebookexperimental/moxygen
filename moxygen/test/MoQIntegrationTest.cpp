@@ -11,7 +11,9 @@
 #include <folly/ScopeGuard.h>
 #include <folly/Singleton.h>
 #include <folly/Synchronized.h>
+#include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Sleep.h>
 #include <folly/coro/Task.h>
 #include <folly/coro/Timeout.h>
 #include <folly/io/async/EventBase.h>
@@ -27,6 +29,7 @@
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
 #include <moxygen/MoQClient.h>
 #include <moxygen/MoQConsumers.h>
+#include <moxygen/MoQRelaySession.h>
 #include <moxygen/MoQServer.h>
 #include <moxygen/MoQSession.h>
 #include <moxygen/MoQVersions.h>
@@ -40,6 +43,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <iterator>
 #include <map>
 #include <set>
 
@@ -675,6 +679,60 @@ class TestServer : public MoQServer {
   std::shared_ptr<TestPublisher> publisher_;
   std::shared_ptr<TestSubscriber> subscriber_;
   bool rejectSetup_{false};
+};
+
+class RelaySessionTestServer : public TestServer {
+ public:
+  using TestServer::TestServer;
+
+  void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
+    TestServer::onNewSession(clientSession);
+    *session_.wlock() = clientSession;
+  }
+
+  std::shared_ptr<MoQSession> session() {
+    return session_.rlock()->lock();
+  }
+
+ protected:
+  std::shared_ptr<MoQSession> createSession(
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+      std::shared_ptr<MoQExecutor> executor) override {
+    return std::make_shared<MoQRelaySession>(
+        std::move(wt), *this, std::move(executor));
+  }
+
+ private:
+  folly::Synchronized<std::weak_ptr<MoQSession>> session_;
+};
+
+class UnansweredPublishNamespaceSubscriber : public Subscriber {
+ public:
+  explicit UnansweredPublishNamespaceSubscriber(size_t expected)
+      : expected_(expected) {}
+
+  folly::coro::Task<PublishNamespaceResult> publishNamespace(
+      PublishNamespace pubNs,
+      std::shared_ptr<PublishNamespaceCallback>) override {
+    if (++received_ == expected_) {
+      allReceived_.post();
+    }
+    co_await folly::coro::sleep(30s);
+    co_return folly::makeUnexpected(
+        PublishNamespaceError{
+            pubNs.requestID,
+            PublishNamespaceErrorCode::INTERNAL_ERROR,
+            "unanswered"});
+  }
+
+  folly::coro::Baton& allReceived() {
+    return allReceived_;
+  }
+
+ private:
+  size_t expected_;
+  size_t received_{0};
+  folly::coro::Baton allReceived_;
 };
 
 // Helper to build a SubscribeOk for client-side publish tests.
@@ -2290,6 +2348,127 @@ TEST_P(MoQIntegrationTest, StreamingFetch_OldestFirst) {
 
 TEST_P(MoQIntegrationTest, StreamingFetch_NewestFirst) {
   runStreamingFetch(GroupOrder::NewestFirst);
+}
+
+using MoQRequestStreamTest = MoQIntegrationTest;
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQRequestStreamTest,
+    MoQRequestStreamTest,
+    testing::ValuesIn([] {
+      std::vector<uint64_t> versions;
+      std::copy_if(
+          kSupportedVersions.begin(),
+          kSupportedVersions.end(),
+          std::back_inserter(versions),
+          [](uint64_t version) { return getDraftMajorVersion(version) >= 18; });
+      return versions;
+    }()),
+    [](const testing::TestParamInfo<uint64_t>& info) {
+      return "Draft" + std::to_string(getDraftMajorVersion(info.param));
+    });
+
+TEST_P(MoQRequestStreamTest, PeerCloseAfterGoawayWithUnansweredServerRequests) {
+  server_->stop();
+  auto server =
+      std::make_shared<RelaySessionTestServer>(publisher_, subscriber_);
+  server_ = server;
+  server_->start(folly::SocketAddress("::", 0));
+  server_->waitUntilInitialized();
+  auto fds = server_->getAllListeningSocketFDs();
+  ASSERT_FALSE(fds.empty());
+  folly::SocketAddress boundAddr;
+  boundAddr.setFromLocalAddress(folly::NetworkSocket::fromFd(fds[0]));
+  serverPort_ = boundAddr.getPort();
+
+  publisher_->setSubscribeHandler(
+      [](SubscribeRequest sub, std::shared_ptr<TrackConsumer> callback)
+          -> folly::coro::Task<Publisher::SubscribeResult> {
+        co_return co_await acceptAndSendDelayed(
+            std::move(sub),
+            std::move(callback),
+            [](std::shared_ptr<TrackConsumer>, RequestID) {});
+      });
+  auto clientSubscriber =
+      std::make_shared<UnansweredPublishNamespaceSubscriber>(2);
+
+  runTest(
+      folly::coro::co_invoke(
+          [this, server, clientSubscriber]() -> folly::coro::Task<void> {
+            client_ = std::make_unique<MoQClient>(
+                std::make_shared<MoQFollyExecutorImpl>(
+                    clientEvbThread_.getEventBase()),
+                proxygen::URL(
+                    fmt::format(
+                        "https://localhost:{}{}", serverPort_, kTestEndpoint)),
+                MoQRelaySession::createRelaySessionFactory(),
+                std::make_shared<
+                    InsecureVerifierDangerousDoNotUseInProduction>());
+            std::vector<std::string> alpns;
+            if (auto alpn = getAlpnFromVersion(GetParam())) {
+              alpns.push_back(*alpn);
+            }
+            co_await client_->setupMoQSession(
+                5s,
+                5s,
+                nullptr,
+                clientSubscriber,
+                quic::TransportSettings(),
+                alpns);
+
+            auto subscribeResult = co_await client_->moqSession_->subscribe(
+                makeSubscribe(),
+                std::make_shared<ObjectReceiver>(
+                    ObjectReceiver::SUBSCRIBE,
+                    std::make_shared<TestObjectCallback>()));
+            EXPECT_FALSE(subscribeResult.hasError());
+
+            auto serverSession =
+                std::dynamic_pointer_cast<MoQRelaySession>(server->session());
+            EXPECT_NE(serverSession, nullptr);
+            if (!serverSession) {
+              co_return;
+            }
+            auto serverExec = serverSession->getExecutor()->getKeepAlive();
+            co_await folly::coro::co_withExecutor(
+                serverExec,
+                folly::coro::co_invoke(
+                    [serverSession, serverExec]() -> folly::coro::Task<void> {
+                      for (const auto& name : {"a", "b"}) {
+                        PublishNamespace pubNs;
+                        pubNs.trackNamespace =
+                            TrackNamespace({{"integration-test"}, {name}});
+                        folly::coro::co_withExecutor(
+                            serverExec,
+                            serverSession->publishNamespace(
+                                std::move(pubNs), nullptr))
+                            .start();
+                      }
+                      co_return;
+                    }));
+            co_await clientSubscriber->allReceived();
+
+            co_await folly::coro::co_withExecutor(
+                serverExec,
+                folly::coro::co_invoke(
+                    [serverSession]() -> folly::coro::Task<void> {
+                      serverSession->goaway(Goaway{"", 0, std::nullopt});
+                      co_return;
+                    }));
+            client_->moqSession_->close(SessionCloseErrorCode::NO_ERROR);
+
+            bool serverClosed = false;
+            for (int i = 0; i < 100 && !serverClosed; ++i) {
+              co_await folly::coro::sleep(20ms);
+              serverClosed = co_await folly::coro::co_withExecutor(
+                  serverExec,
+                  folly::coro::co_invoke(
+                      [serverSession]() -> folly::coro::Task<bool> {
+                        co_return serverSession->isClosed();
+                      }));
+            }
+            EXPECT_TRUE(serverClosed);
+          }));
 }
 
 namespace {
