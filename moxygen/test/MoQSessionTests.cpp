@@ -4,6 +4,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/logging/xlog.h>
+#include <proxygen/lib/http/webtransport/test/FakeSharedWebTransport.h>
 #include <quic/client/QuicClientTransport.h>
 #include <quic/common/events/FollyQuicEventBase.h>
 #include <quic/common/udpsocket/FollyQuicAsyncUDPSocket.h>
@@ -454,6 +456,43 @@ class RecordingSessionCloseCallback
   std::optional<SessionCloseErrorCode> errorCode;
   folly::coro::Baton closed;
 };
+
+TEST(MoQSessionTest, CloseRetainsLastOwnerThroughCallback) {
+  folly::EventBase eventBase;
+  auto executor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  auto [clientWt, serverWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  auto storage = std::make_unique<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()), executor);
+  bool releaseRequested = false;
+  std::shared_ptr<MoQSession> owner(
+      storage.get(), [&](MoQSession*) { releaseRequested = true; });
+  struct ReleasingCloseCallback : MoQSession::MoQSessionCloseCallback {
+    ReleasingCloseCallback(std::shared_ptr<MoQSession>& session, bool& released)
+        : owner(session), releaseRequested(released) {}
+
+    void onMoQSessionClosed(
+        SessionCloseErrorCode /*error*/,
+        folly::Optional<uint32_t> /*wtError*/) override {
+      ++closes;
+      owner->close(SessionCloseErrorCode::NO_ERROR);
+      owner.reset();
+      EXPECT_FALSE(releaseRequested);
+    }
+
+    std::shared_ptr<MoQSession>& owner;
+    bool& releaseRequested;
+    size_t closes{0};
+  } callback(owner, releaseRequested);
+  storage->setSessionCloseCallback(&callback);
+
+  storage->close(SessionCloseErrorCode::NO_ERROR);
+
+  EXPECT_EQ(callback.closes, 1);
+  EXPECT_TRUE(releaseRequested);
+  EXPECT_FALSE(owner);
+  EXPECT_TRUE(clientWt->isSessionClosed());
+}
 
 namespace {
 class NoVersionServerSetupCallback : public MoQSession::ServerSetupCallback {
@@ -2340,16 +2379,17 @@ class DummyMoQClientBase : public MoQClientBase {
     MoQClientBase::goaway(goaway);
   }
   void test_completeSetup(
-      proxygen::WebTransport* wt,
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       std::optional<std::string> negotiatedProtocol) {
     negotiatedProtocol_ = std::move(negotiatedProtocol);
     completeSetupMoQSession(
-        wt,
+        std::move(wt),
         std::nullopt,
         /*publishHandler=*/nullptr,
         /*subscribeHandler=*/nullptr);
   }
 
+  std::shared_ptr<proxygen::WebTransport> ownedWt_;
   int connectQuicCalls{0};
 
  protected:
@@ -2404,6 +2444,91 @@ TEST(MoQClientBaseTest, CallbacksIgnoredWhenSessionNull) {
   client.test_onNewUniStream(readH.get());
   client.test_onDatagram(folly::IOBuf::copyBuffer("hi"));
   client.test_goaway(Goaway{"/newSession"});
+}
+
+class MockClientLifetimeWebTransport
+    : public proxygen::test::FakeSharedWebTransport {
+ public:
+  MOCK_METHOD(
+      (folly::Expected<BidiStreamHandle, ErrorCode>),
+      createBidiStream,
+      (),
+      (override));
+  MOCK_METHOD(
+      (folly::Expected<folly::Unit, ErrorCode>),
+      closeSession,
+      (folly::Optional<uint32_t>),
+      (override));
+};
+
+TEST(MoQClientBaseTest, SessionEndRetainsTransportAfterClientRelease) {
+  folly::EventBase eventBase;
+  auto executor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
+  proxygen::test::FakeStreamHandle readHandle(0);
+  proxygen::test::FakeStreamHandle writeHandle(0);
+  auto storage =
+      std::make_unique<testing::StrictMock<MockClientLifetimeWebTransport>>();
+  bool releaseRequested = false;
+  auto client = std::make_unique<DummyMoQClientBase>(
+      executor, proxygen::URL("https://example.com:443/"));
+  client->ownedWt_ = std::shared_ptr<proxygen::WebTransport>(
+      storage.get(), [&](proxygen::WebTransport*) { releaseRequested = true; });
+  std::weak_ptr<proxygen::WebTransport> weakWt = client->ownedWt_;
+  EXPECT_CALL(*storage, createBidiStream())
+      .WillOnce(
+          testing::Return(
+              proxygen::WebTransport::BidiStreamHandle{
+                  &readHandle, &writeHandle}));
+
+  client->test_completeSetup(client->ownedWt_, "moqt-16");
+  ASSERT_NE(client->moqSession_, nullptr);
+  ASSERT_FALSE(client->moqSession_->isClosed());
+  std::weak_ptr<MoQSession> weakSession = client->moqSession_;
+  struct ReleasingCloseCallback : MoQSession::MoQSessionCloseCallback {
+    ReleasingCloseCallback(
+        std::unique_ptr<DummyMoQClientBase>& owner,
+        bool& released)
+        : client(owner), releaseRequested(released) {}
+
+    void onMoQSessionClosed(
+        SessionCloseErrorCode /*error*/,
+        folly::Optional<uint32_t> /*wtError*/) override {
+      ++closes;
+      client.reset();
+      EXPECT_FALSE(releaseRequested);
+    }
+
+    std::unique_ptr<DummyMoQClientBase>& client;
+    bool& releaseRequested;
+    size_t closes{0};
+  } callback(client, releaseRequested);
+  client->moqSession_->setSessionCloseCallback(&callback);
+  EXPECT_CALL(*storage, closeSession(_))
+      .WillOnce(
+          [&](folly::Optional<uint32_t> error)
+              -> proxygen::test::GenericApiRet {
+            EXPECT_EQ(
+                error, folly::to_underlying(SessionCloseErrorCode::NO_ERROR));
+            EXPECT_FALSE(client);
+            EXPECT_FALSE(releaseRequested);
+            EXPECT_FALSE(weakWt.expired());
+            return folly::unit;
+          });
+
+  client->moqSession_->onSessionEnd(folly::none);
+
+  EXPECT_EQ(callback.closes, 1);
+  EXPECT_FALSE(client);
+  EXPECT_TRUE(weakSession.expired());
+
+  executor->add([&] { eventBase.terminateLoopSoon(); });
+  eventBase.loopForever();
+
+  EXPECT_TRUE(releaseRequested);
+  EXPECT_TRUE(weakWt.expired());
+  for (int i = 0; i < 10; ++i) {
+    eventBase.loopOnce(EVLOOP_NONBLOCK);
+  }
 }
 
 // A caller-supplied transport is adopted rather than dialled, so the client

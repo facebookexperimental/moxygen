@@ -179,7 +179,7 @@ class MoQClientBase {
   static SessionFactory defaultSessionFactory();
 
   void completeSetupMoQSession(
-      proxygen::WebTransport* wt,
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       const std::optional<std::string>& pathParam,
       std::shared_ptr<Publisher> publishHandler,
       std::shared_ptr<Subscriber> subscribeHandler);

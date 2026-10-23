@@ -3303,6 +3303,7 @@ void MoQSession::close(
   if (closed_) {
     return;
   }
+  auto keepAlive = weak_from_this().lock();
   closeResult_ = CloseResult{error, wtError};
   closed_ = true;
   if (closeCallback_) {

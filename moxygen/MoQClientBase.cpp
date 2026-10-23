@@ -67,19 +67,19 @@ folly::coro::Task<void> MoQClientBase::connectAndSendSetup(
 
   // Make WebTransport object
   quicSocket_ = quicClient;
-  proxygen::WebTransport* wt;
+  folly::MaybeManagedPtr<proxygen::WebTransport> wt(nullptr);
   if (useQuicWtSession_) {
     quicWtSession_ = std::make_shared<proxygen::QuicWtSession>(
         std::move(quicClient), /*wtHandler=*/nullptr);
-    wt = quicWtSession_.get();
+    wt = quicWtSession_;
   } else {
     quicWebTransport_ =
         std::make_shared<proxygen::QuicWebTransport>(std::move(quicClient));
-    wt = quicWebTransport_.get();
+    wt = quicWebTransport_;
   }
 
   completeSetupMoQSession(
-      wt,
+      std::move(wt),
       url_.getPath(),
       std::move(publishHandler),
       std::move(subscribeHandler));
@@ -141,7 +141,7 @@ folly::coro::Task<void> MoQClientBase::setupMoQSession(
 }
 
 void MoQClientBase::completeSetupMoQSession(
-    proxygen::WebTransport* wt,
+    folly::MaybeManagedPtr<proxygen::WebTransport> wt,
     const std::optional<std::string>& pathParam,
     std::shared_ptr<Publisher> publishHandler,
     std::shared_ptr<Subscriber> subscribeHandler) {
@@ -157,8 +157,7 @@ void MoQClientBase::completeSetupMoQSession(
   }
 
   //  Create MoQSession and Setup MoQSession parameters
-  moqSession_ =
-      createSession(folly::MaybeManagedPtr<proxygen::WebTransport>(wt));
+  moqSession_ = createSession(std::move(wt));
   if (quicWebTransport_) {
     quicWebTransport_->setHandler(moqSession_.get());
   } else if (quicWtSession_) {

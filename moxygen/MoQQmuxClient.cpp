@@ -100,7 +100,7 @@ folly::coro::Task<void> MoQQmuxClient::setupMoQSession(
       std::chrono::steady_clock::now() - connectStart);
 
   completeSetupMoQSession(
-      qmuxSession_.get(),
+      qmuxSession_,
       url_.getPath(),
       std::move(publishHandler),
       std::move(subscribeHandler));
