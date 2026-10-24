@@ -45,6 +45,7 @@ if [ $# -eq 0 ]; then
     echo "         $0 http://localhost:9999 16 Q   # raw QUIC"
     echo "         $0 http://localhost:9999 16 X   # QMUX-on-TCP"
     echo "         $0 http://localhost:9999 16,18"
+    echo "         $0 http://localhost:9999 20     # fill fetch, not joining FETCH"
     exit 1
 fi
 
@@ -897,6 +898,9 @@ set_section "10" "Joining FETCH"
 # A joining FETCH backfills what ran before the subscription started, so the
 # two together cover the track.  Every test but the last runs against a track
 # a background subscriber is already holding open.
+#
+# From draft 20 the same flags produce a fill fetch stream instead.  These
+# cases check the backfill the client reports, so they cover either wire form.
 
 # 16 groups of 6 objects at 50ms is a little under five seconds of track, so
 # it is still running when the join lands a second and a half in.

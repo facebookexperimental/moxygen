@@ -31,11 +31,18 @@ DEFINE_int32(transaction_timeout, 120, "Transaction timeout (s)");
 DEFINE_int32(
     join_start,
     0,
-    "Joining start, only used if either jrfetch or jafetch is true");
+    "Where the backfill starts, used with fill, jrfetch or jafetch. With "
+    "jafetch it is an absolute group; otherwise it counts groups back from "
+    "the current one.");
 DEFINE_bool(quic_transport, false, "Use raw QUIC transport");
 DEFINE_bool(fetch, false, "Use fetch rather than subscribe");
-DEFINE_bool(jrfetch, false, "Joining relative fetch");
-DEFINE_bool(jafetch, false, "Joining absolute fetch");
+DEFINE_bool(jrfetch, false, "Backfill relative to the current group");
+DEFINE_bool(
+    fill,
+    false,
+    "Backfill join_start groups. Version-neutral spelling of jrfetch: a "
+    "joining FETCH below draft 20, a fill fetch stream from draft 20 on.");
+DEFINE_bool(jafetch, false, "Backfill from an absolute group");
 DEFINE_bool(forward, true, "Forward flag for subscriptions");
 DEFINE_bool(
     publish,
@@ -87,7 +94,7 @@ LocationFilter flags2filter() {
   if (soStr.empty()) {
     soStr = std::string("0");
   }
-  if (FLAGS_jafetch || FLAGS_jrfetch) {
+  if (FLAGS_jafetch || FLAGS_jrfetch || FLAGS_fill) {
     XLOG(ERR) << "Joining fetch requires empty sg";
     exit(1);
   }
@@ -278,7 +285,7 @@ class MoQTextClient : public Subscriber,
       addRendezvousTimeoutParamIfSupported(
           sub, moqClient_.getSession()->getNegotiatedVersion());
 
-      if (FLAGS_jafetch || FLAGS_jrfetch) {
+      if (FLAGS_jafetch || FLAGS_jrfetch || FLAGS_fill) {
         // --jafetch counts from a group ID, the others from the current
         // group, which is one nearer than a Location Filter's relative start.
         const auto joinStart = static_cast<uint64_t>(FLAGS_join_start);
@@ -431,10 +438,10 @@ int main(int argc, char* argv[]) {
   if (!url.isValid() || !url.hasHost()) {
     XLOG(ERR) << "Invalid url: " << FLAGS_connect_url;
   }
-  int sumFetchCount =
-      int(FLAGS_jafetch) + int(FLAGS_jrfetch) + int(FLAGS_fetch);
+  int sumFetchCount = int(FLAGS_jafetch) + int(FLAGS_jrfetch) +
+      int(FLAGS_fill) + int(FLAGS_fetch);
   XCHECK(sumFetchCount <= 1)
-      << "Can specify at most one of jafetch or jrfetch or fetch";
+      << "Can specify at most one of jafetch or jrfetch or fill or fetch";
   TrackNamespace ns =
       TrackNamespace(FLAGS_track_namespace, FLAGS_track_namespace_delimiter);
   std::shared_ptr<MoQFollyExecutorImpl> moqEvb =

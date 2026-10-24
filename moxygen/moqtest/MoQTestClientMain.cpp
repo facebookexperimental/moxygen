@@ -121,10 +121,17 @@ DEFINE_string(
 DEFINE_string(
     join_start,
     "",
-    "With --request=subscribe, also send a joining FETCH that backfills what "
-    "ran before the subscription. A non-negative value is the absolute group "
-    "to fetch from; a negative value counts that many groups back from where "
-    "the subscription begins. Empty means a plain SUBSCRIBE.");
+    "With --request=subscribe, also backfill what ran before the "
+    "subscription: a joining FETCH below draft 20, a fill fetch stream from "
+    "draft 20 on. A non-negative value is the absolute group to start from; a "
+    "negative value counts that many groups back from where the subscription "
+    "begins. Empty means a plain SUBSCRIBE.");
+DEFINE_bool(
+    fill,
+    false,
+    "Backfill from --join_start, which defaults to the start of the track. "
+    "The same thing --join_start asks for on its own, under the name the "
+    "other samples use.");
 DEFINE_string(
     publish_order,
     "subscribe_first",
@@ -191,8 +198,11 @@ int main(int argc, char** argv) {
   if (!parseInt64Flag("join_start", FLAGS_join_start, joinStart)) {
     return 1;
   }
+  if (FLAGS_fill && !joinStart) {
+    joinStart = 0;
+  }
   if (joinStart && FLAGS_request != "subscribe") {
-    XLOG(ERR) << "--join_start only applies with --request=subscribe";
+    XLOG(ERR) << "--fill and --join_start only apply with --request=subscribe";
     return 1;
   }
   // A negative value is negated to get the number of groups to count back,
