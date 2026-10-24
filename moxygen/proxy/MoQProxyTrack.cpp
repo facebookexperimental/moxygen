@@ -607,9 +607,9 @@ Publisher::SubscribeResult MoQProxyTrack::addSubscriber(
             SubscribeErrorCode::DUPLICATE_SUBSCRIPTION,
             "session already subscribes to this track"});
   }
-  if (forwarder_->largest() &&
-      subscribeRequest.locType == LocationType::AbsoluteRange &&
-      subscribeRequest.endGroup < forwarder_->largest()->group) {
+  auto subEndGroup = subscribeRequest.filter.legacyEndGroup();
+  if (forwarder_->largest() && subEndGroup &&
+      *subEndGroup < forwarder_->largest()->group) {
     return folly::makeUnexpected(
         SubscribeError{
             subscribeRequest.requestID,
@@ -707,7 +707,7 @@ MoQProxyTrack::establishWithProvider(
   auto upstreamRequest = subscribeRequest;
   upstreamRequest.priority = kDefaultPriority;
   upstreamRequest.groupOrder = GroupOrder::Default;
-  upstreamRequest.locType = LocationType::LargestObject;
+  upstreamRequest.filter = LocationFilter::nextObject();
   upstreamRequest.forward = forwarder_->numForwardingSubscribers() > 0;
 
   auto upstreamVersion = upstreamSession->getNegotiatedVersion();

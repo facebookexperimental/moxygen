@@ -474,12 +474,10 @@ CO_TEST_P_X(MoQSessionTest, PublishWithFilterParameters) {
                     actualPub.requestID,
                     true, // forward - subscriber wants forwarding
                     64,   // subscriber priority - different from default
-                    GroupOrder::NewestFirst,     // subscriber prefers different
-                                                 // order
-                    LocationType::AbsoluteRange, // subscriber wants range
-                                                 // filter
-                    AbsoluteLocation{50, 25},    // specific start location
-                    std::make_optional(uint64_t(200)), // endGroup
+                    // subscriber prefers a different order
+                    GroupOrder::NewestFirst,
+                    // subscriber wants a range filter
+                    LocationFilter::range(AbsoluteLocation{50, 25}, 200),
                 };
 
                 // Create the reply task that returns the PublishOk
@@ -510,12 +508,14 @@ CO_TEST_P_X(MoQSessionTest, PublishWithFilterParameters) {
   EXPECT_TRUE(publishOk.forward);
   EXPECT_EQ(publishOk.subscriberPriority, 64);
   EXPECT_EQ(publishOk.groupOrder, GroupOrder::NewestFirst);
-  EXPECT_EQ(publishOk.locType, LocationType::AbsoluteRange);
-  EXPECT_TRUE(publishOk.start.has_value());
-  EXPECT_EQ(publishOk.start->group, 50u);
-  EXPECT_EQ(publishOk.start->object, 25u);
-  EXPECT_TRUE(publishOk.endGroup.has_value());
-  EXPECT_EQ(*publishOk.endGroup, 200u);
+  // PUBLISH_OK does not carry a filter in draft 20, so the publisher sees the
+  // unfiltered default.
+  if (getDraftMajorVersion(getServerSelectedVersion()) >= 20) {
+    EXPECT_EQ(publishOk.filter, LocationFilter::none());
+  } else {
+    EXPECT_EQ(
+        publishOk.filter, LocationFilter::range(AbsoluteLocation{50, 25}, 200));
+  }
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
@@ -724,8 +724,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithDeliveryTimeout) {
     SubscribeUpdate subscribeUpdate{
         RequestID(0),
         RequestID(0),
-        AbsoluteLocation{0, 0},
-        10,
+        LocationFilter::range({0, 0}, {10, 0}),
         kDefaultPriority + 1,
         true};
 
@@ -792,8 +791,7 @@ CO_TEST_P_X(MoQSessionTest, PublishThenSubscribeUpdate) {
     SubscribeUpdate subscribeUpdate{
         RequestID(0),
         RequestID(0),
-        AbsoluteLocation{0, 0},
-        10,
+        LocationFilter::range({0, 0}, {10, 0}),
         kDefaultPriority + 1,
         true};
 
@@ -1001,9 +999,7 @@ CO_TEST_P_X(MoQSessionTest, PublishDataArrivesBeforePublishOk) {
                               true,
                               128,
                               GroupOrder::Default,
-                              LocationType::LargestObject,
-                              std::nullopt,
-                              std::nullopt};
+                              LocationFilter::nextObject()};
                         })};
               }));
 
@@ -1058,9 +1054,7 @@ CO_TEST_P_X(MoQSessionTest, PublishConsumerReadyDeliversDataBeforePublishOk) {
                           true,
                           128,
                           GroupOrder::Default,
-                          LocationType::LargestObject,
-                          std::nullopt,
-                          std::nullopt};
+                          LocationFilter::nextObject()};
                     }),
                 /*consumerReady=*/true};
           });
@@ -1226,9 +1220,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkRequestIDMappedToInbound) {
                     true,
                     128,
                     GroupOrder::Default,
-                    LocationType::LargestObject,
-                    std::nullopt,
-                    std::nullopt};
+                    LocationFilter::nextObject()};
                 auto replyTask = folly::coro::makeTask<
                     folly::Expected<PublishOk, PublishError>>(std::move(bogus));
                 return Subscriber::PublishConsumerAndReplyTask{
@@ -1285,10 +1277,7 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
                     true, // forward
                     128,  // subscriber priority
                     GroupOrder::Default,
-                    LocationType::LargestObject,
-                    std::nullopt,                    // start
-                    std::make_optional(uint64_t(0)), // endGroup
-                };
+                    LocationFilter::nextObject()};
 
                 // Add delivery timeout parameter (3000ms)
                 publishOk.params.insertParam(
@@ -1410,9 +1399,7 @@ CO_TEST_P_X(
             true,
             128,
             GroupOrder::Default,
-            LocationType::LargestObject,
-            std::nullopt,
-            std::make_optional(uint64_t(0))};
+            LocationFilter::nextObject()};
         ok.params.insertParam(
             {folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
              kSubscriberTimeoutMs});
@@ -1474,9 +1461,7 @@ CO_TEST_P_X(MoQSessionTest, DeliveryTimeoutResetCancelsLaterObjects) {
             true,
             128,
             GroupOrder::Default,
-            LocationType::LargestObject,
-            std::nullopt,
-            std::make_optional(uint64_t(0))};
+            LocationFilter::nextObject()};
         return Subscriber::PublishConsumerAndReplyTask{
             std::static_pointer_cast<TrackConsumer>(consumer),
             folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
@@ -1607,9 +1592,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeDuplicatesPendingPublish) {
                           true,
                           128,
                           GroupOrder::Default,
-                          LocationType::LargestObject,
-                          std::nullopt,
-                          std::make_optional(uint64_t(0))};
+                          LocationFilter::nextObject()};
                     })};
           });
 

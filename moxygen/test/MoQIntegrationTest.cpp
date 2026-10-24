@@ -507,7 +507,7 @@ class TestSubscriber : public Subscriber {
     publishOk.forward = true;
     publishOk.subscriberPriority = kDefaultPriority;
     publishOk.groupOrder = GroupOrder::Default;
-    publishOk.locType = LocationType::LargestObject;
+    publishOk.filter = LocationFilter::nextObject();
 
     auto replyTask =
         folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
@@ -754,7 +754,7 @@ SubscribeRequest makeSubscribe() {
   sub.priority = kDefaultPriority;
   sub.groupOrder = GroupOrder::OldestFirst;
   sub.forward = true;
-  sub.locType = LocationType::LargestObject;
+  sub.filter = LocationFilter::nextObject();
   return sub;
 }
 

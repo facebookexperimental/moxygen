@@ -75,7 +75,7 @@ class MoQTrackServerTest : public testing::Test {
     moxygen::SubscribeRequest sub;
     sub.requestID = moxygen::RequestID(requestID);
     sub.fullTrackName = {track_, kDefaultTrackName};
-    sub.locType = moxygen::LocationType::NextGroupStart;
+    sub.filter = moxygen::LocationFilter::relativeStart(0);
     sub.forward = true;
     return sub;
   }
@@ -1820,7 +1820,7 @@ TEST_F(MoQTrackServerTest, RequestUpdateTogglesForward) {
   moxygen::SubscribeRequest sub;
   sub.requestID = moxygen::RequestID(1);
   sub.fullTrackName = forwarder->fullTrackName();
-  sub.locType = moxygen::LocationType::LargestObject;
+  sub.filter = moxygen::LocationFilter::nextObject();
   sub.forward = true;
 
   auto subscriber =

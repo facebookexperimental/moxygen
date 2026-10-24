@@ -128,8 +128,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   SubscribeUpdate subscribeUpdate;
   subscribeUpdate.requestID = RequestID(0);
   subscribeUpdate.existingRequestID = RequestID(0);
-  subscribeUpdate.start = AbsoluteLocation{1, 2};
-  subscribeUpdate.endGroup = std::optional<uint64_t>(3);
+  subscribeUpdate.filter = LocationFilter::range({1, 2}, {3, 0});
   subscribeUpdate.priority = 255;
   subscribeUpdate.forward = std::optional<bool>(true);
   addTestParams(subscribeUpdate.params, moqFrameWriter, version);
@@ -188,9 +187,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   publishOk.forward = false;
   publishOk.subscriberPriority = 128;
   publishOk.groupOrder = GroupOrder::Default;
-  publishOk.locType = LocationType::LargestObject;
-  publishOk.start = std::nullopt;
-  publishOk.endGroup = std::nullopt;
+  publishOk.filter = LocationFilter::nextObject();
   addTestParams(publishOk.params, moqFrameWriter, version);
   res = moqFrameWriter.writePublishOk(writeBuf, publishOk);
 
@@ -238,7 +235,7 @@ std::unique_ptr<folly::IOBuf> writeAllControlMessages(
   trackStatus.fullTrackName =
       FullTrackName({TrackNamespace({"hello"}), "world"});
   trackStatus.groupOrder = GroupOrder::OldestFirst;
-  trackStatus.locType = LocationType::LargestObject;
+  trackStatus.filter = LocationFilter::nextObject();
   trackStatus.params = TrackRequestParameters{FrameType::TRACK_STATUS};
   addTestParams(trackStatus.params, moqFrameWriter, version);
   res = moqFrameWriter.writeTrackStatus(writeBuf, trackStatus);

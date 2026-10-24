@@ -18,8 +18,7 @@ DEFINE_int32(transaction_timeout, 1000, "transaction timeout in ms");
 const int kDefaultRequestId = 0;
 const std::string kDefaultTrackName = "test";
 const GroupOrder kDefaultGroupOrder = GroupOrder::OldestFirst;
-const LocationType kDefaultLocationType = LocationType::NextGroupStart;
-const uint64_t kDefaultEndGroup = 10;
+const LocationFilter kDefaultLocationFilter = LocationFilter::relativeStart(0);
 
 MoQTestClient::MoQTestClient(
     PrivateTag,
@@ -180,8 +179,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::subscribe(
 
   sub.fullTrackName = ftn;
   sub.groupOrder = kDefaultGroupOrder;
-  sub.locType = kDefaultLocationType;
-  sub.endGroup = kDefaultEndGroup;
+  sub.filter = kDefaultLocationFilter;
 
   // Add delivery timeout parameter if configured
   if (params.deliveryTimeout > 0) {
@@ -233,8 +231,7 @@ Subscriber::PublishResult MoQTestClient::publish(
   ok.forward = true;
   ok.subscriberPriority = kDefaultPriority;
   ok.groupOrder = GroupOrder::Default;
-  ok.locType = LocationType::AbsoluteStart;
-  ok.start = AbsoluteLocation(0, 0);
+  ok.filter = LocationFilter::absoluteStart({0, 0});
 
   return Subscriber::PublishConsumerAndReplyTask{
       subReceiver_,
@@ -434,7 +431,7 @@ folly::coro::Task<moxygen::TrackNamespace> MoQTestClient::join(
   sub.groupOrder = kDefaultGroupOrder;
   // The backfill ends on the object the subscription starts after, so the two
   // halves only meet with no gap if the subscription starts at Largest.
-  sub.locType = LocationType::LargestObject;
+  sub.filter = LocationFilter::nextObject();
 
   if (params.deliveryTimeout > 0) {
     sub.params.insertParam(

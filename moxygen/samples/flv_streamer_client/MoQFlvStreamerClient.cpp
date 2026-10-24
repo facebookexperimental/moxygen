@@ -176,7 +176,7 @@ class MoQFlvStreamerClient
                << " requestID=" << subscribeReq.requestID;
     AbsoluteLocation largest;
     // Location mode not supported
-    if (subscribeReq.locType != LocationType::LargestObject) {
+    if (subscribeReq.filter != LocationFilter::nextObject()) {
       co_return folly::makeUnexpected(
           SubscribeError{
               subscribeReq.requestID,

@@ -338,8 +338,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdate) {
   SubscribeUpdate subscribeUpdate{
       subscribeRequest.requestID,
       RequestID(0),
-      AbsoluteLocation{0, 0},
-      10,
+      LocationFilter::range({0, 0}, {10, 0}),
       kDefaultPriority + 1,
       true};
 
@@ -441,8 +440,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateForwardingFalse) {
   SubscribeUpdate subscribeUpdate{
       subscribeRequest.requestID,
       RequestID(0),
-      AbsoluteLocation{0, 0},
-      10,
+      LocationFilter::range({0, 0}, {10, 0}),
       kDefaultPriority,
       false};
 
@@ -1117,8 +1115,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeUpdateWithRequestID) {
   SubscribeUpdate subscribeUpdate{
       RequestID(0), // Will be assigned by session based on version
       subscribeRequest.requestID,
-      AbsoluteLocation{0, 0},
-      10,
+      LocationFilter::range({0, 0}, {10, 0}),
       kDefaultPriority + 1,
       true};
 

@@ -209,6 +209,160 @@ std::string FullTrackName::describe() const {
   return folly::to<std::string>(trackNamespace.describe(), '/', trackName);
 }
 
+SubscribeRange LocationFilter::resolve(
+    std::optional<AbsoluteLocation> largest,
+    bool isFetch) const {
+  const auto nextObject =
+      largest ? largest->next().value_or(kLocationMax) : kLocationMin;
+
+  SubscribeRange result;
+  if (fieldCount_ == 1) {
+    const uint64_t nextGroup = largest ? saturatingAdd(largest->group, 1) : 0;
+    const uint64_t groupsBack = start_.group;
+    result.start = {groupsBack > nextGroup ? 0 : nextGroup - groupsBack, 0};
+  } else if (isNextObjectForm()) {
+    result.start = nextObject;
+  } else {
+    result.start = start_;
+    // Below draft 20, a start behind Largest moves up to the Next Object.
+    // TODO: skip this at draft 20 once the unfiltered default is settled.
+    if (!isFetch && largest && result.start < *largest) {
+      result.start = nextObject;
+    }
+  }
+
+  if (fieldCount_ >= 3) {
+    result.end = {end_.group, fieldCount_ == 3 ? kEightByteLimit : end_.object};
+  } else {
+    result.end = kLocationMax;
+  }
+  // A fetch never runs past Largest Object. Without one, an omitted end stays
+  // open and the publisher bounds it.
+  if (isFetch && largest) {
+    result.end = std::min(result.end, *largest);
+  }
+
+  XLOG(DBG1) << "resolve " << describe() << " -> start=" << result.start
+             << " end=" << result.end;
+  return result;
+}
+
+std::pair<AbsoluteLocation, AbsoluteLocation> LocationFilter::fetchRange(
+    std::optional<AbsoluteLocation> largest) const {
+  auto range = resolve(largest, /*isFetch=*/true);
+  // A StandaloneFetch holds a wire End Location: a range ending with its group
+  // is written as object 0 of that group.
+  if (range.end.object == kEightByteLimit) {
+    return {range.start, AbsoluteLocation{range.end.group, 0}};
+  }
+  return {range.start, range.end.next().value_or(kLocationMax)};
+}
+
+folly::Expected<LocationFilter, ErrorCode> LocationFilter::fromFields(
+    const std::array<uint64_t, kMaxFields>& fields,
+    uint8_t count) {
+  if (count > kMaxFields) {
+    XLOG(ERR) << "LocationFilter: " << int(count) << " fields, max is "
+              << int(kMaxFields);
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  AbsoluteLocation end;
+  if (count >= 3) {
+    // Only a sum past 2^64-1 is a violation. Both operands arrive as varints,
+    // so a parsed filter cannot reach that sum, but a direct caller can.
+    if (fields[2] > std::numeric_limits<uint64_t>::max() - fields[0]) {
+      XLOG(ERR) << "LocationFilter: EndGroup overflows, startGroup="
+                << fields[0] << " delta=" << fields[2];
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    // EndGroup is delta encoded; EndObject exists only in the four field form.
+    // The sum saturates so that it stays encodable.
+    end = AbsoluteLocation{
+        saturatingAdd(fields[0], fields[2]),
+        count == kMaxFields ? fields[3] : 0};
+  }
+  return LocationFilter(count, AbsoluteLocation{fields[0], fields[1]}, end);
+}
+
+std::string LocationFilter::describe() const {
+  switch (fieldCount_) {
+    case 0:
+      return "{none}";
+    case 1:
+      return folly::to<std::string>("{relative ", start_.group, "}");
+    case 2:
+      return isNextObjectForm() ? "{nextObject}" : start_.describe();
+    case 3:
+      return folly::to<std::string>(start_.describe(), "-{", end_.group, ",*}");
+    default:
+      return folly::to<std::string>(start_.describe(), "-", end_.describe());
+  }
+}
+
+LocationFilter toLocationFilter(const StandaloneFetch& range) {
+  if (range.end == kLocationMax) {
+    return LocationFilter::absoluteStart(range.start);
+  }
+  // A StandaloneFetch end is the wire End Location, where object 0 means all
+  // of the end group and anything else is already one past the last object.
+  if (range.end.object == 0) {
+    return LocationFilter::range(range.start, range.end.group);
+  }
+  auto inclusiveEnd = range.end.prev();
+  if (!inclusiveEnd) {
+    return LocationFilter::absoluteStart(range.start);
+  }
+  return LocationFilter::range(range.start, *inclusiveEnd);
+}
+
+SubscriptionFilter toSubscriptionFilter(const LocationFilter& filter) {
+  const auto fields = filter.fields();
+  const auto start = AbsoluteLocation{fields[0], fields[1]};
+  if (auto endGroup = filter.legacyEndGroup()) {
+    return SubscriptionFilter(LocationType::AbsoluteRange, start, endGroup);
+  }
+  switch (filter.fieldCount()) {
+    case 0:
+      return SubscriptionFilter(
+          LocationType::AbsoluteStart, kLocationMin, std::nullopt);
+    case 1:
+      if (start.group == 0) {
+        return SubscriptionFilter(
+            LocationType::NextGroupStart, std::nullopt, std::nullopt);
+      }
+      if (start.group > 1) {
+        XLOG(ERR) << "No legacy encoding for a start " << start.group
+                  << " groups back; clamping to the current group";
+      }
+      return SubscriptionFilter(
+          LocationType::LargestGroup, std::nullopt, std::nullopt);
+    default:
+      if (!filter.absoluteStartLocation()) {
+        return SubscriptionFilter(
+            LocationType::LargestObject, std::nullopt, std::nullopt);
+      }
+      return SubscriptionFilter(
+          LocationType::AbsoluteStart, start, std::nullopt);
+  }
+}
+
+LocationFilter fromSubscriptionFilter(const SubscriptionFilter& filter) {
+  switch (filter.filterType) {
+    case LocationType::NextGroupStart:
+      return LocationFilter::relativeStart(0);
+    case LocationType::LargestGroup:
+      return LocationFilter::relativeStart(1);
+    case LocationType::LargestObject:
+      return LocationFilter::nextObject();
+    case LocationType::AbsoluteRange:
+      return LocationFilter::range(
+          filter.location.value_or(kLocationMin), filter.endGroup.value_or(0));
+    case LocationType::AbsoluteStart:
+      break;
+  }
+  return LocationFilter::absoluteStart(filter.location.value_or(kLocationMin));
+}
+
 std::string toString(LocationType loctype) {
   switch (loctype) {
     case LocationType::NextGroupStart: {
@@ -371,6 +525,21 @@ static bool isLegacyPublishOkSubscriptionParameter(TrackRequestParamKey key) {
       return false;
   }
 }
+
+// v20+ carries the FETCH range in LOCATION_FILTER (0x21) and allows it on
+// PUBLISH, but not on PUBLISH_OK.
+static bool isLocationFilterAllowedV20(FrameType frameType) {
+  switch (frameType) {
+    case FrameType::SUBSCRIBE:
+    case FrameType::REQUEST_UPDATE:
+    case FrameType::PUBLISH:
+    case FrameType::FETCH:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
 // Empty set means allowed for all frame types
 const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
@@ -498,6 +667,11 @@ bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
     return false;
   }
 
+  if (key == TrackRequestParamKey::LOCATION_FILTER &&
+      majorVersion_.has_value() && *majorVersion_ >= 20) {
+    return isLocationFilterAllowedV20(frameType_);
+  }
+
   auto it = kParamAllowlist.find(key);
   if (it == kParamAllowlist.end()) {
     // The wire parser rejects unknown keys (isKnownParamKey); local callers
@@ -536,9 +710,7 @@ SubscribeRequest SubscribeRequest::make(
     uint8_t priority,
     GroupOrder groupOrder,
     bool forward,
-    LocationType locType,
-    std::optional<AbsoluteLocation> start,
-    uint64_t endGroup,
+    LocationFilter filter,
     const std::vector<Parameter>& inputParams) {
   SubscribeRequest req = SubscribeRequest{
       RequestID(), // Default constructed RequestID
@@ -546,9 +718,7 @@ SubscribeRequest SubscribeRequest::make(
       priority,
       groupOrder,
       forward,
-      locType,
-      std::move(start),
-      endGroup,
+      filter,
       TrackRequestParameters{FrameType::SUBSCRIBE}};
 
   for (const auto& param : inputParams) {
@@ -559,6 +729,29 @@ SubscribeRequest SubscribeRequest::make(
     }
   }
   return req;
+}
+
+SubscribeRequest SubscribeRequest::make(
+    const FullTrackName& fullTrackName,
+    uint8_t priority,
+    GroupOrder groupOrder,
+    bool forward,
+    LocationType locType,
+    std::optional<AbsoluteLocation> start,
+    uint64_t endGroup,
+    const std::vector<Parameter>& inputParams) {
+  return make(
+      fullTrackName,
+      priority,
+      groupOrder,
+      forward,
+      fromSubscriptionFilter(SubscriptionFilter(
+          locType,
+          start,
+          locType == LocationType::AbsoluteRange
+              ? std::optional<uint64_t>(endGroup)
+              : std::nullopt)),
+      inputParams);
 }
 
 Fetch::Fetch(

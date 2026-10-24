@@ -132,8 +132,7 @@ class Draft18RequestUpdateGoawayTest : public MoQSessionTest {
     return SubscribeUpdate{
         RequestID(0),
         RequestID(0),
-        AbsoluteLocation{0, 0},
-        10,
+        LocationFilter::range({0, 0}, uint64_t(9)),
         kDefaultPriority,
         false};
   }
@@ -196,8 +195,7 @@ CO_TEST_P_X(
   SubscribeUpdate update{
       subscription.subscribeRequest.requestID,
       RequestID(0),
-      AbsoluteLocation{1, 0},
-      2,
+      LocationFilter::range({1, 0}, {2, 0}),
       kDefaultPriority + 1,
       true};
 
@@ -240,8 +238,7 @@ CO_TEST_P_X(
   SubscribeUpdate update{
       subscription.subscribeRequest.requestID,
       RequestID(0),
-      AbsoluteLocation{1, 0},
-      2,
+      LocationFilter::range({1, 0}, {2, 0}),
       kDefaultPriority + 1,
       true};
 
@@ -356,8 +353,7 @@ CO_TEST_P_X(
   SubscribeUpdate update{
       subscription.subscribeRequest.requestID,
       RequestID(0),
-      AbsoluteLocation{1, 0},
-      2,
+      LocationFilter::range({1, 0}, uint64_t(1)),
       kDefaultPriority + 1,
       true};
   auto result = co_await subscription.clientHandle->requestUpdate(update);
@@ -391,7 +387,6 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterStartDecreases) {
       });
 
   auto subscribeRequest = getSubscribe(kTestTrackName);
-  subscribeRequest.start = AbsoluteLocation{10, 5};
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   auto subscribeHandler = res.value();
@@ -400,8 +395,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterStartDecreases) {
   SubscribeUpdate subscribeUpdate{
       subscribeRequest.requestID,
       RequestID(0),
-      AbsoluteLocation{5, 3}, // Start decreased - should fail
-      20,
+      // Start decreased - should fail
+      LocationFilter::range({5, 3}, {20, 0}),
       kDefaultPriority,
       true};
 
@@ -411,8 +406,10 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterStartDecreases) {
   EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
       .WillOnce([&subscribeUpdateInvoked](const auto& actualUpdate) {
         // Verify that start location decreased
-        EXPECT_TRUE(actualUpdate.start.has_value());
-        EXPECT_LT(actualUpdate.start.value(), (AbsoluteLocation{10, 5}))
+        ASSERT_TRUE(actualUpdate.filter.has_value());
+        auto actualStart = actualUpdate.filter->absoluteStartLocation();
+        ASSERT_TRUE(actualStart.has_value());
+        EXPECT_LT(*actualStart, (AbsoluteLocation{10, 5}))
             << "Start should have decreased";
         subscribeUpdateInvoked.post();
       });
@@ -449,8 +446,6 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterEndLessThanStart) {
       });
 
   auto subscribeRequest = getSubscribe(kTestTrackName);
-  subscribeRequest.start = AbsoluteLocation{5, 10};
-  subscribeRequest.endGroup = 20;
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   auto subscribeHandler = res.value();
@@ -459,8 +454,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterEndLessThanStart) {
   SubscribeUpdate subscribeUpdate{
       subscribeRequest.requestID,
       RequestID(0),
-      AbsoluteLocation{5, 10},
-      3, // endGroup < start.group - should fail
+      // endGroup < start.group - should fail
+      LocationFilter::range({5, 10}, {3, 0}),
       kDefaultPriority,
       true};
 
@@ -470,10 +465,12 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterEndLessThanStart) {
   EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
       .WillOnce([&subscribeUpdateInvoked](const auto& actualUpdate) {
         // Verify that endGroup is less than start.group
-        EXPECT_TRUE(actualUpdate.endGroup.has_value());
-        EXPECT_TRUE(actualUpdate.start.has_value());
-        EXPECT_LT(
-            actualUpdate.endGroup.value(), actualUpdate.start.value().group)
+        ASSERT_TRUE(actualUpdate.filter.has_value());
+        auto actualEndGroup = actualUpdate.filter->legacyEndGroup();
+        auto actualStart = actualUpdate.filter->absoluteStartLocation();
+        ASSERT_TRUE(actualEndGroup.has_value());
+        ASSERT_TRUE(actualStart.has_value());
+        EXPECT_LT(*actualEndGroup, actualStart->group)
             << "End group should be less than start group";
         subscribeUpdateInvoked.post();
       });
@@ -512,8 +509,6 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterSuccess) {
       });
 
   auto subscribeRequest = getSubscribe(kTestTrackName);
-  subscribeRequest.start = AbsoluteLocation{10, 5};
-  subscribeRequest.endGroup = 50;
   auto res =
       co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
   auto subscribeHandler = res.value();
@@ -522,8 +517,8 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterSuccess) {
   SubscribeUpdate subscribeUpdate{
       subscribeRequest.requestID,
       RequestID(0),
-      AbsoluteLocation{20, 10}, // Start advanced (20, 10 > 10, 5)
-      100,                      // endGroup increased
+      // Start advanced (20, 10 > 10, 5), endGroup increased
+      LocationFilter::range({20, 10}, {100, 0}),
       kDefaultPriority + 1,
       true};
 
@@ -533,21 +528,22 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterSuccess) {
   EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
       .WillOnce([&subscribeUpdateInvoked](const auto& actualUpdate) {
         // Verify the filter was updated correctly
-        EXPECT_TRUE(actualUpdate.start.has_value());
-        EXPECT_TRUE(actualUpdate.endGroup.has_value());
-        EXPECT_EQ(actualUpdate.start.value(), (AbsoluteLocation(20, 10)))
+        ASSERT_TRUE(actualUpdate.filter.has_value());
+        auto actualStart = actualUpdate.filter->absoluteStartLocation();
+        auto actualEndGroup = actualUpdate.filter->legacyEndGroup();
+        ASSERT_TRUE(actualStart.has_value());
+        ASSERT_TRUE(actualEndGroup.has_value());
+        EXPECT_EQ(*actualStart, (AbsoluteLocation(20, 10)))
             << "Start should be updated to {20, 10}";
-        EXPECT_EQ(actualUpdate.endGroup.value(), 100)
-            << "End group should be 100";
+        EXPECT_EQ(*actualEndGroup, 100) << "End group should be 100";
         EXPECT_EQ(actualUpdate.priority, kDefaultPriority + 1)
             << "Priority should be updated";
         EXPECT_TRUE(actualUpdate.forward.value()) << "Forward should be true";
         // Verify start is valid (doesn't decrease and endGroup >=
         // start.group)
-        EXPECT_GE(actualUpdate.start.value(), (AbsoluteLocation(10, 5)))
+        EXPECT_GE(*actualStart, (AbsoluteLocation(10, 5)))
             << "Start should not decrease";
-        EXPECT_GE(
-            actualUpdate.endGroup.value(), actualUpdate.start.value().group)
+        EXPECT_GE(*actualEndGroup, actualStart->group)
             << "End group should be >= start.group";
         subscribeUpdateInvoked.post();
       });
@@ -607,9 +603,7 @@ CO_TEST_P_X(PreDraft18Test, RequestUpdateRetiresItsRequestID) {
           testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
   for (size_t i = 0; i < kUpdates; ++i) {
     SubscribeUpdate update;
-    // start and endGroup are required before draft 15.
-    update.start = AbsoluteLocation{0, 0};
-    update.endGroup = 0;
+    update.filter = LocationFilter::absoluteStart({0, 0});
     update.priority = kDefaultPriority;
     update.forward = true;
     auto updateRes = co_await subscribeHandler->requestUpdate(update);
@@ -659,8 +653,6 @@ CO_TEST_P_X(
       });
 
   auto subscribeRequest = getSubscribe(kTestTrackName);
-  subscribeRequest.start = initialStart;
-  subscribeRequest.endGroup = initialEndGroup;
   subscribeRequest.priority = initialPriority;
   subscribeRequest.forward = initialForward;
   auto res =
@@ -672,8 +664,8 @@ CO_TEST_P_X(
   SubscribeUpdate subscribeUpdate{
       subscribeRequest.requestID,
       RequestID(0),
-      initialStart,         // Keep start the same
-      initialEndGroup,      // Keep endGroup the same
+      // Keep start and endGroup the same
+      LocationFilter::range(initialStart, {initialEndGroup, 0}),
       kDefaultPriority + 1, // Change only priority (non-default so it is sent)
       initialForward,       // Keep forward the same
   };
@@ -687,9 +679,10 @@ CO_TEST_P_X(
                  initialEndGroup,
                  initialForward](const auto& actualUpdate) {
         // Verify that unchanged fields are preserved
-        EXPECT_EQ(actualUpdate.start, initialStart)
+        ASSERT_TRUE(actualUpdate.filter.has_value());
+        EXPECT_EQ(actualUpdate.filter->absoluteStartLocation(), initialStart)
             << "Start location should be preserved";
-        EXPECT_EQ(actualUpdate.endGroup, initialEndGroup)
+        EXPECT_EQ(actualUpdate.filter->legacyEndGroup(), initialEndGroup)
             << "End group should be preserved";
         EXPECT_EQ(actualUpdate.forward, initialForward)
             << "Forward should be preserved";
@@ -1645,8 +1638,7 @@ CO_TEST_P_X(Draft18Test, PublishRequestUpdateFailsOnPeerStopSending) {
             SubscribeUpdate{
                 RequestID(0),
                 RequestID(0),
-                AbsoluteLocation{0, 0},
-                10,
+                LocationFilter::range({0, 0}, {10, 0}),
                 kDefaultPriority + 1,
                 true});
         updateDone.post();
@@ -1774,7 +1766,8 @@ CO_TEST_P_X(Draft18Test, FetchRequestUpdateCoalescesCumulatively) {
   int observedPriority = -1;
   EXPECT_CALL(*mockFetchHandle, requestUpdateCalled)
       .WillOnce([&observedStart, &observedPriority](const RequestUpdate& u) {
-        observedStart = u.start;
+        observedStart =
+            u.filter ? u.filter->absoluteStartLocation() : std::nullopt;
         observedPriority = u.priority.value_or(-1);
       });
   EXPECT_CALL(*mockFetchHandle, requestUpdateResult)
@@ -1789,7 +1782,7 @@ CO_TEST_P_X(Draft18Test, FetchRequestUpdateCoalescesCumulatively) {
   first.existingRequestID = fetchRequestID;
   first.requestID = RequestID(getRequestIDMultiplier());
   first.priority = kDefaultPriority + 1;
-  first.start = AbsoluteLocation{5, 0};
+  first.filter = LocationFilter::absoluteStart({5, 0});
   cb->onRequestUpdate(std::move(first));
 
   RequestUpdate second;
@@ -1904,8 +1897,7 @@ CO_TEST_P_X(MoQSessionTest, FetchRequestUpdateNotSupported) {
   RequestUpdate requestUpdate{
       RequestID(0),                     // Will be assigned by client
       res.value()->fetchOk().requestID, // Existing fetch request ID
-      AbsoluteLocation{50, 0},
-      200,
+      LocationFilter::range({50, 0}, {200, 0}),
       kDefaultPriority + 1,
       true};
 

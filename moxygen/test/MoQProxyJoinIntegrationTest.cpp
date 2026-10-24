@@ -51,7 +51,7 @@ TrackConsumer::BeginSubgroupOptions lastInGroup() {
 
 SubscribeRequest liveSubscribe() {
   auto request = SubscribeRequest::make(kTrack);
-  request.locType = LocationType::LargestObject;
+  request.filter = LocationFilter::nextObject();
   return request;
 }
 

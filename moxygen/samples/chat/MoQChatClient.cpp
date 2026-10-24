@@ -393,7 +393,7 @@ folly::coro::Task<void> MoQChatClient::subscribeToUser(
   auto handler = std::make_shared<ChatObjectHandler>(*this, username);
 
   auto req = SubscribeRequest::make(FullTrackName({trackNamespace, "chat"}));
-  req.locType = LocationType::NextGroupStart;
+  req.filter = LocationFilter::relativeStart(0);
   auto track = co_await co_awaitTry(moqClient_.getSession()->subscribe(
       std::move(req),
       std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, handler)));

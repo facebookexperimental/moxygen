@@ -76,6 +76,14 @@ ParamValueEncoding paramEncodingV18(uint64_t key) {
   return ParamValueEncoding::Varint;
 }
 
+// The request-specific params whose frame-type allowlists match draft 20.
+bool isDraft20FilterParam(moxygen::TrackRequestParamKey key, uint64_t version) {
+  if (!moxygen::useLocationFilter(version)) {
+    return false;
+  }
+  return key == moxygen::TrackRequestParamKey::LOCATION_FILTER;
+}
+
 bool isRequestSpecificParam(moxygen::TrackRequestParamKey key) {
   switch (key) {
     case moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER:
@@ -176,8 +184,12 @@ bool isPublishOkRequestSpecificParam(
   if (majorVersion >= 22) {
     return key == moxygen::TrackRequestParamKey::EXPIRES;
   }
+  // Draft 20 does not allow a filter on PUBLISH_OK, so receiving one is a
+  // PROTOCOL_VIOLATION.
+  if (key == moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER) {
+    return majorVersion < 20;
+  }
   switch (key) {
-    case moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER:
     case moxygen::TrackRequestParamKey::EXPIRES:
     case moxygen::TrackRequestParamKey::GROUP_ORDER:
     case moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY:
@@ -251,16 +263,12 @@ std::vector<moxygen::Parameter> getPublishOkRequestSpecificParams(
     return requestSpecificParams;
   }
 
-  moxygen::Parameter subscriptionFilterParam;
-  subscriptionFilterParam.key =
-      folly::to_underlying(moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER);
-  subscriptionFilterParam.asSubscriptionFilter = moxygen::SubscriptionFilter(
-      publishOk.locType,
-      publishOk.start,
-      publishOk.locType == moxygen::LocationType::AbsoluteRange
-          ? publishOk.endGroup
-          : std::nullopt);
-  requestSpecificParams.push_back(subscriptionFilterParam);
+  // PUBLISH_OK does not carry a filter in draft 20.
+  if (majorVersion < 20) {
+    requestSpecificParams.emplace_back(
+        folly::to_underlying(moxygen::TrackRequestParamKey::LOCATION_FILTER),
+        publishOk.filter);
+  }
 
   if (publishOk.subscriberPriority != moxygen::kDefaultPriority) {
     moxygen::Parameter priorityParam;
@@ -757,11 +765,34 @@ MoQFrameParser::parseSubscriptionFilter(
   return filter;
 }
 
+folly::Expected<LocationFilter, ErrorCode> MoQFrameParser::parseLocationFilter(
+    folly::io::Cursor& cursor,
+    size_t& length) const noexcept {
+  std::array<uint64_t, LocationFilter::kMaxFields> fields{};
+  uint8_t count = 0;
+  while (length > 0) {
+    if (count == LocationFilter::kMaxFields) {
+      XLOG(ERR) << "parseLocationFilter: more than four fields";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    auto field = decodeVarint(cursor, length);
+    if (!field) {
+      // The parameter length is known, so a field running past it is
+      // malformed rather than a signal to wait for more bytes.
+      XLOG(ERR) << "parseLocationFilter: field crosses the parameter length";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    fields[count++] = field->first;
+    length -= field->second;
+  }
+  return LocationFilter::fromFields(fields, count);
+}
+
 folly::Expected<std::optional<Parameter>, ErrorCode>
 MoQFrameParser::parseVariableParam(
     folly::io::Cursor& cursor,
     size_t& length,
-    uint64_t /*version*/,
+    uint64_t version,
     uint64_t key) const noexcept {
   Parameter p;
   p.key = key;
@@ -794,28 +825,35 @@ MoQFrameParser::parseVariableParam(
     // Read length prefix (odd key = length-prefixed)
     auto lenRes = decodeVarint(cursor, length);
     if (!lenRes) {
-      XLOG(DBG4)
-          << "parseVariableParam: UNDERFLOW on subscriptionFilter length";
+      XLOG(DBG4) << "parseVariableParam: UNDERFLOW on filter length";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
     length -= lenRes->second;
-    auto filterLen = lenRes->first;
-    if (filterLen > length || !cursor.canAdvance(filterLen)) {
-      XLOG(DBG4) << "parseVariableParam: UNDERFLOW on subscriptionFilter data";
+    auto valueLen = lenRes->first;
+    if (valueLen > length || !cursor.canAdvance(valueLen)) {
+      XLOG(DBG4) << "parseVariableParam: UNDERFLOW on filter data";
       return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    size_t filterSize = filterLen;
-    auto res = parseSubscriptionFilter(cursor, filterSize);
-    if (!res) {
-      return folly::makeUnexpected(res.error());
+    size_t valueSize = valueLen;
+    length -= valueLen;
+    if (useLocationFilter(version)) {
+      auto res = parseLocationFilter(cursor, valueSize);
+      if (!res) {
+        return folly::makeUnexpected(res.error());
+      }
+      p.asLocationFilter = res.value();
+    } else {
+      auto res = parseSubscriptionFilter(cursor, valueSize);
+      if (!res) {
+        return folly::makeUnexpected(res.error());
+      }
+      if (valueSize > 0) {
+        XLOG(DBG4) << "parseVariableParam: subscription filter did not consume"
+                   << " all declared bytes, remaining=" << valueSize;
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      p.asLocationFilter = fromSubscriptionFilter(res.value());
     }
-    if (filterSize > 0) {
-      XLOG(DBG4) << "parseVariableParam: subscription filter did not consume"
-                 << " all declared bytes, remaining=" << filterSize;
-      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-    }
-    length -= lenRes->first;
-    p.asSubscriptionFilter = res.value();
   }
 
   else {
@@ -1705,6 +1743,15 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     if (*res) {
       auto trackRequestParamKey = (TrackRequestParamKey)key;
       if (isRequestSpecificParam(trackRequestParamKey)) {
+        // Request-specific params bypass insertParam, so check them here.
+        // TODO: also check the pre-20 tables once they are audited.
+        if (isDraft20FilterParam(trackRequestParamKey, version) &&
+            !params.isParamAllowed(trackRequestParamKey)) {
+          XLOG(ERR) << "parseTrackRequestParams: request-specific param not"
+                    << " allowed for frame type at param index=" << i
+                    << ", key=" << key;
+          return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+        }
         requestSpecificParams.push_back(std::move(*res.value()));
       } else {
         auto insertResult = params.insertParam(std::move(*res.value()));
@@ -1728,12 +1775,12 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
   return folly::unit;
 }
 
-std::optional<SubscriptionFilter> MoQFrameParser::extractSubscriptionFilter(
+std::optional<LocationFilter> MoQFrameParser::extractLocationFilter(
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   for (const auto& param : requestSpecificParams) {
     if (param.key ==
-        folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER)) {
-      return param.asSubscriptionFilter;
+        folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER)) {
+      return param.asLocationFilter;
     }
   }
   return std::nullopt;
@@ -1807,20 +1854,10 @@ MoQFrameParser::parseSubscribeRequest(
 void MoQFrameParser::handleRequestSpecificParams(
     SubscribeRequest& subscribeRequest,
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
-  // SUBSCRIPTION_FILTER
-  auto filter = extractSubscriptionFilter(requestSpecificParams);
-  if (filter.has_value()) {
-    subscribeRequest.locType = filter->filterType;
-    subscribeRequest.start = filter->location;
-    if (filter->endGroup.has_value()) {
-      subscribeRequest.endGroup = filter->endGroup.value();
-    }
-  } else {
-    // Set defaults indicating an unfiltered subscribe
-    subscribeRequest.locType = LocationType::AbsoluteStart;
-    subscribeRequest.start = AbsoluteLocation{0, 0};
-    subscribeRequest.endGroup = 0; // ignored for AbsoluteStart
-  }
+  // An omitted filter is unfiltered, which drafts 16-19 encode as
+  // AbsoluteStart {0,0}.
+  subscribeRequest.filter = extractLocationFilter(requestSpecificParams)
+                                .value_or(LocationFilter::none());
 
   // GROUP_ORDER
   handleGroupOrderParam(
@@ -1902,17 +1939,16 @@ folly::Expected<RequestUpdate, ErrorCode> MoQFrameParser::parseRequestUpdate(
 void MoQFrameParser::handleRequestSpecificParams(
     RequestUpdate& requestUpdate,
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
-  auto filter = extractSubscriptionFilter(requestSpecificParams);
-  if (filter.has_value()) {
-    if (filter->location.has_value()) {
-      requestUpdate.start = filter->location.value();
-    }
-    if (filter->endGroup.has_value()) {
-      requestUpdate.endGroup = filter->endGroup.value() + 1;
-    } else if (filter->filterType == LocationType::AbsoluteStart) {
-      requestUpdate.endGroup = 0;
+  auto filter = extractLocationFilter(requestSpecificParams);
+  if (filter && !useLocationFilter(*version_)) {
+    // Drafts 16-19 accept only a filter with an absolute start.
+    auto legacyType = toSubscriptionFilter(*filter).filterType;
+    if (legacyType != LocationType::AbsoluteRange &&
+        legacyType != LocationType::AbsoluteStart) {
+      filter.reset();
     }
   }
+  requestUpdate.filter = filter;
 
   // SUBSCRIBER_PRIORITY: absent means unchanged, so leave priority unset.
   if (auto maybePriority = getFirstIntParam(
@@ -2234,22 +2270,8 @@ folly::Expected<PublishOk, ErrorCode> MoQFrameParser::parsePublishOk(
 void MoQFrameParser::handleRequestSpecificParams(
     PublishOk& publishOk,
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
-  // SUBSCRIPTION_FILTER
-  auto filter = extractSubscriptionFilter(requestSpecificParams);
-  if (filter.has_value()) {
-    publishOk.locType = filter->filterType;
-    publishOk.start = filter->location;
-    if (filter->endGroup.has_value()) {
-      publishOk.endGroup = filter->endGroup.value();
-    } else {
-      publishOk.endGroup = std::nullopt;
-    }
-  } else {
-    // Set defaults
-    publishOk.locType = LocationType::AbsoluteStart;
-    publishOk.start = AbsoluteLocation{0, 0};
-    publishOk.endGroup = std::nullopt;
-  }
+  publishOk.filter = extractLocationFilter(requestSpecificParams)
+                         .value_or(LocationFilter::absoluteStart(kLocationMin));
 
   // GROUP_ORDER
   handleGroupOrderParam(
@@ -2602,18 +2624,21 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
     if (!ftn) {
       return folly::makeUnexpected(ftn.error());
     }
-
-    auto start = parseAbsoluteLocation(cursor, length);
-    if (!start) {
-      return folly::makeUnexpected(start.error());
-    }
-
-    auto end = parseAbsoluteLocation(cursor, length);
-    if (!end) {
-      return folly::makeUnexpected(end.error());
-    }
     fetch.fullTrackName = std::move(ftn.value());
-    fetch.args = StandaloneFetch(start.value(), end.value());
+
+    // Draft 20 carries the range in LOCATION_FILTER.
+    if (!useLocationFilter(*version_)) {
+      auto start = parseAbsoluteLocation(cursor, length);
+      if (!start) {
+        return folly::makeUnexpected(start.error());
+      }
+
+      auto end = parseAbsoluteLocation(cursor, length);
+      if (!end) {
+        return folly::makeUnexpected(end.error());
+      }
+      fetch.args = StandaloneFetch(start.value(), end.value());
+    }
   } else {
     // Relative or absolute join
     auto jsid = decodeVarint(cursor, length);
@@ -2634,6 +2659,13 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
     fetch.args = JoiningFetch(
         RequestID(jsid->first), joiningStart->first, fetchTypeEnum);
   }
+  return parseFetchParams(cursor, length, std::move(fetch));
+}
+
+folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetchParams(
+    folly::io::Cursor& cursor,
+    size_t length,
+    Fetch fetch) const noexcept {
   auto numParams = decodeVarint(cursor, length);
   if (!numParams) {
     XLOG(DBG4) << "parseFetch: UNDERFLOW on numParams";
@@ -2641,10 +2673,10 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
   }
   length -= numParams->second;
   std::vector<Parameter> requestSpecificParams;
-  auto res5 = parseTrackRequestParams(
+  auto res = parseTrackRequestParams(
       cursor, length, numParams->first, fetch.params, requestSpecificParams);
-  if (!res5) {
-    return folly::makeUnexpected(res5.error());
+  if (!res) {
+    return folly::makeUnexpected(res.error());
   }
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
@@ -2666,6 +2698,24 @@ void MoQFrameParser::handleRequestSpecificParams(
       fetchRequest.groupOrder, requestSpecificParams, GroupOrder::OldestFirst);
   handleIncludePropertiesParam(
       fetchRequest.includeProperties, fetchRequest.params);
+
+  // A joining FETCH carries its range in the body, not in a filter.
+  if (!useLocationFilter(*version_) ||
+      !std::holds_alternative<StandaloneFetch>(fetchRequest.args)) {
+    return;
+  }
+  fetchRequest.filter = extractLocationFilter(requestSpecificParams)
+                            .value_or(LocationFilter::none());
+  if (fetchRequest.filter.needsLargest()) {
+    // A start relative to Largest Object cannot be resolved here, so leave an
+    // empty range. The session refuses the request.
+    fetchRequest.args = StandaloneFetch(kLocationMin, kLocationMin);
+    return;
+  }
+  // Largest Object is not known here, so an open end runs to the maximum
+  // Location and the publisher clamps it.
+  auto [start, end] = fetchRequest.filter.fetchRange(std::nullopt);
+  fetchRequest.args = StandaloneFetch(start, end);
 }
 
 folly::Expected<FetchCancel, ErrorCode> MoQFrameParser::parseFetchCancel(
@@ -3398,23 +3448,16 @@ static folly::Expected<PublishOk, ErrorCode> requestOkToPublishOk(
     }
   }
 
-  std::optional<SubscriptionFilter> filter;
+  std::optional<LocationFilter> filter;
   for (const auto& param : requestOk.requestSpecificParams) {
     if (param.key ==
-        folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER)) {
-      filter = param.asSubscriptionFilter;
+        folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER)) {
+      filter = param.asLocationFilter;
       break;
     }
   }
-  if (filter.has_value()) {
-    publishOk.locType = filter->filterType;
-    publishOk.start = filter->location;
-    publishOk.endGroup = filter->endGroup;
-  } else {
-    publishOk.locType = LocationType::AbsoluteStart;
-    publishOk.start = AbsoluteLocation{0, 0};
-    publishOk.endGroup = std::nullopt;
-  }
+  publishOk.filter =
+      filter.value_or(LocationFilter::absoluteStart(kLocationMin));
 
   auto maybeGroupOrder = getFirstIntParam(
       requestOk.requestSpecificParams, TrackRequestParamKey::GROUP_ORDER);
@@ -4066,19 +4109,26 @@ void MoQFrameWriter::writeV18ParamValue(
       writeVarint(writeBuf, param.largestObject->object, size, error);
       return;
     case ParamValueEncoding::LengthPrefixed: {
-      if (param.key ==
+      if (param.key !=
           folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER)) {
-        folly::IOBufQueue tmpBuf{folly::IOBufQueue::cacheChainLength()};
-        size_t tmpSize = 0;
-        writeSubscriptionFilter(
-            tmpBuf, param.asSubscriptionFilter, tmpSize, error);
-        if (!error) {
-          writeVarint(writeBuf, tmpSize, size, error);
-          writeBuf.append(tmpBuf.move());
-          size += tmpSize;
-        }
-      } else {
         writeFixedString(writeBuf, param.asString, size, error);
+        return;
+      }
+      folly::IOBufQueue tmpBuf{folly::IOBufQueue::cacheChainLength()};
+      size_t tmpSize = 0;
+      if (useLocationFilter(*version_)) {
+        writeLocationFilter(tmpBuf, param.asLocationFilter, tmpSize, error);
+      } else {
+        writeSubscriptionFilter(
+            tmpBuf,
+            toSubscriptionFilter(param.asLocationFilter),
+            tmpSize,
+            error);
+      }
+      if (!error) {
+        writeVarint(writeBuf, tmpSize, size, error);
+        writeBuf.append(tmpBuf.move());
+        size += tmpSize;
       }
       return;
     }
@@ -4108,7 +4158,8 @@ void MoQFrameWriter::writeParamValue(
     // Write to a temporary buffer to compute the length first.
     folly::IOBufQueue tmpBuf{folly::IOBufQueue::cacheChainLength()};
     size_t tmpSize = 0;
-    writeSubscriptionFilter(tmpBuf, param.asSubscriptionFilter, tmpSize, error);
+    writeSubscriptionFilter(
+        tmpBuf, toSubscriptionFilter(param.asLocationFilter), tmpSize, error);
     if (!error) {
       writeVarint(writeBuf, tmpSize, size, error);
       writeBuf.append(tmpBuf.move());
@@ -4193,6 +4244,17 @@ void MoQFrameWriter::writeSubscriptionFilter(
     } else {
       error = true;
     }
+  }
+}
+
+void MoQFrameWriter::writeLocationFilter(
+    folly::IOBufQueue& writeBuf,
+    const LocationFilter& filter,
+    size_t& size,
+    bool& error) const noexcept {
+  const auto fields = filter.fields();
+  for (uint8_t i = 0; i < filter.fieldCount(); i++) {
+    writeVarint(writeBuf, fields[i], size, error);
   }
 }
 
@@ -4547,13 +4609,8 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
   if (semanticFrameType != FrameType::TRACK_STATUS) {
     Parameter subscriptionFilterParam;
     subscriptionFilterParam.key =
-        folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
-    subscriptionFilterParam.asSubscriptionFilter = SubscriptionFilter(
-        subscribeRequest.locType,
-        subscribeRequest.start,
-        subscribeRequest.locType == LocationType::AbsoluteRange
-            ? std::optional<uint64_t>(subscribeRequest.endGroup)
-            : std::nullopt);
+        folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER);
+    subscriptionFilterParam.asLocationFilter = subscribeRequest.filter;
     requestSpecificParams.push_back(subscriptionFilterParam);
 
     if (subscribeRequest.priority != kDefaultPriority) {
@@ -4620,26 +4677,17 @@ WriteResult MoQFrameWriter::writeRequestUpdate(
   }
 
   std::vector<Parameter> requestSpecificParams;
-  if (update.start.has_value() || update.endGroup.has_value()) {
-    Parameter subscriptionFilterParam;
-    subscriptionFilterParam.key =
-        folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER);
-    // Here, we're trying to keep in line with the SubscribeUpdate usage, in
-    // that update.endGroup is the end group id + 1. If update.endGroup == 0,
-    // that means that the subscription is open ended.
-    LocationType locationType =
-        (!update.endGroup.has_value() || *update.endGroup == 0)
-        ? LocationType::AbsoluteStart
-        : LocationType::AbsoluteRange;
-
-    std::optional<uint64_t> endGroup = std::nullopt;
-    if (update.endGroup.has_value() && *update.endGroup > 0) {
-      endGroup = *update.endGroup - 1;
+  if (update.filter) {
+    auto filter = *update.filter;
+    // Drafts 16-19 carry only a filter with an absolute start.
+    if (!useLocationFilter(*version_)) {
+      auto start = filter.absoluteStartLocation().value_or(kLocationMin);
+      auto endGroup = filter.legacyEndGroup();
+      filter = endGroup ? LocationFilter::range(start, *endGroup)
+                        : LocationFilter::absoluteStart(start);
     }
-
-    subscriptionFilterParam.asSubscriptionFilter =
-        SubscriptionFilter(locationType, update.start, endGroup);
-    requestSpecificParams.push_back(subscriptionFilterParam);
+    requestSpecificParams.emplace_back(
+        folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER), filter);
   }
 
   // Emit SUBSCRIBER_PRIORITY whenever the update carries a priority,
@@ -5234,10 +5282,13 @@ WriteResult MoQFrameWriter::writeFetch(
     writeVarint(
         writeBuf, folly::to_underlying(FetchType::STANDALONE), size, error);
     writeFullTrackName(writeBuf, fetch.fullTrackName, size, error);
-    writeVarint(writeBuf, standalone->start.group, size, error);
-    writeVarint(writeBuf, standalone->start.object, size, error);
-    writeVarint(writeBuf, standalone->end.group, size, error);
-    writeVarint(writeBuf, standalone->end.object, size, error);
+    // Draft 20 carries the range in LOCATION_FILTER.
+    if (!useLocationFilter(*version_)) {
+      writeVarint(writeBuf, standalone->start.group, size, error);
+      writeVarint(writeBuf, standalone->start.object, size, error);
+      writeVarint(writeBuf, standalone->end.group, size, error);
+      writeVarint(writeBuf, standalone->end.object, size, error);
+    }
   } else {
     XCHECK(joining);
 
@@ -5250,6 +5301,14 @@ WriteResult MoQFrameWriter::writeFetch(
   }
 
   std::vector<Parameter> requestSpecificParams;
+  if (standalone && useLocationFilter(*version_)) {
+    // A locally built Fetch carries its range in args; a parsed one already
+    // has the filter the peer sent, which a relay forwards as-is.
+    requestSpecificParams.emplace_back(
+        folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER),
+        fetch.filter == LocationFilter::none() ? toLocationFilter(*standalone)
+                                               : fetch.filter);
+  }
   if (fetch.priority != kDefaultPriority) {
     Parameter priorityParam;
     priorityParam.key =

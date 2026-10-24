@@ -532,8 +532,7 @@ CO_TEST_P_X(PreDraft18Test, JoiningFetchOnNonLargestObjectSubscriptionCloses) {
       .Times(testing::AtMost(1))
       .WillRepeatedly(testing::Return(folly::unit));
   auto subscribe = getSubscribe(kTestTrackName);
-  subscribe.locType = LocationType::AbsoluteStart;
-  subscribe.start = AbsoluteLocation{0, 0};
+  subscribe.filter = LocationFilter::absoluteStart(AbsoluteLocation{0, 0});
 
   auto res = co_await clientSession_->join(
       std::move(subscribe),

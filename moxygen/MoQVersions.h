@@ -33,9 +33,16 @@ constexpr std::string_view kAlpnMoqtDraft16Latest = kAlpnMoqtDraft16Meta00;
 constexpr std::string_view kAlpnMoqtDraft18 = "moqt-18";
 constexpr std::string_view kAlpnMoqtDraft18Latest = kAlpnMoqtDraft18;
 
-constexpr std::array<uint64_t, 2> kSupportedVersions{
+// Meta-scoped draft 20 ALPNs, since only part of the draft is implemented.
+// Each wire-breaking step adds a revision and moves kAlpnMoqtDraft20Latest.
+//   meta-00: draft 18, with the range in LOCATION_FILTER
+constexpr std::string_view kAlpnMoqtDraft20Meta00 = "moqt-20-meta-00";
+constexpr std::string_view kAlpnMoqtDraft20Latest = kAlpnMoqtDraft20Meta00;
+
+constexpr std::array<uint64_t, 3> kSupportedVersions{
     kVersionDraft16,
-    kVersionDraft18};
+    kVersionDraft18,
+    kVersionDraft20};
 
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, 0xff080002 has the major version 8 and
@@ -76,6 +83,9 @@ bool useUniControlStreams(uint64_t version);
 // draft 18); also disables request-order-dependent encodings (e.g. auth
 // token aliasing) and request-frame-on-control-stream patterns.
 bool useBidiRequestStreams(uint64_t version);
+
+// True if the request range is carried in LOCATION_FILTER (draft 20+).
+bool useLocationFilter(uint64_t version);
 
 // Returns a comma-separated list of supported versions, useful for logging.
 std::string getSupportedVersionsString();

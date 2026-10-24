@@ -124,8 +124,7 @@ folly::coro::Task<void> SubscriberState::subscribe(
 
   sub.fullTrackName = ftn;
   sub.groupOrder = GroupOrder::OldestFirst;
-  sub.locType = LocationType::NextGroupStart;
-  sub.endGroup = std::numeric_limits<uint32_t>::max();
+  sub.filter = LocationFilter::relativeStart(0);
 
   // Add delivery timeout parameter
   if (deliveryTimeoutMs > 0) {

@@ -114,7 +114,7 @@ class MoQRelayTest : public ::testing::Test {
     SubscribeRequest sub;
     sub.fullTrackName = trackName;
     sub.requestID = requestID;
-    sub.locType = LocationType::LargestObject;
+    sub.filter = LocationFilter::nextObject();
     std::shared_ptr<SubscriptionHandle> handle{nullptr};
     withSessionContext(session, [&]() {
       auto task = relay_->subscribe(std::move(sub), consumer);
@@ -382,9 +382,7 @@ class MoQRelayTest : public ::testing::Test {
                   /*forward=*/pub.forward,
                   /*priority=*/128,
                   GroupOrder::Default,
-                  LocationType::LargestObject,
-                  /*start=*/kLocationMin,
-                  /*endGroup=*/std::make_optional(uint64_t(0))};
+                  LocationFilter::nextObject()};
               return Subscriber::PublishConsumerAndReplyTask{
                   createMockConsumer(),
                   folly::coro::makeTask<
@@ -433,7 +431,7 @@ class MoQRelayTest : public ::testing::Test {
     SubscribeRequest sub;
     sub.fullTrackName = ftn;
     sub.requestID = RequestID(1);
-    sub.locType = LocationType::LargestObject;
+    sub.filter = LocationFilter::nextObject();
     auto consumer = createMockConsumer();
     withSessionContext(subscriber, [&]() {
       auto res = folly::coro::blockingWait(
@@ -1032,9 +1030,7 @@ TEST_F(MoQRelayTest, SubscribeNamespaceDoesntAddDrainingPublish) {
                                       /*forward=*/true,
                                       /*subscriberPriority=*/0,
                                       /*groupOrder=*/GroupOrder::OldestFirst,
-                                      /*locType=*/LocationType::LargestObject,
-                                      /*start=*/std::nullopt,
-                                      /*endGroup=*/std::nullopt};
+                                      LocationFilter::nextObject()};
                 }()});
       });
 
@@ -1119,7 +1115,7 @@ TEST_F(MoQRelayTest, SubscribeEmptyNamespaceRejectedPreV18) {
   SubscribeRequest sub;
   sub.fullTrackName = FullTrackName{TrackNamespace{{}}, "track1"};
   sub.requestID = RequestID(0);
-  sub.locType = LocationType::LargestObject;
+  sub.filter = LocationFilter::nextObject();
   auto consumer = createMockConsumer();
 
   withSessionContext(session, [&]() {
@@ -1141,7 +1137,7 @@ TEST_F(MoQRelayTest, SubscribeEmptyNamespaceAcceptedV18) {
   SubscribeRequest sub;
   sub.fullTrackName = FullTrackName{TrackNamespace{{}}, "track1"};
   sub.requestID = RequestID(0);
-  sub.locType = LocationType::LargestObject;
+  sub.filter = LocationFilter::nextObject();
   auto consumer = createMockConsumer();
 
   withSessionContext(session, [&]() {
@@ -1338,9 +1334,7 @@ TEST_F(MoQRelayTest, PublishExtensionsForwardedToSubscribers) {
                       true,
                       0,
                       GroupOrder::OldestFirst,
-                      LocationType::LargestObject,
-                      std::nullopt,
-                      std::nullopt};
+                      LocationFilter::nextObject()};
                 }()});
       });
 
@@ -1428,9 +1422,7 @@ TEST_F(MoQRelayTest, PublishExtensionsForwardedToLateJoiners) {
                       true,
                       0,
                       GroupOrder::OldestFirst,
-                      LocationType::LargestObject,
-                      std::nullopt,
-                      std::nullopt};
+                      LocationFilter::nextObject()};
                 }()});
       });
 
@@ -1470,9 +1462,7 @@ TEST_F(MoQRelayTest, PublishExtensionsForwardedToLateJoiners) {
                       true,
                       0,
                       GroupOrder::OldestFirst,
-                      LocationType::LargestObject,
-                      std::nullopt,
-                      std::nullopt};
+                      LocationFilter::nextObject()};
                 }()});
       });
 
@@ -1573,9 +1563,7 @@ TEST_F(MoQRelayTest, RelaySubscribePreservesFirstSubscriberRequest) {
   sub.fullTrackName = kTestTrackName;
   sub.requestID = RequestID(1);
   sub.groupOrder = GroupOrder::NewestFirst;
-  sub.locType = LocationType::AbsoluteRange;
-  sub.start = AbsoluteLocation{4, 0};
-  sub.endGroup = 9;
+  sub.filter = LocationFilter::range({4, 0}, {9, 0});
 
   auto consumer = createMockConsumer();
   std::shared_ptr<SubscriptionHandle> handle{nullptr};
@@ -1589,7 +1577,7 @@ TEST_F(MoQRelayTest, RelaySubscribePreservesFirstSubscriberRequest) {
   getOrCreateMockState(subscriberSession)->subscribeHandles.push_back(handle);
 
   EXPECT_EQ(upstreamReq.groupOrder, GroupOrder::Default);
-  EXPECT_EQ(upstreamReq.locType, LocationType::LargestObject);
+  EXPECT_EQ(upstreamReq.filter, LocationFilter::nextObject());
 
   EXPECT_EQ(handle->subscribeOk().groupOrder, GroupOrder::NewestFirst);
   auto* subscriber = dynamic_cast<MoQForwarder::Subscriber*>(handle.get());
@@ -1840,7 +1828,7 @@ TEST_F(MoQRelayTest, RelaySubscribeLateJoinerNGRForwardedUpstream) {
   SubscribeRequest sub2;
   sub2.fullTrackName = kTestTrackName;
   sub2.requestID = RequestID(2);
-  sub2.locType = LocationType::LargestObject;
+  sub2.filter = LocationFilter::nextObject();
   sub2.params.insertParam(Parameter(
       folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST),
       uint64_t(8)));
@@ -1961,13 +1949,11 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkPostprocessing) {
   // Test 1: Range update from PublishOk
   // Create a PublishOk with specific start/end locations
   PublishOk pubOk1{
-      RequestID(1),                // requestID
-      true,                        // forward
-      0,                           // subscriberPriority
-      GroupOrder::OldestFirst,     // groupOrder
-      LocationType::AbsoluteStart, // locType
-      AbsoluteLocation{5, 0},      // start
-      uint64_t(15),                // endGroup
+      RequestID(1),            // requestID
+      true,                    // forward
+      0,                       // subscriberPriority
+      GroupOrder::OldestFirst, // groupOrder
+      LocationFilter::absoluteStart({5, 0}),
       TrackRequestParameters(FrameType::PUBLISH_OK)};
 
   // Apply the postprocessing
@@ -1983,9 +1969,7 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkPostprocessing) {
       false, // forward = false
       0,
       GroupOrder::OldestFirst,
-      LocationType::AbsoluteStart,
-      AbsoluteLocation{5, 0},
-      uint64_t(15),
+      LocationFilter::absoluteStart({5, 0}),
       TrackRequestParameters(FrameType::PUBLISH_OK)};
   subscriber->onPublishOk(pubOk2);
   EXPECT_FALSE(subscriber->shouldForward)
@@ -1997,9 +1981,7 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkPostprocessing) {
       true, // forward = true
       0,
       GroupOrder::OldestFirst,
-      LocationType::AbsoluteStart,
-      AbsoluteLocation{5, 0},
-      uint64_t(15),
+      LocationFilter::absoluteStart({5, 0}),
       TrackRequestParameters(FrameType::PUBLISH_OK)};
   subscriber->onPublishOk(pubOk3);
   EXPECT_TRUE(subscriber->shouldForward)
@@ -2024,9 +2006,7 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkPostprocessing) {
       true,
       0,
       GroupOrder::OldestFirst,
-      LocationType::AbsoluteStart,
-      AbsoluteLocation{10, 0},
-      std::nullopt,
+      LocationFilter::absoluteStart({10, 0}),
       std::move(ngrParams)};
 
   // onPublishOk should fire the NGR callback for group 20
@@ -2743,9 +2723,7 @@ TEST_F(MoQRelayTest, OnPublishOkUpdatesForwardingCount) {
       /*forward=*/false,
       0,
       GroupOrder::OldestFirst,
-      LocationType::AbsoluteStart,
-      AbsoluteLocation{0, 0},
-      std::nullopt,
+      LocationFilter::absoluteStart({0, 0}),
       TrackRequestParameters(FrameType::PUBLISH_OK)};
   subscriber->onPublishOk(pubOkFalse);
 
@@ -2763,9 +2741,7 @@ TEST_F(MoQRelayTest, OnPublishOkUpdatesForwardingCount) {
       /*forward=*/true,
       0,
       GroupOrder::OldestFirst,
-      LocationType::AbsoluteStart,
-      AbsoluteLocation{0, 0},
-      std::nullopt,
+      LocationFilter::absoluteStart({0, 0}),
       TrackRequestParameters(FrameType::PUBLISH_OK)};
   subscriber->onPublishOk(pubOkTrue);
 
@@ -2855,7 +2831,7 @@ TEST_F(MoQRelayTest, SubscribeSecondForwardingSubscriberSingleRequestUpdate) {
     SubscribeRequest sub;
     sub.fullTrackName = kTestTrackName;
     sub.requestID = RequestID(1);
-    sub.locType = LocationType::LargestObject;
+    sub.filter = LocationFilter::nextObject();
     sub.forward = false;
     withSessionContext(s1, [&]() {
       auto res = folly::coro::blockingWait(
@@ -2884,7 +2860,7 @@ TEST_F(MoQRelayTest, SubscribeSecondForwardingSubscriberSingleRequestUpdate) {
     SubscribeRequest sub;
     sub.fullTrackName = kTestTrackName;
     sub.requestID = RequestID(2);
-    sub.locType = LocationType::LargestObject;
+    sub.filter = LocationFilter::nextObject();
     sub.forward = true;
     withSessionContext(s2, [&]() {
       auto res = folly::coro::blockingWait(

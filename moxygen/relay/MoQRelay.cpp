@@ -28,8 +28,7 @@ folly::coro::Task<void> MoQRelay::doSubscribeUpdate(
   auto updateRes = co_await handle->requestUpdate(
       {RequestID(0),
        handle->subscribeOk().requestID,
-       kLocationMin,
-       kLocationMax.group,
+       LocationFilter::range(kLocationMin, {kLocationMax.group, 0}),
        kDefaultPriority,
        /*forward=*/forward});
   if (updateRes.hasError()) {
@@ -525,9 +524,7 @@ Subscriber::PublishResult MoQRelay::publish(
           /*forward=*/(nSubscribers > 0),
           kDefaultPriority,
           pub.groupOrder,
-          LocationType::AbsoluteRange,
-          kLocationMin,
-          kLocationMax.group}),
+          LocationFilter::range(kLocationMin, {kLocationMax.group, 0})}),
       /*consumerReady=*/true};
 }
 
@@ -1581,8 +1578,9 @@ MoQRelay::subscribeToExistingRelaySubscription(
     }
   }
   auto& forwarder = subscriptionIt->second.forwarder;
-  if (forwarder->largest() && subReq.locType == LocationType::AbsoluteRange &&
-      subReq.endGroup < forwarder->largest()->group) {
+  auto subEndGroup = subReq.filter.legacyEndGroup();
+  if (forwarder->largest() && subEndGroup &&
+      *subEndGroup < forwarder->largest()->group) {
     co_return folly::makeUnexpected(
         SubscribeError{
             subReq.requestID,
@@ -1632,9 +1630,9 @@ MoQRelay::subscribeToFirstRelaySubscription(
   auto upstreamSubReq = subReq;
   upstreamSubReq.priority = kDefaultUpstreamPriority;
   upstreamSubReq.groupOrder = GroupOrder::Default;
-  // We only subscribe upstream with LargestObject. This is to satisfy other
+  // We only subscribe upstream from the Next Object. This is to satisfy other
   // subscribers that join with narrower filters
-  upstreamSubReq.locType = LocationType::LargestObject;
+  upstreamSubReq.filter = LocationFilter::nextObject();
   auto forwarder =
       std::make_shared<MoQForwarder>(subReq.fullTrackName, std::nullopt);
   forwarder->setCallback(shared_from_this());

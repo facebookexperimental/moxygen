@@ -68,9 +68,7 @@ SubscribeRequest getSubscribe(const FullTrackName& ftn) {
       0,
       GroupOrder::OldestFirst,
       true,
-      LocationType::LargestObject,
-      std::nullopt,
-      0};
+      LocationFilter::nextObject()};
 }
 
 PublishDone getTrackEndedPublishDone(RequestID id) {
@@ -82,8 +80,7 @@ TrackStatus getTrackStatus() {
       .requestID = RequestID(0),
       .fullTrackName = kTestTrackName,
       .groupOrder = GroupOrder::Default,
-      .locType = LocationType::LargestObject,
-      .endGroup = 0};
+      .filter = LocationFilter::nextObject()};
 }
 
 moxygen::SubscribeNamespace getSubscribeNamespace() {
@@ -469,8 +466,7 @@ folly::coro::Task<void> MoQSessionTest::publishRequestUpdateRoundTrip(
   SubscribeUpdate subscribeUpdate{
       RequestID(0),
       RequestID(0),
-      AbsoluteLocation{0, 0},
-      10,
+      LocationFilter::range({0, 0}, {10, 0}),
       kDefaultPriority + 1,
       true};
 
@@ -678,5 +674,10 @@ INSTANTIATE_TEST_SUITE_P(
     PreDraft18Test,
     PreDraft18Test,
     testing::ValuesIn(getPreDraft18VersionParams()));
+
+INSTANTIATE_TEST_SUITE_P(
+    Draft20Test,
+    Draft20Test,
+    testing::Values(VersionParams{{kVersionDraft20}, kVersionDraft20}));
 
 }} // namespace moxygen::test

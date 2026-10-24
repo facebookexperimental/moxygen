@@ -69,11 +69,11 @@ class MoQForwarderTest : public ::testing::Test {
       std::shared_ptr<MoQSession> session,
       std::shared_ptr<TrackConsumer> consumer,
       RequestID requestID = RequestID(0),
-      LocationType locType = LocationType::LargestObject) {
+      LocationFilter filter = LocationFilter::nextObject()) {
     SubscribeRequest sub;
     sub.fullTrackName = forwarder.fullTrackName();
     sub.requestID = requestID;
-    sub.locType = locType;
+    sub.filter = filter;
     return forwarder.addSubscriber(
         session->sessionId(), sub, std::move(consumer));
   }
@@ -685,9 +685,7 @@ TEST_F(MoQForwarderTest, SubscribeUpdateStartLocationCanDecrease) {
   SubscribeRequest sub;
   sub.fullTrackName = kFwdTestTrackName;
   sub.requestID = RequestID(1);
-  sub.locType = LocationType::AbsoluteStart;
-  sub.start = AbsoluteLocation{10, 0};
-  sub.endGroup = 0;
+  sub.filter = LocationFilter::absoluteStart({10, 0});
 
   auto subscriber =
       forwarder->addSubscriber(subscriberSession->sessionId(), sub, consumer);
@@ -698,8 +696,7 @@ TEST_F(MoQForwarderTest, SubscribeUpdateStartLocationCanDecrease) {
   SubscribeUpdate subscribeUpdate{
       RequestID(2),
       sub.requestID,
-      AbsoluteLocation{5, 0},
-      0,
+      LocationFilter::absoluteStart({5, 0}),
       kDefaultPriority,
       true};
 
@@ -712,7 +709,7 @@ TEST_F(MoQForwarderTest, SubscribeUpdateStartLocationCanDecrease) {
       << "Start location should be updated to {5, 0}";
 }
 
-// Test: a requestUpdate whose new end is at or before its new start is a
+// Test: a requestUpdate whose new end is before its new start is a
 // request-level error, and leaves the subscription's range untouched rather
 // than half applied.
 TEST_F(MoQForwarderTest, SubscribeUpdateEndBeforeStartLeavesRangeUnchanged) {
@@ -722,9 +719,7 @@ TEST_F(MoQForwarderTest, SubscribeUpdateEndBeforeStartLeavesRangeUnchanged) {
   SubscribeRequest sub;
   sub.fullTrackName = kFwdTestTrackName;
   sub.requestID = RequestID(1);
-  sub.locType = LocationType::AbsoluteRange;
-  sub.start = AbsoluteLocation{10, 0};
-  sub.endGroup = 20;
+  sub.filter = LocationFilter::range({10, 0}, {20, 0});
 
   auto subscriber =
       forwarder->addSubscriber(createMockSession()->sessionId(), sub, consumer);
@@ -734,8 +729,7 @@ TEST_F(MoQForwarderTest, SubscribeUpdateEndBeforeStartLeavesRangeUnchanged) {
   SubscribeUpdate subscribeUpdate{
       RequestID(2),
       sub.requestID,
-      AbsoluteLocation{15, 0},
-      15,
+      LocationFilter::range({15, 0}, {14, 0}),
       kDefaultPriority,
       true};
 
@@ -746,6 +740,70 @@ TEST_F(MoQForwarderTest, SubscribeUpdateEndBeforeStartLeavesRangeUnchanged) {
 
   EXPECT_EQ(subscriber->range.start, originalRange.start);
   EXPECT_EQ(subscriber->range.end, originalRange.end);
+}
+
+// A relative or Next Object start in an update resolves against Largest
+// Object, like the same filter on a SUBSCRIBE.
+TEST_F(MoQForwarderTest, RequestUpdateRelativeStartResolvesAgainstLargest) {
+  auto forwarder = std::make_shared<MoQForwarder>(
+      kFwdTestTrackName, AbsoluteLocation{10, 3});
+  SubscribeRequest sub;
+  sub.fullTrackName = kFwdTestTrackName;
+  sub.requestID = RequestID(1);
+  sub.filter = LocationFilter::range({2, 0}, {4, 0});
+  auto subscriber = forwarder->addSubscriber(
+      createMockSession()->sessionId(), sub, createMockConsumer());
+  ASSERT_NE(subscriber, nullptr);
+
+  RequestUpdate update;
+  update.requestID = RequestID(2);
+  update.existingRequestID = sub.requestID;
+  update.filter = LocationFilter::relativeStart(1);
+  ASSERT_TRUE(
+      folly::coro::blockingWait(subscriber->requestUpdate(update)).hasValue());
+  EXPECT_EQ(subscriber->range.start, (AbsoluteLocation{10, 0}));
+
+  update.requestID = RequestID(3);
+  update.filter = LocationFilter::nextObject();
+  ASSERT_TRUE(
+      folly::coro::blockingWait(subscriber->requestUpdate(update)).hasValue());
+  EXPECT_EQ(subscriber->range.start, (AbsoluteLocation{10, 4}));
+
+  // An absolute start stays as written, even below Largest Object.
+  update.requestID = RequestID(4);
+  update.filter = LocationFilter::absoluteStart({5, 1});
+  ASSERT_TRUE(
+      folly::coro::blockingWait(subscriber->requestUpdate(update)).hasValue());
+  EXPECT_EQ(subscriber->range.start, (AbsoluteLocation{5, 1}));
+}
+
+// With no objects yet, a relative start in an update lands where the same
+// filter on a SUBSCRIBE would.
+TEST_F(MoQForwarderTest, RequestUpdateRelativeStartWithoutLargest) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  SubscribeRequest sub;
+  sub.fullTrackName = kFwdTestTrackName;
+  sub.requestID = RequestID(1);
+  sub.filter = LocationFilter::range({2, 0}, {4, 0});
+  auto subscriber = forwarder->addSubscriber(
+      createMockSession()->sessionId(), sub, createMockConsumer());
+  ASSERT_NE(subscriber, nullptr);
+
+  SubscribeRequest relativeSub = sub;
+  relativeSub.requestID = RequestID(5);
+  relativeSub.filter = LocationFilter::relativeStart(1);
+  auto reference = forwarder->addSubscriber(
+      createMockSession()->sessionId(), relativeSub, createMockConsumer());
+  ASSERT_NE(reference, nullptr);
+
+  RequestUpdate update;
+  update.requestID = RequestID(2);
+  update.existingRequestID = sub.requestID;
+  update.filter = LocationFilter::relativeStart(1);
+  ASSERT_TRUE(
+      folly::coro::blockingWait(subscriber->requestUpdate(update)).hasValue());
+  EXPECT_EQ(subscriber->range.start, reference->range.start);
+  EXPECT_EQ(subscriber->range.end, reference->range.end);
 }
 
 TEST_F(
@@ -1506,7 +1564,7 @@ TEST_F(MoQForwarderTest, ResetDuringDrainingDoesNotCrash) {
   SubscribeRequest sub;
   sub.fullTrackName = kFwdTestTrackName;
   sub.requestID = RequestID(1);
-  sub.locType = LocationType::LargestGroup;
+  sub.filter = LocationFilter::relativeStart(1);
   forwarder->addSubscriber(session->sessionId(), sub, consumer);
 
   auto subgroupRes = forwarder->beginSubgroup(0, 0, 0);
@@ -1571,13 +1629,13 @@ TEST_F(MoQForwarderTest, ResetDuringDrainingMultipleSubscribersDoesNotCrash) {
   SubscribeRequest sub1;
   sub1.fullTrackName = kFwdTestTrackName;
   sub1.requestID = RequestID(1);
-  sub1.locType = LocationType::LargestGroup;
+  sub1.filter = LocationFilter::relativeStart(1);
   forwarder->addSubscriber(session1->sessionId(), sub1, consumer1);
 
   SubscribeRequest sub2;
   sub2.fullTrackName = kFwdTestTrackName;
   sub2.requestID = RequestID(2);
-  sub2.locType = LocationType::LargestGroup;
+  sub2.filter = LocationFilter::relativeStart(1);
   forwarder->addSubscriber(session2->sessionId(), sub2, consumer2);
 
   auto subgroupRes = forwarder->beginSubgroup(0, 0, 0);
@@ -1655,7 +1713,7 @@ TEST_F(MoQForwarderTest, ExtensionsIncludedInSubscribeOkForSubscribers) {
   SubscribeRequest sub1;
   sub1.fullTrackName = kFwdTestTrackName;
   sub1.requestID = RequestID(1);
-  sub1.locType = LocationType::LargestGroup;
+  sub1.filter = LocationFilter::relativeStart(1);
   auto subscriber1 =
       forwarder->addSubscriber(session1->sessionId(), sub1, consumer1);
   ASSERT_NE(subscriber1, nullptr);
@@ -1671,7 +1729,7 @@ TEST_F(MoQForwarderTest, ExtensionsIncludedInSubscribeOkForSubscribers) {
   SubscribeRequest sub2;
   sub2.fullTrackName = kFwdTestTrackName;
   sub2.requestID = RequestID(2);
-  sub2.locType = LocationType::LargestGroup;
+  sub2.filter = LocationFilter::relativeStart(1);
   auto subscriber2 =
       forwarder->addSubscriber(session2->sessionId(), sub2, consumer2);
   ASSERT_NE(subscriber2, nullptr);
@@ -1848,9 +1906,7 @@ TEST_F(MoQForwarderTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
       true, // forward
       0,    // subscriberPriority
       GroupOrder::OldestFirst,
-      LocationType::LargestObject,
-      std::nullopt, // start
-      std::nullopt, // endGroup
+      LocationFilter::nextObject(),
       TrackRequestParameters(FrameType::PUBLISH_OK)};
   subscriber->onPublishOk(pubOk);
   EXPECT_EQ(subscriber->range.start.object, kObjectID + 1);
@@ -1891,7 +1947,7 @@ TEST_F(MoQForwarderTest, SubscriberDetachedOnForwarderDestruction) {
   // The forward-state update is silently skipped after detach.
   RequestUpdate upd;
   upd.requestID = RequestID(1);
-  upd.start = AbsoluteLocation{5, 0};
+  upd.filter = LocationFilter::absoluteStart({5, 0});
   upd.forward = false;
   auto result =
       folly::coro::blockingWait(subscriber->requestUpdate(std::move(upd)));
@@ -1904,9 +1960,7 @@ TEST_F(MoQForwarderTest, SubscriberDetachedOnForwarderDestruction) {
       true,
       0,
       GroupOrder::OldestFirst,
-      LocationType::LargestObject,
-      AbsoluteLocation{0, 0},
-      std::nullopt,
+      LocationFilter::nextObject(),
       TrackRequestParameters(FrameType::PUBLISH_OK)};
   subscriber->onPublishOk(pubOk);
 }
@@ -1965,7 +2019,7 @@ TEST_F(MoQForwarderTest, JoiningFetchNonForwardingSubscriptionIsRequestError) {
   SubscribeRequest sub;
   sub.fullTrackName = kFwdTestTrackName;
   sub.requestID = RequestID(2);
-  sub.locType = LocationType::LargestObject;
+  sub.filter = LocationFilter::nextObject();
   sub.forward = false;
   auto subscriber =
       forwarder->addSubscriber(session->sessionId(), sub, createMockConsumer());
@@ -1989,7 +2043,7 @@ TEST_F(MoQForwarderTest, JoiningFetchAfterResumeAnchorsAtResumeLargest) {
   SubscribeRequest sub;
   sub.fullTrackName = kFwdTestTrackName;
   sub.requestID = RequestID(1);
-  sub.locType = LocationType::LargestObject;
+  sub.filter = LocationFilter::nextObject();
   sub.forward = true;
   auto subscriber =
       forwarder->addSubscriber(session->sessionId(), sub, createMockConsumer());
@@ -2077,7 +2131,7 @@ TEST_F(MoQForwarderTest, DeprecatedSessionOverloadsResolveToTheSameSubscriber) {
   SubscribeRequest sub;
   sub.fullTrackName = kFwdTestTrackName;
   sub.requestID = RequestID(1);
-  sub.locType = LocationType::LargestGroup;
+  sub.filter = LocationFilter::relativeStart(1);
   auto viaSession =
       forwarder->addSubscriber(session, sub, createMockConsumer());
   ASSERT_NE(viaSession, nullptr);
@@ -2182,6 +2236,31 @@ TEST_F(MoQForwarderTest, SubgroupInStartGroupOpensAtFirstAdmittedObject) {
   EXPECT_TRUE((*sgRes)->object(5, test::makeBuf(10)).hasValue());
 
   EXPECT_FALSE(opened.beginsWithFirstObject);
+}
+
+// Test: a range of one later object in the group keeps the subgroup open
+// through the objects before it.
+TEST_F(MoQForwarderTest, SingleObjectRangeKeepsSubgroupOpen) {
+  auto forwarder = std::make_shared<MoQForwarder>(
+      kFwdTestTrackName, AbsoluteLocation{43, 2});
+  auto consumer = createMockConsumer();
+  auto subgroup = acceptingSubgroupConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(43, 1, _, _))
+      .WillOnce(Return(subgroupConsumerResult(subgroup)));
+  EXPECT_CALL(*subgroup, object(5, _, _, _));
+  ASSERT_NE(
+      addSubscriber(
+          *forwarder,
+          createMockSession(),
+          consumer,
+          RequestID(1),
+          LocationFilter::range({43, 5}, {43, 5})),
+      nullptr);
+
+  auto sgRes = forwarder->beginSubgroup(43, 1, 0);
+  ASSERT_TRUE(sgRes.hasValue());
+  EXPECT_TRUE((*sgRes)->object(1, test::makeBuf(10)).hasValue());
+  EXPECT_TRUE((*sgRes)->object(5, test::makeBuf(10)).hasValue());
 }
 
 // Test: datagrams and single-object streams are filtered by their own

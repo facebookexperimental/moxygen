@@ -1205,11 +1205,8 @@ void mergeRequestUpdate(RequestUpdate& latest, const RequestUpdate& incoming) {
   if (incoming.priority) {
     latest.priority = incoming.priority;
   }
-  if (incoming.start) {
-    latest.start = incoming.start;
-  }
-  if (incoming.endGroup) {
-    latest.endGroup = incoming.endGroup;
+  if (incoming.filter) {
+    latest.filter = incoming.filter;
   }
   if (incoming.forward) {
     latest.forward = incoming.forward;
@@ -4791,7 +4788,8 @@ void MoQSession::onSubscribeImpl(
       forward,
       deliveryTimeout);
   trackPublisher->setReplyContext(replyContext);
-  trackPublisher->setSubscribeLocType(subscribeRequest.locType);
+  trackPublisher->setSubscribeLocType(
+      toSubscriptionFilter(subscribeRequest.filter).filterType);
   if (logger_) {
     trackPublisher->setLogger(logger_);
   }
@@ -5924,6 +5922,16 @@ void MoQSession::onFetchImpl(
     return;
   }
   if (standalone) {
+    if (fetch.filter.needsLargest()) {
+      // Both forms depend on Largest Object. Draft 20 allows a relative start,
+      // but each relay would resolve it against its own Largest.
+      fetchError(
+          {fetch.requestID,
+           FetchErrorCode::INVALID_RANGE,
+           "Fetch range is relative to Largest Object"},
+          *replyContext);
+      return;
+    }
     if (standalone->end <= standalone->start) {
       // If the end object is zero this indicates a fetch for the entire
       // group, which is valid as long as the start and end group are the

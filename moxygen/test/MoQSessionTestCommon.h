@@ -102,9 +102,7 @@ inline Subscriber::PublishResult makePublishOkResult(
       true, // forward
       128,  // subscriber priority
       GroupOrder::Default,
-      LocationType::LargestObject,
-      std::nullopt,                    // start
-      std::make_optional(uint64_t(0)), // endGroup
+      LocationFilter::nextObject(),
   };
 
   // Create the reply task that returns the PublishOk
@@ -304,5 +302,8 @@ class Draft22Test : public MoQSessionTest {};
 // MAX_REQUEST_ID / REQUESTS_BLOCKED request-ID flow control, which was
 // removed in draft 18 in favor of QUIC bidi stream limits.
 class PreDraft18Test : public MoQSessionTest {};
+
+// Parameterized to draft 20+ only.
+class Draft20Test : public MoQSessionTest {};
 
 }} // namespace moxygen::test

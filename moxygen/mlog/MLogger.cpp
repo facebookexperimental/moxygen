@@ -245,14 +245,15 @@ void MLogger::logSubscribe(
       convertTrackNameToByteStringFormat(req.fullTrackName.trackName, type);
   baseMsg->subscriberPriority = req.priority;
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
-  baseMsg->filterType = static_cast<uint8_t>(req.locType);
-  if (req.start.has_value()) {
+  auto legacyFilter = toSubscriptionFilter(req.filter);
+  baseMsg->filterType = static_cast<uint8_t>(legacyFilter.filterType);
+  if (legacyFilter.location.has_value()) {
     MOQTLocation loc;
-    loc.group = req.start.value().group;
-    loc.object = req.start.value().object;
+    loc.group = legacyFilter.location->group;
+    loc.object = legacyFilter.location->object;
     baseMsg->startLocation = loc;
   }
-  baseMsg->endGroup = req.endGroup;
+  baseMsg->endGroup = legacyFilter.endGroup.value_or(0);
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
 
@@ -266,12 +267,14 @@ void MLogger::logSubscribeUpdate(
   auto baseMsg = std::make_unique<MOQTSubscribeUpdate>();
   baseMsg->requestId = req.requestID.value;
   baseMsg->subscriptionRequestId = req.existingRequestID.value;
-  if (req.start.has_value()) {
-    baseMsg->startLocation.group = req.start->group;
-    baseMsg->startLocation.object = req.start->object;
-  }
-  if (req.endGroup.has_value()) {
-    baseMsg->endGroup = req.endGroup.value();
+  if (req.filter.has_value()) {
+    if (auto start = req.filter->absoluteStartLocation()) {
+      baseMsg->startLocation.group = start->group;
+      baseMsg->startLocation.object = start->object;
+    }
+    if (auto endGroup = req.filter->legacyEndGroup()) {
+      baseMsg->endGroup = *endGroup;
+    }
   }
   if (req.priority.has_value()) {
     baseMsg->subscriberPriority = req.priority.value();
@@ -412,14 +415,14 @@ void MLogger::logTrackStatus(
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
   baseMsg->forward = req.forward;
   baseMsg->filterType = 0;
-  if (req.start.has_value()) {
+  if (auto start = req.filter.absoluteStartLocation()) {
     MOQTLocation loc;
-    loc.group = req.start.value().group;
-    loc.object = req.start.value().object;
+    loc.group = start->group;
+    loc.object = start->object;
     baseMsg->startLocation = loc;
   }
-  if (req.endGroup != 0) {
-    baseMsg->endGroup = req.endGroup;
+  if (auto endGroup = req.filter.legacyEndGroup()) {
+    baseMsg->endGroup = *endGroup;
   }
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
@@ -706,14 +709,15 @@ void MLogger::logPublishOk(
   baseMsg->forward = req.forward ? 1 : 0;
   baseMsg->subscriberPriority = req.subscriberPriority;
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
-  baseMsg->filterType = static_cast<uint64_t>(req.locType);
-  if (req.start.has_value()) {
+  auto legacyFilter = toSubscriptionFilter(req.filter);
+  baseMsg->filterType = static_cast<uint64_t>(legacyFilter.filterType);
+  if (legacyFilter.location.has_value()) {
     MOQTLocation loc;
-    loc.group = req.start.value().group;
-    loc.object = req.start.value().object;
+    loc.group = legacyFilter.location->group;
+    loc.object = legacyFilter.location->object;
     baseMsg->start = loc;
   }
-  baseMsg->endGroup = req.endGroup;
+  baseMsg->endGroup = legacyFilter.endGroup;
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 

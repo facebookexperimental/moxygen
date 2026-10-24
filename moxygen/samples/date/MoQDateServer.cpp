@@ -201,8 +201,8 @@ class DatePublisher : public Publisher {
               "unexpected subscribe"});
     }
     auto largest = *forwarder_.largest();
-    if (subReq.locType == LocationType::AbsoluteRange &&
-        subReq.endGroup < largest.group) {
+    auto subEndGroup = subReq.filter.legacyEndGroup();
+    if (subEndGroup && *subEndGroup < largest.group) {
       co_return folly::makeUnexpected(
           SubscribeError{
               subReq.requestID,

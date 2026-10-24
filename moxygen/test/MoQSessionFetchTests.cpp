@@ -758,6 +758,25 @@ CO_TEST_P_X(MoQSessionTest, FetchCallbackErrorTerminatesStream) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A standalone FETCH needs an absolute range, so both forms relative to
+// Largest Object are refused.
+CO_TEST_P_X(Draft20Test, FetchRelativeToLargestIsRejected) {
+  co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisher, fetch(_, _)).Times(0);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchError(_)).Times(2);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchError(_)).Times(2);
+
+  for (const auto& filter :
+       {LocationFilter::nextObject(), LocationFilter::relativeStart(3)}) {
+    auto fetch = getFetch({0, 0}, {0, 0});
+    fetch.filter = filter;
+    auto res = co_await clientSession_->fetch(fetch, fetchCallback_);
+    CO_ASSERT_TRUE(res.hasError());
+    EXPECT_EQ(res.error().errorCode, FetchErrorCode::INVALID_RANGE);
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // === Draft 18+ bidi early-close coverage ===
 
 // Peer FINs the FETCH bidi response stream without sending FETCH_OK or

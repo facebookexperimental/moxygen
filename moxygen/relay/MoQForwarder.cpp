@@ -157,7 +157,7 @@ bool MoQForwarder::SubgroupForwarder::subscriberMayAcceptLaterObject() const {
     }
     const auto& start = sub->range.start;
     if (start.group == identifier_.group && start.object > *lastObjectId_ &&
-        start < sub->range.end) {
+        start <= sub->range.end) {
       return true;
     }
   }
@@ -315,17 +315,20 @@ folly::Expected<SubscribeRange, FetchError> MoQForwarder::resolveJoiningFetch(
       joining.fetchType == FetchType::RELATIVE_JOINING ||
       joining.fetchType == FetchType::ABSOLUTE_JOINING);
   auto& largest = *subIt->second->joiningLocation;
+  // Not LocationFilter::relativeStart(): that clamps a start before the track
+  // to group 0, but a joining FETCH does not.
+  // TODO: fold these together once drafts below 20 are dropped.
   if (joining.fetchType == FetchType::RELATIVE_JOINING) {
     AbsoluteLocation start{largest};
     start.group -=
         (start.group >= joining.joiningStart) ? joining.joiningStart : 0;
     start.object = 0;
     return SubscribeRange{start, {largest.group, largest.object + 1}};
-  } else {
-    // ABSOLUTE_JOINING
-    AbsoluteLocation start{joining.joiningStart, 0};
-    return SubscribeRange{start, {largest.group, largest.object + 1}};
   }
+  // ABSOLUTE_JOINING
+  return SubscribeRange{
+      AbsoluteLocation{joining.joiningStart, 0},
+      {largest.group, largest.object + 1}};
 }
 
 void MoQForwarder::drainSubscriber(
@@ -843,13 +846,7 @@ void MoQForwarder::Subscriber::onPublishOk(const PublishOk& pubOk) {
   // PUBLISH-served subscriptions carry the real id only after PUBLISH_OK; a
   // later joining fetch matches against it in resolveJoiningFetch.
   requestID = pubOk.requestID;
-  // Update subscriber range from PUBLISH_OK
-  std::optional<AbsoluteLocation> end;
-  if (pubOk.endGroup) {
-    end = AbsoluteLocation{*pubOk.endGroup, 0};
-  }
-  range =
-      toSubscribeRange(pubOk.start, end, pubOk.locType, forwarder->largest());
+  range = toSubscribeRange(pubOk.filter, forwarder->largest());
 
   updateForwardState(pubOk.forward);
 
@@ -866,23 +863,25 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
   // - Forward state is optional and only updated if explicitly provided
   // - A New Group can be requested
 
-  // Resolve the whole range before applying any of it: a rejected update must
-  // leave it as it was.
-  const auto newStart = requestUpdate.start.value_or(range.start);
-  if (requestUpdate.endGroup.has_value()) {
-    AbsoluteLocation newEnd{*requestUpdate.endGroup, 0};
-    // The end is exclusive; 0 means open-ended.
-    if (*requestUpdate.endGroup > 0 && newStart >= newEnd) {
-      XLOG(ERR) << "Invalid requestUpdate: end Location " << newEnd
-                << " is less than start " << newStart;
+  // The filter replaces the old one. A relative or Next Object start resolves
+  // against Largest Object like a SUBSCRIBE; an absolute start can be below
+  // Largest Object. A rejected update leaves the range as it was.
+  if (requestUpdate.filter) {
+    auto newRange = toSubscribeRange(
+        *requestUpdate.filter, forwarder ? forwarder->largest() : std::nullopt);
+    if (auto start = requestUpdate.filter->absoluteStartLocation()) {
+      newRange.start = *start;
+    }
+    if (newRange.start > newRange.end) {
+      XLOG(ERR) << "Invalid requestUpdate: end Location " << newRange.end
+                << " is less than start " << newRange.start;
       co_return folly::makeUnexpected(RequestError(
           requestUpdate.requestID,
           RequestErrorCode::INVALID_RANGE,
           "End Location is less than start"));
     }
-    range.end = newEnd;
+    range = newRange;
   }
-  range.start = newStart;
 
   RequestOk ok{
       .requestID = requestUpdate.requestID,
