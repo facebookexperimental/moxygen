@@ -36,8 +36,10 @@ constexpr std::string_view kAlpnMoqtDraft18Latest = kAlpnMoqtDraft18;
 // Meta-scoped draft 20 ALPNs, since only part of the draft is implemented.
 // Each wire-breaking step adds a revision and moves kAlpnMoqtDraft20Latest.
 //   meta-00: draft 18, with the range in LOCATION_FILTER
+//   meta-01: adds FILL_PARAMETERS and fill fetch streams
 constexpr std::string_view kAlpnMoqtDraft20Meta00 = "moqt-20-meta-00";
-constexpr std::string_view kAlpnMoqtDraft20Latest = kAlpnMoqtDraft20Meta00;
+constexpr std::string_view kAlpnMoqtDraft20Meta01 = "moqt-20-meta-01";
+constexpr std::string_view kAlpnMoqtDraft20Latest = kAlpnMoqtDraft20Meta01;
 
 constexpr std::array<uint64_t, 3> kSupportedVersions{
     kVersionDraft16,

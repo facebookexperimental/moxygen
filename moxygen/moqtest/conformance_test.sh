@@ -218,7 +218,7 @@ run_join_test() {
     # join would have started a fresh one and validated it without ever
     # backfilling, so check which range the two halves actually met on.
     local backfill
-    backfill=$(echo "$output" | grep -o "joining FETCH backfills.*" | tail -1) || true
+    backfill=$(echo "$output" | grep -o "backfill covers.*" | tail -1) || true
     if [ -z "$reason" ]; then
         if [ "$expect" = "backfill" ] && ! echo "$backfill" | grep -q "groups"; then
             reason="Join backfilled nothing, so it did not land mid-track"

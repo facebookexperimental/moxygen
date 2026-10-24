@@ -43,6 +43,10 @@ class SubscriptionHandle {
 
   virtual void unsubscribe() = 0;
 
+  // Cancels the fill named by the request ID given to beginFill(). The
+  // subscription and other fills continue.
+  virtual void cancelFill(RequestID /*requestID*/) {}
+
   using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
   // Updates request parameters (start/end locations, priority, forward).
   // This is a coroutine because it may do async work, such as forwarding the

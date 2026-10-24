@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include "moxygen/FillFetch.h"
 #include "moxygen/test/MoQSessionTestCommon.h"
 
 #include "moxygen/MoQTrackProperties.h"
@@ -202,15 +203,25 @@ CO_TEST_P_X(MoQSessionTest, FetchNewestFirstResponseObjects) {
 
 CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
   co_await setupMoQSession();
-  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    serveFill(sub.requestID, sub.fill, pub, AbsoluteLocation{0, 0});
     pub->datagram(
         ObjectHeader(0, 0, 1, 0, 11), folly::IOBuf::copyBuffer("hello world"));
     pub->publishDone(getTrackEndedPublishDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
-  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
-    auto joining = std::get_if<JoiningFetch>(&fetch.args);
-    EXPECT_NE(joining, nullptr);
+  auto fillFetch = useFillFetch(GetParam().serverVersion);
+  auto serveJoin = [fillFetch](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    // Draft 20 serves the join as a fill with a resolved standalone range.
+    if (fillFetch) {
+      auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
+      EXPECT_NE(standalone, nullptr);
+      if (standalone) {
+        EXPECT_EQ(standalone->start, (AbsoluteLocation{0, 0}));
+      }
+    } else {
+      EXPECT_NE(std::get_if<JoiningFetch>(&fetch.args), nullptr);
+    }
     EXPECT_EQ(fetch.fullTrackName, FullTrackName(kTestTrackName));
     fetchPub->object(
         /*groupID=*/0,
@@ -220,7 +231,12 @@ CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
         noExtensions(),
         /*finFetch=*/true);
     co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
-  });
+  };
+  if (fillFetch) {
+    expectFillFetch(serveJoin);
+  } else {
+    expectFetch(serveJoin);
+  }
   EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
       .WillOnce([&](const auto& header, auto, bool) {
         EXPECT_EQ(header.length, 11);
@@ -238,17 +254,12 @@ CO_TEST_P_X(MoQSessionTest, RelativeJoiningFetch) {
       .Times(0);
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
       .Times(0);
-  auto res = co_await clientSession_->join(
-      getSubscribe(kTestTrackName),
-      subscribeCallback_,
-      1,
-      129,
-      GroupOrder::Default,
-      {},
-      fetchCallback_,
-      FetchType::RELATIVE_JOINING);
-  EXPECT_FALSE(res.subscribeResult.hasError());
-  EXPECT_FALSE(res.fetchResult.hasError());
+  expectBeginFill();
+  auto res = co_await clientSession_->subscribe(
+      subscribeWithFill(
+          kTestTrackName, /*joiningStart=*/1, /*fillPriority=*/129),
+      subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
   co_await publishDone_;
   co_await fetchBaton;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -278,22 +289,26 @@ CO_TEST_P_X(MoQSessionTest, AbsoluteJoiningFetch) {
     pub->publishDone(getTrackEndedPublishDone(sub.requestID));
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
   });
-  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
-    auto joining = std::get_if<JoiningFetch>(&fetch.args);
-    EXPECT_NE(joining, nullptr);
-    EXPECT_EQ(fetch.fullTrackName, FullTrackName(kTestTrackName));
-    for (uint32_t group = 2; group < 6; group++) {
-      auto objectPubResult = fetchPub->object(
-          /*groupID=*/group,
-          /*subgroupID=*/0,
-          /*objectID=*/0,
-          moxygen::test::makeBuf(100),
-          noExtensions(),
-          /*finFetch=*/(group == 5));
-      EXPECT_TRUE(objectPubResult.hasValue());
-    }
-    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
-  });
+  // The join starts after Largest Object, so nothing is backfilled. Only drafts
+  // below 20 still answer the Joining FETCH.
+  auto fillFetch = useFillFetch(GetParam().serverVersion);
+  if (!fillFetch) {
+    expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+      EXPECT_NE(std::get_if<JoiningFetch>(&fetch.args), nullptr);
+      EXPECT_EQ(fetch.fullTrackName, FullTrackName(kTestTrackName));
+      for (uint32_t group = 2; group < 6; group++) {
+        auto objectPubResult = fetchPub->object(
+            /*groupID=*/group,
+            /*subgroupID=*/0,
+            /*objectID=*/0,
+            moxygen::test::makeBuf(100),
+            noExtensions(),
+            /*finFetch=*/(group == 5));
+        EXPECT_TRUE(objectPubResult.hasValue());
+      }
+      co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+    });
+  }
   EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
       .WillRepeatedly([&](const auto& header, auto, bool) {
         EXPECT_EQ(header.length, 11);
@@ -314,19 +329,19 @@ CO_TEST_P_X(MoQSessionTest, AbsoluteJoiningFetch) {
       .Times(0);
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
       .Times(0);
-  auto res = co_await clientSession_->join(
-      getSubscribe(kTestTrackName),
-      subscribeCallback_,
-      2 /* joiningStart */,
-      129 /* fetchPri */,
-      GroupOrder::Default,
-      {},
-      fetchCallback_,
-      FetchType::ABSOLUTE_JOINING);
-  EXPECT_FALSE(res.subscribeResult.hasError());
-  EXPECT_FALSE(res.fetchResult.hasError());
+  expectBeginFill();
+  if (fillFetch) {
+    // An empty fill gets only the reset at subscription end.
+    EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
+  }
+  auto sub = subscribeWithFill(kTestTrackName, 0, /*fillPriority=*/129);
+  sub.fill->locationFilter = LocationFilter::absoluteStart({2, 0});
+  auto res = co_await clientSession_->subscribe(sub, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
   co_await publishDone_;
-  co_await fetchBaton;
+  if (!fillFetch) {
+    co_await fetchBaton;
+  }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, BadAbsoluteJoiningFetch) {
@@ -344,9 +359,12 @@ CO_TEST_P_X(MoQSessionTest, BadAbsoluteJoiningFetch) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// Verify that join() resolves the joining FETCH's request ID through the
-// FullTrackName match rather than peeking at nextRequestID_.
-CO_TEST_P_X(MoQSessionTest, JoinFetchResolvesRequestIDByTrackName) {
+// The Joining FETCH that carries a fill names the SUBSCRIBE's request ID.
+CO_TEST_P_X(MoQSessionTest, FillJoiningFetchNamesSubscribeRequestID) {
+  if (useFillFetch(getServerSelectedVersion())) {
+    // Draft 20 does not send a Joining FETCH for a fill.
+    co_return;
+  }
   co_await setupMoQSession();
   // Both are captured rather than compared in the handlers: the handlers race
   // under collectAll, and RequestID{} is 0, which is a real ID.
@@ -396,23 +414,65 @@ CO_TEST_P_X(MoQSessionTest, JoinFetchResolvesRequestIDByTrackName) {
       .Times(0);
   EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionStreamClosed())
       .Times(0);
-  auto res = co_await clientSession_->join(
-      getSubscribe(kTestTrackName),
-      subscribeCallback_,
-      1,
-      129,
-      GroupOrder::Default,
-      {},
-      fetchCallback_,
-      FetchType::RELATIVE_JOINING);
-  EXPECT_FALSE(res.subscribeResult.hasError());
-  EXPECT_FALSE(res.fetchResult.hasError());
+  expectBeginFill();
+  auto res = co_await clientSession_->subscribe(
+      subscribeWithFill(
+          kTestTrackName, /*joiningStart=*/1, /*fillPriority=*/129),
+      subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
   co_await publishDone_;
   co_await fetchBaton;
   // Both handlers have run by now. Requiring subscribeRequestID to be engaged
   // keeps the comparison below from passing on two nullopts.
   EXPECT_TRUE(subscribeRequestID.has_value());
   EXPECT_EQ(joiningRequestID, subscribeRequestID);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Below draft 20, a fill for an absolute range goes out as a standalone FETCH
+// for exactly that range.
+CO_TEST_P_X(MoQSessionTest, FillAbsoluteRangeIsAStandaloneFetch) {
+  if (useFillFetch(getServerSelectedVersion())) {
+    // Draft 20 serves the fill on its own stream.
+    co_return;
+  }
+  co_await setupMoQSession();
+  expectSubscribe([](auto sub, auto) -> TaskSubscribeResult {
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{3, 0});
+  });
+  std::optional<StandaloneFetch> range;
+  expectFetch([&range](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    if (auto standalone = std::get_if<StandaloneFetch>(&fetch.args)) {
+      range = *standalone;
+    }
+    fetchPub->object(
+        /*groupID=*/1,
+        /*subgroupID=*/0,
+        /*objectID=*/1,
+        moxygen::test::makeBuf(10),
+        noExtensions(),
+        /*finFetch=*/true);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{3, 0});
+  });
+  folly::coro::Baton fetchDone;
+  EXPECT_CALL(*fetchCallback_, object(1, 0, 1, _, _, true, _)).WillOnce([&] {
+    fetchDone.post();
+    return folly::unit;
+  });
+  EXPECT_CALL(*fetchCallback_, reset(_)).WillRepeatedly(testing::Return());
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillRepeatedly(testing::Return(folly::unit));
+  expectBeginFill();
+
+  auto sub = getSubscribe(kTestTrackName);
+  sub.fill = FillParameters{
+      LocationFilter::range({1, 1}, AbsoluteLocation{2, 1}), {}, {}, {}};
+  auto res = co_await clientSession_->subscribe(sub, subscribeCallback_);
+  CO_ASSERT_TRUE(!res.hasError());
+  co_await fetchDone;
+  CO_ASSERT_TRUE(range.has_value());
+  EXPECT_EQ(range->start, (AbsoluteLocation{1, 1}));
+  EXPECT_EQ(range->end, (AbsoluteLocation{2, 2}));
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
@@ -1183,6 +1243,440 @@ CO_TEST_P_X(Draft18Test, DrainClosesSessionWhenEarlyCloseEndsLastFetch) {
       << "draining session did not close after its last fetch was failed";
 
   releaseHandler.post();
+}
+
+// A publisher that cannot serve a fill opens the stream and resets it.
+CO_TEST_P_X(Draft20Test, FailedFillOpensAndResetsItsStream) {
+  co_await setupMoQSession();
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    serveFill(sub.requestID, sub.fill, pub, AbsoluteLocation{4, 0});
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{4, 0});
+  });
+  folly::coro::Baton fetchCalled;
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce([&](Fetch fetch, auto) -> TaskFetchResult {
+        fetchCalled.post();
+        co_return folly::makeUnexpected(
+            FetchError{
+                fetch.requestID,
+                FetchErrorCode::INTERNAL_ERROR,
+                "cannot serve"});
+      });
+  // A fill does not get a reply, so neither fetch outcome is reported.
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchError(_)).Times(0);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchSuccess()).Times(0);
+
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillRepeatedly(testing::Return(folly::unit));
+  // This transport drops the FETCH_HEADER along with the reset, so the fill
+  // consumer is told only when the session closes.
+  EXPECT_CALL(*fetchCallback_, reset(_)).WillRepeatedly(testing::Return());
+  expectBeginFill();
+  auto res = co_await clientSession_->subscribe(
+      subscribeWithFill(kTestTrackName, /*joiningStart=*/1),
+      subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await fetchCalled;
+  co_await rescheduleN(4);
+
+  // The stream must exist and carry a reset. This transport drops the header
+  // on reset; a real connection has usually sent it already.
+  auto streamIt = serverWt_->writeHandles.find(serverObjectStreamId());
+  CO_ASSERT_NE(streamIt, serverWt_->writeHandles.end());
+  EXPECT_TRUE(streamIt->second->getWriteErr().has_value());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Cancelling a fill stops only its stream; a FETCH_CANCEL for the shared
+// request ID would hit the subscription.
+CO_TEST_P_X(Draft20Test, FillFetchCancelStopsDataStream) {
+  co_await setupMoQSession();
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    serveFill(sub.requestID, sub.fill, pub, AbsoluteLocation{0, 0});
+    pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+  // No fin, so the fill stream is still open when the cancel arrives.
+  expectFillFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    fetchPub->object(0, 0, 0, moxygen::test::makeBuf(100));
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+  expectPublishDone();
+
+  folly::coro::Baton objectReceived;
+  EXPECT_CALL(*fetchCallback_, object(_, _, _, _, _, false, _)).WillOnce([&] {
+    objectReceived.post();
+    return folly::unit;
+  });
+  expectBeginFill();
+  auto res = co_await clientSession_->subscribe(
+      subscribeWithFill(
+          kTestTrackName, /*joiningStart=*/1, /*fillPriority=*/129),
+      subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await publishDone_;
+  co_await objectReceived;
+
+  auto dataStream = serverWt_->writeHandles.at(serverObjectStreamId());
+  auto* dataWriteHandle =
+      static_cast<proxygen::WebTransport::StreamWriteHandle*>(dataStream.get());
+  std::optional<uint32_t> stopSendingCode;
+  folly::CancellationCallback stopSendingCallback(
+      dataWriteHandle->getCancelToken(), [&] {
+        if (auto* exception = dataWriteHandle->exception()) {
+          stopSendingCode = exception->error;
+        }
+      });
+
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
+  // The fill carries the subscribe's request ID.
+  res.value()->cancelFill(res.value()->subscribeOk().requestID);
+  EXPECT_EQ(
+      stopSendingCode,
+      toWireResetStreamErrorCode(
+          ResetStreamErrorCode::CANCELLED, GetParam().serverVersion));
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Unsubscribing resets the subscription's open fill streams.
+CO_TEST_P_X(Draft20Test, UnsubscribeResetsAnOpenFill) {
+  co_await setupMoQSession();
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    serveFill(sub.requestID, sub.fill, pub, AbsoluteLocation{4, 0});
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{4, 0});
+  });
+  // No fin, so the fill stream is still open when the unsubscribe arrives.
+  expectFillFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    fetchPub->object(0, 0, 0, moxygen::test::makeBuf(100));
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+  folly::coro::Baton objectReceived;
+  EXPECT_CALL(*fetchCallback_, object(_, _, _, _, _, false, _)).WillOnce([&] {
+    objectReceived.post();
+    return folly::unit;
+  });
+  EXPECT_CALL(*fetchCallback_, reset(_)).WillRepeatedly(testing::Return());
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillRepeatedly(testing::Return(folly::unit));
+  expectBeginFill();
+
+  auto res = co_await clientSession_->subscribe(
+      subscribeWithFill(kTestTrackName, /*joiningStart=*/1),
+      subscribeCallback_);
+  CO_ASSERT_TRUE(!res.hasError());
+  co_await objectReceived;
+
+  res.value()->unsubscribe();
+  co_await rescheduleN(4);
+
+  auto streamIt = serverWt_->writeHandles.find(serverObjectStreamId());
+  CO_ASSERT_NE(streamIt, serverWt_->writeHandles.end());
+  EXPECT_TRUE(streamIt->second->getWriteErr().has_value());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A paused SUBSCRIBE does not open a fill.
+CO_TEST_P_X(Draft20Test, PausedSubscribeOpensNoFill) {
+  co_await setupMoQSession();
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    serveFill(sub.requestID, sub.fill, pub, AbsoluteLocation{4, 0});
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{4, 0});
+  });
+  // beginFill runs when the SUBSCRIBE is sent; pausing only stops the
+  // publisher from serving the fill.
+  EXPECT_CALL(*serverPublisher, fetch(_, _)).Times(0);
+  EXPECT_CALL(*fetchCallback_, reset(_)).WillRepeatedly(testing::Return());
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillRepeatedly(testing::Return(folly::unit));
+  expectBeginFill();
+
+  auto sub = subscribeWithFill(kTestTrackName, /*joiningStart=*/1);
+  sub.forward = false;
+  auto res = co_await clientSession_->subscribe(sub, subscribeCallback_);
+  CO_ASSERT_TRUE(!res.hasError());
+  co_await rescheduleN(4);
+  EXPECT_EQ(serverWt_->writeHandles.count(serverObjectStreamId()), 0);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// With no order on the subscription or the fill, the subscriber requests
+// Ascending, so parsing the fill stream does not depend on SUBSCRIBE_OK.
+CO_TEST_P_X(Draft20Test, FillWithDefaultOrderRequestsAscending) {
+  co_await setupMoQSession();
+  std::optional<GroupOrder> fillOrder;
+  expectSubscribe([&fillOrder](auto sub, auto) -> TaskSubscribeResult {
+    fillOrder = sub.fill->groupOrder;
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{4, 0});
+  });
+  EXPECT_CALL(*fetchCallback_, reset(_)).WillRepeatedly(testing::Return());
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillRepeatedly(testing::Return(folly::unit));
+  expectBeginFill();
+
+  auto sub = subscribeWithFill(kTestTrackName, /*joiningStart=*/1);
+  sub.groupOrder = GroupOrder::Default;
+  auto res = co_await clientSession_->subscribe(sub, subscribeCallback_);
+  CO_ASSERT_TRUE(!res.hasError());
+  EXPECT_EQ(fillOrder, GroupOrder::OldestFirst);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A failed SUBSCRIBE ends the fill it registered.
+CO_TEST_P_X(Draft20Test, SubscribeErrorEndsTheFill) {
+  co_await setupMoQSession();
+  expectSubscribe(
+      [](auto sub, auto) -> TaskSubscribeResult {
+        co_return folly::makeUnexpected(
+            SubscribeError{
+                sub.requestID, SubscribeErrorCode::UNAUTHORIZED, "bad"});
+      },
+      MoQControlCodec::Direction::SERVER,
+      SubscribeErrorCode::UNAUTHORIZED);
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onSubscribeError(SubscribeErrorCode::UNAUTHORIZED));
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
+  expectBeginFill();
+
+  auto res = co_await clientSession_->subscribe(
+      subscribeWithFill(kTestTrackName, /*joiningStart=*/1),
+      subscribeCallback_);
+  CO_ASSERT_TRUE(res.hasError());
+  testing::Mock::VerifyAndClearExpectations(fetchCallback_.get());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// beginFill opens each requested fill once, and nothing else.
+CO_TEST_P_X(Draft20Test, BeginFillOpensEachRequestedFillOnce) {
+  co_await setupMoQSession();
+  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
+    EXPECT_TRUE(pub->beginFill(RequestID(sub.requestID.value + 2)).hasError());
+    auto fill = pub->beginFill(sub.requestID);
+    EXPECT_TRUE(fill.hasValue());
+    EXPECT_TRUE(pub->beginFill(sub.requestID).hasError());
+    if (fill) {
+      fill.value()->endOfFetch();
+    }
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{4, 0});
+  });
+  folly::coro::Baton fillEnded;
+  expectBeginFill();
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillRepeatedly(testing::Return(folly::unit));
+  EXPECT_CALL(*fetchCallback_, endOfFetch()).WillOnce([&] {
+    fillEnded.post();
+    return folly::unit;
+  });
+
+  auto res = co_await clientSession_->subscribe(
+      subscribeWithFill(kTestTrackName, /*joiningStart=*/1),
+      subscribeCallback_);
+  CO_ASSERT_TRUE(!res.hasError());
+  co_await fillEnded;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A fill cannot open after PUBLISH_DONE, which would not count it.
+CO_TEST_P_X(Draft20Test, BeginFillRefusedAfterPublishDone) {
+  co_await setupMoQSession();
+  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
+    pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+    EXPECT_TRUE(pub->beginFill(sub.requestID).hasError());
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{4, 0});
+  });
+  EXPECT_CALL(*fetchCallback_, reset(_)).WillRepeatedly(testing::Return());
+  expectBeginFill();
+  expectPublishDone();
+
+  auto res = co_await clientSession_->subscribe(
+      subscribeWithFill(kTestTrackName, /*joiningStart=*/1),
+      subscribeCallback_);
+  CO_ASSERT_TRUE(!res.hasError());
+  co_await publishDone_;
+  EXPECT_EQ(serverWt_->writeHandles.count(serverObjectStreamId()), 0);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A reset fill ends only its own stream; the subscription keeps delivering.
+CO_TEST_P_X(Draft20Test, FillResetLeavesTheSubscriptionAlive) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  expectSubscribe(
+      [this, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        serveFill(sub.requestID, sub.fill, pub, AbsoluteLocation{4, 0});
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{4, 0});
+      });
+  folly::coro::Baton fetchCalled;
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce([&](Fetch fetch, auto) -> TaskFetchResult {
+        fetchCalled.post();
+        co_return folly::makeUnexpected(
+            FetchError{
+                fetch.requestID,
+                FetchErrorCode::INTERNAL_ERROR,
+                "cannot serve"});
+      });
+  EXPECT_CALL(*fetchCallback_, reset(_)).WillRepeatedly(testing::Return());
+  expectBeginFill();
+  expectPublishDone();
+
+  auto res = co_await clientSession_->subscribe(
+      subscribeWithFill(kTestTrackName, /*joiningStart=*/1),
+      subscribeCallback_);
+  CO_ASSERT_TRUE(!res.hasError());
+  co_await fetchCalled;
+  co_await rescheduleN(4);
+
+  // The fill stream was opened and reset.
+  auto streamIt = serverWt_->writeHandles.find(serverObjectStreamId());
+  CO_ASSERT_NE(streamIt, serverWt_->writeHandles.end());
+  EXPECT_TRUE(streamIt->second->getWriteErr().has_value());
+
+  // The subscription still delivers after its fill died.
+  folly::coro::Baton datagramReceived;
+  EXPECT_CALL(*subscribeCallback_, datagram(_, _, _)).WillOnce([&] {
+    datagramReceived.post();
+    return folly::unit;
+  });
+  trackConsumer->datagram(
+      ObjectHeader(5, 0, 0, 0, 11), folly::IOBuf::copyBuffer("hello world"));
+  co_await datagramReceived;
+
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(res.value()->subscribeOk().requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Draft 20 counts a fill stream in PUBLISH_DONE's Stream Count.
+CO_TEST_P_X(Draft20Test, PublishDoneStreamCountIncludesTheFill) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  expectSubscribe(
+      [this, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        serveFill(sub.requestID, sub.fill, pub, AbsoluteLocation{4, 0});
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{4, 0});
+      });
+  expectFillFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    fetchPub->object(
+        /*groupID=*/3,
+        /*subgroupID=*/0,
+        /*objectID=*/0,
+        moxygen::test::makeBuf(100),
+        noExtensions(),
+        /*finFetch=*/true);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{4, 0});
+  });
+  folly::coro::Baton fillObject;
+  EXPECT_CALL(*fetchCallback_, object(3, 0, 0, _, _, true, _)).WillOnce([&] {
+    fillObject.post();
+    return folly::unit;
+  });
+  expectBeginFill();
+
+  uint64_t observedStreamCount = 0;
+  folly::coro::Baton donePosted;
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce([&](const PublishDone& done) {
+        observedStreamCount = done.streamCount;
+        donePosted.post();
+        return folly::unit;
+      });
+  EXPECT_CALL(*serverPublisherStatsCallback_, onPublishDone(_));
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onPublishDone(_));
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionEnd());
+
+  auto res = co_await clientSession_->subscribe(
+      subscribeWithFill(kTestTrackName, /*joiningStart=*/1),
+      subscribeCallback_);
+  CO_ASSERT_TRUE(!res.hasError());
+  co_await fillObject;
+
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(res.value()->subscribeOk().requestID));
+  co_await donePosted;
+
+  // The fill stream is the only stream this subscription opened.
+  EXPECT_EQ(observedStreamCount, 1);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A fill inherits the subscription's priority, group order and authorization,
+// except where FILL_PARAMETERS override them.
+TEST(MakeFillFetch, InheritsTheSubscription) {
+  TrackRequestParameters params{FrameType::SUBSCRIBE};
+  params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+      AuthToken{0, "subscription-secret", true}));
+  const auto filter = LocationFilter::absoluteStart({2, 0});
+  const AbsoluteLocation largest{4, 0};
+
+  auto fetch = makeFillFetch(
+      kTestTrackName,
+      RequestID(7),
+      filter,
+      FillParameters{},
+      largest,
+      /*priority=*/64,
+      GroupOrder::NewestFirst,
+      params);
+  ASSERT_TRUE(fetch.has_value());
+  EXPECT_EQ(fetch->requestID, RequestID(7));
+  EXPECT_EQ(fetch->priority, 64);
+  EXPECT_EQ(fetch->groupOrder, GroupOrder::NewestFirst);
+  EXPECT_EQ(
+      std::get<StandaloneFetch>(fetch->args).start, (AbsoluteLocation{2, 0}));
+  ASSERT_EQ(fetch->params.size(), 1);
+  EXPECT_EQ(fetch->params.at(0).asAuthToken.tokenValue, "subscription-secret");
+
+  auto overridden = makeFillFetch(
+      kTestTrackName,
+      RequestID(7),
+      filter,
+      FillParameters{
+          LocationFilter::absoluteStart({3, 0}),
+          8,
+          GroupOrder::OldestFirst,
+          {}},
+      largest,
+      /*priority=*/64,
+      GroupOrder::NewestFirst,
+      params);
+  ASSERT_TRUE(overridden.has_value());
+  EXPECT_EQ(overridden->priority, 8);
+  EXPECT_EQ(overridden->groupOrder, GroupOrder::OldestFirst);
+  EXPECT_EQ(
+      std::get<StandaloneFetch>(overridden->args).start,
+      (AbsoluteLocation{3, 0}));
+}
+
+// With no Largest, or a range past it, there is nothing to fill.
+TEST(MakeFillFetch, NothingToFill) {
+  const TrackRequestParameters params{FrameType::SUBSCRIBE};
+  EXPECT_FALSE(makeFillFetch(
+                   kTestTrackName,
+                   RequestID(7),
+                   LocationFilter::absoluteStart({0, 0}),
+                   FillParameters{},
+                   std::nullopt,
+                   kDefaultPriority,
+                   GroupOrder::OldestFirst,
+                   params)
+                   .has_value());
+  EXPECT_FALSE(makeFillFetch(
+                   kTestTrackName,
+                   RequestID(7),
+                   LocationFilter::absoluteStart({9, 0}),
+                   FillParameters{},
+                   AbsoluteLocation{4, 0},
+                   kDefaultPriority,
+                   GroupOrder::OldestFirst,
+                   params)
+                   .has_value());
 }
 
 // Regression: FETCH publishers live in pubTracks_ but never fire

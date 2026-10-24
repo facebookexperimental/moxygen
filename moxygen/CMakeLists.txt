@@ -74,6 +74,7 @@ moxygen_add_library(moxygen_moq_location
 moxygen_add_library(moxygen_moq
   SRCS
     BidiStreamControl.cpp
+    FillFetch.cpp
     MoQSession.cpp
   DEPS
     moxygen_events_moq_delivery_timeout_manager

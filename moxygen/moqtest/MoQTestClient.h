@@ -315,7 +315,7 @@ class MoQTestClient : public Subscriber,
   void finishRequest();
 
   RequestDeadline requestDeadline_{*this};
-  // Last group the joining FETCH half covers; unset when there is no join.
+  // Last group the fill covers; unset when there is no fill.
   std::optional<uint64_t> fetchHalfLastGroup_;
   bool publishDoneReceived_{false};
   // A datagram that arrives after its deadline is as good as dropped.
@@ -412,20 +412,11 @@ class MoQTestClient : public Subscriber,
       const MoQTestParameters& params,
       const StandaloneFetch& range);
 
-  // The group a joining FETCH backfills from.  A relative join counts back
-  // from where the subscription begins, so it needs the reported Largest.
+  // The group a fill starts from.  A relative fill counts back from where the
+  // subscription begins, so it needs the reported Largest.
   static uint64_t joiningStartGroup(
       int64_t joinStart,
       const AbsoluteLocation& largest);
-
-  // The client does not choose a joining FETCH's range, but it can reconstruct
-  // it: the backfill runs from `startGroup` up to the object the subscription
-  // reported as Largest.
-  void validateJoiningFetchOk(
-      const FetchOk& ok,
-      const MoQTestParameters& params,
-      const AbsoluteLocation& largest,
-      uint64_t startGroup);
 
   // Drops expectations below `group`.  A join that does not reach back to the
   // start of the track never delivers those, and neither half is at fault.

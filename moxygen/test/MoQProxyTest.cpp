@@ -227,6 +227,32 @@ TEST_F(MoQProxyTest, EstablishesUpstreamSubscription) {
   result.value()->unsubscribe();
 }
 
+TEST_F(MoQProxyTest, FillOpensAndResets) {
+  auto upstreamHandle = makeUpstreamHandle(RequestID(100));
+  SubscribeRequest upstreamRequest;
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [&](SubscribeRequest request, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            upstreamRequest = std::move(request);
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+  auto fill = std::make_shared<NiceMock<MockFetchConsumer>>();
+  EXPECT_CALL(*fill, reset(ResetStreamErrorCode::INTERNAL_ERROR));
+  auto consumer = makeConsumer();
+  EXPECT_CALL(*consumer, beginFill(RequestID(1))).WillOnce(Return(fill));
+  auto request = makeSubscribeRequest(RequestID(1));
+  request.fill =
+      FillParameters{LocationFilter::absoluteStart({8, 0}), {}, {}, {}};
+
+  auto result =
+      subscribe(makeDownstreamSession(), std::move(request), consumer);
+
+  ASSERT_TRUE(result.hasValue());
+  EXPECT_FALSE(upstreamRequest.fill.has_value());
+  result.value()->unsubscribe();
+}
+
 TEST_F(MoQProxyTest, TriesUpstreamProvidersInOrder) {
   auto fallbackSession =
       std::make_shared<NiceMock<test::MockMoQSession>>(executor_);

@@ -1564,6 +1564,8 @@ TEST_F(MoQRelayTest, RelaySubscribePreservesFirstSubscriberRequest) {
   sub.requestID = RequestID(1);
   sub.groupOrder = GroupOrder::NewestFirst;
   sub.filter = LocationFilter::range({4, 0}, {9, 0});
+  // The upstream subscription is shared, so the fill stays off it.
+  sub.fill = FillParameters{LocationFilter::relativeStart(3), {}, {}, {}};
 
   auto consumer = createMockConsumer();
   std::shared_ptr<SubscriptionHandle> handle{nullptr};
@@ -1578,6 +1580,7 @@ TEST_F(MoQRelayTest, RelaySubscribePreservesFirstSubscriberRequest) {
 
   EXPECT_EQ(upstreamReq.groupOrder, GroupOrder::Default);
   EXPECT_EQ(upstreamReq.filter, LocationFilter::nextObject());
+  EXPECT_FALSE(upstreamReq.fill.has_value());
 
   EXPECT_EQ(handle->subscribeOk().groupOrder, GroupOrder::NewestFirst);
   auto* subscriber = dynamic_cast<MoQForwarder::Subscriber*>(handle.get());

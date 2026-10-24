@@ -6,6 +6,7 @@
 
 #include <moxygen/samples/media_server/MoQBroadcast.h>
 
+#include <moxygen/FillFetch.h>
 #include <moxygen/MoQSession.h>
 #include <moxygen/msf/MediaCatalog.h>
 #include <moxygen/samples/media_server/PublishLoop.h>
@@ -66,6 +67,15 @@ class ForwarderCallback : public MoQForwarder::Callback {
   void onPublishDone(MoQForwarder*) override {
     if (auto b = broadcast_.lock()) {
       b->onForwarderSourceEnded(trackName_);
+    }
+  }
+
+  void fillRequested(
+      MoQForwarder*,
+      std::shared_ptr<TrackConsumer> consumer,
+      Fetch fetch) override {
+    if (auto b = broadcast_.lock()) {
+      b->serveFill(std::move(consumer), std::move(fetch));
     }
   }
 
@@ -286,6 +296,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQBroadcast::subscribe(
             SubscribeErrorCode::DOES_NOT_EXIST,
             "track ended"});
   }
+  if (subReq.fill) {
+    sub->requestFill(subReq.requestID, *subReq.fill);
+  }
   XLOG(INFO) << "[MoQBroadcast] subscriber added track=" << ftn.trackName;
   // Non-static tracks produce objects through a publish loop. A source may
   // still seed initialLargest while continuing to publish future objects.
@@ -349,6 +362,19 @@ folly::coro::Task<Publisher::FetchResult> MoQBroadcast::fetch(
           handle->cancelSource.getToken(), std::move(serve)))
       .start();
   co_return handle;
+}
+
+// Only the catalog serves a FETCH, so a media fill opens and then resets.
+void MoQBroadcast::serveFill(
+    std::shared_ptr<TrackConsumer> consumer,
+    Fetch fetch) {
+  serveFillFromFetch(
+      [self = shared_from_this()](
+          Fetch fetch, std::shared_ptr<FetchConsumer> fill) {
+        return self->fetch(std::move(fetch), std::move(fill));
+      },
+      std::move(consumer),
+      std::move(fetch));
 }
 
 folly::coro::Task<void> MoQBroadcast::serveMediaFetch(

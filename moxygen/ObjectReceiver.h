@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <folly/Function.h>
 #include <folly/logging/xlog.h>
 #include <moxygen/MoQConsumers.h>
 
@@ -169,15 +170,151 @@ class ObjectSubgroupReceiver : public SubgroupConsumer {
   void notifyParentFinished();
 };
 
+// Forwards one fill stream to its consumer and reports that stream's terminal
+// to the parent.
+class ObjectFillReceiver : public FetchConsumer {
+  std::shared_ptr<FetchConsumer> inner_;
+  std::shared_ptr<ObjectReceiver> parent_;
+  bool finished_{false};
+
+ public:
+  explicit ObjectFillReceiver(std::shared_ptr<FetchConsumer> inner)
+      : inner_(std::move(inner)) {}
+
+  // Otherwise a wrapper dropped without a terminal blocks all-data-received.
+  ~ObjectFillReceiver() override;
+  ObjectFillReceiver(const ObjectFillReceiver&) = delete;
+  ObjectFillReceiver& operator=(const ObjectFillReceiver&) = delete;
+  ObjectFillReceiver(ObjectFillReceiver&&) = delete;
+  ObjectFillReceiver& operator=(ObjectFillReceiver&&) = delete;
+
+  void setParent(std::shared_ptr<ObjectReceiver> parent) {
+    parent_ = std::move(parent);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> object(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      Payload payload,
+      Extensions extensions = noExtensions(),
+      bool finFetch = false,
+      bool forwardingPreferenceIsDatagram = false) override {
+    auto res = inner_->object(
+        groupID,
+        subgroupID,
+        objectID,
+        std::move(payload),
+        std::move(extensions),
+        finFetch,
+        forwardingPreferenceIsDatagram);
+    if (finFetch) {
+      notifyParentFinished();
+    }
+    return res;
+  }
+
+  void checkpoint() override {
+    inner_->checkpoint();
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> beginObject(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      uint64_t length,
+      Payload initialPayload,
+      Extensions extensions = noExtensions()) override {
+    return inner_->beginObject(
+        groupID,
+        subgroupID,
+        objectID,
+        length,
+        std::move(initialPayload),
+        std::move(extensions));
+  }
+
+  folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
+      Payload payload,
+      bool finSubgroup = false) override {
+    auto res = inner_->objectPayload(std::move(payload), finSubgroup);
+    // Only the chunk that completes the object ends the fetch. A completed
+    // object can still return an error, such as BLOCKED.
+    if (finSubgroup &&
+        !(res.hasValue() && res.value() == ObjectPublishStatus::IN_PROGRESS)) {
+      notifyParentFinished();
+    }
+    return res;
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      bool finFetch = false) override {
+    auto res = inner_->endOfGroup(groupID, subgroupID, objectID, finFetch);
+    if (finFetch) {
+      notifyParentFinished();
+    }
+    return res;
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID) override {
+    auto res = inner_->endOfTrackAndGroup(groupID, subgroupID, objectID);
+    notifyParentFinished();
+    return res;
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {
+    auto res = inner_->endOfFetch();
+    notifyParentFinished();
+    return res;
+  }
+
+  void reset(ResetStreamErrorCode error) override {
+    inner_->reset(error);
+    notifyParentFinished();
+  }
+
+  void goaway(Goaway goaway) override {
+    inner_->goaway(std::move(goaway));
+  }
+
+  folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
+  awaitReadyToConsume() override {
+    return inner_->awaitReadyToConsume();
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfUnknownRange(
+      uint64_t groupID,
+      uint64_t objectID,
+      bool finFetch = false) override {
+    auto res = inner_->endOfUnknownRange(groupID, objectID, finFetch);
+    if (finFetch) {
+      notifyParentFinished();
+    }
+    return res;
+  }
+
+ private:
+  void notifyParentFinished();
+};
+
 class ObjectReceiver : public TrackConsumer,
                        public FetchConsumer,
                        public std::enable_shared_from_this<ObjectReceiver> {
   std::shared_ptr<ObjectReceiverCallback> callback_{nullptr};
   std::optional<ObjectSubgroupReceiver> fetchPublisher_;
+  folly::Function<std::shared_ptr<FetchConsumer>(RequestID)>
+      fillReceiverFactory_;
   std::optional<TrackAlias> trackAlias_;
   // Tracking for onAllDataReceived.  Only allDataCallbackSent_ applies to
   // fetches.
   size_t openSubgroups_{0};
+  size_t openFills_{0};
   bool publishDoneDelivered_{false};
   bool allDataCallbackSent_{false};
 
@@ -215,6 +352,30 @@ class ObjectReceiver : public TrackConsumer,
     return receiver;
   }
 
+  using FillReceiverFactory =
+      folly::Function<std::shared_ptr<FetchConsumer>(RequestID)>;
+
+  // Makes the consumer for each fill on this subscription. Fills can be open
+  // at the same time, so each needs its own consumer. Without a factory, or
+  // when it returns null, the fill is refused.
+  void setFillReceiverFactory(FillReceiverFactory factory) {
+    fillReceiverFactory_ = std::move(factory);
+  }
+
+  folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError> beginFill(
+      RequestID requestID) override {
+    auto inner =
+        fillReceiverFactory_ ? fillReceiverFactory_(requestID) : nullptr;
+    if (!inner) {
+      return folly::makeUnexpected(
+          MoQPublishError(MoQPublishError::CANCELLED, "No fill receiver"));
+    }
+    ++openFills_;
+    auto receiver = std::make_shared<ObjectFillReceiver>(std::move(inner));
+    receiver->setParent(shared_from_this());
+    return receiver;
+  }
+
   // Called when a subgroup stream finishes (via endOfSubgroup or reset)
   void onSubgroupFinished() {
     if (openSubgroups_ > 0) {
@@ -223,11 +384,20 @@ class ObjectReceiver : public TrackConsumer,
     maybeFireAllDataReceived();
   }
 
-  // Fire onAllDataReceived callback once when both conditions are met:
+  // Called when a fill fetch stream finishes (via a terminal or reset)
+  void onFillFinished() {
+    if (openFills_ > 0) {
+      --openFills_;
+    }
+    maybeFireAllDataReceived();
+  }
+
+  // Fire onAllDataReceived callback once when all three conditions are met:
   // 1. PUBLISH_DONE has been received
   // 2. All subgroup streams have closed
+  // 3. All fill fetch streams have closed
   void maybeFireAllDataReceived() {
-    if (publishDoneDelivered_ && openSubgroups_ == 0) {
+    if (publishDoneDelivered_ && openSubgroups_ == 0 && openFills_ == 0) {
       fireAllDataReceived();
     }
   }
@@ -388,6 +558,17 @@ inline void ObjectSubgroupReceiver::notifyParentFinished() {
     finished_ = true;
     parent_->onSubgroupFinished();
   }
+}
+
+inline void ObjectFillReceiver::notifyParentFinished() {
+  if (parent_ && !finished_) {
+    finished_ = true;
+    parent_->onFillFinished();
+  }
+}
+
+inline ObjectFillReceiver::~ObjectFillReceiver() {
+  notifyParentFinished();
 }
 
 } // namespace moxygen

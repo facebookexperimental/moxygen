@@ -285,6 +285,10 @@ class MoQRelay : public Publisher,
   void onEmpty(MoQForwarder* forwarder) override;
   void forwardChanged(MoQForwarder* forwarder) override;
   void newGroupRequested(MoQForwarder* forwarder, uint64_t group) override;
+  void fillRequested(
+      MoQForwarder* forwarder,
+      std::shared_ptr<TrackConsumer> consumer,
+      Fetch fetch) override;
 
   folly::coro::Task<void> publishToSession(
       std::shared_ptr<MoQSession> session,

@@ -79,6 +79,7 @@ class MoQBroadcast : public std::enable_shared_from_this<MoQBroadcast> {
   // them). They only schedule work; the actual reap runs later on the executor.
   void onForwarderEmpty(const std::string& trackName);
   void onForwarderSourceEnded(const std::string& trackName);
+  void serveFill(std::shared_ptr<TrackConsumer> consumer, Fetch fetch);
 
  private:
   // A per-track serving stack: the track's segment feed, its fan-out forwarder,

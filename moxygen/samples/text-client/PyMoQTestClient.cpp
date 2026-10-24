@@ -321,25 +321,25 @@ class PyMoQSubscriber : public Subscriber,
 
         co_await handler_->baton;
       } else if (options_.jafetch || options_.jrfetch) {
-        // Joining fetch mode
-        FetchType fetchType = options_.jafetch ? FetchType::ABSOLUTE_JOINING
-                                               : FetchType::RELATIVE_JOINING;
-        auto fetchReceiver = std::make_shared<ObjectReceiver>(
-            ObjectReceiver::FETCH, std::make_shared<PyObjectHandler>(true));
+        // Fill mode. jafetch counts from a group ID, jrfetch from the current
+        // group, which is one nearer than a Location Filter's relative start.
+        const auto joinStart = static_cast<uint64_t>(options_.joinStart);
+        FillParameters fill;
+        fill.locationFilter = options_.jafetch
+            ? LocationFilter::absoluteStart({joinStart, 0})
+            : LocationFilter::relativeStart(joinStart + 1);
+        sub.fill = fill;
+        subReceiver_->setFillReceiverFactory([](RequestID) {
+          return std::make_shared<ObjectReceiver>(
+              ObjectReceiver::FETCH, std::make_shared<PyObjectHandler>(true));
+        });
 
-        auto joinResult = co_await moqClient_.getSession()->join(
-            sub,
-            subReceiver_,
-            options_.joinStart,
-            sub.priority,
-            sub.groupOrder,
-            {},
-            fetchReceiver,
-            fetchType);
+        auto subscribeResult =
+            co_await moqClient_.getSession()->subscribe(sub, subReceiver_);
 
-        if (joinResult.subscribeResult.hasError()) {
-          auto& error = joinResult.subscribeResult.error();
-          std::cerr << "Join/Subscribe failed with error:" << std::endl;
+        if (subscribeResult.hasError()) {
+          auto& error = subscribeResult.error();
+          std::cerr << "Subscribe with fill failed with error:" << std::endl;
           std::cerr << "  - Error Code: "
                     << folly::to_underlying(error.errorCode) << std::endl;
           std::cerr << "  - Reason: " << error.reasonPhrase << std::endl;

@@ -6,6 +6,7 @@
 
 #include "moxygen/relay/MoQRelay.h"
 #include <folly/logging/xlog.h>
+#include "moxygen/FillFetch.h"
 #include "moxygen/MoQFilters.h"
 #include "moxygen/MoQFramer.h"
 #include "moxygen/MoQTrackProperties.h"
@@ -1601,6 +1602,9 @@ MoQRelay::subscribeToExistingRelaySubscription(
   }
   XLOG(DBG4) << "added subscriber for ftn=" << subReq.fullTrackName;
   forwarder->tryProcessNewGroupRequest(subReq.params);
+  if (subReq.fill) {
+    subscriber->requestFill(subReq.requestID, *subReq.fill);
+  }
   co_return subscriber;
 }
 
@@ -1633,6 +1637,11 @@ MoQRelay::subscribeToFirstRelaySubscription(
   // We only subscribe upstream from the Next Object. This is to satisfy other
   // subscribers that join with narrower filters
   upstreamSubReq.filter = LocationFilter::nextObject();
+  // The shared upstream subscription does not request a fill either;
+  // downstream fills come from the cache and an upstream FETCH.
+  // TODO: carry the first subscriber's FILL_PARAMETERS upstream once the
+  // cache can take in an upstream fill.
+  upstreamSubReq.fill.reset();
   auto forwarder =
       std::make_shared<MoQForwarder>(subReq.fullTrackName, std::nullopt);
   forwarder->setCallback(shared_from_this());
@@ -1710,6 +1719,10 @@ MoQRelay::subscribeToFirstRelaySubscription(
   // Record NGR as outstanding (no fire — it rides the outgoing SUBSCRIBE).
   forwarder->tryProcessNewGroupRequest(subReq.params, /*fire=*/false);
   rsub.promise.setValue(folly::unit);
+  // Only now is upstream's Largest known, to both the forwarder and the cache.
+  if (subReq.fill) {
+    subscriber->requestFill(subReq.requestID, *subReq.fill);
+  }
   co_return subscriber;
 }
 
@@ -1919,6 +1932,14 @@ void MoQRelay::newGroupRequested(MoQForwarder* forwarder, uint64_t group) {
   auto handle = subscription.handle;
   co_withExecutor(exec, doNewGroupRequestUpdate(std::move(handle), group))
       .start();
+}
+
+// Serves the fill through MoQRelay::fetch: from the cache, else upstream.
+void MoQRelay::fillRequested(
+    MoQForwarder* /*forwarder*/,
+    std::shared_ptr<TrackConsumer> consumer,
+    Fetch fetch) {
+  serveFillFromFetch(shared_from_this(), std::move(consumer), std::move(fetch));
 }
 
 } // namespace moxygen

@@ -278,28 +278,23 @@ class MoQTextClient : public Subscriber,
       addRendezvousTimeoutParamIfSupported(
           sub, moqClient_.getSession()->getNegotiatedVersion());
 
-      Publisher::SubscribeResult track;
       if (FLAGS_jafetch || FLAGS_jrfetch) {
-        FetchType fetchType = FLAGS_jafetch ? FetchType::ABSOLUTE_JOINING
-                                            : FetchType::RELATIVE_JOINING;
-
-        // Call join() for joining fetch
-        fetchTextReceiver_ = std::make_shared<ObjectReceiver>(
-            ObjectReceiver::FETCH, fetchTextHandler_);
-        auto joinResult = co_await moqClient_.getSession()->join(
-            sub,
-            subTextReceiver_,
-            FLAGS_join_start,
-            sub.priority,
-            sub.groupOrder,
-            {},
-            fetchTextReceiver_,
-            fetchType);
-        track = joinResult.subscribeResult;
-      } else {
-        track =
-            co_await moqClient_.getSession()->subscribe(sub, subTextReceiver_);
+        // --jafetch counts from a group ID, the others from the current
+        // group, which is one nearer than a Location Filter's relative start.
+        const auto joinStart = static_cast<uint64_t>(FLAGS_join_start);
+        FillParameters fill;
+        fill.locationFilter = FLAGS_jafetch
+            ? LocationFilter::absoluteStart({joinStart, 0})
+            : LocationFilter::relativeStart(joinStart + 1);
+        sub.fill = fill;
+        subTextReceiver_->setFillReceiverFactory([this](RequestID) {
+          fetchTextReceiver_ = std::make_shared<ObjectReceiver>(
+              ObjectReceiver::FETCH, fetchTextHandler_);
+          return fetchTextReceiver_;
+        });
       }
+      Publisher::SubscribeResult track =
+          co_await moqClient_.getSession()->subscribe(sub, subTextReceiver_);
       bool needFetch = false;
       const auto subStart = sub.filter.absoluteStartLocation();
       const auto subEndGroup = sub.filter.legacyEndGroup();

@@ -1045,6 +1045,18 @@ void StreamPublisherImpl::reset(ResetStreamErrorCode error) {
     publisher_->cancelUniStreamCreditWait(*streamCreditWaitId_);
   }
 
+  if (!writeHandle_ && publisher_ && publisher_->isFill()) {
+    // A fill signals failure by resetting right after the FETCH_HEADER, so
+    // the header must reach the wire.
+    // TODO: checkpoint the header once proxygen's WebTransport exposes
+    // updateReliableDeliveryCheckpoint.
+    if (ensureWriteHandle().hasValue()) {
+      auto res = writeToStream(/*finStream=*/false, /*endObject=*/false);
+      XLOG_IF(ERR, res.hasError())
+          << "Fill FETCH_HEADER write failed before reset: "
+          << res.error().describe();
+    }
+  }
   if (auto* wh = std::exchange(writeHandle_, nullptr)) {
     wh->resetStream(
         toWireResetStreamErrorCode(error, publisher_->getVersion()));
@@ -1594,6 +1606,11 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     session_->beginSubscriptionStat(*this);
   }
 
+  // The handler serves a recorded fill through beginFill().
+  void expectFill(RequestID requestID, const FillParameters& fill) {
+    requestedFills_.emplace(requestID, fill);
+  }
+
   void setForward(bool forward) {
     forward_ = forward;
     for (const auto& [_, subgroupPublisher] : subgroups_) {
@@ -1675,7 +1692,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   }
 
   bool hasOpenDataStreams() const override {
-    return !subgroups_.empty();
+    return !subgroups_.empty() || !fills_.empty();
   }
 
   void resetAllSubgroups(ResetStreamErrorCode code) {
@@ -1684,7 +1701,16 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       // reset will invoke onStreamComplete, which erases from subgroups_
       it->second->reset(code);
     }
+    resetFills(code);
   }
+
+  // Fills live here, not in pubTracks_, which already maps this request ID.
+  void addFill(std::shared_ptr<FetchPublisherImpl> fill);
+  void removeFill(const FetchPublisherImpl* fill);
+  void resetFills(ResetStreamErrorCode code);
+
+  // Retire once PUBLISH_DONE is sent and the last subgroup or fill closes.
+  void maybeDrain();
 
   // TrackConsumer overrides
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
@@ -1702,6 +1728,9 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       SubgroupIDFormat format,
       bool includeExtensions,
       BeginSubgroupOptions options);
+
+  folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError> beginFill(
+      RequestID requestID) override;
 
   folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
   awaitStreamCredit() override;
@@ -1742,6 +1771,9 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       std::pair<uint64_t, uint64_t>,
       std::shared_ptr<StreamPublisherImpl>>
       subgroups_;
+  folly::F14FastMap<RequestID, FillParameters, RequestID::hash> requestedFills_;
+  // Fill fetch streams this subscription has open.
+  std::vector<std::shared_ptr<FetchPublisherImpl>> fills_;
   uint64_t streamCount_{0};
   bool forward_;
   std::shared_ptr<DeliveryCallback> deliveryCallback_;
@@ -1797,7 +1829,7 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
     cancelGoawayResetTimer();
     cancelled_ = true;
     // reset -> onStreamComplete -> fetchComplete: handles pubTracks_.erase
-    // and retireRequestID
+    // and retireRequestID. A fill is removed from its subscription instead.
     reset(ResetStreamErrorCode::CANCELLED);
     if (auto handle = std::exchange(handle_, nullptr)) {
       handle->fetchCancel();
@@ -1832,6 +1864,16 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
     }
   }
 
+  // Set when this serves a subscription's fill range rather than a FETCH.
+  void setFillOwner(const std::shared_ptr<TrackPublisherImpl>& owner) {
+    fillOwner_ = owner;
+    isFill_ = true;
+  }
+
+  bool isFill() const override {
+    return isFill_;
+  }
+
   void onStreamComplete(const ObjectHeader&) override {
     cancelGoawayResetTimer();
     if (!streamPublisher_) {
@@ -1839,6 +1881,16 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
       return;
     }
     streamPublisher_.reset();
+    if (isFill_) {
+      // A fill shares its subscription's request ID, so fetchComplete() would
+      // erase the subscription's publisher from pubTracks_.
+      auto self = shared_from_this();
+      session_ = nullptr;
+      if (auto owner = fillOwner_.lock()) {
+        owner->removeFill(this);
+      }
+      return;
+    }
     PublisherImpl::fetchComplete();
   }
 
@@ -1946,11 +1998,58 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
   std::shared_ptr<MLogger> logger_;
   std::shared_ptr<Publisher::FetchHandle> handle_;
   std::shared_ptr<StreamPublisherImpl> streamPublisher_;
+  std::weak_ptr<TrackPublisherImpl> fillOwner_;
+  bool isFill_{false};
   bool cancelled_{false};
   RequestUpdateSequencer updates_;
 };
 
 // TrackPublisherImpl
+
+void MoQSession::TrackPublisherImpl::addFill(
+    std::shared_ptr<FetchPublisherImpl> fill) {
+  fills_.push_back(std::move(fill));
+}
+
+void MoQSession::TrackPublisherImpl::removeFill(
+    const FetchPublisherImpl* fill) {
+  auto keepalive = shared_from_this();
+  fills_.erase(
+      std::remove_if(
+          fills_.begin(),
+          fills_.end(),
+          [fill](const auto& f) { return f.get() == fill; }),
+      fills_.end());
+  maybeDrain();
+}
+
+void MoQSession::TrackPublisherImpl::resetFills(ResetStreamErrorCode code) {
+  // reset() drives removeFill(), so take the list first.
+  auto fills = std::exchange(fills_, {});
+  for (auto& fill : fills) {
+    fill->reset(code);
+  }
+}
+
+folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>
+MoQSession::TrackPublisherImpl::beginFill(RequestID requestID) {
+  auto it = requestedFills_.find(requestID);
+  if (it == requestedFills_.end()) {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::API_ERROR, "No fill requested"));
+  }
+  auto fill = it->second;
+  requestedFills_.erase(it);
+  // A paused subscription does not open a fill stream.
+  if (!session_ || !forward_ || publishEnded()) {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::CANCELLED, "Not delivering"));
+  }
+  return session_->openFillStream(
+      std::static_pointer_cast<TrackPublisherImpl>(shared_from_this()),
+      requestID,
+      fill);
+}
 
 folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
 MoQSession::TrackPublisherImpl::beginSubgroup(
@@ -2055,7 +2154,11 @@ void MoQSession::TrackPublisherImpl::onStreamComplete(
   // from it.
   auto keepalive = shared_from_this();
   subgroups_.erase({finalHeader.group, finalHeader.subgroup});
-  if (session_ && isDone() && subgroups_.empty()) {
+  maybeDrain();
+}
+
+void MoQSession::TrackPublisherImpl::maybeDrain() {
+  if (session_ && isDone() && !hasOpenDataStreams()) {
     session_->publisherDrained(requestID_);
   }
 }
@@ -2335,6 +2438,15 @@ class MoQSession::SubscribeTrackReceiveState
     return cancelSource_.isCancellationRequested() ? nullptr : callback_;
   }
 
+  // The subscription's group order, unless FILL_PARAMETERS overrides it.
+  void setFillGroupOrderOverride(std::optional<GroupOrder> order) {
+    fillGroupOrderOverride_ = order;
+  }
+
+  GroupOrder getFillGroupOrder() const {
+    return fillGroupOrderOverride_.value_or(groupOrder_);
+  }
+
   void cancel() {
     XLOG(DBG1) << __func__ << " alias=" << alias_
                << " requestID=" << requestID_;
@@ -2349,6 +2461,7 @@ class MoQSession::SubscribeTrackReceiveState
   // Returns false if the subscribe was already cancelled.
   bool processSubscribeOK(SubscribeOk subscribeOK) {
     alias_ = subscribeOK.trackAlias;
+    groupOrder_ = subscribeOK.groupOrder;
     return subscribePromise_.trySetValue(std::move(subscribeOK));
   }
 
@@ -2374,11 +2487,12 @@ class MoQSession::SubscribeTrackReceiveState
       logger_->logStreamTypeSet(
           currentStreamId_, MOQTStreamType::SUBGROUP_HEADER, Owner::REMOTE);
     }
-    streamCount_++;
-    if (pendingPublishDone_ &&
-        streamCount_ >= pendingPublishDone_->streamCount) {
-      deliverPublishDoneAndRemove();
-    }
+    countStream();
+  }
+
+  // Draft 20 counts fill streams in PUBLISH_DONE's Stream Count.
+  void onFillStream() {
+    countStream();
   }
 
   void processPublishDone(PublishDone pubDone) {
@@ -2425,6 +2539,14 @@ class MoQSession::SubscribeTrackReceiveState
   }
 
  private:
+  void countStream() {
+    streamCount_++;
+    if (pendingPublishDone_ &&
+        streamCount_ >= pendingPublishDone_->streamCount) {
+      deliverPublishDoneAndRemove();
+    }
+  }
+
   void deliverPublishDoneAndRemove() {
     cancelStreamCountTimeout();
     if (pendingPublishDone_) {
@@ -2485,6 +2607,8 @@ class MoQSession::SubscribeTrackReceiveState
   std::optional<PublishDone> pendingPublishDone_;
   uint64_t streamCount_{0};
   uint64_t currentStreamId_{0};
+  GroupOrder groupOrder_{GroupOrder::OldestFirst};
+  std::optional<GroupOrder> fillGroupOrderOverride_;
 
   // Indicates whether receiveState is for Publish
   bool publish_;
@@ -2560,6 +2684,32 @@ class MoQSession::FetchTrackReceiveState
     return std::move(contract.second);
   }
 
+  // A fill does not get a FETCH_OK, so it is established once registered.
+  void markFill() {
+    isFill_ = true;
+    fetchEstablished_ = true;
+  }
+
+  bool isFill() const {
+    return isFill_;
+  }
+
+  void markStreamOpened() {
+    streamOpened_ = true;
+  }
+
+  bool streamOpened() const {
+    return streamOpened_;
+  }
+
+  // An empty fill range never opens a stream, so this reset is the answer.
+  void fillNeverOpened(MoQSession* session) {
+    if (auto callback = std::exchange(callback_, nullptr)) {
+      callback->reset(ResetStreamErrorCode::CANCELLED);
+    }
+    session->fetches_.erase(requestID_);
+  }
+
   std::shared_ptr<FetchConsumer> getFetchCallback() const {
     return callback_;
   }
@@ -2610,6 +2760,10 @@ class MoQSession::FetchTrackReceiveState
   void cancel(
       MoQSession* session,
       ResetStreamErrorCode consumerError = ResetStreamErrorCode::CANCELLED) {
+    if (isFill_) {
+      // Cancelling sends STOP_SENDING on the fill's data stream.
+      dataStreamCancelCode_ = ResetStreamErrorCode::CANCELLED;
+    }
     cancelSource_.requestCancellation();
     // RST the bidi (e.g. fetch-stream-open timeout); peer interprets as cancel.
     if (bidiControl_) {
@@ -2650,6 +2804,9 @@ class MoQSession::FetchTrackReceiveState
   }
 
   void fetchError(FetchError fetchErr) {
+    if (isFill_) {
+      return;
+    }
     if (!promise_.isFulfilled()) {
       fetchErr.requestID = requestID_;
       promise_.setValue(folly::makeUnexpected(std::move(fetchErr)));
@@ -2657,6 +2814,7 @@ class MoQSession::FetchTrackReceiveState
   }
 
   void onFetchHeader(RequestID requestID) {
+    streamOpened_ = true;
     if (logger_) {
       logger_->logStreamTypeSet(
           currentStreamId_, MOQTStreamType::FETCH_HEADER, Owner::REMOTE);
@@ -2665,7 +2823,7 @@ class MoQSession::FetchTrackReceiveState
   }
 
   bool fetchOkAndAllDataReceived() const {
-    return promise_.isFulfilled() && !callback_;
+    return (isFill_ || promise_.isFulfilled()) && !callback_;
   }
 
   void setCurrentStreamId(uint64_t id) {
@@ -2682,6 +2840,8 @@ class MoQSession::FetchTrackReceiveState
       ResetStreamErrorCode::INTERNAL_ERROR};
   bool fetchEstablished_{false};
   std::unique_ptr<StallTimeout> stallTimeout_;
+  bool isFill_{false};
+  bool streamOpened_{false};
 };
 
 // Links a held joining FETCH to the SUBSCRIBE or PUBLISH it references.
@@ -4087,15 +4247,85 @@ MoQSession::resolveJoiningFetch(
 }
 
 std::shared_ptr<MoQSession::FetchTrackReceiveState>
-MoQSession::getFetchTrackReceiveState(RequestID requestID) {
+MoQSession::openFetchTrackReceiveState(RequestID requestID) {
   XLOG(DBG3) << "getTrack reqID=" << requestID;
   auto trackIt = fetches_.find(requestID);
-  if (trackIt == fetches_.end()) {
-    // received an object for unknown subscribe ID
-    XLOG(ERR) << "unknown subscribe ID=" << requestID << " sess=" << this;
+  if (trackIt != fetches_.end()) {
+    // The count can complete the subscription and drop a waiting fill.
+    auto state = trackIt->second;
+    if (state->isFill() && !state->streamOpened()) {
+      state->markStreamOpened();
+      countFillStream(requestID);
+    }
+    return state;
+  }
+  if (auto fill = beginFillReceiveState(requestID)) {
+    fill->markStreamOpened();
+    countFillStream(requestID);
+    return fill;
+  }
+  // received an object for unknown subscribe ID
+  XLOG(ERR) << "unknown subscribe ID=" << requestID << " sess=" << this;
+  return nullptr;
+}
+
+std::shared_ptr<MoQSession::FetchTrackReceiveState>
+MoQSession::beginFillReceiveState(RequestID requestID) {
+  // A fill's FETCH_HEADER carries the ID of the SUBSCRIBE or REQUEST_UPDATE
+  // that initiated it.
+  std::shared_ptr<SubscribeTrackReceiveState> subState;
+  auto aliasIt = reqIdToTrackAlias_.find(requestID);
+  if (aliasIt != reqIdToTrackAlias_.end()) {
+    subState = getSubscribeTrackReceiveState(aliasIt->second);
+  } else {
+    // The fill can arrive before SUBSCRIBE_OK, which is on another stream.
+    auto pendingIt = pendingRequests_.find(requestID);
+    if (pendingIt != pendingRequests_.end()) {
+      if (auto* pending = pendingIt->second->tryGetSubscribeTrack()) {
+        subState = *pending;
+      }
+    }
+  }
+  if (!subState) {
     return nullptr;
   }
-  return trackIt->second;
+  auto callback = subState->getSubscribeCallback();
+  if (!callback) {
+    return nullptr;
+  }
+  auto consumer = callback->beginFill(requestID);
+  if (!consumer || !consumer.value()) {
+    XLOG(DBG1) << "Fill refused by consumer id=" << requestID
+               << " sess=" << this;
+    return nullptr;
+  }
+  return registerFillReceiveState(
+      subState->fullTrackName(),
+      requestID,
+      std::move(consumer.value()),
+      subState->getFillGroupOrder());
+}
+
+void MoQSession::countFillStream(RequestID requestID) {
+  auto aliasIt = reqIdToTrackAlias_.find(requestID);
+  if (aliasIt == reqIdToTrackAlias_.end()) {
+    return;
+  }
+  if (auto subState = getSubscribeTrackReceiveState(aliasIt->second)) {
+    subState->onFillStream();
+  }
+}
+
+std::shared_ptr<MoQSession::FetchTrackReceiveState>
+MoQSession::registerFillReceiveState(
+    const FullTrackName& fullTrackName,
+    RequestID requestID,
+    std::shared_ptr<FetchConsumer> consumer,
+    GroupOrder groupOrder) {
+  auto state = std::make_shared<FetchTrackReceiveState>(
+      fullTrackName, requestID, std::move(consumer), groupOrder, logger_);
+  state->markFill();
+  return fetches_.emplace(requestID, std::move(state)).first->second;
 }
 
 namespace detail {
@@ -4578,7 +4808,7 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
   auto onFetchFunc =
       [this, &token, &codec, &fetchState, &fetchCancelCb, &readHandle](
           RequestID requestID) {
-        auto state = getFetchTrackReceiveState(requestID);
+        auto state = openFetchTrackReceiveState(requestID);
         if (state) {
           // FetchTrackReceiveState lifecycle now controls read loop
           fetchState = state;
@@ -4829,6 +5059,9 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
   setRequestSession();
   auto requestID = sub.requestID;
   auto fullTrackName = sub.fullTrackName;
+  if (sub.fill) {
+    trackPublisher->expectFill(requestID, *sub.fill);
+  }
   auto& params = sub.params;
   const bool sendTrackProperties =
       getDraftMajorVersion(*getNegotiatedVersion()) < 22 ||
@@ -4891,6 +5124,35 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     // dependent joining FETCH can be dispatched.
     resolveJoiningDependencies(requestID, fullTrackName);
   }
+}
+
+folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>
+MoQSession::openFillStream(
+    const std::shared_ptr<TrackPublisherImpl>& trackPublisher,
+    RequestID requestID,
+    const FillParameters& fill) {
+  auto fillPublisher = std::make_shared<FetchPublisherImpl>(
+      this,
+      trackPublisher->fullTrackName(),
+      requestID,
+      fill.subscriberPriority.value_or(trackPublisher->subPriority()),
+      fill.groupOrder.value_or(trackPublisher->getGroupOrder()),
+      *negotiatedVersion_,
+      moqSettings_.bufferingThresholds.perSubscription);
+  fillPublisher->setLogger(logger_);
+  fillPublisher->initialize();
+  auto streamPublisher = fillPublisher->getStreamPublisher();
+  if (!streamPublisher) {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::API_ERROR, "Fill stream failed"));
+  }
+  fillPublisher->setFillOwner(trackPublisher);
+  trackPublisher->addFill(fillPublisher);
+  // Draft 20 counts fill streams in PUBLISH_DONE's Stream Count.
+  trackPublisher->onStreamCreated();
+  XLOG(DBG1) << "Opening fill fetch stream id=" << requestID
+             << " sess=" << this;
+  return streamPublisher;
 }
 
 // Extensions are canonical; the param fallback only fires for a locally built
@@ -5430,6 +5692,13 @@ class MoQSession::ReceiverSubscriptionHandle
     }
   }
 
+  void cancelFill(RequestID requestID) override {
+    if (session_) {
+      // fetchCancel() sends STOP_SENDING for a fill, not FETCH_CANCEL.
+      session_->fetchCancel({requestID}, nullptr);
+    }
+  }
+
  private:
   enum class RequestUpdateState { PENDING, READY, REJECTED };
 
@@ -5652,7 +5921,17 @@ void MoQSession::onPublishDone(PublishDone publishDone) {
 void MoQSession::removeSubscriptionState(TrackAlias alias, RequestID id) {
   subTracks_.erase(alias);
   reqIdToTrackAlias_.erase(id);
+  endUnopenedFill(id);
   checkForCloseOnDrain();
+}
+
+void MoQSession::endUnopenedFill(RequestID id) {
+  // A fill that never got a stream will not get one now.
+  auto fillIt = fetches_.find(id);
+  if (fillIt != fetches_.end() && fillIt->second->isFill() &&
+      !fillIt->second->streamOpened()) {
+    fillIt->second->fillNeverOpened(this);
+  }
 }
 
 void MoQSession::onMaxRequestID(MaxRequestID maxRequestID) {
@@ -6877,6 +7156,74 @@ RequestID MoQSession::getNextRequestID() {
   return ret;
 }
 
+folly::coro::Task<void> MoQSession::sendFetchForFill(
+    RequestID subscribeID,
+    SubscribeRequest sub,
+    std::shared_ptr<FetchConsumer> consumer) {
+  const auto& filter = sub.fill->locationFilter.value_or(sub.filter);
+  const auto priority = sub.fill->subscriberPriority.value_or(sub.priority);
+  const auto groupOrder = sub.fill->groupOrder.value_or(sub.groupOrder);
+  // Draft 20 fills inherit the subscription's parameters; match that.
+  const std::vector<Parameter> params(sub.params.begin(), sub.params.end());
+  auto start = filter.absoluteStartLocation();
+  std::optional<Fetch> fetchReq;
+  if (start && !filter.isOpenEnded()) {
+    // An absolute range is a standalone FETCH. The publisher clamps the end
+    // to Largest Object.
+    auto [rangeStart, rangeEnd] = filter.fetchRange(std::nullopt);
+    fetchReq.emplace(
+        0,
+        sub.fullTrackName,
+        rangeStart,
+        rangeEnd,
+        priority,
+        groupOrder,
+        params);
+  } else if (auto groupsBack = filter.relativeStartGroupsBack()) {
+    // A joining FETCH counts back from the current group, one nearer than a
+    // Location Filter, which counts from the next group.
+    fetchReq.emplace(
+        0,
+        subscribeID,
+        *groupsBack > 0 ? *groupsBack - 1 : 0,
+        FetchType::RELATIVE_JOINING,
+        priority,
+        groupOrder,
+        params);
+  } else if (start) {
+    // A Joining FETCH starts at the beginning of a Group, so a fill that starts
+    // mid-Group also gets that Group's earlier Objects.
+    fetchReq.emplace(
+        0,
+        subscribeID,
+        start->group,
+        FetchType::ABSOLUTE_JOINING,
+        priority,
+        groupOrder,
+        params);
+  } else {
+    // The Next Object form selects nothing a fill could carry.
+    consumer->reset(ResetStreamErrorCode::CANCELLED);
+    co_return;
+  }
+  fetchReq->fullTrackName = sub.fullTrackName;
+
+  auto result = co_await co_awaitTry(fetch(std::move(*fetchReq), consumer));
+  if (result.hasException()) {
+    XLOG(ERR) << "Fill FETCH failed id=" << subscribeID
+              << " err=" << result.exception().what() << " sess=" << this;
+  } else if (result.value().hasError()) {
+    XLOG(ERR) << "Fill FETCH failed id=" << subscribeID << " code="
+              << folly::to_underlying(result.value().error().errorCode)
+              << " reason=" << result.value().error().reasonPhrase
+              << " sess=" << this;
+  } else {
+    co_return;
+  }
+  // At every draft, a fill reports failure only by resetting.
+  consumer->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+}
+
 folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     SubscribeRequest sub,
     std::shared_ptr<TrackConsumer> callback) {
@@ -6918,6 +7265,16 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   sub.requestID = reqID;
   TrackAlias trackAlias = reqID.value;
   aliasifyAuthTokens(sub.params);
+  if (sub.fill && sub.fill->groupOrder == GroupOrder::Default) {
+    sub.fill->groupOrder.reset();
+  }
+  if (sub.fill && !sub.fill->groupOrder &&
+      sub.groupOrder == GroupOrder::Default &&
+      useFillFetch(*negotiatedVersion_)) {
+    // The fill stream can arrive before the SUBSCRIBE_OK that carries the
+    // publisher's order, and the stream cannot be parsed without an order.
+    sub.fill->groupOrder = GroupOrder::OldestFirst;
+  }
   folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
   auto wres = moqFrameWriter_.writeSubscribeRequest(buf, sub);
   if (!wres) {
@@ -6971,20 +7328,57 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
       fullTrackName, reqID, callback, this, trackAlias, logger_);
   trackReceiveState->setBidiControl(control);
+  if (sub.fill) {
+    trackReceiveState->setFillGroupOrderOverride(sub.fill->groupOrder);
+  }
   pendingRequests_.emplace(
       reqID, PendingRequestState::makeSubscribeTrack(trackReceiveState));
   pendingSubscribeTracks_.insert(fullTrackName);
   auto cancelGuard = cancelOnExit(reqID);
-  auto reply = trackReceiveState->subscribeFuture();
-  const auto limit = moqSettings_.requestTimeout;
-  folly::Try<SubscribeTrackReceiveState::SubscribeResult> subscribeResultTry;
-  if (limit > std::chrono::milliseconds::zero()) {
-    subscribeResultTry =
-        co_await co_awaitTry(folly::coro::timeout(std::move(reply), limit));
-  } else {
-    subscribeResultTry = co_await co_awaitTry(std::move(reply));
+  std::shared_ptr<FetchConsumer> fillConsumer;
+  if (sub.fill) {
+    auto beginFillResult = callback->beginFill(reqID);
+    if (beginFillResult) {
+      fillConsumer = std::move(beginFillResult.value());
+    }
   }
+  if (fillConsumer && useFillFetch(*negotiatedVersion_)) {
+    // Register up front: a PUBLISH_DONE can remove the subscription state
+    // before the fill stream is read.
+    registerFillReceiveState(
+        fullTrackName,
+        reqID,
+        std::move(fillConsumer),
+        sub.fill->groupOrder.value_or(sub.groupOrder));
+    fillConsumer.reset();
+  }
+  if (fillConsumer) {
+    // The SUBSCRIBE reply does not wait for the fill's FETCH reply. Started
+    // inline so that the FETCH follows the SUBSCRIBE before the publisher can
+    // end the subscription.
+    co_withExecutor(
+        exec_.get(),
+        co_withCancellation(
+            cancellationSource_.getToken(),
+            folly::coro::co_invoke(
+                [self = shared_from_this(),
+                 reqID,
+                 sub,
+                 consumer = std::move(
+                     fillConsumer)]() mutable -> folly::coro::Task<void> {
+                  co_await self->sendFetchForFill(
+                      reqID, std::move(sub), std::move(consumer));
+                })))
+        .startInlineUnsafe();
+  }
+  const auto limit = moqSettings_.requestTimeout;
+  auto reply = limit > std::chrono::milliseconds::zero()
+      ? folly::coro::toTask(
+            folly::coro::timeout(trackReceiveState->subscribeFuture(), limit))
+      : folly::coro::toTask(trackReceiveState->subscribeFuture());
+  auto subscribeResultTry = co_await co_awaitTry(std::move(reply));
   if (subscribeResultTry.tryGetExceptionObject<folly::FutureTimeout>()) {
+    endUnopenedFill(reqID);
     SubscribeError subscribeError = {
         reqID, SubscribeErrorCode::TIMEOUT, "request timed out"};
     MOQ_SUBSCRIBER_STATS(
@@ -7005,6 +7399,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   XLOG(DBG1) << "Subscribe ready trackReceiveState=" << trackReceiveState
              << " requestID=" << reqID;
   if (subscribeResult.hasError()) {
+    endUnopenedFill(reqID);
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_,
         onSubscribeError,
@@ -7668,7 +8063,13 @@ void MoQSession::fetchCancel(
               << " sess=" << this;
     return;
   }
+  auto isFill = trackIt->second->isFill();
   trackIt->second->cancel(this, consumerError);
+  if (isFill) {
+    // A FETCH_CANCEL would name the subscription's request ID. The
+    // STOP_SENDING that cancel() triggers is the whole cancel.
+    return;
+  }
   // Draft 18+ cancels via the bidi; older drafts send FetchCancel on control.
   if (control && getDraftMajorVersion(*negotiatedVersion_) >= 18) {
     control->cancel(ResetStreamErrorCode::CANCELLED);

@@ -2464,4 +2464,51 @@ TEST_F(MoQForwarderTest, ReentrantRemovalOfLastOtherSubscriberOnlyEmpties) {
   EXPECT_EQ(callback->forwardChanges, startedOnly);
 }
 
+// A fill reaching further back than the filter does not widen what the
+// forwarder sends; the publisher session serves the fill.
+TEST_F(MoQForwarderTest, FillDoesNotWidenTheSubscriptionRange) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  forwarder->setLargest(AbsoluteLocation{50, 0});
+  auto session = createMockSession();
+
+  SubscribeRequest sub;
+  sub.fullTrackName = forwarder->fullTrackName();
+  sub.requestID = RequestID(1);
+  sub.filter = LocationFilter::range(AbsoluteLocation{40, 0}, 60);
+  sub.fill = FillParameters{LocationFilter::relativeStart(30), {}, {}, {}};
+
+  auto subscriber =
+      forwarder->addSubscriber(session->sessionId(), sub, createMockConsumer());
+  ASSERT_NE(subscriber, nullptr);
+  // addSubscriber clamps the start to the Next Object; the fill must not
+  // move it.
+  EXPECT_EQ(subscriber->range.start, (AbsoluteLocation{50, 1}));
+  EXPECT_EQ(subscriber->range.end.group, 60);
+
+  forwarder->removeSubscriber(session, std::nullopt, "test");
+}
+
+// Pausing is subscription state and a fill is not, so an update carrying both
+// applies the pause and leaves the fill for the publisher session.
+TEST_F(MoQForwarderTest, RequestUpdateWithFillStillAppliesForwardState) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  forwarder->setLargest(AbsoluteLocation{50, 0});
+  auto session = createMockSession();
+  auto subscriber =
+      addSubscriber(*forwarder, session, createMockConsumer(), RequestID(1));
+  ASSERT_NE(subscriber, nullptr);
+  ASSERT_TRUE(subscriber->checkShouldForward());
+
+  RequestUpdate update;
+  update.requestID = RequestID(2);
+  update.existingRequestID = RequestID(1);
+  update.forward = false;
+  update.fill = FillParameters{LocationFilter::relativeStart(3), {}, {}, {}};
+  auto res = folly::coro::blockingWait(subscriber->requestUpdate(update));
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_FALSE(subscriber->checkShouldForward());
+
+  forwarder->removeSubscriber(session, std::nullopt, "test");
+}
+
 } // namespace moxygen::test

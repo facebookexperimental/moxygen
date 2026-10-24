@@ -10,6 +10,7 @@
 #include <folly/coro/Sleep.h>
 #include <folly/logging/xlog.h>
 #include <vector>
+#include "moxygen/FillFetch.h"
 #include "moxygen/moqtest/Utils.h"
 
 namespace moxygen {
@@ -108,6 +109,15 @@ std::shared_ptr<MoQForwarder> MoQTestPublisher::makeForwarder(
   return forwarder;
 }
 
+void MoQTestPublisher::TrackCallback::fillRequested(
+    MoQForwarder* /*forwarder*/,
+    std::shared_ptr<TrackConsumer> consumer,
+    Fetch fetch) {
+  if (auto p = publisher.lock()) {
+    serveFillFromFetch(std::move(p), std::move(consumer), std::move(fetch));
+  }
+}
+
 void MoQTestPublisher::retireTrack(
     const FullTrackName& ftn,
     const MoQForwarder* forwarder) {
@@ -150,6 +160,9 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestPublisher::subscribe(
             sub.requestID,
             SubscribeErrorCode::INTERNAL_ERROR,
             "failed to add subscriber"});
+  }
+  if (sub.fill) {
+    subscriber->requestFill(sub.requestID, *sub.fill);
   }
   if (!isNewTrack) {
     co_return subscriber;

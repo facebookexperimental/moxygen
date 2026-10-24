@@ -533,6 +533,12 @@ class LocationFilter {
     return fieldCount_ == 1 || isNextObjectForm();
   }
 
+  // Groups back from the Next Group, for the relative form only.
+  std::optional<uint64_t> relativeStartGroupsBack() const {
+    return fieldCount_ == 1 ? std::optional<uint64_t>(start_.group)
+                            : std::nullopt;
+  }
+
   // The Start Location as written, for the callers that must not resolve it
   // against Largest Object. The relative forms have none until resolved.
   std::optional<AbsoluteLocation> absoluteStartLocation() const {

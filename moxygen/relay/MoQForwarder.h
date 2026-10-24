@@ -76,6 +76,11 @@ class MoQForwarder : public TrackConsumer {
     virtual void forwardChanged(MoQForwarder*) {}
     // This fires whenever an unseen NGR is received
     virtual void newGroupRequested(MoQForwarder*, uint64_t /*group*/) {}
+    // Serve `fetch` into consumer->beginFill(fetch.requestID).
+    virtual void fillRequested(
+        MoQForwarder*,
+        std::shared_ptr<TrackConsumer> /*consumer*/,
+        Fetch /*fetch*/) {}
   };
 
   void setCallback(std::shared_ptr<Callback> callback);
@@ -130,6 +135,9 @@ class MoQForwarder : public TrackConsumer {
     folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
         RequestUpdate requestUpdate) override;
 
+    // Resolves a fill against Largest Object for Callback::fillRequested.
+    void requestFill(RequestID fillRequestID, const FillParameters& fill);
+
     void unsubscribe() override;
 
     bool checkShouldForward();
@@ -142,6 +150,10 @@ class MoQForwarder : public TrackConsumer {
     SessionId sessionId;
     RequestID requestID;
     SubscribeRange range;
+    // What a fill inherits from the subscription.
+    LocationFilter filter{LocationFilter::nextObject()};
+    uint8_t priority{kDefaultPriority};
+    TrackRequestParameters params{FrameType::SUBSCRIBE};
     std::shared_ptr<TrackConsumer> trackConsumer;
     // Stores the SubgroupConsumer for this subscriber for all currently
     // publishing subgroups.  Having this state here makes it easy to remove

@@ -6,6 +6,7 @@
 
 #include "moxygen/relay/MoQForwarder.h"
 #include <folly/logging/xlog.h>
+#include "moxygen/FillFetch.h"
 #include "moxygen/MoQTrackProperties.h"
 
 namespace moxygen {
@@ -231,6 +232,9 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
       toSubscribeRange(subReq, largest_),
       std::move(consumer),
       subReq.forward);
+  subscriber->filter = subReq.filter;
+  subscriber->priority = subReq.priority;
+  subscriber->params = subReq.params;
   // If the session already has a subscriber (e.g. from a prior
   // addSubscriber(sessionId, forward) call), emplace is a no-op. Return the
   // existing in-map entry and only increment the forwarding count when a new
@@ -908,6 +912,28 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
   }
 
   co_return ok;
+}
+
+void MoQForwarder::Subscriber::requestFill(
+    RequestID fillRequestID,
+    const FillParameters& fill) {
+  if (!forwarder || !forwarder->callback_ || !trackConsumer) {
+    return;
+  }
+  auto fetch = makeFillFetch(
+      forwarder->fullTrackName(),
+      fillRequestID,
+      filter,
+      fill,
+      forwarder->largest(),
+      priority,
+      subscribeOk().groupOrder,
+      params);
+  if (!fetch) {
+    return;
+  }
+  forwarder->callback_->fillRequested(
+      forwarder, trackConsumer, std::move(*fetch));
 }
 
 void MoQForwarder::Subscriber::unsubscribe() {

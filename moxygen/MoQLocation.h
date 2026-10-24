@@ -30,4 +30,13 @@ inline StandaloneFetch toFetchRange(
   return StandaloneFetch(start, end);
 }
 
+// A StandaloneFetch end is a wire End Location: object 0 means the whole end
+// group, so only an earlier end group is empty.
+inline bool isEmptyFetchRange(const StandaloneFetch& range) {
+  if (range.end.group == range.start.group && range.end.object == 0) {
+    return false;
+  }
+  return range.end <= range.start;
+}
+
 } // namespace moxygen

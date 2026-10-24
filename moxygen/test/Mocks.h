@@ -114,6 +114,12 @@ class MockTrackConsumer : public TrackConsumer {
       (override));
 
   MOCK_METHOD(
+      (folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>),
+      beginFill,
+      (RequestID requestID),
+      (override));
+
+  MOCK_METHOD(
       (folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>),
       awaitStreamCredit,
       (),

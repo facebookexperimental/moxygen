@@ -129,6 +129,8 @@ class SubgroupConsumer {
   }
 };
 
+class FetchConsumer;
+
 // Interface for Publishing and Receiving Subscriptions
 //
 // Note that for now, both the stream interface and datagram interface coexist
@@ -182,6 +184,16 @@ class TrackConsumer {
       const ObjectHeader& header,
       Payload payload,
       bool lastInGroup = false) = 0;
+
+  // Called when a fill fetch stream opens; the returned consumer receives its
+  // objects. requestID is the SUBSCRIBE or REQUEST_UPDATE that initiated it,
+  // and several fills can be open at once. reset() is the only failure signal.
+  // An error return refuses the fill.
+  virtual folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>
+  beginFill(RequestID /*requestID*/) {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::CANCELLED, "Fill not accepted"));
+  }
 
   // Inform the consumer that the publisher will not open any new subgroups or
   // send any new datagrams for this track.

@@ -36,6 +36,73 @@ Payload makePayload(const std::string& str) {
   return folly::IOBuf::copyBuffer(str);
 }
 
+// Stands in for the application's fill consumer, which every fill on the
+// subscription shares.
+class CountingFillConsumer : public FetchConsumer {
+ public:
+  size_t objects{0};
+  size_t terminals{0};
+
+  folly::Expected<folly::Unit, MoQPublishError> object(
+      uint64_t,
+      uint64_t,
+      uint64_t,
+      Payload,
+      Extensions = noExtensions(),
+      bool finFetch = false,
+      bool = false) override {
+    ++objects;
+    if (finFetch) {
+      ++terminals;
+    }
+    return folly::unit;
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> beginObject(
+      uint64_t,
+      uint64_t,
+      uint64_t,
+      uint64_t,
+      Payload,
+      Extensions = noExtensions()) override {
+    return folly::unit;
+  }
+
+  folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
+      Payload,
+      bool = false) override {
+    return ObjectPublishStatus::DONE;
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError>
+  endOfGroup(uint64_t, uint64_t, uint64_t, bool finFetch = false) override {
+    if (finFetch) {
+      ++terminals;
+    }
+    return folly::unit;
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError>
+  endOfTrackAndGroup(uint64_t, uint64_t, uint64_t) override {
+    ++terminals;
+    return folly::unit;
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {
+    ++terminals;
+    return folly::unit;
+  }
+
+  void reset(ResetStreamErrorCode) override {
+    ++terminals;
+  }
+
+  folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
+  awaitReadyToConsume() override {
+    return folly::makeSemiFuture<uint64_t>(0);
+  }
+};
+
 } // namespace
 
 class ObjectReceiverTest : public Test {
@@ -338,6 +405,138 @@ TEST_F(ObjectReceiverTest, FetchObjectPayloadIsTerminalWhenBlocked) {
 
   EXPECT_CALL(*callback_, onAllDataReceived()).Times(1);
   auto res = receiver->objectPayload(makePayload("def"), /*finSubgroup=*/true);
+  ASSERT_TRUE(res.hasError());
+  EXPECT_EQ(res.error().code, MoQPublishError::BLOCKED);
+}
+
+// Two fills each get their own consumer; all data is reported only after both
+// end.
+TEST_F(ObjectReceiverTest, AllDataReceivedWaitsForEveryFill) {
+  auto receiver = std::make_shared<ObjectReceiver>(
+      ObjectReceiver::Type::SUBSCRIBE, callback_);
+  receiver->setTrackAlias(TrackAlias(1));
+  std::vector<std::shared_ptr<CountingFillConsumer>> fillConsumers;
+  receiver->setFillReceiverFactory([&fillConsumers](RequestID) {
+    return fillConsumers.emplace_back(std::make_shared<CountingFillConsumer>());
+  });
+
+  auto firstResult = receiver->beginFill(RequestID(1));
+  ASSERT_TRUE(firstResult.hasValue());
+  auto second = receiver->beginFill(RequestID(2));
+  ASSERT_TRUE(second.hasValue());
+  auto first = *firstResult;
+
+  PublishDone done;
+  done.requestID = RequestID(1);
+  done.statusCode = PublishDoneStatusCode::SUBSCRIPTION_ENDED;
+  EXPECT_CALL(*callback_, onPublishDone(_)).Times(1);
+  EXPECT_CALL(*callback_, onAllDataReceived()).Times(0);
+  EXPECT_TRUE(receiver->publishDone(std::move(done)).hasValue());
+
+  // The first fill ends while the second is still streaming.
+  EXPECT_TRUE(first->endOfFetch().hasValue());
+  Mock::VerifyAndClearExpectations(callback_.get());
+
+  EXPECT_CALL(*callback_, onAllDataReceived()).Times(1);
+  EXPECT_TRUE((*second)
+                  ->object(
+                      /*groupID=*/4,
+                      /*subgroupID=*/0,
+                      /*objectID=*/0,
+                      makePayload("abc"),
+                      noExtensions(),
+                      /*finFetch=*/true)
+                  .hasValue());
+
+  ASSERT_EQ(fillConsumers.size(), 2);
+  EXPECT_EQ(fillConsumers[0]->terminals, 1);
+  EXPECT_EQ(fillConsumers[0]->objects, 0);
+  EXPECT_EQ(fillConsumers[1]->terminals, 1);
+  EXPECT_EQ(fillConsumers[1]->objects, 1);
+}
+
+namespace {
+// Every way a fill can end.
+const std::vector<std::pair<std::string, std::function<void(FetchConsumer&)>>>
+    kFillTerminals = {
+        {"object",
+         [](FetchConsumer& c) {
+           c.object(4, 0, 0, makePayload("abc"), noExtensions(), true);
+         }},
+        {"endOfGroup", [](FetchConsumer& c) { c.endOfGroup(4, 0, 0, true); }},
+        {"endOfTrackAndGroup",
+         [](FetchConsumer& c) { c.endOfTrackAndGroup(4, 0, 0); }},
+        {"endOfFetch", [](FetchConsumer& c) { c.endOfFetch(); }},
+        {"reset",
+         [](FetchConsumer& c) { c.reset(ResetStreamErrorCode::CANCELLED); }},
+        {"objectPayload",
+         [](FetchConsumer& c) {
+           c.beginObject(4, 0, 0, 3, makePayload("abc"));
+           c.objectPayload(makePayload("abc"), /*finSubgroup=*/true);
+         }},
+        {"dropped", [](FetchConsumer&) {}},
+};
+} // namespace
+
+// Each terminal must release the fill, or all data is never reported.
+TEST_F(ObjectReceiverTest, EveryFillTerminalReleasesTheFill) {
+  for (const auto& [name, endFill] : kFillTerminals) {
+    SCOPED_TRACE(name);
+    auto callback = std::make_shared<NiceMock<MockObjectReceiverCallback>>();
+    auto receiver = std::make_shared<ObjectReceiver>(
+        ObjectReceiver::Type::SUBSCRIBE, callback);
+    receiver->setTrackAlias(TrackAlias(1));
+    receiver->setFillReceiverFactory(
+        [](RequestID) { return std::make_shared<CountingFillConsumer>(); });
+
+    auto fillResult = receiver->beginFill(RequestID(1));
+    ASSERT_TRUE(fillResult.hasValue());
+    // Moved out so the "dropped" case really does release the last reference.
+    auto fill = std::move(fillResult.value());
+
+    PublishDone done;
+    done.requestID = RequestID(1);
+    done.statusCode = PublishDoneStatusCode::SUBSCRIPTION_ENDED;
+    EXPECT_CALL(*callback, onAllDataReceived()).Times(0);
+    EXPECT_TRUE(receiver->publishDone(std::move(done)).hasValue());
+    Mock::VerifyAndClearExpectations(callback.get());
+
+    EXPECT_CALL(*callback, onAllDataReceived()).Times(1);
+    endFill(*fill);
+    // "dropped" ends the fill by releasing the last reference instead.
+    fill.reset();
+    Mock::VerifyAndClearExpectations(callback.get());
+  }
+}
+
+// The last chunk completes the object even when the application blocks, so
+// the fill still ends.
+TEST_F(ObjectReceiverTest, BlockedLastChunkReleasesTheFill) {
+  auto receiver = std::make_shared<ObjectReceiver>(
+      ObjectReceiver::Type::SUBSCRIBE, callback_);
+  receiver->setTrackAlias(TrackAlias(1));
+  auto fillCallback = std::make_shared<NiceMock<MockObjectReceiverCallback>>();
+  receiver->setFillReceiverFactory([fillCallback](RequestID) {
+    return std::make_shared<ObjectReceiver>(
+        ObjectReceiver::Type::FETCH, fillCallback);
+  });
+  auto fillResult = receiver->beginFill(RequestID(1));
+  ASSERT_TRUE(fillResult.hasValue());
+  auto fill = *fillResult;
+
+  PublishDone done;
+  done.requestID = RequestID(1);
+  done.statusCode = PublishDoneStatusCode::SUBSCRIPTION_ENDED;
+  EXPECT_CALL(*callback_, onPublishDone(_));
+  EXPECT_CALL(*callback_, onAllDataReceived()).Times(0);
+  EXPECT_TRUE(receiver->publishDone(std::move(done)).hasValue());
+  Mock::VerifyAndClearExpectations(callback_.get());
+
+  EXPECT_CALL(*fillCallback, onObject(_, _, _))
+      .WillOnce(Return(ObjectReceiverCallback::FlowControlState::BLOCKED));
+  EXPECT_CALL(*callback_, onAllDataReceived());
+  EXPECT_TRUE(fill->beginObject(4, 0, 0, 6, makePayload("abc")).hasValue());
+  auto res = fill->objectPayload(makePayload("def"), /*finSubgroup=*/true);
   ASSERT_TRUE(res.hasError());
   EXPECT_EQ(res.error().code, MoQPublishError::BLOCKED);
 }

@@ -177,6 +177,11 @@ class MoQTestPublisher : public Publisher,
       retire(forwarder);
     }
 
+    void fillRequested(
+        MoQForwarder* forwarder,
+        std::shared_ptr<TrackConsumer> consumer,
+        Fetch fetch) override;
+
    private:
     void retire(MoQForwarder* forwarder) {
       if (auto p = publisher.lock()) {

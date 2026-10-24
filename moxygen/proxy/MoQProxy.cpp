@@ -309,11 +309,20 @@ folly::coro::Task<Publisher::SubscribeResult> MoQProxy::subscribe(
   }
 
   const auto reqCtx = MoQSession::getRequestContext();
+  const auto requestID = subscribeRequest.requestID;
+  const bool fillRequested = subscribeRequest.fill.has_value();
   auto track = getOrCreateTrack(subscribeRequest.fullTrackName);
-  co_return co_await track->subscribe(
+  auto result = co_await track->subscribe(
       std::move(subscribeRequest),
-      std::move(consumer),
+      consumer,
       MoQProxyTrack::DownstreamPeer{reqCtx.sessionId, reqCtx.version});
+  // The proxy does not serve fills yet, so a requested fill opens and resets.
+  if (result.hasValue() && fillRequested) {
+    if (auto fill = consumer->beginFill(requestID); fill.hasValue()) {
+      fill.value()->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+    }
+  }
+  co_return result;
 }
 
 folly::coro::Task<Publisher::FetchResult> MoQProxy::fetch(

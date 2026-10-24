@@ -505,6 +505,11 @@ class MoQSession : public Subscriber,
 
     virtual void onStreamCreated() {}
 
+    // A fill reports failure by opening and resetting its stream.
+    virtual bool isFill() const {
+      return false;
+    }
+
     // Advance the tracked largest published object as objects are written.
     virtual void updateLargest(const AbsoluteLocation& /*location*/) {}
 
@@ -781,8 +786,32 @@ class MoQSession : public Subscriber,
 
   std::shared_ptr<SubscribeTrackReceiveState> getSubscribeTrackReceiveState(
       TrackAlias alias);
-  std::shared_ptr<FetchTrackReceiveState> getFetchTrackReceiveState(
+  // For a FETCH_HEADER: the FETCH or fill this stream serves. Opening a fill's
+  // stream counts it toward its subscription.
+  std::shared_ptr<FetchTrackReceiveState> openFetchTrackReceiveState(
       RequestID requestID);
+
+  // Registers receive state for a fill whose request ID matches a
+  // subscription, using its beginFill(). Returns nullptr otherwise.
+  std::shared_ptr<FetchTrackReceiveState> beginFillReceiveState(
+      RequestID requestID);
+
+  // Counts a fill toward its subscription's PUBLISH_DONE Stream Count.
+  void countFillStream(RequestID requestID);
+
+  // Files a fill's receive state under its FETCH_HEADER's request ID.
+  std::shared_ptr<FetchTrackReceiveState> registerFillReceiveState(
+      const FullTrackName& fullTrackName,
+      RequestID requestID,
+      std::shared_ptr<FetchConsumer> consumer,
+      GroupOrder groupOrder);
+
+  // Serves a subscription's fill below draft 20, as a standalone FETCH for an
+  // absolute range and a Joining FETCH otherwise.
+  folly::coro::Task<void> sendFetchForFill(
+      RequestID subscribeID,
+      SubscribeRequest sub,
+      std::shared_ptr<FetchConsumer> consumer);
 
   void setLogger(const std::shared_ptr<MLogger>& logger);
   std::shared_ptr<MLogger> getLogger() const;
@@ -938,6 +967,13 @@ class MoQSession : public Subscriber,
       SubscribeRequest sub,
       std::shared_ptr<TrackPublisherImpl> trackPublisher,
       std::shared_ptr<ReplyContext> replyContext);
+
+  folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>
+  openFillStream(
+      const std::shared_ptr<TrackPublisherImpl>& trackPublisher,
+      RequestID requestID,
+      const FillParameters& fill);
+
   void sendSubscribeOk(const SubscribeOk& subOk, ReplyContext& replyContext);
   void subscribeError(const SubscribeError& subErr, ReplyContext& replyContext);
   void unsubscribe(
@@ -1060,6 +1096,7 @@ class MoQSession : public Subscriber,
   void onUnsubscribeNamespace(
       UnsubscribeNamespace unsubscribeNamespace) override;
   void removeSubscriptionState(TrackAlias alias, RequestID id);
+  void endUnopenedFill(RequestID id);
   void checkForCloseOnDrain();
 
   void sendMaxRequestID(bool signalWriteLoop);
