@@ -1579,15 +1579,20 @@ MoQRelay::subscribeToExistingRelaySubscription(
     }
   }
   auto& forwarder = subscriptionIt->second.forwarder;
-  auto subEndGroup = subReq.filter.legacyEndGroup();
-  if (forwarder->largest() && subEndGroup &&
-      *subEndGroup < forwarder->largest()->group) {
-    co_return folly::makeUnexpected(
-        SubscribeError{
-            subReq.requestID,
-            SubscribeErrorCode::INVALID_RANGE,
-            "Range in the past, use FETCH"});
-    // start may be in the past, it will get adjusted forward to largest
+  // Draft 20 accepts a filter entirely before Largest Object. Older drafts
+  // refuse it, but only for a subscriber joining an existing subscription.
+  // TODO: retire the asymmetry along with the drafts that need it.
+  if (!useFillFetch(downstreamSession->getNegotiatedVersion().value_or(0))) {
+    auto subEndGroup = subReq.filter.legacyEndGroup();
+    if (forwarder->largest() && subEndGroup &&
+        *subEndGroup < forwarder->largest()->group) {
+      co_return folly::makeUnexpected(
+          SubscribeError{
+              subReq.requestID,
+              SubscribeErrorCode::INVALID_RANGE,
+              "Range in the past, use FETCH"});
+      // start may be in the past, it will get adjusted forward to largest
+    }
   }
   auto subscriber = forwarder->addSubscriber(
       downstreamSession->sessionId(), subReq, std::move(consumer));

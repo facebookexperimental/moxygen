@@ -1479,6 +1479,102 @@ TEST_F(MoQRelayTest, PublishExtensionsForwardedToLateJoiners) {
   removeSession(subscriber2);
 }
 
+namespace {
+// A second subscriber whose range ends before the forwarder's Largest Object.
+// Only subscribers that join an existing subscription reach the range check.
+SubscribeRequest pastRangeSubscribe(RequestID requestID) {
+  SubscribeRequest sub;
+  sub.fullTrackName = kTestTrackName;
+  sub.requestID = requestID;
+  sub.filter = LocationFilter::range(AbsoluteLocation{1, 0}, 10);
+  return sub;
+}
+} // namespace
+
+// Refusing a past range refuses the fill that would have retrieved it.
+TEST_F(MoQRelayTest, PastRangeSubscriptionAcceptedAtDraft20) {
+  auto publisherSession = createMockSession();
+  auto subscriber1 = createMockSession();
+  auto subscriber2 = createMockSession();
+  ON_CALL(*subscriber2, getNegotiatedVersion())
+      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft20)));
+
+  doPublishNamespace(publisherSession, kTestNamespace);
+
+  SubscribeOk upstreamOk;
+  upstreamOk.requestID = RequestID(1);
+  upstreamOk.trackAlias = TrackAlias(1);
+  upstreamOk.groupOrder = GroupOrder::OldestFirst;
+  upstreamOk.largest = AbsoluteLocation{50, 0};
+  EXPECT_CALL(*publisherSession, subscribe(_, _))
+      .WillOnce([upstreamOk](const auto&, auto) {
+        auto handle =
+            std::make_shared<NiceMock<MockSubscriptionHandle>>(upstreamOk);
+        return folly::coro::makeTask<Publisher::SubscribeResult>(
+            folly::
+                Expected<std::shared_ptr<SubscriptionHandle>, SubscribeError>(
+                    handle));
+      });
+
+  auto handle1 = subscribeToTrack(
+      subscriber1, kTestTrackName, createMockConsumer(), RequestID(1));
+  ASSERT_NE(handle1, nullptr);
+
+  auto consumer2 = createMockConsumer();
+  withSessionContext(subscriber2, [&]() {
+    auto res = folly::coro::blockingWait(
+        relay_->subscribe(pastRangeSubscribe(RequestID(2)), consumer2),
+        exec_.get());
+    ASSERT_TRUE(res.hasValue());
+    getOrCreateMockState(subscriber2)->subscribeHandles.push_back(*res);
+  });
+
+  removeSession(publisherSession);
+  removeSession(subscriber1);
+  removeSession(subscriber2);
+}
+
+// The drafts below 20 still refuse the same request.
+TEST_F(MoQRelayTest, PastRangeSubscriptionRefusedBeforeDraft20) {
+  auto publisherSession = createMockSession();
+  auto subscriber1 = createMockSession();
+  auto subscriber2 = createMockSession();
+
+  doPublishNamespace(publisherSession, kTestNamespace);
+
+  SubscribeOk upstreamOk;
+  upstreamOk.requestID = RequestID(1);
+  upstreamOk.trackAlias = TrackAlias(1);
+  upstreamOk.groupOrder = GroupOrder::OldestFirst;
+  upstreamOk.largest = AbsoluteLocation{50, 0};
+  EXPECT_CALL(*publisherSession, subscribe(_, _))
+      .WillOnce([upstreamOk](const auto&, auto) {
+        auto handle =
+            std::make_shared<NiceMock<MockSubscriptionHandle>>(upstreamOk);
+        return folly::coro::makeTask<Publisher::SubscribeResult>(
+            folly::
+                Expected<std::shared_ptr<SubscriptionHandle>, SubscribeError>(
+                    handle));
+      });
+
+  auto handle1 = subscribeToTrack(
+      subscriber1, kTestTrackName, createMockConsumer(), RequestID(1));
+  ASSERT_NE(handle1, nullptr);
+
+  auto consumer2 = createMockConsumer();
+  withSessionContext(subscriber2, [&]() {
+    auto res = folly::coro::blockingWait(
+        relay_->subscribe(pastRangeSubscribe(RequestID(2)), consumer2),
+        exec_.get());
+    ASSERT_FALSE(res.hasValue());
+    EXPECT_EQ(res.error().errorCode, SubscribeErrorCode::INVALID_RANGE);
+  });
+
+  removeSession(publisherSession);
+  removeSession(subscriber1);
+  removeSession(subscriber2);
+}
+
 // Test: relay SUBSCRIBE path – dynamic groups from the upstream SubscribeOk is
 // stored in the forwarder and forwarded to both the first and late-joining
 // downstream subscribers

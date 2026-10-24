@@ -675,6 +675,26 @@ CO_TEST_F(MoQCacheTest, TestFillColdCacheUpstreamErrorOpensNoStream) {
   EXPECT_TRUE(res.hasError());
 }
 
+// The cache's mark can trail the forwarder's Largest Object, so a fill opened
+// against the forwarder can narrow to an empty stream.
+// TODO: resolve the stream and the range against one Largest Object.
+CO_TEST_F(MoQCacheTest, TestFillAboveLaggingCacheMarkNarrowsToEmpty) {
+  // A live writeback keeps the answer on the cache's own mark.
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  populateCacheRange({2, 0}, {2, 5});
+  EXPECT_CALL(*upstream_, fetch(_, _)).Times(0);
+  // Only the FIN.
+  EXPECT_CALL(*consumer_, object(_, _, _, _, _, _, _)).Times(0);
+  EXPECT_CALL(*consumer_, endOfFetch())
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  auto res = co_await cache_.fetch(
+      getFillFetch({4, 0}, {4, 10}), trackingConsumer_, upstream_);
+  CO_ASSERT_TRUE(res.hasValue());
+  // Narrowed to the start: the whole fill range is past what the cache holds.
+  EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{4, 0}));
+}
+
 // After the cached head is sent, a failure on the tail resets the stream.
 CO_TEST_F(MoQCacheTest, TestFillPartialRangeUpstreamErrorResetsStream) {
   populateCacheRange({2, 0}, {2, 1});
