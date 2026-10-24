@@ -21,6 +21,11 @@ add_compile_definitions(GLOG_USE_GLOG_EXPORT)
 option(BUILD_TESTS "Build tests" ON)
 option(BUILD_MOQTEST "Build the moqtest client, server and perf executables" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries (discouraged)" OFF)
+option(MOXYGEN_USE_HABERDASHERY
+    "Use haberdashery for QUIC AES-128-GCM packet protection (Linux only)" OFF)
+# haberdashery is not in github_hashes, so its revision is pinned here.
+set(HABERDASHERY_REV "13b6e1d445cb70ef7c448b98ea14954a8ca40b63"
+    CACHE STRING "haberdashery git revision")
 
 # =============================================================================
 # Linking preferences
@@ -215,6 +220,13 @@ FetchContent_Declare(mvfst
     GIT_TAG ${MVFST_REV}
 )
 
+if(MOXYGEN_USE_HABERDASHERY)
+    FetchContent_Declare(haberdashery
+        GIT_REPOSITORY https://github.com/facebookincubator/haberdashery.git
+        GIT_TAG ${HABERDASHERY_REV}
+    )
+endif()
+
 # Allow overriding proxygen repo/rev via -DPROXYGEN_REPO_OVERRIDE and
 # -DPROXYGEN_REV_OVERRIDE
 set(PROXYGEN_REPO_OVERRIDE ""
@@ -279,6 +291,24 @@ if(NOT wangle_POPULATED)
     FetchContent_Populate(wangle)
     add_subdirectory(
         ${wangle_SOURCE_DIR}/wangle ${wangle_BINARY_DIR} EXCLUDE_FROM_ALL)
+endif()
+
+if(MOXYGEN_USE_HABERDASHERY)
+    FetchContent_GetProperties(haberdashery)
+    if(NOT haberdashery_POPULATED)
+        FetchContent_Populate(haberdashery)
+        add_subdirectory(${haberdashery_SOURCE_DIR} ${haberdashery_BINARY_DIR}
+            EXCLUDE_FROM_ALL)
+    endif()
+    if(NOT TARGET haberdashery::haberdashery)
+        message(FATAL_ERROR
+            "MOXYGEN_USE_HABERDASHERY: haberdashery has no assembly for "
+            "${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+    # A normal variable overrides mvfst's option() under CMP0077 and leaves
+    # the cache alone, so that a user's MVFST_USE_HABERDASHERY applies when
+    # this is off.
+    set(MVFST_USE_HABERDASHERY ON)
 endif()
 
 FetchContent_GetProperties(mvfst)
