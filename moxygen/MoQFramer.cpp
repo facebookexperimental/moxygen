@@ -2707,23 +2707,26 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
   fetch.priority = kDefaultPriority;
   fetch.groupOrder = GroupOrder::OldestFirst;
 
-  if (length < 1) {
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-  }
+  // Draft 20 FETCH does not carry a Fetch Type; every fetch is standalone.
+  FetchType fetchTypeEnum{FetchType::STANDALONE};
+  if (!useFillFetch(*version_)) {
+    if (length < 1) {
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
 
-  auto fetchType = decodeVarint(cursor, length);
-  if (!fetchType) {
-    XLOG(DBG4) << "parseFetch: UNDERFLOW on fetchType";
-    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    auto fetchType = decodeVarint(cursor, length);
+    if (!fetchType) {
+      XLOG(DBG4) << "parseFetch: UNDERFLOW on fetchType";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    if (fetchType->first == 0 ||
+        fetchType->first > folly::to_underlying(FetchType::ABSOLUTE_JOINING)) {
+      XLOG(ERR) << "fetchType = 0 or fetchType > JONING =" << fetchType->first;
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    length -= fetchType->second;
+    fetchTypeEnum = static_cast<FetchType>(fetchType->first);
   }
-  if (fetchType->first == 0 ||
-      fetchType->first > folly::to_underlying(FetchType::ABSOLUTE_JOINING)) {
-    XLOG(ERR) << "fetchType = 0 or fetchType > JONING =" << fetchType->first;
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-  }
-  length -= fetchType->second;
-
-  FetchType fetchTypeEnum(static_cast<FetchType>(fetchType->first));
   if (fetchTypeEnum == FetchType::STANDALONE) {
     auto ftn = parseFullTrackName(cursor, length);
     if (!ftn) {
@@ -5442,9 +5445,12 @@ WriteResult MoQFrameWriter::writeFetch(
   writeVarint(writeBuf, fetch.requestID.value, size, error);
 
   auto [standalone, joining] = fetchType(fetch);
+  const bool writeFetchType = !useFillFetch(*version_);
   if (standalone) {
-    writeVarint(
-        writeBuf, folly::to_underlying(FetchType::STANDALONE), size, error);
+    if (writeFetchType) {
+      writeVarint(
+          writeBuf, folly::to_underlying(FetchType::STANDALONE), size, error);
+    }
     writeFullTrackName(writeBuf, fetch.fullTrackName, size, error);
     // Draft 20 carries the range in LOCATION_FILTER.
     if (!useLocationFilter(*version_)) {
@@ -5455,6 +5461,7 @@ WriteResult MoQFrameWriter::writeFetch(
     }
   } else {
     XCHECK(joining);
+    XCHECK(writeFetchType) << "draft 20 has no Joining FETCH";
 
     writeVarint(
         writeBuf, folly::to_underlying(joining->fetchType), size, error);

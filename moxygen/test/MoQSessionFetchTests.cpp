@@ -1245,6 +1245,23 @@ CO_TEST_P_X(Draft18Test, DrainClosesSessionWhenEarlyCloseEndsLastFetch) {
   releaseHandler.post();
 }
 
+// Draft 20 refuses a Joining FETCH; a fill replaces it.
+CO_TEST_P_X(Draft20Test, JoiningFetchRefused) {
+  co_await setupMoQSession();
+  auto res = co_await clientSession_->fetch(
+      Fetch(
+          RequestID(0),
+          RequestID(17),
+          1,
+          FetchType::RELATIVE_JOINING,
+          128,
+          GroupOrder::Default),
+      fetchCallback_);
+  CO_ASSERT_TRUE(res.hasError());
+  EXPECT_EQ(res.error().errorCode, FetchErrorCode::NOT_SUPPORTED);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // A publisher that cannot serve a fill opens the stream and resets it.
 CO_TEST_P_X(Draft20Test, FailedFillOpensAndResetsItsStream) {
   co_await setupMoQSession();

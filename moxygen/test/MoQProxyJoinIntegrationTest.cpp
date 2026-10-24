@@ -827,12 +827,20 @@ TEST_P(ProxyJoinIntegrationTest, CancelledJoinStopsOnlyItsOwnReplay) {
   }));
 }
 
+// Draft 20 retires Joining FETCH.
+static std::vector<uint64_t> joiningFetchVersions() {
+  std::vector<uint64_t> versions;
+  for (auto version : kSupportedVersions) {
+    if (!useFillFetch(version)) {
+      versions.push_back(version);
+    }
+  }
+  return versions;
+}
+
 INSTANTIATE_TEST_SUITE_P(
     AllVersions,
     ProxyJoinIntegrationTest,
-    testing::ValuesIn(
-        std::vector<uint64_t>(
-            kSupportedVersions.begin(),
-            kSupportedVersions.end())));
+    testing::ValuesIn(joiningFetchVersions()));
 
 } // namespace moxygen::test

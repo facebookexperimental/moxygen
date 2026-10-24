@@ -1746,6 +1746,13 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
   }
 
   auto [standalone, joining] = fetchType(fetch);
+  if (joining && useFillFetch(session->getNegotiatedVersion().value_or(0))) {
+    // Only a locally built request can reach here at draft 20.
+    co_return folly::makeUnexpected(FetchError(
+        {fetch.requestID,
+         FetchErrorCode::NOT_SUPPORTED,
+         "Joining FETCH retired, use a fill"}));
+  }
   if (joining) {
     auto subscriptionIt = subscriptions_.find(fetch.fullTrackName);
     if (subscriptionIt == subscriptions_.end()) {
@@ -1755,7 +1762,24 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
           {fetch.requestID,
            FetchErrorCode::DOES_NOT_EXIST,
            "No subscription for joining fetch"}));
-    } else if (subscriptionIt->second.promise.isFulfilled()) {
+    }
+    const auto& upstream = subscriptionIt->second.upstream;
+    // A draft 20 upstream refuses Joining FETCH, so resolve the join here once
+    // the subscribe completes.
+    if (!subscriptionIt->second.promise.isFulfilled() && upstream &&
+        useFillFetch(upstream->getNegotiatedVersion().value_or(0))) {
+      auto ready = co_await folly::coro::co_awaitTry(
+          subscriptionIt->second.promise.getFuture());
+      subscriptionIt = subscriptions_.find(fetch.fullTrackName);
+      if (ready.hasException() || subscriptionIt == subscriptions_.end() ||
+          !subscriptionIt->second.promise.isFulfilled()) {
+        co_return folly::makeUnexpected(FetchError(
+            {fetch.requestID,
+             FetchErrorCode::INVALID_JOINING_REQUEST_ID,
+             "Joined subscription failed"}));
+      }
+    }
+    if (subscriptionIt->second.promise.isFulfilled()) {
       auto res = subscriptionIt->second.forwarder->resolveJoiningFetch(
           session->sessionId(), *joining);
       if (res.hasError()) {

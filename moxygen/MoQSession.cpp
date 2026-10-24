@@ -7961,6 +7961,17 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   };
   auto g =
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
+  if (useFillFetch(negotiatedVersion_.value_or(0)) &&
+      std::holds_alternative<JoiningFetch>(fetch.args)) {
+    // Draft 20 replaces Joining FETCH with a fill.
+    FetchError fetchError = {
+        fetch.requestID,
+        FetchErrorCode::NOT_SUPPORTED,
+        "Joining FETCH retired, use a fill"};
+    MOQ_SUBSCRIBER_STATS(
+        subscriberStatsCallback_, onFetchError, fetchError.errorCode);
+    co_return folly::makeUnexpected(fetchError);
+  }
   if (draining_ || closed_) {
     FetchError fetchError = {
         failedLocalRequestID(),

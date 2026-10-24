@@ -2657,7 +2657,6 @@ TEST(MoQFramerFillParameters, RejectedBelowV20) {
 TEST(MoQFramerLocationFilter, FillParametersOnFetchIsAViolation) {
   folly::IOBufQueue body{folly::IOBufQueue::cacheChainLength()};
   writeVarintTo(body, 7); // Request ID
-  writeVarintTo(body, folly::to_underlying(FetchType::STANDALONE));
   writeVarintTo(body, 1); // Track Namespace, one element
   writeVarintTo(body, 2);
   body.append(folly::IOBuf::copyBuffer("ns"));

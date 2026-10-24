@@ -70,6 +70,10 @@ class JoiningFetchTestHelper {
 // The session dispatches a joining FETCH only after its SUBSCRIBE has been
 // answered, and a bound dependency does not inherit the unseen-ID timeout.
 CO_TEST_P_X(MoQSessionTest, JoiningFetchWaitsForSlowSubscription) {
+  if (useFillFetch(getServerSelectedVersion())) {
+    // Draft 20 retires Joining FETCH.
+    co_return;
+  }
   serverSession_->setMoqSettings(joiningSettings(20ms));
   co_await setupMoQSession();
   folly::coro::Baton releaseSubscribe;
@@ -332,6 +336,10 @@ CO_TEST_P_X(Draft18Test, JoiningFetchOnPublishFollowsThePublishReply) {
 
 // A subscription that fails takes its pending joining FETCH with it.
 CO_TEST_P_X(MoQSessionTest, JoiningFetchFailsWithItsSubscription) {
+  if (useFillFetch(getServerSelectedVersion())) {
+    // Draft 20 retires Joining FETCH.
+    co_return;
+  }
   co_await setupMoQSession();
   expectSubscribe(
       [](auto sub, auto) -> TaskSubscribeResult {
@@ -367,6 +375,10 @@ CO_TEST_P_X(MoQSessionTest, JoiningFetchFailsWithItsSubscription) {
 // Held joining FETCHes are capped per session. Overflow is an overload error;
 // a held FETCH that is dispatched frees its slot.
 CO_TEST_P_X(MoQSessionTest, DeferredJoiningFetchesAreCapped) {
+  if (useFillFetch(getServerSelectedVersion())) {
+    // Draft 20 retires Joining FETCH.
+    co_return;
+  }
   serverSession_->setMoqSettings(joiningSettings(2000ms, /*maxDeferred=*/1));
   // Two joins issue four requests.
   initialMaxRequestID_ = 4 * getRequestIDMultiplier();
@@ -436,6 +448,10 @@ CO_TEST_P_X(MoQSessionTest, DeferredJoiningFetchesAreCapped) {
 
 // FETCH_CANCEL for a held joining FETCH releases its slot for later joins.
 CO_TEST_P_X(MoQSessionTest, CancellingAHeldJoiningFetchFreesItsSlot) {
+  if (useFillFetch(getServerSelectedVersion())) {
+    // Draft 20 retires Joining FETCH.
+    co_return;
+  }
   serverSession_->setMoqSettings(joiningSettings(2000ms, /*maxDeferred=*/1));
   initialMaxRequestID_ = 4 * getRequestIDMultiplier();
   co_await setupMoQSession();
