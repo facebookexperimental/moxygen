@@ -636,7 +636,8 @@ void StreamPublisherImpl::setWriteHandle(
     logger_->logStreamTypeSet(
         writeHandle_->getID(), MOQTStreamType::FETCH_HEADER, Owner::LOCAL);
     RequestID req = publisher_->requestID();
-    logger_->logFetchHeaderCreated(writeHandle_->getID(), req.value);
+    logger_->logFetchHeaderCreated(
+        writeHandle_->getID(), req.value, publisher_->isFill());
   }
 
   cancelCallback_.emplace(writeHandle_->getCancelToken(), [this] {
@@ -2883,7 +2884,8 @@ class MoQSession::FetchTrackReceiveState
     if (logger_) {
       logger_->logStreamTypeSet(
           currentStreamId_, MOQTStreamType::FETCH_HEADER, Owner::REMOTE);
-      logger_->logFetchHeaderParsed(currentStreamId_, requestID.value);
+      logger_->logFetchHeaderParsed(
+          currentStreamId_, requestID.value, isFill());
     }
   }
 

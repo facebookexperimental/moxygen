@@ -856,6 +856,9 @@ folly::dynamic MOQTFetchHeaderCreated::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["stream_id"] = streamId;
   obj["request_id"] = requestId;
+  if (isFill) {
+    obj["is_fill"] = true;
+  }
   return obj;
 }
 
@@ -863,6 +866,9 @@ folly::dynamic MOQTFetchHeaderParsed::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["stream_id"] = streamId;
   obj["request_id"] = requestId;
+  if (isFill) {
+    obj["is_fill"] = true;
+  }
   return obj;
 }
 

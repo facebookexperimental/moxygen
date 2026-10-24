@@ -207,8 +207,14 @@ class MLogger {
       TrackAlias trackAlias,
       const ObjectHeader& objHeader,
       Payload payload);
-  void logFetchHeaderCreated(const uint64_t streamId, const uint64_t requestId);
-  void logFetchHeaderParsed(const uint64_t streamId, const uint64_t requestId);
+  void logFetchHeaderCreated(
+      const uint64_t streamId,
+      const uint64_t requestId,
+      bool isFill = false);
+  void logFetchHeaderParsed(
+      const uint64_t streamId,
+      const uint64_t requestId,
+      bool isFill = false);
   void logFetchObjectCreated(
       const uint64_t streamId,
       const ObjectHeader& header,

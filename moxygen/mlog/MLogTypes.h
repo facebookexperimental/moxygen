@@ -690,6 +690,9 @@ struct MOQTSubgroupObjectParsed {
 struct MOQTFetchHeaderCreated {
   uint64_t streamId{0};
   uint64_t requestId{0};
+  // qlog does not define a fill stream type, so this goes in the extension
+  // point.
+  bool isFill{false};
 
   folly::dynamic toDynamic() const;
 };
@@ -697,6 +700,7 @@ struct MOQTFetchHeaderCreated {
 struct MOQTFetchHeaderParsed {
   uint64_t streamId{0};
   uint64_t requestId{0};
+  bool isFill{false};
 
   folly::dynamic toDynamic() const;
 };
