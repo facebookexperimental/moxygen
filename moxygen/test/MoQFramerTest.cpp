@@ -1740,7 +1740,8 @@ static size_t writeSubscribeRequestWithAuthToken(
       kDefaultPriority,
       GroupOrder::OldestFirst,
       true,
-      LocationFilter::nextObject()};
+      LocationFilter::nextObject(),
+      std::nullopt};
 
   auto encodedToken =
       encodeToken(writer, aliasType, alias, tokenType, tokenValue);
@@ -2470,6 +2471,29 @@ ErrorCode parseSubscribeBodyError(const std::unique_ptr<folly::IOBuf>& bytes) {
 }
 } // namespace
 
+// The nested block has its own allowlist, narrower than the message's.
+TEST(MoQFramerFillParameters, DisallowedNestedTypeIsAViolation) {
+  // FORWARD is a legal SUBSCRIBE parameter but has no meaning inside a fill.
+  const std::string nested(
+      1,
+      static_cast<char>(folly::to_underlying(TrackRequestParamKey::FORWARD)));
+  EXPECT_EQ(
+      parseSubscribeBodyError(
+          subscribeWithRawParam(TrackRequestParamKey::FILL_PARAMETERS, nested)),
+      ErrorCode::PROTOCOL_VIOLATION);
+}
+
+// Range Filters are rejected inside FILL_PARAMETERS, as at the top level,
+// until moxygen implements them.
+TEST(MoQFramerFillParameters, RangeFilterIsAViolation) {
+  // Type 0x25 (a Range Filter) with an empty value.
+  const std::string nested("\x25\x00", 2);
+  EXPECT_EQ(
+      parseSubscribeBodyError(
+          subscribeWithRawParam(TrackRequestParamKey::FILL_PARAMETERS, nested)),
+      ErrorCode::PROTOCOL_VIOLATION);
+}
+
 // A Location Filter has at most four fields.
 TEST(MoQFramerLocationFilter, MoreThanFourFieldsIsAViolation) {
   EXPECT_EQ(
@@ -2487,6 +2511,173 @@ TEST(MoQFramerLocationFilter, FieldCrossingParamLengthIsAViolation) {
       parseSubscribeBodyError(subscribeWithRawParam(
           TrackRequestParamKey::LOCATION_FILTER, std::string("\x01\x80", 2))),
       ErrorCode::PROTOCOL_VIOLATION);
+}
+
+namespace {
+std::unique_ptr<folly::IOBuf> writeFillSubscribe(
+    MoQFrameWriter& writer,
+    const FillParameters& fill,
+    LocationFilter filter = LocationFilter::nextObject()) {
+  auto req = SubscribeRequest::make(
+      FullTrackName{TrackNamespace({"ns"}), "track"},
+      kDefaultPriority,
+      GroupOrder::Default,
+      /*forward=*/true,
+      filter);
+  req.fill = fill;
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  EXPECT_TRUE(writer.writeSubscribeRequest(buf, req).hasValue());
+  return buf.move();
+}
+
+folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeFrame(
+    MoQFrameParser& parser,
+    const std::unique_ptr<folly::IOBuf>& bytes) {
+  folly::io::Cursor cursor(bytes.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_TRUE(frameType.has_value());
+  auto frameLen = cursor.readBE<uint16_t>();
+  return parser.parseSubscribeRequest(cursor, frameLen);
+}
+} // namespace
+
+TEST(MoQFramerFillParameters, SubscribeRoundTripV20) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft20);
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft20);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  const std::vector<FillParameters> fills{
+      // Presence alone requests a fill; every member may be absent.
+      FillParameters{},
+      FillParameters{LocationFilter::relativeStart(3), {}, {}, {}},
+      FillParameters{LocationFilter::none(), {}, {}, {}},
+      FillParameters{
+          LocationFilter::range({1, 2}, {3, 4}),
+          uint8_t{7},
+          GroupOrder::NewestFirst,
+          std::chrono::milliseconds(250)},
+      FillParameters{{}, uint8_t{200}, {}, {}},
+      FillParameters{{}, {}, GroupOrder::OldestFirst, {}},
+      FillParameters{{}, {}, {}, std::chrono::milliseconds(0)}};
+
+  for (const auto& fill : fills) {
+    auto bytes = writeFillSubscribe(writer, fill);
+    auto parseRes = parseSubscribeFrame(parser, bytes);
+    ASSERT_TRUE(parseRes.hasValue());
+    ASSERT_TRUE(parseRes->fill.has_value());
+    EXPECT_EQ(*parseRes->fill, fill);
+  }
+}
+
+// A Default group order goes out as an omitted GROUP_ORDER, which still parses.
+TEST(MoQFramerFillParameters, DefaultGroupOrderIsOmitted) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft20);
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft20);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  auto bytes = writeFillSubscribe(
+      writer, FillParameters{{}, {}, GroupOrder::Default, {}});
+  auto parseRes = parseSubscribeFrame(parser, bytes);
+  ASSERT_TRUE(parseRes.hasValue());
+  ASSERT_TRUE(parseRes->fill.has_value());
+  EXPECT_EQ(*parseRes->fill, FillParameters{});
+}
+
+// A type may appear both in the message and inside FILL_PARAMETERS.
+TEST(MoQFramerFillParameters, NestedAndOuterFilterAreIndependent) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft20);
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft20);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  FillParameters fill;
+  fill.locationFilter = LocationFilter::relativeStart(4);
+  auto bytes =
+      writeFillSubscribe(writer, fill, LocationFilter::absoluteStart({9, 9}));
+
+  auto parseRes = parseSubscribeFrame(parser, bytes);
+  ASSERT_TRUE(parseRes.hasValue());
+  EXPECT_EQ(parseRes->filter, LocationFilter::absoluteStart({9, 9}));
+  ASSERT_TRUE(parseRes->fill.has_value());
+  EXPECT_EQ(parseRes->fill->locationFilter, LocationFilter::relativeStart(4));
+}
+
+// A subscription without FILL_PARAMETERS does not request a fill.
+TEST(MoQFramerFillParameters, AbsentWhenNotRequested) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft20);
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft20);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  auto req =
+      SubscribeRequest::make(FullTrackName{TrackNamespace({"ns"}), "track"});
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeSubscribeRequest(buf, req).hasValue());
+  auto bytes = buf.move();
+
+  auto parseRes = parseSubscribeFrame(parser, bytes);
+  ASSERT_TRUE(parseRes.hasValue());
+  EXPECT_FALSE(parseRes->fill.has_value());
+}
+
+// FILL_PARAMETERS below draft 20 is a protocol violation.
+TEST(MoQFramerFillParameters, RejectedBelowV20) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft20);
+  FillParameters fill;
+  fill.locationFilter = LocationFilter::relativeStart(1);
+  auto bytes = writeFillSubscribe(writer, fill);
+
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft18);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  folly::io::Cursor cursor(bytes.get());
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  ASSERT_TRUE(frameType.has_value());
+  auto frameLen = cursor.readBE<uint16_t>();
+  auto parseRes = parser.parseSubscribeRequest(cursor, frameLen);
+  ASSERT_TRUE(parseRes.hasError());
+  EXPECT_EQ(parseRes.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+// FILL_PARAMETERS on any message but SUBSCRIBE or REQUEST_UPDATE is a
+// protocol violation.
+TEST(MoQFramerLocationFilter, FillParametersOnFetchIsAViolation) {
+  folly::IOBufQueue body{folly::IOBufQueue::cacheChainLength()};
+  writeVarintTo(body, 7); // Request ID
+  writeVarintTo(body, folly::to_underlying(FetchType::STANDALONE));
+  writeVarintTo(body, 1); // Track Namespace, one element
+  writeVarintTo(body, 2);
+  body.append(folly::IOBuf::copyBuffer("ns"));
+  writeVarintTo(body, 5); // Track Name
+  body.append(folly::IOBuf::copyBuffer("track"));
+  writeVarintTo(body, 1); // one parameter
+  writeVarintTo(
+      body, folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS));
+  writeVarintTo(body, 0); // empty FILL_PARAMETERS value
+
+  auto bytes = body.move();
+  MoQFrameParser parser;
+  parser.initializeVersion(kVersionDraft20);
+  MoQTokenCache tokenCache;
+  parser.setTokenCache(&tokenCache);
+
+  folly::io::Cursor cursor(bytes.get());
+  auto res = parser.parseFetch(cursor, bytes->computeChainDataLength());
+  ASSERT_TRUE(res.hasError());
+  EXPECT_EQ(res.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
 // Draft 20 carries the FETCH range in LOCATION_FILTER.
@@ -6689,7 +6880,8 @@ TEST_F(ParameterValidationFlowTest, ParseParamsIgnoresInvalidParam) {
       kDefaultPriority,
       GroupOrder::Default,
       true,
-      LocationFilter::relativeStart(1)};
+      LocationFilter::relativeStart(1),
+      std::nullopt};
 
   // Add valid param using insertParam
   reqWithInvalidParam.params.insertParam(Parameter(

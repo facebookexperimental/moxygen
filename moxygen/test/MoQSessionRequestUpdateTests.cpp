@@ -1674,6 +1674,40 @@ CO_TEST_P_X(Draft18Test, PublishRequestUpdateFailsOnPeerStopSending) {
 // which resets the fetch consumer.
 // =============================================================================
 
+// A fill exists only for a subscription, so FILL_PARAMETERS on a FETCH's
+// REQUEST_UPDATE closes the session.
+CO_TEST_P_X(Draft20Test, FetchRequestUpdateWithFillClosesSession) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockFetchHandle> mockFetchHandle = nullptr;
+  std::shared_ptr<FetchConsumer> heldFetchConsumer = nullptr;
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce(
+          [&](Fetch fetch,
+              std::shared_ptr<FetchConsumer> consumer) -> TaskFetchResult {
+            heldFetchConsumer = std::move(consumer);
+            mockFetchHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 10});
+            co_return mockFetchHandle;
+          });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto fetchRes =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 10}), fetchCallback_);
+  CO_ASSERT_TRUE(!fetchRes.hasError());
+  EXPECT_CALL(*mockFetchHandle, requestUpdateCalled).Times(0);
+  EXPECT_CALL(*fetchCallback_, reset(_)).Times(testing::AnyNumber());
+
+  RequestUpdate update;
+  update.existingRequestID = fetchRes.value()->fetchOk().requestID;
+  update.requestID = RequestID(getRequestIDMultiplier());
+  update.fill = FillParameters{};
+  static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get())
+      ->onRequestUpdate(std::move(update));
+  co_await rescheduleN(5);
+
+  EXPECT_TRUE(serverSession_->isClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // FETCH REQUEST_UPDATE coalescing (draft 18+). The client fetch handle does not
 // send updates, so inject them server-side: several queued updates collapse to
 // a single application call for the newest.

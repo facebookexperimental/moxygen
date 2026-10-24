@@ -564,6 +564,10 @@ const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
         {TrackRequestParamKey::FILL_TIMEOUT, kAllowedFramesForFillTimeout},
         {TrackRequestParamKey::TRACK_NAMESPACE_PREFIX,
          kAllowedFramesForTrackNamespacePrefix},
+        // v20+ FILL_PARAMETERS (0x23): MAY appear in SUBSCRIBE or
+        // REQUEST_UPDATE.
+        {TrackRequestParamKey::FILL_PARAMETERS,
+         {FrameType::SUBSCRIBE, FrameType::REQUEST_UPDATE}},
         // v22+ INCLUDE_PROPERTIES (0x35): MAY appear in SUBSCRIBE,
         // TRACK_STATUS, FETCH, or SUBSCRIBE_TRACKS.
         {TrackRequestParamKey::INCLUDE_PROPERTIES,
@@ -594,6 +598,10 @@ static bool isV18OnlyParamKey(TrackRequestParamKey key) {
   }
 }
 
+static bool isV20OnlyParamKey(TrackRequestParamKey key) {
+  return key == TrackRequestParamKey::FILL_PARAMETERS;
+}
+
 static bool isV22OnlyParamKey(TrackRequestParamKey key) {
   return key == TrackRequestParamKey::INCLUDE_PROPERTIES;
 }
@@ -601,6 +609,9 @@ static bool isV22OnlyParamKey(TrackRequestParamKey key) {
 bool Parameters::isKnownParamKey(uint64_t key, uint64_t majorVersion) {
   auto typedKey = static_cast<TrackRequestParamKey>(key);
   if (majorVersion < 18 && isV18OnlyParamKey(typedKey)) {
+    return false;
+  }
+  if (majorVersion < 20 && isV20OnlyParamKey(typedKey)) {
     return false;
   }
   if (majorVersion < 22 && isV22OnlyParamKey(typedKey)) {
@@ -658,6 +669,11 @@ bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
   // v18-only parameter keys.
   if (isV18OnlyParamKey(key) &&
       (!majorVersion_.has_value() || *majorVersion_ < 18)) {
+    return false;
+  }
+
+  if (isV20OnlyParamKey(key) &&
+      (!majorVersion_.has_value() || *majorVersion_ < 20)) {
     return false;
   }
 
@@ -719,6 +735,7 @@ SubscribeRequest SubscribeRequest::make(
       groupOrder,
       forward,
       filter,
+      std::nullopt,
       TrackRequestParameters{FrameType::SUBSCRIBE}};
 
   for (const auto& param : inputParams) {

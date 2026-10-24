@@ -84,6 +84,9 @@ bool useUniControlStreams(uint64_t version);
 // token aliasing) and request-frame-on-control-stream patterns.
 bool useBidiRequestStreams(uint64_t version);
 
+// True if a subscription can request a fill with FILL_PARAMETERS.
+bool useFillFetch(uint64_t version);
+
 // True if the request range is carried in LOCATION_FILTER (draft 20+).
 bool useLocationFilter(uint64_t version);
 

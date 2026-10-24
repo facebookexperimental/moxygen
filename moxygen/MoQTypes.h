@@ -654,12 +654,31 @@ enum class GroupOrder : uint8_t {
   NewestFirst = 0x2
 };
 
+// Draft-20 FILL_PARAMETERS, which requests a fill fetch stream. Each member
+// overrides the subscription's value for that stream only.
+struct FillParameters {
+  // Absent means the fill covers the subscription's own range; a zero-length
+  // filter on the wire means the whole track up to Largest Object.
+  std::optional<LocationFilter> locationFilter;
+  std::optional<uint8_t> subscriberPriority;
+  std::optional<GroupOrder> groupOrder;
+  // Carried through but not enforced yet.
+  std::optional<std::chrono::milliseconds> fillTimeout;
+
+  bool operator==(const FillParameters& other) const {
+    return locationFilter == other.locationFilter &&
+        subscriberPriority == other.subscriberPriority &&
+        groupOrder == other.groupOrder && fillTimeout == other.fillTimeout;
+  }
+};
+
 struct Parameter {
   uint64_t key = 0;
   std::string asString;
   uint64_t asUint64 = 0;
   AuthToken asAuthToken;
   LocationFilter asLocationFilter;
+  FillParameters asFillParameters;
   std::optional<AbsoluteLocation> largestObject;
 
   // Constructors for Parameter for each type, provided the key and the type
@@ -671,6 +690,7 @@ struct Parameter {
         asUint64(0),
         asAuthToken(),
         asLocationFilter(),
+        asFillParameters(),
         largestObject() {}
 
   // uint64_t parameter
@@ -680,6 +700,7 @@ struct Parameter {
         asUint64(uint64),
         asAuthToken(),
         asLocationFilter(),
+        asFillParameters(),
         largestObject() {}
 
   // AuthToken parameter
@@ -689,6 +710,17 @@ struct Parameter {
         asUint64(0),
         asAuthToken(token),
         asLocationFilter(),
+        asFillParameters(),
+        largestObject() {}
+
+  // FillParameters parameter
+  Parameter(uint64_t keyIn, const FillParameters& fill)
+      : key(keyIn),
+        asString(),
+        asUint64(0),
+        asAuthToken(),
+        asLocationFilter(),
+        asFillParameters(fill),
         largestObject() {}
 
   // LocationFilter parameter
@@ -698,6 +730,7 @@ struct Parameter {
         asUint64(0),
         asAuthToken(),
         asLocationFilter(filter),
+        asFillParameters(),
         largestObject() {}
 
   // LargestObject parameter (std::optional<AbsoluteLocation>)
@@ -735,6 +768,7 @@ enum class TrackRequestParamKey : uint64_t {
   LOCATION_FILTER = 0x21,
   EXPIRES = 8,
   GROUP_ORDER = 0x22,
+  FILL_PARAMETERS = 0x23, // draft 20+
   LARGEST_OBJECT = 0x9,
   FILL_TIMEOUT = 0x0A,
   FORWARD = 0x10,
@@ -1314,6 +1348,7 @@ struct SubscribeRequest {
   GroupOrder groupOrder{GroupOrder::Default};
   bool forward{true};
   LocationFilter filter{LocationFilter::nextObject()};
+  std::optional<FillParameters> fill; // draft 20+
   TrackRequestParameters params{FrameType::SUBSCRIBE};
   bool includeProperties{true};
 };
@@ -1327,6 +1362,7 @@ struct RequestUpdate {
   // Optional forward field. When absent, existing forward state is
   // preserved.
   std::optional<bool> forward;
+  std::optional<FillParameters> fill; // draft 20+
   TrackRequestParameters params{FrameType::SUBSCRIBE_UPDATE};
 };
 

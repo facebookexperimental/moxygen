@@ -4994,6 +4994,12 @@ void MoQSession::onRequestUpdate(RequestUpdate requestUpdate) {
     }
     if (auto fetchPub =
             std::dynamic_pointer_cast<FetchPublisherImpl>(pubIt->second)) {
+      if (requestUpdate.fill) {
+        XLOG(ERR) << "FILL_PARAMETERS in a REQUEST_UPDATE for a FETCH reqID="
+                  << existingRequestID << " sess=" << this;
+        close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+        return;
+      }
       handleFetchRequestUpdate(requestUpdate, fetchPub);
       return;
     }

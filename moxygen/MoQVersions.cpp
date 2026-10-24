@@ -143,6 +143,10 @@ bool useBidiRequestStreams(uint64_t version) {
   return getDraftMajorVersion(version) >= 18;
 }
 
+bool useFillFetch(uint64_t version) {
+  return getDraftMajorVersion(version) >= 20;
+}
+
 bool useLocationFilter(uint64_t version) {
   return getDraftMajorVersion(version) >= 20;
 }

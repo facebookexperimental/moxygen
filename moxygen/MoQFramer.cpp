@@ -70,22 +70,41 @@ ParamValueEncoding paramEncodingV18(uint64_t key) {
     case K::AUTHORIZATION_TOKEN:
     case K::SUBSCRIPTION_FILTER:
     case K::TRACK_NAMESPACE_PREFIX:
+    case K::FILL_PARAMETERS:
       return ParamValueEncoding::LengthPrefixed;
   }
   XLOG(DFATAL) << "paramEncodingV18: unknown key " << key;
   return ParamValueEncoding::Varint;
 }
 
+// The parameter types draft 20 permits inside FILL_PARAMETERS. Range Filters
+// are also permitted, but they are rejected here as they are at the top
+// level, until moxygen implements them.
+bool isFillParameterAllowed(uint64_t key) {
+  switch (key) {
+    case folly::to_underlying(moxygen::TrackRequestParamKey::FILL_TIMEOUT):
+    case folly::to_underlying(
+        moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY):
+    case folly::to_underlying(moxygen::TrackRequestParamKey::LOCATION_FILTER):
+    case folly::to_underlying(moxygen::TrackRequestParamKey::GROUP_ORDER):
+      return true;
+    default:
+      return false;
+  }
+}
+
 // The request-specific params whose frame-type allowlists match draft 20.
 bool isDraft20FilterParam(moxygen::TrackRequestParamKey key, uint64_t version) {
-  if (!moxygen::useLocationFilter(version)) {
+  if (!moxygen::useFillFetch(version)) {
     return false;
   }
-  return key == moxygen::TrackRequestParamKey::LOCATION_FILTER;
+  return key == moxygen::TrackRequestParamKey::FILL_PARAMETERS ||
+      key == moxygen::TrackRequestParamKey::LOCATION_FILTER;
 }
 
 bool isRequestSpecificParam(moxygen::TrackRequestParamKey key) {
   switch (key) {
+    case moxygen::TrackRequestParamKey::FILL_PARAMETERS:
     case moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER:
     case moxygen::TrackRequestParamKey::LARGEST_OBJECT:
     case moxygen::TrackRequestParamKey::EXPIRES:
@@ -788,6 +807,65 @@ folly::Expected<LocationFilter, ErrorCode> MoQFrameParser::parseLocationFilter(
   return LocationFilter::fromFields(fields, count);
 }
 
+folly::Expected<FillParameters, ErrorCode> MoQFrameParser::parseFillParameters(
+    folly::io::Cursor& cursor,
+    size_t& length) const noexcept {
+  FillParameters fill;
+  const auto version = *version_;
+  // Its own duplicate scope, so a type may appear here and in the message.
+  uint64_t previousKey = 0;
+  while (length > 0) {
+    auto key = parseParamKey(cursor, length, version, previousKey);
+    if (key.hasError()) {
+      return folly::makeUnexpected(key.error());
+    }
+    if (!isFillParameterAllowed(*key)) {
+      XLOG(ERR) << "parseFillParameters: parameter " << *key
+                << " is not allowed inside FILL_PARAMETERS";
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    if (*key == folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER)) {
+      auto lenRes = decodeVarint(cursor, length);
+      if (!lenRes) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      length -= lenRes->second;
+      if (lenRes->first > length || !cursor.canAdvance(lenRes->first)) {
+        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+      }
+      size_t valueLen = lenRes->first;
+      length -= valueLen;
+      auto filter = parseLocationFilter(cursor, valueLen);
+      if (!filter) {
+        return folly::makeUnexpected(filter.error());
+      }
+      fill.locationFilter = filter.value();
+      continue;
+    }
+    auto res = parseV18ParamValue(cursor, length, version, *key);
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
+    if (!res->has_value()) {
+      continue;
+    }
+    switch (static_cast<TrackRequestParamKey>(*key)) {
+      case TrackRequestParamKey::FILL_TIMEOUT:
+        fill.fillTimeout = std::chrono::milliseconds((*res)->asUint64);
+        break;
+      case TrackRequestParamKey::SUBSCRIBER_PRIORITY:
+        fill.subscriberPriority = static_cast<uint8_t>((*res)->asUint64);
+        break;
+      case TrackRequestParamKey::GROUP_ORDER:
+        fill.groupOrder = static_cast<GroupOrder>((*res)->asUint64);
+        break;
+      default:
+        break;
+    }
+  }
+  return fill;
+}
+
 folly::Expected<std::optional<Parameter>, ErrorCode>
 MoQFrameParser::parseVariableParam(
     folly::io::Cursor& cursor,
@@ -821,7 +899,10 @@ MoQFrameParser::parseVariableParam(
       return std::nullopt;
     }
     p.asAuthToken = std::move(*tokenRes.value());
-  } else if (key == subscriptionFilterKey) {
+  } else if (
+      key == subscriptionFilterKey ||
+      (key == folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS) &&
+       useFillFetch(version))) {
     // Read length prefix (odd key = length-prefixed)
     auto lenRes = decodeVarint(cursor, length);
     if (!lenRes) {
@@ -836,7 +917,13 @@ MoQFrameParser::parseVariableParam(
     }
     size_t valueSize = valueLen;
     length -= valueLen;
-    if (useLocationFilter(version)) {
+    if (key == folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS)) {
+      auto res = parseFillParameters(cursor, valueSize);
+      if (!res) {
+        return folly::makeUnexpected(res.error());
+      }
+      p.asFillParameters = res.value();
+    } else if (useLocationFilter(version)) {
       auto res = parseLocationFilter(cursor, valueSize);
       if (!res) {
         return folly::makeUnexpected(res.error());
@@ -1775,6 +1862,22 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
   return folly::unit;
 }
 
+std::optional<FillParameters> MoQFrameParser::extractFillParameters(
+    const std::vector<Parameter>& requestSpecificParams) const noexcept {
+  if (!useFillFetch(*version_)) {
+    // Below draft 20 the key is unknown, so it arrives as an opaque string
+    // and carries no fill.
+    return std::nullopt;
+  }
+  for (const auto& param : requestSpecificParams) {
+    if (param.key ==
+        folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS)) {
+      return param.asFillParameters;
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<LocationFilter> MoQFrameParser::extractLocationFilter(
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   for (const auto& param : requestSpecificParams) {
@@ -1858,6 +1961,7 @@ void MoQFrameParser::handleRequestSpecificParams(
   // AbsoluteStart {0,0}.
   subscribeRequest.filter = extractLocationFilter(requestSpecificParams)
                                 .value_or(LocationFilter::none());
+  subscribeRequest.fill = extractFillParameters(requestSpecificParams);
 
   // GROUP_ORDER
   handleGroupOrderParam(
@@ -1949,6 +2053,7 @@ void MoQFrameParser::handleRequestSpecificParams(
     }
   }
   requestUpdate.filter = filter;
+  requestUpdate.fill = extractFillParameters(requestSpecificParams);
 
   // SUBSCRIBER_PRIORITY: absent means unchanged, so leave priority unset.
   if (auto maybePriority = getFirstIntParam(
@@ -4109,14 +4214,19 @@ void MoQFrameWriter::writeV18ParamValue(
       writeVarint(writeBuf, param.largestObject->object, size, error);
       return;
     case ParamValueEncoding::LengthPrefixed: {
-      if (param.key !=
-          folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER)) {
+      const bool isFill = param.key ==
+          folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS);
+      if (!isFill &&
+          param.key !=
+              folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER)) {
         writeFixedString(writeBuf, param.asString, size, error);
         return;
       }
       folly::IOBufQueue tmpBuf{folly::IOBufQueue::cacheChainLength()};
       size_t tmpSize = 0;
-      if (useLocationFilter(*version_)) {
+      if (isFill) {
+        writeFillParameters(tmpBuf, param.asFillParameters, tmpSize, error);
+      } else if (useLocationFilter(*version_)) {
         writeLocationFilter(tmpBuf, param.asLocationFilter, tmpSize, error);
       } else {
         writeSubscriptionFilter(
@@ -4255,6 +4365,48 @@ void MoQFrameWriter::writeLocationFilter(
   const auto fields = filter.fields();
   for (uint8_t i = 0; i < filter.fieldCount(); i++) {
     writeVarint(writeBuf, fields[i], size, error);
+  }
+}
+
+void MoQFrameWriter::writeFillParameters(
+    folly::IOBufQueue& writeBuf,
+    const FillParameters& fill,
+    size_t& size,
+    bool& error) const noexcept {
+  // Ascending type order, delta encoded, like any other parameter block.
+  uint64_t previousKey = 0;
+  auto writeKey = [&](TrackRequestParamKey key) {
+    auto value = folly::to_underlying(key);
+    writeVarint(writeBuf, value - previousKey, size, error);
+    previousKey = value;
+  };
+  if (fill.fillTimeout) {
+    writeKey(TrackRequestParamKey::FILL_TIMEOUT);
+    writeVarint(writeBuf, fill.fillTimeout->count(), size, error);
+  }
+  if (fill.subscriberPriority) {
+    writeKey(TrackRequestParamKey::SUBSCRIBER_PRIORITY);
+    writeBuf.append(&*fill.subscriberPriority, 1);
+    size += 1;
+  }
+  if (fill.locationFilter) {
+    writeKey(TrackRequestParamKey::LOCATION_FILTER);
+    folly::IOBufQueue tmpBuf{folly::IOBufQueue::cacheChainLength()};
+    size_t tmpSize = 0;
+    writeLocationFilter(tmpBuf, *fill.locationFilter, tmpSize, error);
+    if (error) {
+      return;
+    }
+    writeVarint(writeBuf, tmpSize, size, error);
+    writeBuf.append(tmpBuf.move());
+    size += tmpSize;
+  }
+  // Default is not a wire value; omitting GROUP_ORDER means the same thing.
+  if (fill.groupOrder && *fill.groupOrder != GroupOrder::Default) {
+    writeKey(TrackRequestParamKey::GROUP_ORDER);
+    auto order = folly::to_underlying(*fill.groupOrder);
+    writeBuf.append(&order, 1);
+    size += 1;
   }
 }
 
@@ -4613,6 +4765,12 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
     subscriptionFilterParam.asLocationFilter = subscribeRequest.filter;
     requestSpecificParams.push_back(subscriptionFilterParam);
 
+    if (subscribeRequest.fill && useFillFetch(*version_)) {
+      requestSpecificParams.emplace_back(
+          folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS),
+          *subscribeRequest.fill);
+    }
+
     if (subscribeRequest.priority != kDefaultPriority) {
       Parameter priorityParam;
       priorityParam.key =
@@ -4688,6 +4846,12 @@ WriteResult MoQFrameWriter::writeRequestUpdate(
     }
     requestSpecificParams.emplace_back(
         folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER), filter);
+  }
+
+  if (update.fill && useFillFetch(*version_)) {
+    requestSpecificParams.emplace_back(
+        folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS),
+        *update.fill);
   }
 
   // Emit SUBSCRIBER_PRIORITY whenever the update carries a priority,
