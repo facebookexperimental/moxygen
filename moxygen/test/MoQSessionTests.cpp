@@ -1855,6 +1855,268 @@ CO_TEST_P_X(MoQSessionTest, SessionCloseRetiresPublisherWithoutPublishDone) {
   co_await rescheduleN(2);
 }
 
+class MoQBidiSetupGateTest : public MoQSessionTest {
+ public:
+  folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
+      const moxygen::Setup& setup,
+      uint64_t version,
+      std::shared_ptr<MoQSession> session) override {
+    if (rejectAuthority_) {
+      return folly::makeUnexpected(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    }
+    return MoQSessionTest::validateAuthority(
+        setup, version, std::move(session));
+  }
+
+ protected:
+  struct PendingPublish {
+    RequestID requestID;
+    std::shared_ptr<proxygen::test::FakeStreamHandle> request;
+    std::shared_ptr<proxygen::test::FakeStreamHandle> response;
+  };
+
+  void prepareServerSetup() {
+    clientSession_->setPublishHandler(clientPublisher);
+    clientSession_->setSubscribeHandler(clientSubscriber);
+    serverSession_->setPublishHandler(serverPublisher);
+    serverSession_->setSubscribeHandler(serverSubscriber);
+    moxygen::Setup setup;
+    setup.params.insertParam(
+        SetupParameter{
+            folly::to_underlying(SetupKey::MAX_REQUEST_ID),
+            initialMaxRequestID_});
+    EXPECT_TRUE(serverSession_->sendSetup(std::move(setup)).hasValue());
+  }
+
+  void sendClientSetup() {
+    clientSession_->start();
+    serverSession_->start();
+    EXPECT_TRUE(clientSession_->sendSetup(getClientSetup(initialMaxRequestID_))
+                    .hasValue());
+  }
+
+  PendingPublish publishBeforeSetup(uint64_t sequence) {
+    auto bidi = clientWt_->createBidiStream().value();
+    const auto streamId = bidi.writeHandle->getID();
+    PublishRequest request{
+        RequestID(sequence * 2),
+        FullTrackName{TrackNamespace{{"setup-gate"}}, std::to_string(sequence)},
+        TrackAlias(100 + sequence),
+        GroupOrder::Default,
+        AbsoluteLocation{0, 100},
+        true,
+        {}};
+    MoQFrameWriter writer;
+    writer.initializeVersion(kVersionDraft18);
+    folly::IOBufQueue bytes{folly::IOBufQueue::cacheChainLength()};
+    EXPECT_TRUE(writer.writePublish(bytes, request).hasValue());
+    EXPECT_TRUE(bidi.writeHandle->writeStreamData(bytes.move(), false, nullptr)
+                    .hasValue());
+    return {
+        request.requestID,
+        clientWt_->writeHandles.at(streamId),
+        clientWt_->readHandles.at(streamId)};
+  }
+
+  static void expectUnread(const PendingPublish& stream) {
+    EXPECT_EQ(stream.request->readCount_, 0);
+    EXPECT_EQ(stream.response->dataWritten_, 0);
+  }
+
+  folly::coro::Task<void> expectPublishReply(const PendingPublish& stream) {
+    for (int i = 0; i < 50 && stream.response->dataWritten_ == 0; ++i) {
+      co_await folly::coro::co_reschedule_on_current_executor;
+    }
+    CO_ASSERT_GT(stream.response->dataWritten_, 0);
+    struct Reply : MoQControlCodec::ControlCallback {
+      void onRequestOk(RequestOk value, FrameType) override {
+        ok = std::move(value);
+      }
+      void onRequestError(RequestError value, FrameType) override {
+        rejected = std::move(value);
+      }
+      void onConnectionError(ErrorCode value) override {
+        parseError = value;
+      }
+      std::optional<RequestOk> ok;
+      std::optional<RequestError> rejected;
+      std::optional<ErrorCode> parseError;
+    } reply;
+    MoQBidiStreamCodec codec(
+        &reply,
+        std::initializer_list<FrameType>{},
+        stream.requestID,
+        FrameType::REQUEST_OK);
+    codec.initializeVersion(kVersionDraft18);
+    codec.onIngress(stream.response->buf_.move(), false);
+    EXPECT_FALSE(reply.parseError.has_value());
+    EXPECT_FALSE(reply.rejected.has_value());
+    CO_ASSERT_TRUE(reply.ok.has_value());
+    EXPECT_EQ(reply.ok->requestID, stream.requestID);
+  }
+
+  bool rejectAuthority_{false};
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    MoQBidiSetupGateTest,
+    MoQBidiSetupGateTest,
+    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+
+CO_TEST_P_X(MoQBidiSetupGateTest, PublishWaitsForAcceptedSetup) {
+  prepareServerSetup();
+  std::vector<RequestID> dispatched;
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .Times(3)
+      .WillRepeatedly([&](const PublishRequest& request, auto) {
+        dispatched.push_back(request.requestID);
+        return makePublishOkResult(request);
+      });
+  auto first = publishBeforeSetup(0);
+  auto second = publishBeforeSetup(1);
+  co_await rescheduleN(5);
+  EXPECT_TRUE(dispatched.empty());
+  expectUnread(first);
+  expectUnread(second);
+
+  folly::coro::Baton serverSetupDone;
+  folly::Try<moxygen::Setup> serverSetupResult;
+  co_withExecutor(MoQExecutor_.get(), serverSession_->awaitPeerSetup())
+      .start([&](folly::Try<moxygen::Setup>&& result) {
+        serverSetupResult = std::move(result);
+        serverSetupDone.post();
+      });
+  sendClientSetup();
+  auto pipelined = publishBeforeSetup(2);
+  co_await clientSession_->awaitPeerSetup();
+  co_await serverSetupDone;
+  EXPECT_TRUE(serverSetupResult.hasValue());
+  co_await expectPublishReply(first);
+  co_await expectPublishReply(second);
+  co_await expectPublishReply(pipelined);
+  EXPECT_THAT(
+      dispatched,
+      testing::UnorderedElementsAre(RequestID(0), RequestID(2), RequestID(4)));
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQBidiSetupGateTest, CancellationIsIsolatedAcrossStreamChurn) {
+  prepareServerSetup();
+  clientWt_->setMaxLocalBidiStreams(2);
+  size_t dispatched = 0;
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce([&](const PublishRequest& request, auto) {
+        ++dispatched;
+        return makePublishOkResult(request);
+      });
+  auto survivor = publishBeforeSetup(0);
+  for (uint64_t i = 1; i <= 32; ++i) {
+    auto cancelled = publishBeforeSetup(i);
+    co_await rescheduleN(5);
+    expectUnread(cancelled);
+    EXPECT_TRUE(cancelled.response->stopSending(0).hasValue());
+    for (int turn = 0; turn < 50 && cancelled.request->stopSendingCount_ == 0;
+         ++turn) {
+      co_await folly::coro::co_reschedule_on_current_executor;
+    }
+    EXPECT_EQ(cancelled.request->stopSendingCount_, 1);
+    expectUnread(cancelled);
+    expectUnread(survivor);
+    EXPECT_EQ(dispatched, 0);
+    EXPECT_EQ(clientWt_->openLocalBidiStreams().size(), 1);
+  }
+  sendClientSetup();
+  co_await clientSession_->awaitPeerSetup();
+  co_await expectPublishReply(survivor);
+  EXPECT_EQ(dispatched, 1);
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQBidiSetupGateTest, RejectedAuthorityStopsWaitingRequests) {
+  prepareServerSetup();
+  rejectAuthority_ = true;
+  EXPECT_CALL(*serverSubscriber, publish(_, _)).Times(0);
+  RecordingSessionCloseCallback callback;
+  serverSession_->setSessionCloseCallback(&callback);
+  auto first = publishBeforeSetup(0);
+  auto second = publishBeforeSetup(1);
+  co_await rescheduleN(5);
+  expectUnread(first);
+  expectUnread(second);
+  sendClientSetup();
+  co_await callback.closed;
+  co_await rescheduleN(5);
+  EXPECT_EQ(callback.errorCode, SessionCloseErrorCode::PROTOCOL_VIOLATION);
+  EXPECT_TRUE(serverWt_->isSessionClosed());
+  expectUnread(first);
+  expectUnread(second);
+  EXPECT_GT(first.request->stopSendingCount_, 0);
+  EXPECT_GT(second.request->stopSendingCount_, 0);
+  EXPECT_TRUE(clientWt_->openLocalBidiStreams().empty());
+}
+
+CO_TEST_P_X(MoQBidiSetupGateTest, LocalCloseStopsWaitingRequests) {
+  prepareServerSetup();
+  EXPECT_CALL(*serverSubscriber, publish(_, _)).Times(0);
+  RecordingSessionCloseCallback callback;
+  serverSession_->setSessionCloseCallback(&callback);
+  auto first = publishBeforeSetup(0);
+  auto second = publishBeforeSetup(1);
+  co_await rescheduleN(5);
+  expectUnread(first);
+  expectUnread(second);
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await callback.closed;
+  co_await rescheduleN(5);
+  EXPECT_EQ(callback.errorCode, SessionCloseErrorCode::NO_ERROR);
+  expectUnread(first);
+  expectUnread(second);
+  EXPECT_GT(first.request->stopSendingCount_, 0);
+  EXPECT_GT(second.request->stopSendingCount_, 0);
+  EXPECT_TRUE(clientWt_->openLocalBidiStreams().empty());
+}
+
+CO_TEST_P_X(MoQBidiSetupGateTest, WaitingDoesNotRetainFinalSessionOwner) {
+  clientWt_->setPeerHandler(nullptr);
+  serverSession_.reset();
+  bool destroyed = false;
+  serverSession_ = std::shared_ptr<MoQSession>(
+      new MoQRelaySession(
+          folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt_.get()),
+          *this,
+          MoQExecutor_),
+      [&](MoQSession* session) {
+        delete session;
+        destroyed = true;
+      });
+  CO_ASSERT_TRUE(serverSession_->validateAndSetVersionFromAlpn("moqt-18"));
+  serverSession_->setSubscribeHandler(serverSubscriber);
+  EXPECT_CALL(*serverSubscriber, publish(_, _)).Times(0);
+  clientWt_->setPeerHandler(serverSession_.get());
+  auto pending = publishBeforeSetup(0);
+  co_await rescheduleN(5);
+  expectUnread(pending);
+  clientWt_->setPeerHandler(nullptr);
+  serverSession_.reset();
+  EXPECT_TRUE(destroyed);
+  co_await rescheduleN(5);
+  expectUnread(pending);
+  EXPECT_EQ(pending.request->stopSendingCount_, 1);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQBidiSetupGateTest, VersionTestSeamDoesNotWait) {
+  prepareServerSetup();
+  serverSession_->setVersion(kVersionDraft18);
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce([](const PublishRequest& request, auto) {
+        return makePublishOkResult(request);
+      });
+  auto request = publishBeforeSetup(0);
+  co_await expectPublishReply(request);
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // === Uni Control Stream tests (draft-18-meta-00) ===
 
 class MoQUniControlTest : public MoQSessionTest {};
