@@ -1223,6 +1223,8 @@ void mergeRequestUpdate(RequestUpdate& latest, const RequestUpdate& incoming) {
   if (incoming.forward) {
     latest.forward = incoming.forward;
   }
+  // fill is deliberately absent: it is bound to the request ID of its own
+  // message, and two fill ranges do not merge.
   // Upsert params by key: a later value replaces an earlier one of that key,
   // while params only the earlier update carried are preserved.
   for (const auto& param : incoming.params) {
@@ -1249,11 +1251,15 @@ class RequestUpdateSequencer {
     RequestUpdate update;
     std::vector<RequestID> requestIDs;
     RequestID newestRequestID;
+    // Each fill stays bound to the request ID of the update that carried it.
+    std::vector<std::pair<RequestID, FillParameters>> fills;
     std::optional<Result> result;
   };
 
   // Returns true if the caller must schedule takeQueued().
   bool add(RequestUpdate update, bool coalesce) {
+    auto fill = std::exchange(update.fill, std::nullopt);
+    auto requestID = update.requestID;
     if (coalesce && !queued_.empty()) {
       auto& batch = *queued_.back();
       batch.requestIDs.push_back(update.requestID);
@@ -1265,6 +1271,9 @@ class RequestUpdateSequencer {
       batch->newestRequestID = update.requestID;
       batch->update = std::move(update);
       queued_.push_back(std::move(batch));
+    }
+    if (fill) {
+      queued_.back()->fills.emplace_back(requestID, *fill);
     }
     return !std::exchange(dispatchScheduled_, true);
   }
@@ -1479,6 +1488,16 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     session_->setRequestSession();
 
     auto& requestUpdate = batch->update;
+    // The merged update carries the newest update's fill. A coalesced update's
+    // fill goes to the handler on its own.
+    for (const auto& [fillID, fill] : batch->fills) {
+      expectFill(fillID, fill);
+      if (fillID == batch->newestRequestID) {
+        requestUpdate.fill = fill;
+      } else {
+        serveCoalescedFill(fillID, fill);
+      }
+    }
     auto existingRequestID = requestID_;
 
     // Update delivery timeout if present
@@ -1562,6 +1581,37 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       }
       session_->requestUpdateOk(reqOk, existingRequestID);
     }
+  }
+
+  // The handler gets a coalesced update's fill as an update that carries only
+  // the fill. Its result does not change the batch's response.
+  void serveCoalescedFill(RequestID fillID, const FillParameters& fill) {
+    RequestUpdate update;
+    update.requestID = fillID;
+    update.existingRequestID = requestID_;
+    update.fill = fill;
+    startRequestUpdate(
+        *session_,
+        subscriptionHandle_,
+        std::move(update),
+        "",
+        [weakSelf = std::weak_ptr<PublisherImpl>(shared_from_this()),
+         fillID](RequestUpdateSequencer::Result result) {
+          auto self = weakSelf.lock();
+          if (!self || result.hasValue()) {
+            return;
+          }
+          XLOG(ERR) << "requestUpdate failed for the fill of coalesced update "
+                    << fillID;
+          // The update is still acked, so the failed fill is signalled by
+          // resetting its stream, unless the handler already opened it.
+          auto stream =
+              std::static_pointer_cast<TrackPublisherImpl>(self)->beginFill(
+                  fillID);
+          if (stream.hasValue()) {
+            stream.value()->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+          }
+        });
   }
 
   // Draft 18+ treats a DELIVERY_TIMEOUT of 0 as an explicit "no timeout" that
@@ -2447,6 +2497,15 @@ class MoQSession::SubscribeTrackReceiveState
     return fillGroupOrderOverride_.value_or(groupOrder_);
   }
 
+  // The order a REQUEST_UPDATE's fill uses. The SUBSCRIBE's override does not
+  // apply to it.
+  GroupOrder getUpdateFillGroupOrder(const FillParameters& fill) const {
+    if (fill.groupOrder && *fill.groupOrder != GroupOrder::Default) {
+      return *fill.groupOrder;
+    }
+    return groupOrder_;
+  }
+
   void cancel() {
     XLOG(DBG1) << __func__ << " alias=" << alias_
                << " requestID=" << requestID_;
@@ -2685,9 +2744,15 @@ class MoQSession::FetchTrackReceiveState
   }
 
   // A fill does not get a FETCH_OK, so it is established once registered.
-  void markFill() {
+  // owner is the subscription the fill counts against.
+  void markFill(RequestID owner) {
     isFill_ = true;
     fetchEstablished_ = true;
+    owningSubscribeID_ = owner;
+  }
+
+  RequestID owningSubscribeID() const {
+    return owningSubscribeID_;
   }
 
   bool isFill() const {
@@ -2842,6 +2907,7 @@ class MoQSession::FetchTrackReceiveState
   std::unique_ptr<StallTimeout> stallTimeout_;
   bool isFill_{false};
   bool streamOpened_{false};
+  RequestID owningSubscribeID_{0};
 };
 
 // Links a held joining FETCH to the SUBSCRIBE or PUBLISH it references.
@@ -4255,13 +4321,13 @@ MoQSession::openFetchTrackReceiveState(RequestID requestID) {
     auto state = trackIt->second;
     if (state->isFill() && !state->streamOpened()) {
       state->markStreamOpened();
-      countFillStream(requestID);
+      countFillStream(*state);
     }
     return state;
   }
   if (auto fill = beginFillReceiveState(requestID)) {
     fill->markStreamOpened();
-    countFillStream(requestID);
+    countFillStream(*fill);
     return fill;
   }
   // received an object for unknown subscribe ID
@@ -4269,23 +4335,54 @@ MoQSession::openFetchTrackReceiveState(RequestID requestID) {
   return nullptr;
 }
 
+std::shared_ptr<MoQSession::SubscribeTrackReceiveState>
+MoQSession::findSubscribeStateByRequestID(RequestID requestID) {
+  auto aliasIt = reqIdToTrackAlias_.find(requestID);
+  if (aliasIt != reqIdToTrackAlias_.end()) {
+    return getSubscribeTrackReceiveState(aliasIt->second);
+  }
+  // The fill can arrive before SUBSCRIBE_OK, which is on another stream.
+  auto pendingIt = pendingRequests_.find(requestID);
+  if (pendingIt != pendingRequests_.end()) {
+    if (auto* pending = pendingIt->second->tryGetSubscribeTrack()) {
+      return *pending;
+    }
+  }
+  return nullptr;
+}
+
+bool MoQSession::registerUpdateFill(
+    RequestID subscribeID,
+    RequestID updateID,
+    const FillParameters& fill) {
+  auto subState = findSubscribeStateByRequestID(subscribeID);
+  if (!subState) {
+    return false;
+  }
+  auto callback = subState->getSubscribeCallback();
+  if (!callback) {
+    return false;
+  }
+  auto consumer = callback->beginFill(updateID);
+  if (!consumer || !consumer.value()) {
+    XLOG(DBG1) << "Update fill refused by consumer id=" << updateID
+               << " sess=" << this;
+    return false;
+  }
+  registerFillReceiveState(
+      subState->fullTrackName(),
+      updateID,
+      std::move(consumer.value()),
+      subState->getUpdateFillGroupOrder(fill),
+      subscribeID);
+  return true;
+}
+
 std::shared_ptr<MoQSession::FetchTrackReceiveState>
 MoQSession::beginFillReceiveState(RequestID requestID) {
   // A fill's FETCH_HEADER carries the ID of the SUBSCRIBE or REQUEST_UPDATE
   // that initiated it.
-  std::shared_ptr<SubscribeTrackReceiveState> subState;
-  auto aliasIt = reqIdToTrackAlias_.find(requestID);
-  if (aliasIt != reqIdToTrackAlias_.end()) {
-    subState = getSubscribeTrackReceiveState(aliasIt->second);
-  } else {
-    // The fill can arrive before SUBSCRIBE_OK, which is on another stream.
-    auto pendingIt = pendingRequests_.find(requestID);
-    if (pendingIt != pendingRequests_.end()) {
-      if (auto* pending = pendingIt->second->tryGetSubscribeTrack()) {
-        subState = *pending;
-      }
-    }
-  }
+  auto subState = findSubscribeStateByRequestID(requestID);
   if (!subState) {
     return nullptr;
   }
@@ -4303,15 +4400,12 @@ MoQSession::beginFillReceiveState(RequestID requestID) {
       subState->fullTrackName(),
       requestID,
       std::move(consumer.value()),
-      subState->getFillGroupOrder());
+      subState->getFillGroupOrder(),
+      requestID);
 }
 
-void MoQSession::countFillStream(RequestID requestID) {
-  auto aliasIt = reqIdToTrackAlias_.find(requestID);
-  if (aliasIt == reqIdToTrackAlias_.end()) {
-    return;
-  }
-  if (auto subState = getSubscribeTrackReceiveState(aliasIt->second)) {
+void MoQSession::countFillStream(const FetchTrackReceiveState& fill) {
+  if (auto subState = findSubscribeStateByRequestID(fill.owningSubscribeID())) {
     subState->onFillStream();
   }
 }
@@ -4321,10 +4415,11 @@ MoQSession::registerFillReceiveState(
     const FullTrackName& fullTrackName,
     RequestID requestID,
     std::shared_ptr<FetchConsumer> consumer,
-    GroupOrder groupOrder) {
+    GroupOrder groupOrder,
+    RequestID owningSubscribeID) {
   auto state = std::make_shared<FetchTrackReceiveState>(
       fullTrackName, requestID, std::move(consumer), groupOrder, logger_);
-  state->markFill();
+  state->markFill(owningSubscribeID);
   return fetches_.emplace(requestID, std::move(state)).first->second;
 }
 
@@ -5665,6 +5760,17 @@ class MoQSession::ReceiverSubscriptionHandle
     }
     requestUpdate.requestID = session->getNextRequestID();
 
+    // The update's fill is named by the update's request ID, so file its
+    // receive state before the request goes out. A fill with nowhere to go is
+    // not requested.
+    if (requestUpdate.fill &&
+        !session_->registerUpdateFill(
+            subscribeOk_->requestID,
+            requestUpdate.requestID,
+            *requestUpdate.fill)) {
+      requestUpdate.fill.reset();
+    }
+
     // Create promise/contract for tracking the response
     auto contract = folly::coro::makePromiseContract<
         folly::Expected<RequestOk, RequestError>>();
@@ -5926,11 +6032,17 @@ void MoQSession::removeSubscriptionState(TrackAlias alias, RequestID id) {
 }
 
 void MoQSession::endUnopenedFill(RequestID id) {
-  // A fill that never got a stream will not get one now.
-  auto fillIt = fetches_.find(id);
-  if (fillIt != fetches_.end() && fillIt->second->isFill() &&
-      !fillIt->second->streamOpened()) {
-    fillIt->second->fillNeverOpened(this);
+  // A fill of this subscription, or of one of its REQUEST_UPDATEs, that never
+  // got a stream will not get one now.
+  std::vector<std::shared_ptr<FetchTrackReceiveState>> unopenedFills;
+  for (const auto& [_, state] : fetches_) {
+    if (state->isFill() && !state->streamOpened() &&
+        state->owningSubscribeID() == id) {
+      unopenedFills.push_back(state);
+    }
+  }
+  for (const auto& fill : unopenedFills) {
+    fill->fillNeverOpened(this);
   }
 }
 
@@ -7349,7 +7461,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
         fullTrackName,
         reqID,
         std::move(fillConsumer),
-        sub.fill->groupOrder.value_or(sub.groupOrder));
+        sub.fill->groupOrder.value_or(sub.groupOrder),
+        reqID);
     fillConsumer.reset();
   }
   if (fillConsumer) {

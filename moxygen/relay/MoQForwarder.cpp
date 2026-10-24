@@ -885,6 +885,10 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
           "End Location is less than start"));
     }
     range = newRange;
+    filter = *requestUpdate.filter;
+  }
+  if (requestUpdate.priority) {
+    priority = *requestUpdate.priority;
   }
 
   RequestOk ok{
@@ -909,6 +913,9 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
     }
     // Only update new group request if provided
     forwarder->tryProcessNewGroupRequest(requestUpdate.params);
+  }
+  if (requestUpdate.fill) {
+    requestFill(requestUpdate.requestID, *requestUpdate.fill);
   }
 
   co_return ok;

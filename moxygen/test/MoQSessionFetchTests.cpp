@@ -1498,6 +1498,55 @@ CO_TEST_P_X(Draft20Test, BeginFillRefusedAfterPublishDone) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A subscription paused by a REQUEST_UPDATE does not open a later fill.
+CO_TEST_P_X(Draft20Test, FillOnAPausedSubscriptionOpensNoStream) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle;
+  expectSubscribe(
+      [&mockSubscriptionHandle](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+        mockSubscriptionHandle =
+            makeSubscribeOkResult(sub, AbsoluteLocation{15, 20});
+        co_return mockSubscriptionHandle;
+      });
+  EXPECT_CALL(*serverPublisher, fetch(_, _)).Times(0);
+  EXPECT_CALL(*fetchCallback_, reset(_)).WillRepeatedly(testing::Return());
+  EXPECT_CALL(*subscribeCallback_, beginFill(_))
+      .WillRepeatedly([this](RequestID) {
+        return folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>(
+            fetchCallback_);
+      });
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillRepeatedly(testing::Return(folly::unit));
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate())
+      .Times(testing::AnyNumber());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate())
+      .Times(testing::AnyNumber());
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  CO_ASSERT_TRUE(!res.hasError());
+  auto subscribeHandle = res.value();
+  CO_ASSERT_NE(mockSubscriptionHandle, nullptr);
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
+      .WillRepeatedly([](const auto&) {});
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillRepeatedly(testing::Return(RequestOk{.requestID = RequestID(0)}));
+
+  RequestUpdate pause;
+  pause.existingRequestID = subscribeHandle->subscribeOk().requestID;
+  pause.forward = false;
+  EXPECT_FALSE((co_await subscribeHandle->requestUpdate(pause)).hasError());
+
+  RequestUpdate askFill;
+  askFill.existingRequestID = subscribeHandle->subscribeOk().requestID;
+  askFill.fill =
+      FillParameters{LocationFilter::absoluteStart({10, 0}), {}, {}, {}};
+  EXPECT_FALSE((co_await subscribeHandle->requestUpdate(askFill)).hasError());
+  co_await rescheduleN(4);
+  EXPECT_EQ(serverWt_->writeHandles.count(serverObjectStreamId()), 0);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // A reset fill ends only its own stream; the subscription keeps delivering.
 CO_TEST_P_X(Draft20Test, FillResetLeavesTheSubscriptionAlive) {
   co_await setupMoQSession();

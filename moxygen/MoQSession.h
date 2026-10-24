@@ -796,15 +796,27 @@ class MoQSession : public Subscriber,
   std::shared_ptr<FetchTrackReceiveState> beginFillReceiveState(
       RequestID requestID);
 
+  // The subscription for a request ID, before or after its SUBSCRIBE_OK.
+  std::shared_ptr<SubscribeTrackReceiveState> findSubscribeStateByRequestID(
+      RequestID requestID);
+
+  // Files receive state for a REQUEST_UPDATE's fill, using the subscription's
+  // consumer. Returns false if there is nothing to deliver the fill to.
+  bool registerUpdateFill(
+      RequestID subscribeID,
+      RequestID updateID,
+      const FillParameters& fill);
+
   // Counts a fill toward its subscription's PUBLISH_DONE Stream Count.
-  void countFillStream(RequestID requestID);
+  void countFillStream(const FetchTrackReceiveState& fill);
 
   // Files a fill's receive state under its FETCH_HEADER's request ID.
   std::shared_ptr<FetchTrackReceiveState> registerFillReceiveState(
       const FullTrackName& fullTrackName,
       RequestID requestID,
       std::shared_ptr<FetchConsumer> consumer,
-      GroupOrder groupOrder);
+      GroupOrder groupOrder,
+      RequestID owningSubscribeID);
 
   // Serves a subscription's fill below draft 20, as a standalone FETCH for an
   // absolute range and a Joining FETCH otherwise.
