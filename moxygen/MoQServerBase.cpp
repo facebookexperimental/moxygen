@@ -57,6 +57,9 @@ folly::coro::Task<void> MoQServerBase::handleClientSession(
       XLOG(ERR) << "Failed to send proactive SERVER_SETUP sess="
                 << clientSession.get();
       clientSession->close(SessionCloseErrorCode::INTERNAL_ERROR);
+    } else {
+      // awaitPeerSetup closes the session if CLIENT_SETUP never arrives.
+      co_await folly::coro::co_awaitTry(clientSession->awaitPeerSetup());
     }
   }
 
