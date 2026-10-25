@@ -1980,6 +1980,49 @@ CO_TEST_F(MoQTrackServerTest, CancelAllStopsAnInFlightTrack) {
   EXPECT_LT(recorder.groups().size(), 20u);
 }
 
+// Track status tests
+//
+// TRACK_STATUS describes the track the way SUBSCRIBE_OK would, without
+// starting it.
+
+CO_TEST_F(MoQTrackServerTest, TrackStatusMatchesSubscribeOk) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  track_.trackNamespace[4] = "20";
+  track_.trackNamespace[9] = "50";
+
+  // Nobody has subscribed, so the track is not being generated yet.
+  auto idle = co_await publisher_->trackStatus(MakeSubscribe(1));
+  CO_ASSERT_TRUE(idle.hasValue());
+  EXPECT_EQ(idle->requestID, moxygen::RequestID(1));
+  EXPECT_FALSE(idle->largest.has_value());
+
+  GroupRecorder recorder;
+  auto sub = co_await SubscribeAs(
+      CreateSession(), MakeSubscribe(2), recorder.consumer());
+  CO_ASSERT_TRUE(sub.hasValue());
+  co_await recorder.waitForGroups(2);
+
+  auto live = co_await publisher_->trackStatus(MakeSubscribe(3));
+  const auto lastGroup = recorder.groups().back();
+  publisher_->cancelAll();
+  CO_ASSERT_TRUE(live.hasValue());
+  CO_ASSERT_TRUE(live->largest.has_value());
+  EXPECT_EQ(live->largest->group, lastGroup);
+  EXPECT_EQ(live->groupOrder, sub.value()->subscribeOk().groupOrder);
+  EXPECT_EQ(live->trackProperties, sub.value()->subscribeOk().extensions);
+  EXPECT_EQ(idle->trackProperties, live->trackProperties);
+}
+
+CO_TEST_F(MoQTrackServerTest, TrackStatusRejectsAnInvalidTrack) {
+  MoQTrackServerTest::CreateDefaultTrackNamespace();
+  track_.trackNamespace[0] = "not-moq-test";
+
+  auto res = co_await publisher_->trackStatus(MakeSubscribe(0));
+  CO_ASSERT_TRUE(res.hasError());
+  EXPECT_EQ(
+      res.error().errorCode, moxygen::TrackStatusErrorCode::NOT_SUPPORTED);
+}
+
 // Subgroup header encoding tests
 //
 // The server must pick the most compact subgroup header the draft allows:

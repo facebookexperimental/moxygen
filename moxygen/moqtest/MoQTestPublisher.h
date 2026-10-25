@@ -71,6 +71,11 @@ class MoQTestPublisher : public Publisher,
   // ask for data -- otherwise it would hold the session open forever.
   void cancelAll();
 
+  // Answers with what a SUBSCRIBE_OK for the track would carry, without
+  // starting it.  A track that is not being generated has no largest location.
+  virtual folly::coro::Task<TrackStatusResult> trackStatus(
+      TrackStatus trackStatus) override;
+
   // Subscribing Methods.  Subscribers to the same track share one forwarder
   // and one generator, so a late subscriber joins the track in progress.
   virtual folly::coro::Task<SubscribeResult> subscribe(
