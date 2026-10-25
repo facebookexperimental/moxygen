@@ -4423,6 +4423,31 @@ TEST_P(MoQFramerV16PlusTest, FetchExplicitGroupOrder) {
   EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
 }
 
+TEST_P(MoQFramerV16PlusTest, FetchExplicitPriority) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+  Fetch fetchRequest(
+      RequestID(300),
+      FullTrackName({TrackNamespace({"test"}), "fetch"}),
+      AbsoluteLocation{5, 10},  // start
+      AbsoluteLocation{15, 20}, // end
+      7,                        // priority
+      GroupOrder::OldestFirst);
+
+  auto writeResult = writer_.writeFetch(writeBuf, fetchRequest);
+  EXPECT_TRUE(writeResult.hasValue());
+
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+
+  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::FETCH));
+
+  auto parseResult = parser_.parseFetch(cursor, frameLength(cursor));
+  ASSERT_TRUE(parseResult.hasValue());
+  EXPECT_EQ(parseResult->priority, 7);
+}
+
 TEST_P(MoQFramerV16PlusTest, ParseFetchObjectHeaderCursorUnderflow) {
   auto emptyBuf = folly::IOBuf::create(0);
   folly::io::Cursor cursor(emptyBuf.get());

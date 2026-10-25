@@ -2804,6 +2804,10 @@ void MoQFrameParser::handleRequestSpecificParams(
   // GROUP_ORDER
   handleGroupOrderParam(
       fetchRequest.groupOrder, requestSpecificParams, GroupOrder::OldestFirst);
+
+  // SUBSCRIBER_PRIORITY
+  handleSubscriberPriorityParam(fetchRequest.priority, requestSpecificParams);
+
   handleIncludePropertiesParam(
       fetchRequest.includeProperties, fetchRequest.params);
 
