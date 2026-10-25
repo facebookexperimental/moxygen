@@ -855,6 +855,56 @@ CO_TEST_P_X(MoQSessionTest, TestOnObjectPayload) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A complete object that the consumer reports as in progress resets only its
+// own stream.
+CO_TEST_P_X(MoQSessionTest, ObjectPayloadStatusMismatchResetsStream) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<SubgroupConsumer> subgroupPublisher = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectSubscribe([&](auto sub, auto pub) -> TaskSubscribeResult {
+    auto sgp = pub->beginSubgroup(0, 0, 0).value();
+    subgroupPublisher = sgp;
+    trackConsumer = pub;
+    sgp->beginObject(0, 100, test::makeBuf(10)).hasValue();
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg));
+
+  folly::coro::Baton receivedBeginObject;
+  EXPECT_CALL(*sg, beginObject(0, _, _, _))
+      .WillOnce(testing::Invoke([&receivedBeginObject]() {
+        receivedBeginObject.post();
+        return folly::unit;
+      }));
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto subscribeRes =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+
+  co_await receivedBeginObject;
+
+  EXPECT_CALL(*sg, objectPayload(_, _))
+      .WillOnce(testing::Return(ObjectPublishStatus::IN_PROGRESS));
+  folly::coro::Baton receivedReset;
+  EXPECT_CALL(*sg, reset(ResetStreamErrorCode::INTERNAL_ERROR))
+      .WillOnce(testing::Invoke([&receivedReset]() { receivedReset.post(); }));
+  EXPECT_TRUE(
+      subgroupPublisher
+          ->objectPayload(folly::IOBuf::copyBuffer(std::string(90, 'x')), false)
+          .hasValue());
+  co_await receivedReset;
+
+  expectPublishDone();
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Mock delivery callback for testing
 class MockDeliveryCallback : public DeliveryCallback {
  public:

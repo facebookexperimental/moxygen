@@ -4662,9 +4662,12 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
         finStream);
     if (!res) {
       return MoQCodec::ParseResult::ERROR_TERMINATE;
-    } else {
-      // TODO: CHECK seems too aggressive
-      XCHECK_EQ(objectComplete, res.value() == ObjectPublishStatus::DONE);
+    }
+    if (objectComplete != (res.value() == ObjectPublishStatus::DONE)) {
+      XLOG(ERR) << "objectPayload status does not match the stream framing,"
+                << " objectComplete=" << objectComplete
+                << " stream=" << currentStreamId_;
+      return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
     return MoQCodec::ParseResult::CONTINUE;
   }
