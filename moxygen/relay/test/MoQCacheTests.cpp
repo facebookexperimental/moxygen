@@ -31,6 +31,10 @@ MATCHER_P(HasChainDataLengthOf, n, "") {
   return arg->computeChainDataLength() == uint64_t(n);
 }
 
+MATCHER_P(HasPayload, expected, "") {
+  return arg->template to<std::string>() == expected;
+}
+
 // Helper to create extensions with Prior Object ID Gap
 Extensions makeObjectGapExtensions(uint64_t gap) {
   Extensions ext;
@@ -1568,6 +1572,57 @@ CO_TEST_F(MoQCacheTest, TestRecacheStreamedObjectWithPartialFirstChunk) {
   auto fetchRes = co_await cache_.fetch(
       getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
   EXPECT_TRUE(fetchRes.hasValue());
+  co_await folly::coro::co_reschedule_on_current_executor;
+}
+
+// A streamed object's chunks are cached in arrival order.
+CO_TEST_F(MoQCacheTest, TestStreamedObjectChunksCachedInOrder) {
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  auto subgroupConsumer = writeback->beginSubgroup(0, 0, 0).value();
+  EXPECT_FALSE(
+      subgroupConsumer->beginObject(0, 9, folly::IOBuf::copyBuffer("aaa"))
+          .hasError());
+  EXPECT_FALSE(
+      subgroupConsumer->objectPayload(folly::IOBuf::copyBuffer("bbb"), false)
+          .hasError());
+  EXPECT_FALSE(
+      subgroupConsumer->objectPayload(folly::IOBuf::copyBuffer("ccc"), false)
+          .hasError());
+  writeback.reset();
+
+  EXPECT_CALL(*consumer_, object(0, 0, 0, HasPayload("aaabbbccc"), _, _, _))
+      .WillOnce(Return(folly::unit));
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  co_await folly::coro::co_reschedule_on_current_executor;
+}
+
+CO_TEST_F(MoQCacheTest, TestUpstreamFetchedObjectChunksCachedInOrder) {
+  expectUpstreamFetch({0, 0}, {0, 1}, 0, AbsoluteLocation{0, 0})
+      .via(co_await folly::coro::co_current_executor)
+      .thenTry([this](auto) {
+        upstreamFetchConsumer_->beginObject(
+            0, 0, 0, 9, folly::IOBuf::copyBuffer("aaa"));
+        upstreamFetchConsumer_->objectPayload(
+            folly::IOBuf::copyBuffer("bbb"), false);
+        upstreamFetchConsumer_->objectPayload(
+            folly::IOBuf::copyBuffer("ccc"), true);
+      });
+  EXPECT_CALL(*consumer_, beginObject(0, 0, 0, 9, _, _))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer_, objectPayload(_, _))
+      .Times(2)
+      .WillRepeatedly(Return(ObjectPublishStatus::IN_PROGRESS));
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+
+  EXPECT_CALL(*consumer_, object(0, 0, 0, HasPayload("aaabbbccc"), _, _, _))
+      .WillOnce(Return(folly::unit));
+  res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 1}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
   co_await folly::coro::co_reschedule_on_current_executor;
 }
 

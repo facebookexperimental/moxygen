@@ -711,7 +711,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     auto& object = cacheGroup_.objects[currentObject_];
     size_t addedBytes = payload->computeChainDataLength();
     if (object->payload) {
-      object->payload->appendChain(payload->clone());
+      object->payload->appendToChain(payload->clone());
     } else {
       object->payload = payload->clone();
     }
@@ -1144,7 +1144,7 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     auto& object = objectIt->second;
     size_t addedBytes = payload->computeChainDataLength();
     if (object->payload) {
-      object->payload->appendChain(payload->clone());
+      object->payload->appendToChain(payload->clone());
     } else {
       object->payload = payload->clone();
     }
