@@ -3520,10 +3520,9 @@ RequestOk RequestOk::fromTrackStatusOk(const TrackStatusOk& trackStatusOk) {
       folly::to_underlying(TrackRequestParamKey::EXPIRES),
       static_cast<uint64_t>(trackStatusOk.expires.count()));
 
-  // Add group order parameter
-  requestOk.requestSpecificParams.emplace_back(
-      folly::to_underlying(TrackRequestParamKey::GROUP_ORDER),
-      folly::to_underlying(trackStatusOk.groupOrder));
+  // No GROUP_ORDER: it is only a SUBSCRIBE, PUBLISH_OK or FETCH parameter,
+  // and the receiver closes the session on it anywhere else. As in
+  // SUBSCRIBE_OK, a publisher's group order is a track property.
 
   // Add the LARGEST_OBJECT param if present
   if (trackStatusOk.largest) {
