@@ -419,7 +419,9 @@ class StreamPublisherImpl
   quic::CircularDeque<ObjectDeliveryInfo> pendingDeliveries_;
 
   void onByteEventCommon(quic::StreamId id, uint64_t offset) {
-    uint64_t bytesDeliveredOrCanceled = offset + 1;
+    // The FIN takes a stream offset of its own but was never buffered.
+    uint64_t bytesDeliveredOrCanceled =
+        std::min<uint64_t>(offset + 1, bytesWritten_);
     if (bytesDeliveredOrCanceled > bytesDeliveredOrCanceled_) {
       publisher_->onBytesUnbuffered(
           bytesDeliveredOrCanceled - bytesDeliveredOrCanceled_);
