@@ -298,7 +298,7 @@ if(MOXYGEN_USE_HABERDASHERY)
     if(NOT haberdashery_POPULATED)
         FetchContent_Populate(haberdashery)
         add_subdirectory(${haberdashery_SOURCE_DIR} ${haberdashery_BINARY_DIR}
-            EXCLUDE_FROM_ALL)
+            ${_EXCLUDE_FLAG})
     endif()
     if(NOT TARGET haberdashery::haberdashery)
         message(FATAL_ERROR
