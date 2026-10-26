@@ -783,6 +783,8 @@ enum class TrackRequestParamKey : uint64_t {
   INCLUDE_PROPERTIES = 0x35,
 };
 
+bool isPublishSubscriptionParameter(TrackRequestParamKey key);
+
 inline bool isRendezvousTimeoutParam(uint64_t key, uint64_t majorVersion) {
   return key ==
       static_cast<uint64_t>(TrackRequestParamKey::RENDEZVOUS_TIMEOUT) &&

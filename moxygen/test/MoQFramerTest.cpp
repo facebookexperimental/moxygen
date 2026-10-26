@@ -6568,6 +6568,223 @@ TEST_F(
   EXPECT_TRUE(publishOkParams.isParamAllowed(TrackRequestParamKey::EXPIRES));
   EXPECT_TRUE(requestOkParams.isParamAllowed(TrackRequestParamKey::EXPIRES));
 }
+
+TEST_F(
+    ParametersIsParamAllowedTest,
+    PublishSubscriptionParamsAllowedByFrameAndVersion) {
+  for (auto frameType : {FrameType::PUBLISH, FrameType::SUBSCRIBE_TRACKS}) {
+    Parameters paramsV18(frameType);
+    paramsV18.setMajorVersion(18);
+    Parameters paramsV22(frameType);
+    paramsV22.setMajorVersion(22);
+    for (auto key :
+         {TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT,
+          TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT,
+          TrackRequestParamKey::SUBSCRIBER_PRIORITY,
+          TrackRequestParamKey::SUBSCRIPTION_FILTER,
+          TrackRequestParamKey::GROUP_ORDER}) {
+      EXPECT_EQ(
+          paramsV18.isParamAllowed(key),
+          frameType == FrameType::SUBSCRIBE_TRACKS);
+      EXPECT_TRUE(paramsV22.isParamAllowed(key));
+    }
+  }
+}
+
+TEST(MoQFramerV22Test, PublishSubscriptionParamsRoundTrip) {
+  const std::array<Parameter, 5> subscriptionParams = {
+      Parameter(
+          folly::to_underlying(TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT),
+          uint64_t(1000)),
+      Parameter(
+          folly::to_underlying(TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT),
+          uint64_t(2000)),
+      Parameter(
+          folly::to_underlying(TrackRequestParamKey::SUBSCRIBER_PRIORITY),
+          uint64_t(64)),
+      Parameter(
+          folly::to_underlying(TrackRequestParamKey::GROUP_ORDER),
+          folly::to_underlying(GroupOrder::NewestFirst)),
+      Parameter(
+          folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER),
+          LocationFilter::range(AbsoluteLocation{5, 2}, uint64_t(9)))};
+  auto setSubscriptionParams = [&](auto& request) {
+    request.params.setMajorVersion(22);
+    for (const auto& param : subscriptionParams) {
+      EXPECT_TRUE(request.params.insertParam(param).hasValue());
+    }
+  };
+
+  auto expectSubscriptionParams = [&](const auto& request) {
+    EXPECT_EQ(request.params.size(), subscriptionParams.size());
+    for (const auto& expected : subscriptionParams) {
+      auto actual = std::find_if(
+          request.params.begin(), request.params.end(), [&](const auto& param) {
+            return param.key == expected.key;
+          });
+      ASSERT_NE(actual, request.params.end());
+      if (expected.key ==
+          folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER)) {
+        EXPECT_EQ(actual->asLocationFilter, expected.asLocationFilter);
+      } else {
+        EXPECT_EQ(actual->asUint64, expected.asUint64);
+      }
+    }
+  };
+
+  MoQFrameWriter writer;
+  MoQFrameParser parser;
+  writer.initializeVersion(kVersionDraft22);
+  parser.initializeVersion(kVersionDraft22);
+
+  PublishRequest publish;
+  publish.requestID = RequestID(1);
+  publish.fullTrackName = FullTrackName{TrackNamespace({"example"}), "track"};
+  publish.trackAlias = TrackAlias(1);
+  setSubscriptionParams(publish);
+  setPublisherGroupOrder(publish, GroupOrder::OldestFirst);
+  folly::IOBufQueue publishBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writePublish(publishBuf, publish).hasValue());
+  auto publishBytes = publishBuf.move();
+  folly::io::Cursor publishCursor(publishBytes.get());
+  ASSERT_TRUE(decodeMoQVarint(publishCursor).has_value());
+  auto publishLength = publishCursor.readBE<uint16_t>();
+  auto parsedPublish = parser.parsePublish(publishCursor, publishLength);
+  ASSERT_TRUE(parsedPublish.hasValue());
+  EXPECT_EQ(parsedPublish->groupOrder, GroupOrder::NewestFirst);
+  expectSubscriptionParams(*parsedPublish);
+
+  SubscribeTracks subscribeTracks;
+  subscribeTracks.requestID = RequestID(3);
+  subscribeTracks.trackNamespacePrefix = TrackNamespace({"example"});
+  setSubscriptionParams(subscribeTracks);
+  folly::IOBufQueue subscribeTracksBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer.writeSubscribeTracks(subscribeTracksBuf, subscribeTracks)
+                  .hasValue());
+  auto subscribeTracksBytes = subscribeTracksBuf.move();
+  folly::io::Cursor subscribeTracksCursor(subscribeTracksBytes.get());
+  ASSERT_TRUE(decodeMoQVarint(subscribeTracksCursor).has_value());
+  auto subscribeTracksLength = subscribeTracksCursor.readBE<uint16_t>();
+  auto parsedSubscribeTracks =
+      parser.parseSubscribeTracks(subscribeTracksCursor, subscribeTracksLength);
+  ASSERT_TRUE(parsedSubscribeTracks.hasValue());
+  expectSubscriptionParams(*parsedSubscribeTracks);
+
+  MoQFrameWriter writerV18;
+  MoQFrameParser parserV18;
+  writerV18.initializeVersion(kVersionDraft18);
+  parserV18.initializeVersion(kVersionDraft18);
+  SubscribeTracks subscribeTracksV18;
+  subscribeTracksV18.requestID = RequestID(5);
+  subscribeTracksV18.trackNamespacePrefix = TrackNamespace({"example"});
+  setSubscriptionParams(subscribeTracksV18);
+  folly::IOBufQueue subscribeTracksV18Buf{
+      folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(
+      writerV18.writeSubscribeTracks(subscribeTracksV18Buf, subscribeTracksV18)
+          .hasValue());
+  auto subscribeTracksV18Bytes = subscribeTracksV18Buf.move();
+  folly::io::Cursor subscribeTracksV18Cursor(subscribeTracksV18Bytes.get());
+  ASSERT_TRUE(decodeMoQVarint(subscribeTracksV18Cursor).has_value());
+  auto subscribeTracksV18Length = subscribeTracksV18Cursor.readBE<uint16_t>();
+  auto parsedSubscribeTracksV18 = parserV18.parseSubscribeTracks(
+      subscribeTracksV18Cursor, subscribeTracksV18Length);
+  ASSERT_TRUE(parsedSubscribeTracksV18.hasValue());
+  expectSubscriptionParams(*parsedSubscribeTracksV18);
+}
+
+TEST(MoQFramerV22Test, PublishOmitsUnsupportedSubscriptionParams) {
+  const auto filter =
+      LocationFilter::range(AbsoluteLocation{5, 2}, uint64_t(9));
+  for (auto version :
+       {kVersionDraft16, kVersionDraft18, kVersionDraft20, kVersionDraft21}) {
+    SCOPED_TRACE(version);
+    MoQFrameWriter writer;
+    writer.initializeVersion(version);
+    MoQFrameParser parser;
+    parser.initializeVersion(version);
+
+    PublishRequest baseline;
+    baseline.requestID = RequestID(1);
+    baseline.fullTrackName =
+        FullTrackName{TrackNamespace({"example"}), "track"};
+    baseline.trackAlias = TrackAlias(1);
+    baseline.forward = false;
+    baseline.largest = AbsoluteLocation{10, 3};
+    ASSERT_TRUE(baseline.params
+                    .insertParam(Parameter(
+                        folly::to_underlying(TrackRequestParamKey::EXPIRES),
+                        uint64_t(1000)))
+                    .hasValue());
+    setPublisherGroupOrder(baseline, GroupOrder::OldestFirst);
+
+    auto publish = baseline;
+    publish.params.setMajorVersion(22);
+    for (const auto& param :
+         {Parameter(
+              folly::to_underlying(
+                  TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT),
+              uint64_t(1000)),
+          Parameter(
+              folly::to_underlying(
+                  TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT),
+              uint64_t(2000)),
+          Parameter(
+              folly::to_underlying(TrackRequestParamKey::SUBSCRIBER_PRIORITY),
+              uint64_t(64)),
+          Parameter(
+              folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER),
+              filter),
+          Parameter(
+              folly::to_underlying(TrackRequestParamKey::GROUP_ORDER),
+              folly::to_underlying(GroupOrder::NewestFirst))}) {
+      ASSERT_TRUE(publish.params.insertParam(param).hasValue());
+    }
+
+    folly::IOBufQueue baselineBuf{folly::IOBufQueue::cacheChainLength()};
+    ASSERT_TRUE(writer.writePublish(baselineBuf, baseline).hasValue());
+    auto expected = baseline;
+    if (getDraftMajorVersion(version) >= 20) {
+      ASSERT_TRUE(
+          expected.params
+              .insertParam(Parameter(
+                  folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER),
+                  filter))
+              .hasValue());
+    }
+    folly::IOBufQueue expectedBuf{folly::IOBufQueue::cacheChainLength()};
+    ASSERT_TRUE(writer.writePublish(expectedBuf, expected).hasValue());
+    folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+    ASSERT_TRUE(writer.writePublish(buf, publish).hasValue());
+    if (getDraftMajorVersion(version) >= 20) {
+      EXPECT_GT(buf.chainLength(), baselineBuf.chainLength());
+    }
+    auto bytes = buf.move();
+    auto expectedBytes = expectedBuf.move();
+    EXPECT_EQ(bytes->coalesce(), expectedBytes->coalesce());
+
+    folly::io::Cursor cursor(bytes.get());
+    ASSERT_TRUE(decodeMoQVarint(cursor).has_value());
+    auto length = cursor.readBE<uint16_t>();
+    auto parsed = parser.parsePublish(cursor, length);
+    ASSERT_TRUE(parsed.hasValue());
+    EXPECT_EQ(parsed->requestID, baseline.requestID);
+    EXPECT_EQ(parsed->fullTrackName, baseline.fullTrackName);
+    EXPECT_EQ(parsed->trackAlias, baseline.trackAlias);
+    EXPECT_EQ(parsed->forward, baseline.forward);
+    EXPECT_EQ(parsed->largest, baseline.largest);
+    EXPECT_EQ(parsed->extensions, baseline.extensions);
+    EXPECT_EQ(parsed->groupOrder, GroupOrder::OldestFirst);
+    EXPECT_FALSE(getFirstIntParam(
+        parsed->params, TrackRequestParamKey::SUBSCRIBER_PRIORITY));
+    EXPECT_FALSE(getFirstIntParam(
+        parsed->params, TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT));
+    EXPECT_FALSE(getFirstIntParam(
+        parsed->params, TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT));
+    EXPECT_FALSE(
+        getFirstIntParam(parsed->params, TrackRequestParamKey::GROUP_ORDER));
+  }
+}
 // Draft 18 dropped FORWARD from SUBSCRIBE_NAMESPACE (split into
 // SUBSCRIBE_TRACKS). Receivers MUST treat its presence in a draft-18
 // SUBSCRIBE_NAMESPACE as PROTOCOL_VIOLATION (§10.2.12, §10.2.1).

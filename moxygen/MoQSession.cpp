@@ -7166,13 +7166,25 @@ Subscriber::PublishResult MoQSession::publish(
         pub, MOQTByteStringType::STRING_VALUE, ControlMessageType::CREATED);
   }
 
+  uint8_t subscriberPriority = 0;
+  auto initialGroupOrder = pub.groupOrder;
+  if (getDraftMajorVersion(*negotiatedVersion_) >= 22) {
+    subscriberPriority = static_cast<uint8_t>(
+        getFirstIntParam(pub.params, TrackRequestParamKey::SUBSCRIBER_PRIORITY)
+            .value_or(kDefaultPriority));
+    if (auto groupOrder =
+            getFirstIntParam(pub.params, TrackRequestParamKey::GROUP_ORDER)) {
+      initialGroupOrder = static_cast<GroupOrder>(*groupOrder);
+    }
+  }
+
   auto trackPublisher = std::make_shared<TrackPublisherImpl>(
       this,
       pub.fullTrackName,
       pub.requestID,
       pub.trackAlias,
-      0, // priority
-      pub.groupOrder,
+      subscriberPriority,
+      initialGroupOrder,
       *negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription,
       pub.forward);

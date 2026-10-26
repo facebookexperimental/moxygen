@@ -540,6 +540,19 @@ static bool isLocationFilterAllowedV20(FrameType frameType) {
   }
 }
 
+bool isPublishSubscriptionParameter(TrackRequestParamKey key) {
+  switch (key) {
+    case TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT:
+    case TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT:
+    case TrackRequestParamKey::SUBSCRIBER_PRIORITY:
+    case TrackRequestParamKey::SUBSCRIPTION_FILTER:
+    case TrackRequestParamKey::GROUP_ORDER:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
 // Empty set means allowed for all frame types
 const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
@@ -633,6 +646,18 @@ bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
   if (isDraft22OrLater && isPublishOkResponse &&
       isLegacyPublishOkSubscriptionParameter(key)) {
     return false;
+  }
+
+  if (frameType_ == FrameType::SUBSCRIBE_TRACKS &&
+      (!majorVersion_.has_value() || *majorVersion_ >= 18) &&
+      isPublishSubscriptionParameter(key)) {
+    return true;
+  }
+
+  if (frameType_ == FrameType::PUBLISH &&
+      (!majorVersion_.has_value() || *majorVersion_ >= 22) &&
+      isPublishSubscriptionParameter(key)) {
+    return true;
   }
   if (key == TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT &&
       majorVersion_.has_value() && *majorVersion_ >= 18) {

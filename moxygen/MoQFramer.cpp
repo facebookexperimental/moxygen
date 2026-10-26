@@ -118,6 +118,23 @@ bool isRequestSpecificParam(moxygen::TrackRequestParamKey key) {
   }
 }
 
+template <typename Params>
+bool containsPublishSubscriptionParameter(
+    const Params& params,
+    uint64_t version) {
+  return std::any_of(
+      params.begin(), params.end(), [version](const auto& param) {
+        if (moxygen::useFillFetch(version) &&
+            param.key ==
+                folly::to_underlying(
+                    moxygen::TrackRequestParamKey::LOCATION_FILTER)) {
+          return false;
+        }
+        return moxygen::isPublishSubscriptionParameter(
+            static_cast<moxygen::TrackRequestParamKey>(param.key));
+      });
+}
+
 bool isValidGroupOrderParam(uint64_t value) {
   switch (value) {
     case folly::to_underlying(moxygen::GroupOrder::OldestFirst):
@@ -1829,7 +1846,14 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     }
     if (*res) {
       auto trackRequestParamKey = (TrackRequestParamKey)key;
-      if (isRequestSpecificParam(trackRequestParamKey)) {
+      auto frameType = params.getFrameType();
+      const bool retainSubscriptionParam =
+          isPublishSubscriptionParameter(trackRequestParamKey) &&
+          (frameType == FrameType::SUBSCRIBE_TRACKS ||
+           (frameType == FrameType::PUBLISH &&
+            params.isParamAllowed(trackRequestParamKey)));
+      if (isRequestSpecificParam(trackRequestParamKey) &&
+          !retainSubscriptionParam) {
         // Request-specific params bypass insertParam, so check them here.
         // TODO: also check the pre-20 tables once they are audited.
         if (isDraft20FilterParam(trackRequestParamKey, version) &&
@@ -2269,11 +2293,23 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
   if (!paramRes) {
     return folly::makeUnexpected(paramRes.error());
   }
+  // LOCATION_FILTER is allowed from draft 20; the other subscription
+  // parameters require draft 22.
+  auto majorVersion = getDraftMajorVersion(*version_);
+  if (majorVersion >= 16 && majorVersion < 22 &&
+      containsPublishSubscriptionParameter(requestSpecificParams, *version_)) {
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
 
   // From the spec: If omitted from PUBLISH, the receiver uses Ascending
   // (0x1). Default to OldestFirst; overridden in handleRequestSpecificParams.
   publish.groupOrder = GroupOrder::OldestFirst;
   handleRequestSpecificParams(publish, requestSpecificParams);
+  auto subscriptionGroupOrder =
+      getFirstIntParam(publish.params, TrackRequestParamKey::GROUP_ORDER);
+  if (subscriptionGroupOrder.has_value()) {
+    publish.groupOrder = static_cast<GroupOrder>(*subscriptionGroupOrder);
+  }
 
   // Parse extensions (bare key-value pairs, no length prefix)
   ObjectHeader tempHeader;
@@ -2292,7 +2328,7 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
 
   auto go =
       publish.extensions.getIntExtension(kPublisherGroupOrderExtensionType);
-  if (go) {
+  if (go && !subscriptionGroupOrder.has_value()) {
     publish.groupOrder = static_cast<GroupOrder>(*go);
   }
 
@@ -5038,6 +5074,7 @@ WriteResult MoQFrameWriter::writePublish(
     folly::IOBufQueue& writeBuf,
     const PublishRequest& publish) const noexcept {
   XCHECK(version_.has_value()) << "Version needs to be set to write publish";
+  auto majorVersion = getDraftMajorVersion(*version_);
   size_t size = 0;
   bool error = false;
   auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH, error);
@@ -5063,8 +5100,24 @@ WriteResult MoQFrameWriter::writePublish(
         publish.largest);
   }
 
-  writeTrackRequestParams(
-      writeBuf, publish.params, requestSpecificParams, size, error);
+  auto params = publish.params;
+  if (majorVersion < 22) {
+    Parameters allowedParams(FrameType::PUBLISH);
+    allowedParams.setMajorVersion(majorVersion);
+    auto isUnsupportedSubscriptionParam = [&](const Parameter& param) {
+      auto key = static_cast<TrackRequestParamKey>(param.key);
+      return isPublishSubscriptionParameter(key) &&
+          !allowedParams.isParamAllowed(key);
+    };
+    for (const auto& param : publish.params) {
+      if (isUnsupportedSubscriptionParam(param)) {
+        params.eraseAllParamsOfType(
+            static_cast<TrackRequestParamKey>(param.key));
+      }
+    }
+  }
+
+  writeTrackRequestParams(writeBuf, params, requestSpecificParams, size, error);
 
   // Write extensions
   writeExtensions(

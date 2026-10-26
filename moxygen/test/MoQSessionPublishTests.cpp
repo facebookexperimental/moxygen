@@ -24,6 +24,7 @@ CO_TEST_P_X(MoQSessionTest, NoPublishHandler) {
   EXPECT_TRUE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
 CO_TEST_P_X(Draft22Test, PublishOkDoesNotOverrideInitialForwardState) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
 
@@ -183,6 +184,68 @@ CO_TEST_P_X(
 
   allowPublishOk.post();
   co_await rescheduleN(2);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(Draft22Test, PublishCarriesInitialSubscriptionParameters) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest publish;
+  publish.fullTrackName = FullTrackName{TrackNamespace{{"test"}}, "test-track"};
+  publish.params.setMajorVersion(22);
+  for (const auto& param :
+       {Parameter(
+            folly::to_underlying(TrackRequestParamKey::SUBSCRIBER_PRIORITY),
+            uint64_t(64)),
+        Parameter(
+            folly::to_underlying(TrackRequestParamKey::GROUP_ORDER),
+            folly::to_underlying(GroupOrder::NewestFirst)),
+        Parameter(
+            folly::to_underlying(TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT),
+            uint64_t(1000)),
+        Parameter(
+            folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER),
+            LocationFilter::range(AbsoluteLocation{5, 2}, uint64_t(9)))}) {
+    CO_ASSERT_TRUE(publish.params.insertParam(param).hasValue());
+  }
+
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce([](PublishRequest actual, auto) -> Subscriber::PublishResult {
+        EXPECT_EQ(actual.groupOrder, GroupOrder::NewestFirst);
+        EXPECT_EQ(
+            getFirstIntParam(
+                actual.params, TrackRequestParamKey::SUBSCRIBER_PRIORITY),
+            64);
+        EXPECT_EQ(
+            getFirstIntParam(actual.params, TrackRequestParamKey::GROUP_ORDER),
+            folly::to_underlying(GroupOrder::NewestFirst));
+        EXPECT_EQ(
+            getFirstIntParam(
+                actual.params, TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT),
+            1000);
+        auto filter = std::find_if(
+            actual.params.begin(), actual.params.end(), [](const auto& param) {
+              return param.key ==
+                  folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER);
+            });
+        EXPECT_NE(filter, actual.params.end());
+        if (filter != actual.params.end()) {
+          EXPECT_EQ(
+              filter->asLocationFilter,
+              LocationFilter::range(AbsoluteLocation{5, 2}, uint64_t(9)));
+        }
+        return makePublishOkResult(actual);
+      });
+
+  auto result =
+      clientSession_->publish(std::move(publish), makePublishHandle());
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+  auto reply = co_await std::move(result->reply);
+  EXPECT_TRUE(reply.hasValue());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
