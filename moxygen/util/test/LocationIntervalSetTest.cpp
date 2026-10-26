@@ -536,6 +536,35 @@ TEST_F(LocationIntervalSetTest, FindPrevIntervalMultiple) {
   EXPECT_EQ(result->second, (AbsoluteLocation{0, 15}));
 }
 
+TEST_F(LocationIntervalSetTest, PopFrontEmpty) {
+  EXPECT_FALSE(set_.popFront().has_value());
+}
+
+TEST_F(LocationIntervalSetTest, PopFrontRemovesLowest) {
+  set_.insert({1, 0}, {1, 5});
+  set_.insert({0, 0}, {0, 5});
+  auto result = set_.popFront();
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->first, (AbsoluteLocation{0, 0}));
+  EXPECT_EQ(result->second, (AbsoluteLocation{0, 5}));
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_FALSE(set_.contains({0, 0}));
+  EXPECT_TRUE(set_.contains({1, 0}));
+}
+
+TEST_F(LocationIntervalSetTest, PopFrontThenAdjacentInsert) {
+  // The insert fast path extends the last modified interval, which popFront
+  // erased.
+  set_.insert({0, 0}, {0, 5});
+  set_.popFront();
+  set_.insert({0, 6});
+  EXPECT_EQ(set_.size(), 1);
+  EXPECT_FALSE(set_.contains({0, 5}));
+  EXPECT_EQ(
+      set_.findInterval({0, 6}),
+      (std::make_pair(AbsoluteLocation{0, 6}, AbsoluteLocation{0, 6})));
+}
+
 // Tests for AbsoluteLocation helper methods
 
 TEST(AbsoluteLocationTest, PrevGroupEnd) {
