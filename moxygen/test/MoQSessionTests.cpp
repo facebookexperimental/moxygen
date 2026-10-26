@@ -2117,6 +2117,29 @@ CO_TEST_P_X(MoQBidiSetupGateTest, VersionTestSeamDoesNotWait) {
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A subscription ends with PUBLISH_DONE or an unsubscribe. Session close does
+// not send PUBLISH_DONE, so the publisher's handle has to be unsubscribed.
+CO_TEST_P_X(MoQSessionTest, SessionCloseUnsubscribesPublisherHandle) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> pubHandle;
+  expectSubscribe(
+      [&pubHandle](auto sub, auto /* pub */) -> TaskSubscribeResult {
+        pubHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return pubHandle;
+      });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  CO_ASSERT_TRUE(pubHandle != nullptr);
+
+  EXPECT_CALL(*pubHandle, unsubscribe()).Times(1);
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(2);
+}
+
 // === Uni Control Stream tests (draft-18-meta-00) ===
 
 class MoQUniControlTest : public MoQSessionTest {};
