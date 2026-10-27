@@ -2040,3 +2040,224 @@ CO_TEST_P_X(MoQSessionTest, FetchCancelledWhileFetchOkQueued) {
   }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// Test that when a fetch consumer returns BLOCKED from object(), the read loop
+// pauses and co_awaits the consumer's awaitReadyToConsume() future, then
+// resumes delivering remaining objects.
+CO_TEST_P_X(MoQSessionTest, FetchConsumerBlocked) {
+  co_await setupMoQSession();
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+    fetchPub->object(
+        /*groupID=*/0,
+        /*subgroupID=*/0,
+        /*objectID=*/0,
+        moxygen::test::makeBuf(10),
+        noExtensions(),
+        /*finFetch=*/false);
+    fetchPub->object(
+        /*groupID=*/0,
+        /*subgroupID=*/0,
+        /*objectID=*/1,
+        moxygen::test::makeBuf(10),
+        noExtensions(),
+        /*finFetch=*/true);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  // First object returns BLOCKED
+  folly::Promise<uint64_t> readyPromise;
+  folly::coro::Baton blockedBaton;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(10), _, false, _))
+      .WillOnce([&] {
+        return folly::makeUnexpected(
+            MoQPublishError(MoQPublishError::BLOCKED, "test blocked"));
+      });
+  // The read loop should call awaitReadyToConsume() when BLOCKED
+  EXPECT_CALL(*fetchCallback_, awaitReadyToConsume()).WillOnce([&] {
+    auto [promise, future] = folly::makePromiseContract<uint64_t>();
+    readyPromise = std::move(promise);
+    blockedBaton.post();
+    return std::move(future);
+  });
+  // After unblock, the codec re-enters and delivers the second object.
+  // The first object was already consumed (BLOCKED means "slow down after
+  // this").
+  folly::coro::Baton baton;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 1, HasChainDataLengthOf(10), _, true, _))
+      .WillOnce([&] {
+        baton.post();
+        return folly::unit;
+      });
+
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  // Wait for the read loop to hit BLOCKED and call awaitReadyToConsume
+  co_await blockedBaton;
+
+  // Unblock the consumer — read loop should resume
+  readyPromise.setValue(0);
+  co_await baton;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Test that when a fetch consumer returns BLOCKED and then the session is
+// closed, the await is cancelled and reset() is delivered.
+CO_TEST_P_X(MoQSessionTest, FetchConsumerBlockedThenSessionClose) {
+  co_await setupMoQSession();
+  std::shared_ptr<FetchConsumer> fetchPub;
+  expectFetch([&fetchPub](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
+    EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+    fetchPub = std::move(inFetchPub);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  // First object returns BLOCKED
+  folly::Promise<uint64_t> readyPromise;
+  folly::coro::Baton blockedBaton;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(10), _, false, _))
+      .WillOnce([&] {
+        return folly::makeUnexpected(
+            MoQPublishError(MoQPublishError::BLOCKED, "test blocked"));
+      });
+  EXPECT_CALL(*fetchCallback_, awaitReadyToConsume()).WillOnce([&] {
+    auto [promise, future] = folly::makePromiseContract<uint64_t>();
+    readyPromise = std::move(promise);
+    blockedBaton.post();
+    return std::move(future);
+  });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  XCHECK(fetchPub);
+
+  // Server sends first object
+  fetchPub->object(
+      /*groupID=*/0,
+      /*subgroupID=*/0,
+      /*objectID=*/0,
+      moxygen::test::makeBuf(10),
+      noExtensions(),
+      /*finFetch=*/false);
+
+  // Wait for the read loop to hit BLOCKED and call awaitReadyToConsume
+  co_await blockedBaton;
+
+  // Close the session — this cancels the cancellationSource_ token which
+  // is part of the mergedToken, cancelling the fetch await
+  folly::coro::Baton resetBaton;
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED))
+      .WillOnce([&] { resetBaton.post(); });
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await resetBaton;
+}
+
+// Test that closing the session ends a read loop that is waiting on a fetch
+// consumer's readiness future, even if that future never completes.
+CO_TEST_P_X(MoQSessionTest, FetchConsumerBlockedSessionCloseExitsReadLoop) {
+  co_await setupMoQSession();
+  std::shared_ptr<FetchConsumer> fetchPub;
+  expectFetch([&fetchPub](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
+    fetchPub = std::move(inFetchPub);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  folly::Promise<uint64_t> readyPromise;
+  folly::coro::Baton blockedBaton;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(10), _, false, _))
+      .WillOnce([&] {
+        return folly::makeUnexpected(
+            MoQPublishError(MoQPublishError::BLOCKED, "test blocked"));
+      });
+  EXPECT_CALL(*fetchCallback_, awaitReadyToConsume()).WillOnce([&] {
+    auto [promise, future] = folly::makePromiseContract<uint64_t>();
+    readyPromise = std::move(promise);
+    blockedBaton.post();
+    return std::move(future);
+  });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  XCHECK(fetchPub);
+
+  fetchPub->object(
+      /*groupID=*/0,
+      /*subgroupID=*/0,
+      /*objectID=*/0,
+      moxygen::test::makeBuf(10),
+      noExtensions(),
+      /*finFetch=*/false);
+  co_await blockedBaton;
+
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  for (int i = 0; i < 5; ++i) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+  // The fetch handle and the read loop each hold a session reference.
+  res.value().reset();
+  EXPECT_EQ(clientSession_.use_count(), 1);
+  EXPECT_FALSE(readyPromise.isFulfilled());
+}
+
+// Test that when a fetch consumer returns BLOCKED and awaitReadyToConsume()
+// returns an error, the stream is terminated.
+CO_TEST_P_X(MoQSessionTest, FetchConsumerBlockedAwaitError) {
+  co_await setupMoQSession();
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+    fetchPub->object(
+        /*groupID=*/0,
+        /*subgroupID=*/0,
+        /*objectID=*/0,
+        moxygen::test::makeBuf(10),
+        noExtensions(),
+        /*finFetch=*/false);
+    fetchPub->object(
+        /*groupID=*/0,
+        /*subgroupID=*/0,
+        /*objectID=*/1,
+        moxygen::test::makeBuf(10),
+        noExtensions(),
+        /*finFetch=*/true);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  // First object returns BLOCKED
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(10), _, false, _))
+      .WillOnce([&] {
+        return folly::makeUnexpected(
+            MoQPublishError(MoQPublishError::BLOCKED, "test blocked"));
+      });
+  EXPECT_CALL(*fetchCallback_, awaitReadyToConsume()).WillOnce([] {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::CANCELLED, "cancelled"));
+  });
+
+  // The read loop exits on the failed await and resets the consumer.
+  folly::coro::Baton resetBaton;
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED))
+      .WillOnce([&] { resetBaton.post(); });
+
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+
+  co_await resetBaton;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
