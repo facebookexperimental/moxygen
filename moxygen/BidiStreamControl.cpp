@@ -77,9 +77,10 @@ void BidiStreamControl::write(std::unique_ptr<folly::IOBuf> data, bool fin) {
 void BidiStreamControl::cancel(ResetStreamErrorCode code) {
   onPeerTerminationFn_ = nullptr;
   readCancelCode_ = toWireResetStreamErrorCode(code, negotiatedVersion_);
-  if (writeHandle_) {
-    writeHandle_->resetStream(readCancelCode_);
+  if (auto* wh = writeHandle_) {
+    // Before resetStream: its cancellation would re-enter onPeerStopSending.
     onLocalWriteClose();
+    wh->resetStream(readCancelCode_);
   }
   readCancelSource_.requestCancellation();
 }

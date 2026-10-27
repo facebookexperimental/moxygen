@@ -984,9 +984,8 @@ CO_TEST_P_X(MoQSessionTest, SubscriberCancelsBeforeSubscribeOK) {
   }
   EXPECT_TRUE(
       serverWt_->writeHandles[objectStreamId]->getWriteErr().has_value());
-  if (auto* stopSending =
-          serverWt_->writeHandles[objectStreamId]->writeException()) {
-    EXPECT_EQ(stopSending->error, 0);
+  if (auto code = serverWt_->writeHandles[objectStreamId]->stopSendingErr_) {
+    EXPECT_EQ(*code, 0);
   }
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -1532,6 +1531,32 @@ CO_TEST_P_X(Draft18Test, BidiStreamFinUnsubscribesSubscribe) {
 
   // Draft 18+: unsubscribe() = RST + STOP_SENDING on the bidi.
   res.value()->unsubscribe();
+  co_await unsubBaton;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// The reset's own cancel token must not re-enter the request stream's
+// STOP_SENDING handling; with WtStreamManager that re-entry freed the stream
+// under the outer resetStream.
+CO_TEST_P_X(Draft18Test, UnsubscribeResetsRequestStreamOnce) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> pubHandle;
+  expectSubscribe([&pubHandle](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+    pubHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return pubHandle;
+  });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_TRUE(res.hasValue());
+
+  folly::coro::Baton unsubBaton;
+  EXPECT_CALL(*pubHandle, unsubscribe()).WillOnce([&] { unsubBaton.post(); });
+  EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
+
+  res.value()->unsubscribe();
+  EXPECT_EQ(clientWt_->writeHandles.at(0)->resetCount_, 1);
   co_await unsubBaton;
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
