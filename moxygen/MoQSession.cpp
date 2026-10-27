@@ -773,7 +773,18 @@ StreamPublisherImpl::writeToStream(bool finStream, bool endObject) {
       writeBuf_.move(), finStream, deliveryCallback);
   if (writeRes.hasValue()) {
     if (finStream) {
+      // The stream is done, so there is nothing left to pace and no write
+      // handle to await on.  Report success even if the transport is blocked.
       onStreamComplete();
+      return folly::unit;
+    }
+    // For FETCH, propagate transport flow control signal.  The data was
+    // written; BLOCKED tells the publisher to await readiness before the next
+    // write.
+    if (streamType_ == StreamType::FETCH_HEADER &&
+        *writeRes == proxygen::WebTransport::FCState::BLOCKED) {
+      return folly::makeUnexpected(
+          MoQPublishError(MoQPublishError::BLOCKED, "Transport blocked"));
     }
     return folly::unit;
   }
