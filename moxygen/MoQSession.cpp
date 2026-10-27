@@ -3991,15 +3991,22 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   // Seeded so a handed-over FIN still reaches the close handling below.
   bool fin = initialData.fin;
 
+  // Frame callbacks, including application handlers, run inside onIngress. An
+  // exception from one closes this session, not the process.
+  auto onIngress = [&](std::unique_ptr<folly::IOBuf> data, bool eom) {
+    auto guard = shared_from_this();
+    try {
+      controlCodec->onIngress(std::move(data), eom);
+    } catch (const std::exception& ex) {
+      XLOG(ERR) << "exception thrown from onIngress ex="
+                << folly::exceptionStr(ex) << " sess=" << this;
+      close(SessionCloseErrorCode::INTERNAL_ERROR);
+    }
+  };
+
   // Process any pre-buffered data first
   if (initialData.data || fin) {
-    try {
-      auto guard = shared_from_this();
-      controlCodec->onIngress(std::move(initialData.data), fin);
-    } catch (const std::exception& ex) {
-      XLOG(FATAL) << "exception thrown from onIngress ex="
-                  << folly::exceptionStr(ex);
-    }
+    onIngress(std::move(initialData.data), fin);
   }
 
   bool exceptionalExit = false;
@@ -4027,13 +4034,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     }
     if (!token.isCancellationRequested() &&
         (streamData->data || streamData->fin)) {
-      try {
-        auto guard = shared_from_this();
-        controlCodec->onIngress(std::move(streamData->data), streamData->fin);
-      } catch (const std::exception& ex) {
-        XLOG(FATAL) << "exception thrown from onIngress ex="
-                    << folly::exceptionStr(ex);
-      }
+      onIngress(std::move(streamData->data), streamData->fin);
     }
     fin = streamData->fin;
     if (fin) {

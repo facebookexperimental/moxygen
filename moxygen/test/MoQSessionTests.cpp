@@ -589,6 +589,45 @@ CO_TEST_P_X(DisabledTokenCacheTest, SetupRegistrationsRemainUncached) {
   EXPECT_EQ(closeCallback.errorCode, SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
+using MoQControlCallbackExceptionTest = MoQSessionTest;
+INSTANTIATE_TEST_SUITE_P(
+    MoQControlCallbackExceptionTest,
+    MoQControlCallbackExceptionTest,
+    testing::ValuesIn(getSupportedVersionParams()));
+
+CO_TEST_P_X(MoQControlCallbackExceptionTest, GoawayHandlerThrowClosesSession) {
+  co_await setupMoQSession();
+  // An open subscription keeps the draining server from closing first.
+  auto keepAliveConsumer =
+      std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+  ON_CALL(*keepAliveConsumer, setTrackAlias(_))
+      .WillByDefault(
+          testing::Return(
+              folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+  ON_CALL(*keepAliveConsumer, publishDone(_))
+      .WillByDefault(
+          testing::Return(
+              folly::Expected<folly::Unit, MoQPublishError>(folly::unit)));
+  expectSubscribe(
+      [](SubscribeRequest sub, auto /* pub */) -> TaskSubscribeResult {
+        co_return makeSubscribeOkResult(sub);
+      },
+      MoQControlCodec::Direction::CLIENT);
+  auto keepAlive = co_await serverSession_->subscribe(
+      getSubscribe(kTestTrackName), keepAliveConsumer);
+  CO_ASSERT_TRUE(!keepAlive.hasError());
+
+  RecordingSessionCloseCallback closeCallback;
+  clientSession_->setSessionCloseCallback(&closeCallback);
+  EXPECT_CALL(*clientPublisher, goaway(_))
+      .WillOnce(testing::Throw(std::runtime_error("handler failed")));
+
+  serverSession_->goaway(Goaway{});
+  co_await closeCallback.closed;
+
+  EXPECT_EQ(closeCallback.errorCode, SessionCloseErrorCode::INTERNAL_ERROR);
+}
+
 // === AUTHORITY / PATH tests ===
 
 using MoQAuthorityPathTest = MoQSessionTest;
