@@ -465,6 +465,72 @@ CO_TEST_P_X(Draft18Test, BufferLimitAfterPublishErrorReleasesHandle) {
   consumer.reset();
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+// Delivered bytes, including the FIN's offset, must not push the buffered
+// count below zero and fail later writes against the limit.
+CO_TEST_P_X(Draft18Test, DeliveredSubgroupsStayUnderBufferLimit) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  MoQSettings moqSettings;
+  moqSettings.bufferingThresholds.perSubscription = 100;
+  clientSession_->setMoqSettings(moqSettings);
+
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [](const PublishRequest& actualPub,
+             std::shared_ptr<SubscriptionHandle>) -> Subscriber::PublishResult {
+            auto consumer =
+                std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+            ON_CALL(*consumer, setTrackAlias(_))
+                .WillByDefault(testing::Return(folly::unit));
+            auto subgroup =
+                std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+            ON_CALL(*subgroup, object(_, _, _, _))
+                .WillByDefault(testing::Return(folly::unit));
+            ON_CALL(*subgroup, endOfSubgroup())
+                .WillByDefault(testing::Return(folly::unit));
+            ON_CALL(*consumer, beginSubgroup(_, _, _, _))
+                .WillByDefault(testing::Return(subgroup));
+            ON_CALL(*consumer, publishDone(_))
+                .WillByDefault(testing::Return(folly::unit));
+            return Subscriber::PublishConsumerAndReplyTask{
+                consumer,
+                folly::coro::co_invoke(
+                    [actualPub]()
+                        -> folly::coro::Task<
+                            folly::Expected<PublishOk, PublishError>> {
+                      co_return PublishOk{
+                          actualPub.requestID,
+                          true,
+                          128,
+                          GroupOrder::Default,
+                          LocationFilter::nextObject()};
+                    })};
+          });
+
+  PublishRequest pub;
+  pub.fullTrackName =
+      FullTrackName{TrackNamespace{{"test"}}, "delivered-subgroups-track"};
+  pub.forward = true;
+  auto handle = makePublishHandle();
+  auto result = clientSession_->publish(pub, handle);
+  CO_ASSERT_TRUE(result.hasValue());
+  auto publish = std::move(result.value());
+  auto consumer = publish.consumer;
+  auto reply = co_withExecutor(&eventBase_, std::move(publish.reply)).start();
+
+  for (uint64_t group = 0; group < 3; ++group) {
+    auto subgroup = consumer->beginSubgroup(group, 0, 0);
+    CO_ASSERT_TRUE(subgroup.hasValue());
+    EXPECT_TRUE(
+        subgroup.value()->object(0, moxygen::test::makeBuf(10)).hasValue());
+    EXPECT_TRUE(subgroup.value()->endOfSubgroup().hasValue());
+  }
+
+  auto replyResult = co_await std::move(reply).via(&eventBase_);
+  EXPECT_TRUE(replyResult.hasValue());
+  consumer.reset();
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, PublishBasicSuccess) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
 
