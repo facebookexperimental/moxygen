@@ -221,6 +221,19 @@ void recordNegotiatedVersion(
     result.divergentNegotiatedVersion = version;
   }
 }
+
+// The current group where the negotiated draft has a filter for it (the
+// relative Location Filter, draft 20+), else Next Object. Before draft 20,
+// relativeStart(1) goes out as LargestGroup (250), a filter type those
+// drafts do not define and their relays must reject (draft-18 5.1.2).
+LocationFilter subscribeFilter(const MoQClient& client) {
+  auto version = client.moqSession_ ? client.moqSession_->getNegotiatedVersion()
+                                    : std::nullopt;
+  if (version && !useLocationFilter(*version)) {
+    return LocationFilter::nextObject();
+  }
+  return LocationFilter::relativeStart(1);
+}
 } // namespace
 
 MoQInteropClient::MoQInteropClient(
@@ -415,6 +428,7 @@ folly::coro::Task<InteropTestResult> MoQInteropClient::testSubscribeError() {
 
     FullTrackName ftn{TrackNamespace({"nonexistent"}), "no-such-track"};
     auto sub = SubscribeRequest::make(ftn);
+    sub.filter = subscribeFilter(*moqClient);
     auto consumer = std::make_shared<NoopTrackConsumer>();
 
     auto subResult = co_await folly::coro::timeout(
@@ -498,6 +512,7 @@ folly::coro::Task<InteropTestResult> MoQInteropClient::testAnnounceSubscribe() {
         TrackNamespace(std::vector<std::string>{"moq-test", "interop"}),
         "interop-track"};
     auto sub = SubscribeRequest::make(ftn);
+    sub.filter = subscribeFilter(*subscriber);
     auto consumer = std::make_shared<NoopTrackConsumer>();
 
     auto subResult = co_await folly::coro::timeout(
@@ -748,6 +763,7 @@ MoQInteropClient::testSubscribeBeforeAnnounce() {
         TrackNamespace(std::vector<std::string>{"moq-test", "interop"}),
         "test-track"};
     auto sub = SubscribeRequest::make(ftn);
+    sub.filter = subscribeFilter(*subscriber);
     auto consumer = std::make_shared<NoopTrackConsumer>();
 
     // Step 2: Run subscribe and delayed publisher announce concurrently.
