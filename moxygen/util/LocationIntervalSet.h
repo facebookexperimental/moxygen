@@ -80,6 +80,12 @@ class LocationIntervalSet {
   void remove(AbsoluteLocation start, AbsoluteLocation end);
 
   /**
+   * Remove and return the lowest interval. Returns nullopt if the set is
+   * empty. Runs in amortized O(1).
+   */
+  std::optional<std::pair<AbsoluteLocation, AbsoluteLocation>> popFront();
+
+  /**
    * Find the next interval after loc: if loc lies inside an interval, returns
    * the interval immediately after it; otherwise returns the first interval
    * whose start is >= loc. Returns nullopt if no such interval exists.

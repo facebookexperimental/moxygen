@@ -113,6 +113,17 @@ void LocationIntervalSet::remove(AbsoluteLocation start, AbsoluteLocation end) {
 }
 
 std::optional<std::pair<AbsoluteLocation, AbsoluteLocation>>
+LocationIntervalSet::popFront() {
+  if (intervals_.empty()) {
+    return std::nullopt;
+  }
+  invalidateLastModified();
+  auto front = *intervals_.begin();
+  intervals_.erase(intervals_.begin());
+  return front;
+}
+
+std::optional<std::pair<AbsoluteLocation, AbsoluteLocation>>
 LocationIntervalSet::findNextInterval(AbsoluteLocation loc) const {
   // If loc is inside an interval, skip past it.
   auto containing = findContaining(loc);
