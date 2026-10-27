@@ -103,6 +103,9 @@ MoQForwarder::SubgroupForwarder::forEachSubscriberSubgroup(
         XLOG(DBG2) << "skipping creating subgroup for sub=" << sub.get();
         return;
       }
+      if (sub->isDraining()) {
+        return;
+      }
       // No consumer yet: the object opening the stream must pass the filter.
       if (!forwarder_->checkObjectRange(
               *sub, AbsoluteLocation{identifier_.group, *newObjectID})) {
@@ -153,7 +156,8 @@ bool MoQForwarder::SubgroupForwarder::subscriberMayAcceptLaterObject() const {
   }
   for (const auto& [_, sub] : forwarder_->subscribers_) {
     if (sub->subgroups.contains(identifier_) ||
-        sub->tombstonedSubgroups.contains(identifier_) || !sub->shouldForward) {
+        sub->tombstonedSubgroups.contains(identifier_) || !sub->shouldForward ||
+        sub->isDraining()) {
       continue;
     }
     const auto& start = sub->range.start;
@@ -588,6 +592,7 @@ folly::
               sub->sessionId, std::nullopt, "beginSubgroup duplicate");
         }
       } else if (
+          !sub->isDraining() &&
           !sub->tombstonedSubgroups.count(subgroupIdentifier) &&
           sub->trackConsumer && sub->range.start.group <= groupID &&
           !checkPastEnd(*sub) && sub->checkShouldForward()) {
@@ -616,6 +621,13 @@ folly::
                << " subgroup=" << subgroupID << " - resetting active consumers";
   }
 
+  // No subscriber can join or take a new subgroup after publishDone.
+  if (draining_ && !cacheInterest) {
+    checkAndFireOnEmpty();
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::CANCELLED, "subgroup begun after publishDone"));
+  }
+
   auto subgroupForwarder = std::make_shared<SubgroupForwarder>(
       *this, groupID, subgroupID, priority, options);
   subgroupForwarder->setCacheInterest(cacheInterest);
@@ -624,8 +636,8 @@ folly::
   // their filter admits.
   const AbsoluteLocation groupStart{groupID, 0};
   auto res = forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-    if (groupStart < sub->range.start || !checkRange(*sub) ||
-        !sub->checkShouldForward()) {
+    if (sub->isDraining() || groupStart < sub->range.start ||
+        !checkRange(*sub) || !sub->checkShouldForward()) {
       return;
     }
     // Skip if tombstoned - subscriber already sent stop_sending for this
@@ -663,7 +675,8 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::objectStream(
   updateLargest(header.group, header.id);
   const AbsoluteLocation location{header.group, header.id};
   return forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-    if (!checkObjectRange(*sub, location) || !sub->checkShouldForward()) {
+    if (sub->isDraining() || !checkObjectRange(*sub, location) ||
+        !sub->checkShouldForward()) {
       return;
     }
     sub->trackConsumer->objectStream(header, maybeClone(payload), lastInGroup)
@@ -681,7 +694,8 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::datagram(
   updateLargest(header.group, header.id);
   const AbsoluteLocation location{header.group, header.id};
   return forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
-    if (!checkObjectRange(*sub, location) || !sub->checkShouldForward()) {
+    if (sub->isDraining() || !checkObjectRange(*sub, location) ||
+        !sub->checkShouldForward()) {
       return;
     }
     sub->trackConsumer->datagram(header, maybeClone(payload), lastInGroup)

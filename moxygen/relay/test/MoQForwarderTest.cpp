@@ -63,6 +63,60 @@ class MoQForwarderTest : public ::testing::Test {
     return sg;
   }
 
+  // Like MoQSession's track publisher, refuses new subgroups, objectStreams and
+  // datagrams once publishDone() has been called.
+  std::shared_ptr<MockTrackConsumer> createSessionLikeConsumer() {
+    auto consumer = createMockConsumer();
+    auto done = std::make_shared<bool>(false);
+    auto publishAfterDone = [] {
+      return folly::makeUnexpected(MoQPublishError(
+          MoQPublishError::API_ERROR, "Publish after publishDone"));
+    };
+    ON_CALL(*consumer, publishDone(_)).WillByDefault([done](PublishDone) {
+      *done = true;
+      return folly::makeExpected<MoQPublishError>(folly::unit);
+    });
+    ON_CALL(*consumer, beginSubgroup(_, _, _, _))
+        .WillByDefault(
+            [this, done, publishAfterDone](
+                uint64_t,
+                uint64_t,
+                uint8_t,
+                moxygen::TrackConsumer::BeginSubgroupOptions)
+                -> folly::Expected<
+                    std::shared_ptr<SubgroupConsumer>,
+                    MoQPublishError> {
+              if (*done) {
+                return publishAfterDone();
+              }
+              auto sg = createMockSubgroupConsumer();
+              ON_CALL(*sg, object(_, _, _, _))
+                  .WillByDefault(Return(
+                      folly::makeExpected<MoQPublishError>(folly::unit)));
+              return std::shared_ptr<SubgroupConsumer>(sg);
+            });
+    auto refuseAfterDone = [done, publishAfterDone](
+                               const ObjectHeader&, Payload, bool)
+        -> folly::Expected<folly::Unit, MoQPublishError> {
+      if (*done) {
+        return publishAfterDone();
+      }
+      return folly::unit;
+    };
+    ON_CALL(*consumer, objectStream(_, _, _)).WillByDefault(refuseAfterDone);
+    ON_CALL(*consumer, datagram(_, _, _)).WillByDefault(refuseAfterDone);
+    return consumer;
+  }
+
+  void endPublish(MoQForwarder& forwarder) {
+    forwarder.publishDone(
+        PublishDone{
+            RequestID(0),
+            PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+            0,
+            "publisher ended"});
+  }
+
   // Add a subscriber to a forwarder using only forwarder APIs.
   std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
       MoQForwarder& forwarder,
@@ -383,6 +437,157 @@ TEST_F(MoQForwarderTest, GracefulSessionDraining) {
 
   EXPECT_TRUE(sgs[0]->endOfSubgroup().hasValue());
   EXPECT_TRUE(sgs[1]->endOfSubgroup().hasValue());
+}
+
+// Test: A draining subscriber is not given a subgroup it never opened when
+// that subgroup delivers more objects after publishDone, and the subgroup it
+// is draining still finishes.
+TEST_F(MoQForwarderTest, DrainingSubscriberDoesNotOpenLateSubgroup) {
+  auto session0 = createMockSession();
+  auto session1 = createMockSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer0 = createSessionLikeConsumer();
+  auto consumer1 = createSessionLikeConsumer();
+  auto drainingSubgroup = createMockSubgroupConsumer();
+  EXPECT_CALL(*consumer1, beginSubgroup(1, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(drainingSubgroup)));
+  EXPECT_CALL(*consumer1, beginSubgroup(0, 0, _, _)).Times(0);
+  EXPECT_CALL(*consumer1, publishDone(_));
+
+  // Group 0 is open before subscriber 1 joins and delivers nothing more until
+  // after publishDone.
+  addSubscriber(*forwarder, session0, consumer0, RequestID(1));
+  auto sg0 = forwarder->beginSubgroup(0, 0, 0).value();
+  EXPECT_TRUE(sg0->object(0, test::makeBuf(10)).hasValue());
+  addSubscriber(*forwarder, session1, consumer1, RequestID(2));
+  auto sg1 = forwarder->beginSubgroup(1, 0, 0).value();
+  endPublish(*forwarder);
+
+  EXPECT_CALL(*drainingSubgroup, reset(_)).Times(0);
+  EXPECT_CALL(*drainingSubgroup, object(0, _, _, _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*drainingSubgroup, endOfSubgroup());
+
+  EXPECT_TRUE(sg0->object(1, test::makeBuf(10)).hasValue());
+  EXPECT_TRUE(sg1->object(0, test::makeBuf(10)).hasValue());
+  EXPECT_TRUE(sg1->endOfSubgroup().hasValue());
+  EXPECT_TRUE(sg0->endOfSubgroup().hasValue());
+}
+
+// Test: A subgroup begun after publishDone is CANCELLED rather than registered
+// with no subscriber able to take it, so the forwarder still empties once the
+// draining subscriber finishes.
+TEST_F(MoQForwarderTest, SubgroupBegunAfterPublishDoneIsCancelled) {
+  auto session = createMockSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto callback = std::make_shared<CountingCallback>();
+  forwarder->setCallback(callback);
+  auto consumer = createSessionLikeConsumer();
+  auto drainingSubgroup = createMockSubgroupConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(drainingSubgroup)));
+  EXPECT_CALL(*consumer, beginSubgroup(1, 0, _, _)).Times(0);
+  EXPECT_CALL(*consumer, publishDone(_));
+
+  addSubscriber(*forwarder, session, consumer, RequestID(1));
+  auto sg0 = forwarder->beginSubgroup(0, 0, 0).value();
+  endPublish(*forwarder);
+
+  EXPECT_CALL(*drainingSubgroup, reset(_)).Times(0);
+  EXPECT_CALL(*drainingSubgroup, endOfSubgroup());
+
+  auto sg1 = forwarder->beginSubgroup(1, 0, 0);
+  ASSERT_TRUE(sg1.hasError());
+  EXPECT_EQ(sg1.error().code, MoQPublishError::CANCELLED);
+  EXPECT_EQ(callback->onEmptyCount, 0);
+  EXPECT_TRUE(sg0->endOfSubgroup().hasValue());
+  EXPECT_EQ(callback->onEmptyCount, 1);
+}
+
+// Test: A draining subscriber is not sent objectStreams or datagrams, and the
+// subgroup it is draining still finishes.
+TEST_F(MoQForwarderTest, DrainingSubscriberIsNotSentObjectStreamsOrDatagrams) {
+  auto session = createMockSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createSessionLikeConsumer();
+  auto drainingSubgroup = createMockSubgroupConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(drainingSubgroup)));
+  EXPECT_CALL(*consumer, objectStream(_, _, _)).Times(0);
+  EXPECT_CALL(*consumer, datagram(_, _, _)).Times(0);
+  EXPECT_CALL(*consumer, publishDone(_));
+
+  addSubscriber(*forwarder, session, consumer, RequestID(1));
+  auto sg0 = forwarder->beginSubgroup(0, 0, 0).value();
+  endPublish(*forwarder);
+
+  EXPECT_CALL(*drainingSubgroup, reset(_)).Times(0);
+  EXPECT_CALL(*drainingSubgroup, endOfSubgroup());
+
+  (void)forwarder->objectStream(
+      ObjectHeader(1, 0, 0), test::makeBuf(10), false);
+  (void)forwarder->datagram(ObjectHeader(1, 0, 1), test::makeBuf(10), false);
+  EXPECT_TRUE(sg0->endOfSubgroup().hasValue());
+}
+
+// Test: An object on a subgroup that only a draining subscriber could still
+// have taken is CANCELLED.
+TEST_F(MoQForwarderTest, DrainingSubscriberDoesNotKeepLaggingSubgroupAlive) {
+  auto session = createMockSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createSessionLikeConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(0, 1, _, _));
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _)).Times(0);
+
+  // Starting at object 5, the subscriber opens subgroup 1 there and would take
+  // subgroup 0 only from a later object.
+  addSubscriber(
+      *forwarder,
+      session,
+      consumer,
+      RequestID(1),
+      LocationFilter::absoluteStart({0, 5}));
+  auto lagging = forwarder->beginSubgroup(0, 0, 0).value();
+  auto sg1 = forwarder->beginSubgroup(0, 1, 0).value();
+  EXPECT_TRUE(sg1->object(5, test::makeBuf(10)).hasValue());
+  EXPECT_TRUE(lagging->object(2, test::makeBuf(10)).hasValue());
+  endPublish(*forwarder);
+
+  auto res = lagging->object(3, test::makeBuf(10));
+  ASSERT_TRUE(res.hasError());
+  EXPECT_EQ(res.error().code, MoQPublishError::CANCELLED);
+}
+
+// Test: Re-beginning a subgroup that only a draining subscriber lacks is
+// CANCELLED, since that subscriber cannot reopen it.
+TEST_F(MoQForwarderTest, DuplicateSubgroupIsNotReopenedForDrainingSubscriber) {
+  auto session = createMockSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto consumer = createSessionLikeConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(0, 1, _, _));
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _)).Times(0);
+
+  addSubscriber(
+      *forwarder,
+      session,
+      consumer,
+      RequestID(1),
+      LocationFilter::absoluteStart({0, 5}));
+  ASSERT_TRUE(forwarder->beginSubgroup(0, 0, 0).hasValue());
+  auto sg1 = forwarder->beginSubgroup(0, 1, 0).value();
+  EXPECT_TRUE(sg1->object(5, test::makeBuf(10)).hasValue());
+  forwarder->drainSubscriber(
+      session->sessionId(),
+      PublishDone{
+          RequestID(1),
+          PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+          0,
+          "subscriber drained"},
+      "test");
+
+  auto duplicate = forwarder->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(duplicate.hasError());
+  EXPECT_EQ(duplicate.error().code, MoQPublishError::CANCELLED);
 }
 
 // Test: removeSubscriber immediately resets all open subgroups.

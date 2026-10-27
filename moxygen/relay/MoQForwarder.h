@@ -142,6 +142,12 @@ class MoQForwarder : public TrackConsumer {
 
     bool checkShouldForward();
 
+    // A draining subscriber has been sent PUBLISH_DONE, so it takes no new
+    // subgroups, objectStreams or datagrams.
+    bool isDraining() const {
+      return receivedPublishDone_;
+    }
+
     // Returns true if this subscriber is draining and all subgroups are closed
     bool shouldRemove() const {
       return receivedPublishDone_ && subgroups.empty();
