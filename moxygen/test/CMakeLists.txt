@@ -103,6 +103,7 @@ moxygen_add_test(TARGET MoQSessionTests
     MoQSessionTrackStatusTests.cpp
   DEPENDS
     moqsessiontestcommon
+    moxygen_moq_server_base
     testmain
 )
 
