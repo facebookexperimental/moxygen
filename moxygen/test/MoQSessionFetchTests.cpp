@@ -2261,3 +2261,146 @@ CO_TEST_P_X(MoQSessionTest, FetchConsumerBlockedAwaitError) {
   co_await resetBaton;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+// Test that when the transport returns FCState::BLOCKED on a fetch stream,
+// writeToStream propagates MoQPublishError::BLOCKED to the publisher, and
+// awaitReadyToConsume() returns a future that resolves when unblocked.
+CO_TEST_P_X(MoQSessionTest, FetchWriteBlocked) {
+  co_await setupMoQSession();
+  std::shared_ptr<FetchConsumer> fetchPub;
+  expectFetch([&fetchPub](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
+    EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+    fetchPub = std::move(inFetchPub);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  expectFetchSuccess();
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 3}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  XCHECK(fetchPub);
+
+  // First object — succeeds, creates the write handle
+  auto res1 = fetchPub->object(
+      /*groupID=*/0,
+      /*subgroupID=*/0,
+      /*objectID=*/0,
+      moxygen::test::makeBuf(10),
+      noExtensions(),
+      /*finFetch=*/false);
+  EXPECT_TRUE(res1.hasValue());
+
+  // Find the fetch stream write handle and block it
+  EXPECT_FALSE(serverWt_->writeHandles.empty());
+  auto lastHandle = serverWt_->writeHandles.rbegin()->second;
+  lastHandle->setWriteBlocked(true);
+
+  // Second object — transport returns BLOCKED, publisher gets BLOCKED error
+  auto res2 = fetchPub->object(
+      /*groupID=*/0,
+      /*subgroupID=*/0,
+      /*objectID=*/1,
+      moxygen::test::makeBuf(10),
+      noExtensions(),
+      /*finFetch=*/false);
+  EXPECT_TRUE(res2.hasError());
+  EXPECT_EQ(res2.error().code, MoQPublishError::BLOCKED);
+
+  // awaitReadyToConsume should return a pending future
+  auto awaitRes = fetchPub->awaitReadyToConsume();
+  EXPECT_TRUE(awaitRes.hasValue());
+  auto writableFuture = std::move(awaitRes.value());
+  EXPECT_FALSE(writableFuture.isReady());
+
+  // Unblock the write
+  lastHandle->unblockWrite();
+  EXPECT_TRUE(writableFuture.isReady());
+
+  // Third object — should succeed now
+  auto res3 = fetchPub->object(
+      /*groupID=*/0,
+      /*subgroupID=*/0,
+      /*objectID=*/2,
+      moxygen::test::makeBuf(10),
+      noExtensions(),
+      /*finFetch=*/true);
+  EXPECT_TRUE(res3.hasValue());
+
+  // Wait for objects to be delivered to the client
+  folly::coro::Baton baton;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(10), _, false, _))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 1, HasChainDataLengthOf(10), _, false, _))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 2, HasChainDataLengthOf(10), _, true, _))
+      .WillOnce([&] {
+        baton.post();
+        return folly::unit;
+      });
+  co_await baton;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A blocked write on the object that FINs the fetch must still report success.
+// The stream is complete at that point, so there is nothing to pace and no
+// write handle left to await on -- returning BLOCKED here would send the
+// publisher (e.g. MoQCache) into awaitReadyToConsume(), which fails with
+// CANCELLED and resets a fetch that actually completed.
+CO_TEST_P_X(MoQSessionTest, FetchWriteBlockedOnFin) {
+  co_await setupMoQSession();
+  std::shared_ptr<FetchConsumer> fetchPub;
+  expectFetch([&fetchPub](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
+    EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+    fetchPub = std::move(inFetchPub);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+
+  expectFetchSuccess();
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  XCHECK(fetchPub);
+
+  // First object opens the stream.
+  EXPECT_TRUE(fetchPub
+                  ->object(
+                      /*groupID=*/0,
+                      /*subgroupID=*/0,
+                      /*objectID=*/0,
+                      moxygen::test::makeBuf(10),
+                      noExtensions(),
+                      /*finFetch=*/false)
+                  .hasValue());
+
+  EXPECT_FALSE(serverWt_->writeHandles.empty());
+  serverWt_->writeHandles.rbegin()->second->setWriteBlocked(true);
+
+  folly::coro::Baton baton;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(10), _, false, _))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 1, HasChainDataLengthOf(10), _, true, _))
+      .WillOnce([&] {
+        baton.post();
+        return folly::unit;
+      });
+
+  // The transport is blocked, but this object FINs the fetch.
+  EXPECT_TRUE(fetchPub
+                  ->object(
+                      /*groupID=*/0,
+                      /*subgroupID=*/0,
+                      /*objectID=*/1,
+                      moxygen::test::makeBuf(10),
+                      noExtensions(),
+                      /*finFetch=*/true)
+                  .hasValue());
+
+  serverWt_->writeHandles.rbegin()->second->unblockWrite();
+  co_await baton;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

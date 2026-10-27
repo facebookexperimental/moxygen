@@ -1521,6 +1521,10 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
     std::shared_ptr<CacheTrack> track,
     std::shared_ptr<FetchConsumer> consumer,
     std::shared_ptr<Publisher> upstream) {
+  // TODO: Decouple upstream fetch ingestion from downstream consumer rate.
+  // Currently upstream fetch data is constrained by the downstream consumer's
+  // backpressure. We could buffer upstream fetch responses in the cache
+  // independently, up to a configurable limit.
   auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
   XLOG(DBG1) << "fetchImpl for {" << standalone->start.group << ","
              << standalone->start.object << "}, {" << standalone->end.group
