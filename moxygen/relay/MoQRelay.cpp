@@ -13,6 +13,33 @@
 
 namespace {
 constexpr uint8_t kDefaultUpstreamPriority = 128;
+
+std::optional<moxygen::TrackRequestParameters> makeSubscribeTracksSettings(
+    const moxygen::SubscribeTracks& subscribeTracks,
+    uint64_t version) {
+  if (moxygen::getDraftMajorVersion(version) < 22) {
+    return std::nullopt;
+  }
+  moxygen::TrackRequestParameters result{moxygen::FrameType::PUBLISH};
+  result.setMajorVersion(moxygen::getDraftMajorVersion(version));
+  for (const auto& param : subscribeTracks.params) {
+    if (moxygen::isPublishSubscriptionParameter(
+            static_cast<moxygen::TrackRequestParamKey>(param.key))) {
+      auto insertResult = result.insertParam(param);
+      XCHECK(insertResult.hasValue());
+    }
+  }
+  return result;
+}
+
+void applySubscribeTracksSettings(
+    moxygen::PublishRequest& publish,
+    const moxygen::TrackRequestParameters& params) {
+  for (const auto& param : params) {
+    auto insertResult = publish.params.insertParam(param);
+    XCHECK(insertResult.hasValue());
+  }
+}
 } // namespace
 
 namespace moxygen {
@@ -504,7 +531,8 @@ Subscriber::PublishResult MoQRelay::publish(
               info.forward,
               info.trackNamespacePrefix,
               info.publishBlockedHandle,
-              info.includeProperties))
+              info.includeProperties,
+              info.subscribeTracksSettings))
           .start();
     }
   }
@@ -551,7 +579,8 @@ folly::coro::Task<void> MoQRelay::publishToSession(
     bool forward,
     TrackNamespace trackNamespacePrefix,
     std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle,
-    bool includeProperties) {
+    bool includeProperties,
+    std::optional<TrackRequestParameters> subscribeTracksSettings) {
   const auto fullTrackName = forwarder->fullTrackName();
   auto subscriber = forwarder->addSubscriber(session->sessionId(), forward);
   if (!subscriber) {
@@ -563,6 +592,9 @@ folly::coro::Task<void> MoQRelay::publishToSession(
   auto guard = folly::makeGuard([subscriber] { subscriber->unsubscribe(); });
 
   auto publishRequest = subscriber->getPublishRequest();
+  if (subscribeTracksSettings.has_value()) {
+    applySubscribeTracksSettings(publishRequest, *subscribeTracksSettings);
+  }
   auto negotiatedVersion = session->getNegotiatedVersion();
   if (!includeProperties && negotiatedVersion.has_value() &&
       getDraftMajorVersion(*negotiatedVersion) >= 22) {
@@ -952,7 +984,8 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
           /*namespacePublishHandle=*/nullptr,
           std::move(publishBlockedHandle),
           subTracks.trackNamespacePrefix,
-          subTracks.includeProperties});
+          subTracks.includeProperties,
+          makeSubscribeTracksSettings(subTracks, *maybeNegotiatedVersion)});
   if (wasEmpty && tracksNode->parent_) {
     tracksNode->parent_->incrementActiveChildren();
   }
@@ -987,7 +1020,8 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
               subTracks.forward,
               subTracks.trackNamespacePrefix,
               tracksNode->sessions.at(session).publishBlockedHandle,
-              tracksNode->sessions.at(session).includeProperties))
+              tracksNode->sessions.at(session).includeProperties,
+              tracksNode->sessions.at(session).subscribeTracksSettings))
           .start();
     }
     for (auto& nextNodeIt : pubNode->children) {
@@ -1012,7 +1046,8 @@ void MoQRelay::publishExistingMatchingTracks(
     const std::shared_ptr<Publisher::PublishBlockedHandle>&
         publishBlockedHandle,
     const TrackNamespace* skipUnderPrefix,
-    bool includeProperties) {
+    bool includeProperties,
+    std::optional<TrackRequestParameters> subscribeTracksSettings) {
   auto exec = session->getExecutor();
   std::deque<std::tuple<TrackNamespace, std::shared_ptr<NamespaceNode>>> nodes;
   if (auto pubNode = findNamespaceNode(prefix, /*createMissingNodes=*/false)) {
@@ -1045,7 +1080,8 @@ void MoQRelay::publishExistingMatchingTracks(
               forward,
               prefix,
               publishBlockedHandle,
-              includeProperties))
+              includeProperties,
+              subscribeTracksSettings))
           .start();
     }
     for (auto& nextNodeIt : pubNode->children) {
@@ -1166,7 +1202,8 @@ MoQRelay::updateTracksSubscriptionPrefix(
           it->second.forward,
           it->second.publishBlockedHandle,
           &oldPrefix,
-          it->second.includeProperties);
+          it->second.includeProperties,
+          it->second.subscribeTracksSettings);
     }
   }
   return folly::unit;

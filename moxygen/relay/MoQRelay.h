@@ -153,6 +153,9 @@ class MoQRelay : public Publisher,
       // Draft 22+: whether SUBSCRIBE_TRACKS requested Track Properties in
       // resulting PUBLISH messages.
       bool includeProperties{true};
+      // SUBSCRIBE_TRACKS settings copied into future PUBLISH messages; absent
+      // for SUBSCRIBE_NAMESPACE subscribers.
+      std::optional<TrackRequestParameters> subscribeTracksSettings;
     };
 
     // Sessions with a SUBSCRIBE_NAMESPACE here, with their preferences
@@ -297,7 +300,9 @@ class MoQRelay : public Publisher,
       TrackNamespace trackNamespacePrefix = {},
       std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle =
           nullptr,
-      bool includeProperties = true);
+      bool includeProperties = true,
+      std::optional<TrackRequestParameters> subscribeTracksSettings =
+          std::nullopt);
 
   // Emit PUBLISH to `session` for every already-published track matching
   // `prefix`. Tracks under `skipUnderPrefix` are skipped -- they are already
@@ -311,7 +316,9 @@ class MoQRelay : public Publisher,
       const std::shared_ptr<Publisher::PublishBlockedHandle>&
           publishBlockedHandle,
       const TrackNamespace* skipUnderPrefix = nullptr,
-      bool includeProperties = true);
+      bool includeProperties = true,
+      std::optional<TrackRequestParameters> subscribeTracksSettings =
+          std::nullopt);
 
   // Namespace-tree analog of publishExistingMatchingTracks: replays existing
   // PUBLISH_NAMESPACEs and matching PUBLISHes under `prefix` to a
