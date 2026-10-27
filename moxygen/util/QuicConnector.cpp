@@ -113,6 +113,31 @@ std::shared_ptr<const fizz::CertificateVerifier> makePeerVerifier(
       nullptr);
 }
 
+std::shared_ptr<quic::FizzClientQuicHandshakeContext>
+makeDefaultHandshakeContext(
+    const std::vector<std::string>& alpns,
+    std::shared_ptr<fizz::CertificateVerifier> verifier,
+    std::shared_ptr<quic::QuicPskCache> pskCache,
+    const folly::SocketAddress& connectAddr,
+    const std::string& hostname,
+    quic::EarlyDataAppParamsHandler* earlyDataHandler) {
+  auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
+  fizzContext->setSupportedAlpns(alpns);
+  if (earlyDataHandler) {
+    fizzContext->setSendEarlyData(true);
+  }
+  auto handshakeCtxBuilder =
+      quic::FizzClientQuicHandshakeContext::Builder()
+          .setFizzClientContext(fizzContext)
+          .setCertificateVerifier(
+              makePeerVerifier(std::move(verifier), connectAddr, hostname));
+  if (pskCache) {
+    handshakeCtxBuilder =
+        std::move(handshakeCtxBuilder).setPskCache(std::move(pskCache));
+  }
+  return std::move(handshakeCtxBuilder).build();
+}
+
 } // namespace
 
 folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
@@ -132,24 +157,17 @@ QuicConnector::connectQuic(
   constexpr int kUdpBufferSize = 1024 * 1024; // 1 MB
   sock->setRcvBuf(kUdpBufferSize);
   sock->setSndBuf(kUdpBufferSize);
-  auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
-  fizzContext->setSupportedAlpns(alpns);
-  if (earlyDataHandler) {
-    fizzContext->setSendEarlyData(true);
-  }
-  auto handshakeCtxBuilder =
-      quic::FizzClientQuicHandshakeContext::Builder()
-          .setFizzClientContext(fizzContext)
-          .setCertificateVerifier(
-              makePeerVerifier(std::move(verifier), connectAddr, hostname));
-  if (pskCache) {
-    handshakeCtxBuilder =
-        std::move(handshakeCtxBuilder).setPskCache(std::move(pskCache));
-  }
+  auto handshakeContext = makeDefaultHandshakeContext(
+      alpns,
+      std::move(verifier),
+      std::move(pskCache),
+      connectAddr,
+      hostname,
+      earlyDataHandler);
   auto quicClient = quic::QuicClientTransport::newClient(
       std::move(qEvb),
       std::move(sock),
-      std::move(handshakeCtxBuilder).build(),
+      std::move(handshakeContext),
       /*connectionIdSize=*/0);
   // Make a copy of transportSettings and enable datagram support
   auto ts = transportSettings;
