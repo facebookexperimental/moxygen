@@ -9,6 +9,7 @@
 #include <fizz/protocol/CertificateVerifier.h>
 #include <folly/SocketAddress.h>
 #include <folly/coro/Task.h>
+#include <folly/io/SocketOptionMap.h>
 #include <folly/io/async/EventBase.h>
 #include <quic/state/TransportSettings.h>
 
@@ -16,6 +17,7 @@ namespace quic {
 class QuicClientTransport;
 class QuicPskCache;
 class EarlyDataAppParamsHandler;
+class FizzClientQuicHandshakeContext;
 } // namespace quic
 
 namespace moxygen {
@@ -33,6 +35,17 @@ class QuicConnector {
       std::shared_ptr<quic::QuicPskCache> pskCache = nullptr,
       const std::string& hostname = "",
       quic::EarlyDataAppParamsHandler* earlyDataHandler = nullptr);
+
+  // The supplied context owns certificate verification, ALPN and PSK policy.
+  static folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
+  connectQuicWithContext(
+      folly::EventBase* eventBase,
+      folly::SocketAddress connectAddr,
+      std::chrono::milliseconds timeoutMs,
+      std::shared_ptr<quic::FizzClientQuicHandshakeContext> handshakeContext,
+      const quic::TransportSettings& transportSettings,
+      const std::string& hostname = "",
+      folly::SocketOptionMap socketOptions = {});
 };
 
 } // namespace moxygen

@@ -25,6 +25,7 @@ moxygen_add_library(moxygen_util_quic_connector
     fizz::fizz
     Folly::folly_coro_task
     Folly::folly_io_async_async_base
+    Folly::folly_io_socket_option_map
     Folly::folly_network_address
 )
 

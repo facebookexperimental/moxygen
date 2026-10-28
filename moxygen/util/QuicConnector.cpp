@@ -20,6 +20,8 @@
 #include <quic/fizz/client/handshake/QuicPskCache.h>
 #include <quic/state/EarlyDataAppParamsHandler.h>
 
+#include <stdexcept>
+
 namespace {
 
 class QuicConnectCB : public quic::QuicSocket::ConnectionSetupCallback {
@@ -138,18 +140,14 @@ makeDefaultHandshakeContext(
   return std::move(handshakeCtxBuilder).build();
 }
 
-} // namespace
-
-folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
-QuicConnector::connectQuic(
+folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>> connectQuicImpl(
     folly::EventBase* eventBase,
     folly::SocketAddress connectAddr,
     std::chrono::milliseconds timeoutMs,
-    std::shared_ptr<fizz::CertificateVerifier> verifier,
-    const std::vector<std::string>& alpns,
+    std::shared_ptr<quic::FizzClientQuicHandshakeContext> handshakeContext,
     const quic::TransportSettings& transportSettings,
-    std::shared_ptr<quic::QuicPskCache> pskCache,
     const std::string& hostname,
+    folly::SocketOptionMap socketOptions,
     quic::EarlyDataAppParamsHandler* earlyDataHandler) {
   auto qEvb = std::make_shared<quic::FollyQuicEventBase>(eventBase);
   auto sock = std::make_unique<quic::FollyQuicAsyncUDPSocket>(qEvb);
@@ -157,13 +155,6 @@ QuicConnector::connectQuic(
   constexpr int kUdpBufferSize = 1024 * 1024; // 1 MB
   sock->setRcvBuf(kUdpBufferSize);
   sock->setSndBuf(kUdpBufferSize);
-  auto handshakeContext = makeDefaultHandshakeContext(
-      alpns,
-      std::move(verifier),
-      std::move(pskCache),
-      connectAddr,
-      hostname,
-      earlyDataHandler);
   auto quicClient = quic::QuicClientTransport::newClient(
       std::move(qEvb),
       std::move(sock),
@@ -181,6 +172,9 @@ QuicConnector::connectQuic(
   quicClient->setCongestionControllerFactory(
       std::make_shared<quic::DefaultCongestionControllerFactory>());
   quicClient->setTransportSettings(ts);
+  if (!socketOptions.empty()) {
+    quicClient->setSocketOptions(socketOptions);
+  }
   quicClient->addNewPeerAddress(
       quic::fromFollySocketAddress<quic::SocketAddress>(connectAddr));
   quicClient->setSupportedVersions({quic::QuicVersion::QUIC_V1});
@@ -211,6 +205,60 @@ QuicConnector::connectQuic(
     co_yield folly::coro::co_error(std::move(cb.quicException));
   }
   co_return quicClient;
+}
+
+} // namespace
+
+folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
+QuicConnector::connectQuic(
+    folly::EventBase* eventBase,
+    folly::SocketAddress connectAddr,
+    std::chrono::milliseconds timeoutMs,
+    std::shared_ptr<fizz::CertificateVerifier> verifier,
+    const std::vector<std::string>& alpns,
+    const quic::TransportSettings& transportSettings,
+    std::shared_ptr<quic::QuicPskCache> pskCache,
+    const std::string& hostname,
+    quic::EarlyDataAppParamsHandler* earlyDataHandler) {
+  auto handshakeContext = makeDefaultHandshakeContext(
+      alpns,
+      std::move(verifier),
+      std::move(pskCache),
+      connectAddr,
+      hostname,
+      earlyDataHandler);
+  co_return co_await connectQuicImpl(
+      eventBase,
+      std::move(connectAddr),
+      timeoutMs,
+      std::move(handshakeContext),
+      transportSettings,
+      hostname,
+      {},
+      earlyDataHandler);
+}
+
+folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>
+QuicConnector::connectQuicWithContext(
+    folly::EventBase* eventBase,
+    folly::SocketAddress connectAddr,
+    std::chrono::milliseconds timeoutMs,
+    std::shared_ptr<quic::FizzClientQuicHandshakeContext> handshakeContext,
+    const quic::TransportSettings& transportSettings,
+    const std::string& hostname,
+    folly::SocketOptionMap socketOptions) {
+  if (!handshakeContext) {
+    throw std::invalid_argument("A QUIC handshake context is required");
+  }
+  co_return co_await connectQuicImpl(
+      eventBase,
+      std::move(connectAddr),
+      timeoutMs,
+      std::move(handshakeContext),
+      transportSettings,
+      hostname,
+      std::move(socketOptions),
+      nullptr);
 }
 
 } // namespace moxygen
