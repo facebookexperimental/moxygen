@@ -230,14 +230,13 @@ class MoQRelay : public Publisher,
       const TrackNamespace& oldPrefix,
       const TrackNamespace& newPrefix,
       const std::shared_ptr<MoQSession>& session);
-  // `forward`, when set, updates the Forwarding State applied to future
-  // matching subscriptions (it is applied before backfilling newly-matched
-  // tracks so they honor the new state); existing subscriptions are unaffected.
-  folly::Expected<folly::Unit, RequestErrorCode> updateTracksSubscriptionPrefix(
+  // Applies updated forwarding and subscription settings before backfilling
+  // newly matched tracks; existing subscriptions are unaffected.
+  folly::Expected<folly::Unit, RequestErrorCode> updateSubscribeTracks(
       const TrackNamespace& oldPrefix,
       const TrackNamespace& newPrefix,
       const std::shared_ptr<MoQSession>& session,
-      std::optional<bool> forward = std::nullopt);
+      const RequestUpdate& requestUpdate);
   folly::Expected<folly::Unit, RequestErrorCode>
   updateNamespaceSubscriptionPrefix(
       const TrackNamespace& oldPrefix,
@@ -253,11 +252,16 @@ class MoQRelay : public Publisher,
   // subscriptions (existing subscriptions are unaffected) and may appear with
   // or without a prefix change. Returns the (possibly unchanged) prefix on
   // success or a per-request error to relay back to the peer.
-  folly::Expected<TrackNamespace, RequestError> updatePrefixFromRequest(
+  folly::Expected<TrackNamespace, RequestError> applySubscriptionUpdate(
       const RequestUpdate& reqUpdate,
       const TrackNamespace& currentPrefix,
       const std::shared_ptr<MoQSession>& session,
       PrefixUpdateKind kind);
+
+  static bool updateSubscribeTracksSettings(
+      std::optional<TrackRequestParameters>& subscribeTracksSettings,
+      const RequestUpdate& requestUpdate,
+      uint64_t version);
 
   struct RelaySubscription {
     RelaySubscription(

@@ -3981,6 +3981,64 @@ TEST_F(MoQRelayTracksTest, RequestUpdateChangesTracksForward) {
   removeSession(publisher);
 }
 
+TEST_F(MoQRelayTracksTest, RequestUpdateChangesInitialPublishParams) {
+  auto subscriber = createV22Session();
+  auto publisher = createMockSession();
+  setupPublishSucceeds(subscriber);
+
+  const TrackNamespace prefix{{"test", "a"}};
+  auto handle = doSubscribeTracks(subscriber, prefix);
+  ASSERT_NE(handle, nullptr);
+
+  RequestUpdate update;
+  update.priority = 42;
+  update.filter = LocationFilter::range(AbsoluteLocation{7, 1}, uint64_t(9));
+  update.params.insertParam(Parameter(
+      folly::to_underlying(TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT),
+      uint64_t(3000)));
+  auto result = withSessionContext(subscriber, [&]() {
+    return folly::coro::blockingWait(
+        handle->requestUpdate(update), exec_.get());
+  });
+  ASSERT_TRUE(result.hasValue());
+
+  EXPECT_CALL(
+      *subscriber,
+      publish(
+          Truly([](const PublishRequest& publish) {
+            if (publish.params.size() != 3 ||
+                getFirstIntParam(
+                    publish.params,
+                    TrackRequestParamKey::SUBSCRIBER_PRIORITY) != 42 ||
+                getFirstIntParam(
+                    publish.params,
+                    TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT) != 3000) {
+              return false;
+            }
+            auto filter = std::find_if(
+                publish.params.begin(),
+                publish.params.end(),
+                [](const auto& param) {
+                  return param.key ==
+                      folly::to_underlying(
+                             TrackRequestParamKey::LOCATION_FILTER);
+                });
+            return filter != publish.params.end() &&
+                filter->asLocationFilter ==
+                LocationFilter::range(AbsoluteLocation{7, 1}, uint64_t(9));
+          }),
+          _))
+      .Times(1);
+
+  doPublish(publisher, FullTrackName{prefix, "t"});
+  for (int i = 0; i < 5; i++) {
+    exec_->drive();
+  }
+
+  removeSession(subscriber);
+  removeSession(publisher);
+}
+
 // A combined REQUEST_UPDATE that moves the prefix AND sets FORWARD applies the
 // new Forwarding State to the moved registration: a track already published
 // under the new prefix is backfilled with the new forward value.

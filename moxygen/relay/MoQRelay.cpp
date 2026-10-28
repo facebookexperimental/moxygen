@@ -661,7 +661,7 @@ class MoQRelay::NamespaceSubscription
               RequestErrorCode::INTERNAL_ERROR,
               "SUBSCRIBE_NAMESPACE subscription no longer active"});
     }
-    auto newPrefix = relay_->updatePrefixFromRequest(
+    auto newPrefix = relay_->applySubscriptionUpdate(
         reqUpdate,
         trackNamespacePrefix_,
         session_,
@@ -927,7 +927,7 @@ class MoQRelay::TracksSubscription : public Publisher::SubscribeTracksHandle {
               RequestErrorCode::INTERNAL_ERROR,
               "SUBSCRIBE_TRACKS subscription no longer active"});
     }
-    auto newPrefix = relay_->updatePrefixFromRequest(
+    auto newPrefix = relay_->applySubscriptionUpdate(
         reqUpdate,
         trackNamespacePrefix_,
         session_,
@@ -1169,17 +1169,16 @@ MoQRelay::updateSubscriptionPrefix(
   // Re-target future matching to the new prefix. Already-active downstream
   // subscriptions under the old prefix are left untouched; replaying content
   // newly covered by the new prefix is the caller's responsibility (see
-  // updateTracksSubscriptionPrefix).
+  // updateSubscribeTracks).
   reinsert(newPrefix, std::move(info));
   return folly::unit;
 }
 
-folly::Expected<folly::Unit, RequestErrorCode>
-MoQRelay::updateTracksSubscriptionPrefix(
+folly::Expected<folly::Unit, RequestErrorCode> MoQRelay::updateSubscribeTracks(
     const TrackNamespace& oldPrefix,
     const TrackNamespace& newPrefix,
     const std::shared_ptr<MoQSession>& session,
-    std::optional<bool> forward) {
+    const RequestUpdate& requestUpdate) {
   auto res = updateSubscriptionPrefix(
       tracksSubscriberRoot_, oldPrefix, newPrefix, session);
   if (res.hasError()) {
@@ -1193,9 +1192,13 @@ MoQRelay::updateTracksSubscriptionPrefix(
     if (it != node->sessions.end()) {
       // Apply the new Forwarding State (if the update carried one) before
       // backfilling, so tracks newly matched by newPrefix honor it.
-      if (forward.has_value()) {
-        it->second.forward = *forward;
+      if (requestUpdate.forward.has_value()) {
+        it->second.forward = *requestUpdate.forward;
       }
+      auto version = session->getNegotiatedVersion();
+      XCHECK(version.has_value());
+      updateSubscribeTracksSettings(
+          it->second.subscribeTracksSettings, requestUpdate, *version);
       publishExistingMatchingTracks(
           session,
           newPrefix,
@@ -1207,6 +1210,44 @@ MoQRelay::updateTracksSubscriptionPrefix(
     }
   }
   return folly::unit;
+}
+
+bool MoQRelay::updateSubscribeTracksSettings(
+    std::optional<TrackRequestParameters>& subscribeTracksSettings,
+    const RequestUpdate& requestUpdate,
+    uint64_t version) {
+  if (getDraftMajorVersion(version) < 22) {
+    return false;
+  }
+  if (!subscribeTracksSettings.has_value()) {
+    subscribeTracksSettings.emplace(FrameType::PUBLISH);
+  }
+  auto& settings = *subscribeTracksSettings;
+  settings.setMajorVersion(getDraftMajorVersion(version));
+  bool changed = false;
+  auto upsert = [&](Parameter param) {
+    settings.eraseAllParamsOfType(static_cast<TrackRequestParamKey>(param.key));
+    auto result = settings.insertParam(std::move(param));
+    XCHECK(result.hasValue());
+    changed = true;
+  };
+  for (const auto& param : requestUpdate.params) {
+    if (isPublishSubscriptionParameter(
+            static_cast<TrackRequestParamKey>(param.key))) {
+      upsert(param);
+    }
+  }
+  if (requestUpdate.priority.has_value()) {
+    upsert(Parameter(
+        folly::to_underlying(TrackRequestParamKey::SUBSCRIBER_PRIORITY),
+        uint64_t(*requestUpdate.priority)));
+  }
+  if (requestUpdate.filter.has_value()) {
+    upsert(Parameter(
+        folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER),
+        *requestUpdate.filter));
+  }
+  return changed;
 }
 
 folly::Expected<folly::Unit, RequestErrorCode>
@@ -1237,7 +1278,7 @@ MoQRelay::updateNamespaceSubscriptionPrefix(
   return folly::unit;
 }
 
-folly::Expected<TrackNamespace, RequestError> MoQRelay::updatePrefixFromRequest(
+folly::Expected<TrackNamespace, RequestError> MoQRelay::applySubscriptionUpdate(
     const RequestUpdate& reqUpdate,
     const TrackNamespace& currentPrefix,
     const std::shared_ptr<MoQSession>& session,
@@ -1245,10 +1286,9 @@ folly::Expected<TrackNamespace, RequestError> MoQRelay::updatePrefixFromRequest(
   const bool tracks = kind == PrefixUpdateKind::Tracks;
   // SUBSCRIBE_TRACKS / SUBSCRIBE_NAMESPACE carry the Track Namespace Prefix
   // (draft §10.9.2) in the TRACK_NAMESPACE_PREFIX parameter. A SUBSCRIBE_TRACKS
-  // update may additionally carry a FORWARD value, updating the Forwarding
-  // State on future matching subscriptions (existing subscriptions unaffected);
-  // the parser already validated it to be 0 or 1. FORWARD is not defined for
-  // SUBSCRIBE_NAMESPACE updates, so it is ignored there.
+  // update may additionally change forwarding and subscription settings for
+  // future matching tracks. FORWARD is not defined for SUBSCRIBE_NAMESPACE
+  // updates, so it is ignored there.
   const std::optional<bool> forward = tracks ? reqUpdate.forward : std::nullopt;
 
   auto version = session->getNegotiatedVersion();
@@ -1271,15 +1311,22 @@ folly::Expected<TrackNamespace, RequestError> MoQRelay::updatePrefixFromRequest(
             "Malformed TRACK_NAMESPACE_PREFIX"});
   }
   if (!decoded.value()) {
-    // No prefix change. A SUBSCRIBE_TRACKS FORWARD-only update just moves the
-    // stored Forwarding State in place; anything else has nothing to update.
-    if (forward.has_value()) {
+    // Apply forwarding and subscription setting updates without moving the
+    // namespace registration.
+    bool subscriptionChanged = false;
+    if (tracks) {
       if (auto node = findTracksSubscriberNode(currentPrefix)) {
         auto it = node->sessions.find(session);
         if (it != node->sessions.end()) {
-          it->second.forward = *forward;
+          if (forward.has_value()) {
+            it->second.forward = *forward;
+          }
+          subscriptionChanged = updateSubscribeTracksSettings(
+              it->second.subscribeTracksSettings, reqUpdate, *version);
         }
       }
+    }
+    if (forward.has_value() || subscriptionChanged) {
       return currentPrefix;
     }
     return folly::makeUnexpected(
@@ -1287,17 +1334,17 @@ folly::Expected<TrackNamespace, RequestError> MoQRelay::updatePrefixFromRequest(
             reqUpdate.requestID,
             RequestErrorCode::NOT_SUPPORTED,
             tracks ? "REQUEST_UPDATE for SUBSCRIBE_TRACKS requires a "
-                     "TRACK_NAMESPACE_PREFIX or FORWARD"
+                     "TRACK_NAMESPACE_PREFIX, FORWARD, or subscription "
+                     "parameter"
                    : "REQUEST_UPDATE for SUBSCRIBE_NAMESPACE requires a "
                      "TRACK_NAMESPACE_PREFIX"});
   }
   auto newPrefix = std::move(*decoded.value());
   // On a combined prefix + FORWARD update, the new Forwarding State is applied
-  // inside updateTracksSubscriptionPrefix after the move succeeds (so it is not
+  // inside updateSubscribeTracks after the move succeeds (so it is not
   // applied if the move is rejected for overlap) and before the backfill.
   auto res = tracks
-      ? updateTracksSubscriptionPrefix(
-            currentPrefix, newPrefix, session, forward)
+      ? updateSubscribeTracks(currentPrefix, newPrefix, session, reqUpdate)
       : updateNamespaceSubscriptionPrefix(currentPrefix, newPrefix, session);
   if (res.hasError()) {
     return folly::makeUnexpected(
