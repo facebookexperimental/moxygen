@@ -5762,27 +5762,18 @@ class MoQSession::ReceiverSubscriptionHandle
       : Publisher::SubscriptionHandle(std::move(ok)),
         trackAlias_(alias),
         session_(std::move(session)),
-        control_(std::move(control)),
-        requestUpdateState_(
-            waitForPublishOk ? RequestUpdateState::PENDING
-                             : RequestUpdateState::READY) {
+        control_(std::move(control)) {
     if (!waitForPublishOk) {
-      requestUpdatesReady_.setValue();
+      setRequestUpdateState(RequestUpdateState::READY);
     }
   }
 
   void publishOkSent() {
-    if (requestUpdateState_ == RequestUpdateState::PENDING) {
-      requestUpdateState_ = RequestUpdateState::READY;
-      requestUpdatesReady_.setValue();
-    }
+    setRequestUpdateState(RequestUpdateState::READY);
   }
 
   void publishFailed() {
-    if (requestUpdateState_ == RequestUpdateState::PENDING) {
-      requestUpdateState_ = RequestUpdateState::REJECTED;
-      requestUpdatesReady_.setValue();
-    }
+    setRequestUpdateState(RequestUpdateState::REJECTED);
   }
 
   folly::coro::Task<SubscriptionHandle::RequestUpdateResult> requestUpdate(
@@ -5795,18 +5786,21 @@ class MoQSession::ReceiverSubscriptionHandle
               RequestErrorCode::INTERNAL_ERROR,
               "Session closed"});
     }
-    auto ready = co_await folly::coro::co_awaitTry(
-        folly::coro::co_withCancellation(
-            session->cancellationSource_.getToken(),
-            requestUpdatesReady_.getFuture()));
-    if (ready.hasException()) {
+    auto ready = requestUpdatesReady_.poll();
+    if (!ready.has_value()) {
+      ready = co_await folly::coro::co_awaitTry(
+          folly::coro::co_withCancellation(
+              session->cancellationSource_.getToken(),
+              requestUpdatesReady_.getFuture()));
+    }
+    if (ready->hasException()) {
       co_return folly::makeUnexpected(
           RequestError{
               requestUpdate.requestID,
               RequestErrorCode::INTERNAL_ERROR,
               "Session closed"});
     }
-    if (requestUpdateState_ == RequestUpdateState::REJECTED) {
+    if (ready->value() == RequestUpdateState::REJECTED) {
       co_return folly::makeUnexpected(
           RequestError{
               requestUpdate.requestID,
@@ -5891,13 +5885,18 @@ class MoQSession::ReceiverSubscriptionHandle
   }
 
  private:
-  enum class RequestUpdateState { PENDING, READY, REJECTED };
+  enum class RequestUpdateState { READY, REJECTED };
+
+  void setRequestUpdateState(RequestUpdateState state) {
+    if (!requestUpdatesReady_.isFulfilled()) {
+      requestUpdatesReady_.setValue(state);
+    }
+  }
 
   TrackAlias trackAlias_;
   std::shared_ptr<MoQSession> session_;
   std::shared_ptr<BidiStreamControl> control_;
-  RequestUpdateState requestUpdateState_;
-  folly::coro::SharedPromise<void> requestUpdatesReady_;
+  folly::coro::SharedPromise<RequestUpdateState> requestUpdatesReady_;
 };
 
 void MoQSession::onPublish(PublishRequest publish) {
