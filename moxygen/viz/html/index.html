@@ -1,32 +1,33 @@
 <!--
  Copyright (c) Meta Platforms, Inc. and affiliates.
- 
+
  This source code is licensed under the MIT license found in the
  LICENSE file in the root directory of this source tree.
  -->
 <!DOCTYPE html>
-<html lang='en'>
+<html lang="en">
 <head>
-    <meta charset='UTF-8'>
-    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-    <title>MoQ Transport Visualization</title>
-    <link rel='stylesheet' href='style.css'>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MoQ Transport Visualization (MLog Viewer)</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div class="mlog-viewer-root">
     <header>
-        <h1 id='title'>MoQ Transport Data Visualization</h1>
+        <h1 id="title">MoQ Transport Data Visualization</h1>
         <p class="subtitle">Media over QUIC Transport Event Timeline</p>
     </header>
 
     <div class="control-panel">
         <div class="file-upload-section">
             <label for="qlog-file-input">Upload MoQ QLOG JSON file:</label>
-            <input type="file" id="qlog-file-input" accept=".json" />
-            <button id="load-example-btn">Load Example Data</button>
+            <input type="file" id="qlog-file-input" accept=".json,.qlog,.log,.txt" />
+            <button id="load-example-btn" type="button">Load Example Data</button>
         </div>
 
         <div class="filter-controls">
-            <label>Event Filters:</label>
+            <span>Event Filters:</span>
             <label><input type="checkbox" id="filter-control" checked> Control Messages</label>
             <label><input type="checkbox" id="filter-objects" checked> Data Objects</label>
             <label><input type="checkbox" id="filter-subgroups" checked> Subgroups</label>
@@ -34,44 +35,47 @@
         </div>
 
         <div class="view-controls">
-            <label>View Options:</label>
+            <span>View Options:</span>
             <label><input type="checkbox" id="show-object-ids" checked> Show Object IDs</label>
             <label><input type="checkbox" id="show-sizes" checked> Size-proportional Bars</label>
-            <button id="reset-view-btn">Reset View</button>
+            <button id="reset-view-btn" type="button">Reset View</button>
         </div>
     </div>
 
     <div class="user-instructions">
-        <p><strong>Controls:</strong> Mouse wheel to zoom • Drag to pan • Double-click timeline to center • Hover for details</p>
+        <p><strong>Controls:</strong> Mouse wheel to zoom &middot; Drag to pan &middot; Double-click timeline to center &middot; Hover for details</p>
+    </div>
+
+    <div id="legend" class="legend-panel">
+        <h3>Legend</h3>
+        <div class="legend-content">
+            <div class="legend-item"><div class="legend-color control-msg-color"></div><span>Control Messages</span></div>
+            <div class="legend-item"><div class="legend-color object-msg-color"></div><span>Object Datagrams</span></div>
+            <div class="legend-item"><div class="legend-color subgroup-msg-color"></div><span>Subgroup Operations</span></div>
+            <div class="legend-item"><div class="legend-color fetch-msg-color"></div><span>Fetch Operations</span></div>
+            <div class="legend-item"><div class="legend-color stream-msg-color"></div><span>Stream Settings</span></div>
+        </div>
     </div>
 
     <div class="track-selection-panel">
         <div class="track-list-container">
             <div class="track-list client-published">
                 <h3>Client Published</h3>
-                <div id="client-tracks-list" class="track-checkboxes">
-                    <!-- Dynamic checkboxes for client-published tracks will be inserted here -->
-                </div>
+                <div id="client-tracks-list" class="track-checkboxes"></div>
             </div>
             <div class="track-list server-published">
                 <h3>Server Published</h3>
-                <div id="server-tracks-list" class="track-checkboxes">
-                    <!-- Dynamic checkboxes for server-published tracks will be inserted here -->
-                </div>
+                <div id="server-tracks-list" class="track-checkboxes"></div>
             </div>
         </div>
     </div>
 
     <div class="timeline-container">
-        <div class="timeline-header" id="timeline-header">
-            <!-- Dynamic column headers will be inserted here -->
-        </div>
+        <div class="timeline-header" id="timeline-header"></div>
 
-        <div id='timeline-div'>
+        <div id="timeline-div">
             <div class="time-labels" id="time-labels"></div>
-            <div class="event-columns" id="event-columns">
-                <!-- Dynamic event columns will be inserted here -->
-            </div>
+            <div class="event-columns" id="event-columns"></div>
         </div>
     </div>
 
@@ -81,45 +85,20 @@
             <p>Click on an event to see details</p>
         </div>
     </div>
-<!--
-    <div id="legend" class="legend-panel">
-        <h3>Legend</h3>
-        <div class="legend-content">
-            <div class="legend-item">
-                <div class="legend-color control-msg-color"></div>
-                <span>Control Messages</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color object-msg-color"></div>
-                <span>Object Datagrams</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color subgroup-msg-color"></div>
-                <span>Subgroup Operations</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color fetch-msg-color"></div>
-                <span>Fetch Operations</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color stream-msg-color"></div>
-                <span>Stream Settings</span>
-            </div>
-        </div>
-    </div>
--->
+
     <div id="status-bar" class="status-bar">
         <span id="status-text">Ready to load MoQ QLOG data</span>
         <span id="event-count"></span>
     </div>
 
-    <!-- Event tooltip -->
     <div id="event-tooltip" class="tooltip">
         <div class="tooltip-content"></div>
     </div>
 
-    <script src='https://code.jquery.com/jquery-3.6.0.min.js'></script>
-    <script src='moq-parser.js'></script>
-    <script src='moq-timeline.js'></script>
+    <div id="track-name-tooltip" class="track-name-tooltip"></div>
+</div>
+
+<script src="moq-parser.js"></script>
+<script src="moq-timeline.js"></script>
 </body>
 </html>
