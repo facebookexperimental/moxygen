@@ -3264,13 +3264,23 @@ void MoQSession::startControlWriteLoop(
 
 void MoQSession::start() {
   XLOG(DBG1) << __func__ << " sess=" << this;
+  if (!wt_) {
+    return;
+  }
+  auto onControlStreamFailure = [this] {
+    if (moqSettings_.closeOnControlStreamFailure) {
+      close(SessionCloseErrorCode::INTERNAL_ERROR);
+    } else {
+      wt_->closeSession();
+    }
+  };
   if (negotiatedVersion_ && useUniControlStreams(*negotiatedVersion_)) {
     // Uni control mode: both client and server open a uni stream for outgoing
     // control messages
     auto us = wt_->createUniStream();
     if (!us) {
       XLOG(ERR) << "Failed to get uni control stream sess=" << this;
-      wt_->closeSession();
+      onControlStreamFailure();
       return;
     }
     startControlWriteLoop(us.value());
@@ -3280,7 +3290,7 @@ void MoQSession::start() {
     auto cs = wt_->createBidiStream();
     if (!cs) {
       XLOG(ERR) << "Failed to get control stream sess=" << this;
-      wt_->closeSession();
+      onControlStreamFailure();
       return;
     }
     auto controlStream = cs.value();

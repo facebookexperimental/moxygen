@@ -66,6 +66,7 @@ struct MoQSettings {
   // Joining FETCHes held while their subscription is unseen or pending.
   size_t maxDeferredJoiningFetches{16};
   bool acceptRequestUpdatesAfterReceivedGoaway{false};
+  bool closeOnControlStreamFailure{false};
 };
 
 class ReplyContext;

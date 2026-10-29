@@ -2476,6 +2476,57 @@ CO_TEST_P_X(MoQUniControlTest, ServerClosesSessionWithoutClientSetup) {
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQUniControlTest, ClientCloseBeforeHandleClientSessionRuns) {
+  auto server = std::make_shared<SetupTimeoutServer>();
+  auto handled =
+      co_withExecutor(&eventBase_, server->handleClientSession(serverSession_))
+          .start();
+  clientWt_->closeSession();
+  co_await std::move(handled);
+  EXPECT_TRUE(serverSession_->isClosed());
+}
+
+CO_TEST_P_X(MoQSessionTest, ControlStreamFailureClosesTheSessionWhenEnabled) {
+  serverWt_->setPeerHandler(nullptr);
+  if (useUniControlStreams(getServerSelectedVersion())) {
+    clientWt_->setMaxLocalUniStreams(0);
+  } else {
+    clientWt_->setNextCreateBidiStreamError(
+        proxygen::WebTransport::ErrorCode::BLOCKED);
+  }
+  MoQSettings moqSettings;
+  moqSettings.closeOnControlStreamFailure = true;
+  clientSession_->setMoqSettings(moqSettings);
+  clientSession_->start();
+  CO_ASSERT_TRUE(clientSession_->getCloseResult().has_value());
+  EXPECT_EQ(
+      clientSession_->getCloseResult()->error,
+      SessionCloseErrorCode::INTERNAL_ERROR);
+
+  auto setup = co_await folly::coro::co_awaitTry(
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)));
+  EXPECT_TRUE(setup.hasException<folly::OperationCancelled>());
+}
+
+CO_TEST_P_X(MoQSessionTest, ControlStreamFailureWaitsForTheSetupTimeout) {
+  serverWt_->setPeerHandler(nullptr);
+  if (useUniControlStreams(getServerSelectedVersion())) {
+    clientWt_->setMaxLocalUniStreams(0);
+  } else {
+    clientWt_->setNextCreateBidiStreamError(
+        proxygen::WebTransport::ErrorCode::BLOCKED);
+  }
+  MoQSettings moqSettings;
+  moqSettings.setupTimeout = std::chrono::milliseconds(100);
+  clientSession_->setMoqSettings(moqSettings);
+  clientSession_->start();
+  EXPECT_FALSE(clientSession_->isClosed());
+
+  auto setup = co_await folly::coro::co_awaitTry(
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)));
+  EXPECT_TRUE(setup.hasException<folly::FutureTimeout>());
+}
+
 CO_TEST_P_X(MoQUniControlTest, UniControlSetupStreamFinBeforeSetup) {
   // A peer that packs SETUP and the FIN into one write finishes its control
   // stream before the session can hand it to the control read loop. The
