@@ -89,18 +89,25 @@ void MoQTestPublisher::cancelAll() {
   }
 }
 
+namespace {
+
+// Advertise the priority even-numbered groups are published at, so the
+// subgroup and datagram encodings elide it for those and write it explicitly
+// for the odd ones.
+Extensions makeTrackProperties() {
+  Extensions trackProperties;
+  trackProperties.insertMutableExtension(
+      Extension{kPublisherPriorityExtensionType, kMoQTestPublisherPriority});
+  return trackProperties;
+}
+
+} // namespace
+
 std::shared_ptr<MoQForwarder> MoQTestPublisher::makeForwarder(
     const FullTrackName& ftn,
     uint64_t /*version*/) {
   auto forwarder = std::make_shared<MoQForwarder>(ftn);
-
-  // Advertise the priority even-numbered groups are published at, so the
-  // subgroup and datagram encodings elide it for those and write it
-  // explicitly for the odd ones.
-  Extensions trackProperties;
-  trackProperties.insertMutableExtension(
-      Extension{kPublisherPriorityExtensionType, kMoQTestPublisherPriority});
-  forwarder->setExtensions(std::move(trackProperties));
+  forwarder->setExtensions(makeTrackProperties());
 
   auto cb = std::make_shared<TrackCallback>();
   cb->publisher = shared_from_this();
@@ -129,6 +136,34 @@ void MoQTestPublisher::retireTrack(
   }
   it->second.cancelSource.requestCancellation();
   tracks_.erase(it);
+}
+
+folly::coro::Task<Publisher::TrackStatusResult> MoQTestPublisher::trackStatus(
+    TrackStatus trackStatus) {
+  XLOG(INFO) << "Received Track Status";
+
+  auto res = moxygen::convertTrackNamespaceToMoqTestParam(
+      &trackStatus.fullTrackName.trackNamespace);
+  if (res.hasError()) {
+    co_return folly::makeUnexpected(
+        TrackStatusError{
+            trackStatus.requestID,
+            TrackStatusErrorCode::NOT_SUPPORTED,
+            "Invalid Parameters"});
+  }
+
+  TrackStatusOk ok;
+  ok.requestID = trackStatus.requestID;
+  auto trackIt = tracks_.find(trackStatus.fullTrackName);
+  if (trackIt == tracks_.end()) {
+    ok.trackProperties = makeTrackProperties();
+    co_return ok;
+  }
+  const auto& forwarder = trackIt->second.forwarder;
+  ok.groupOrder = forwarder->groupOrder();
+  ok.largest = forwarder->largest();
+  ok.trackProperties = forwarder->extensions();
+  co_return ok;
 }
 
 folly::coro::Task<MoQSession::SubscribeResult> MoQTestPublisher::subscribe(

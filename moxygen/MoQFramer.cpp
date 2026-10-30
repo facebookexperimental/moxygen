@@ -3560,11 +3560,6 @@ RequestOk RequestOk::fromTrackStatusOk(const TrackStatusOk& trackStatusOk) {
       folly::to_underlying(TrackRequestParamKey::EXPIRES),
       static_cast<uint64_t>(trackStatusOk.expires.count()));
 
-  // Add group order parameter
-  requestOk.requestSpecificParams.emplace_back(
-      folly::to_underlying(TrackRequestParamKey::GROUP_ORDER),
-      folly::to_underlying(trackStatusOk.groupOrder));
-
   // Add the LARGEST_OBJECT param if present
   if (trackStatusOk.largest) {
     requestOk.requestSpecificParams.emplace_back(

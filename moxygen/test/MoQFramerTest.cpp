@@ -1705,6 +1705,14 @@ TEST_P(MoQFramerTest, ParseTrackStatusOk) {
   EXPECT_EQ(parseResult->largest->group, 19);
   EXPECT_EQ(parseResult->largest->object, 77);
   EXPECT_EQ(parseResult->expires, std::chrono::milliseconds(1000));
+  EXPECT_TRUE(
+      std::none_of(
+          result->requestSpecificParams.begin(),
+          result->requestSpecificParams.end(),
+          [](const Parameter& param) {
+            return param.key ==
+                folly::to_underlying(TrackRequestParamKey::GROUP_ORDER);
+          }));
 }
 
 static std::string encodeToken(
