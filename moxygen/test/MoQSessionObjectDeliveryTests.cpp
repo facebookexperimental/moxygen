@@ -927,6 +927,109 @@ class MockDeliveryCallback : public DeliveryCallback {
       (override));
 };
 
+CO_TEST_P_X(MoQSessionTest, AwaitDelivery_FinalObjectWaitsForAck) {
+  co_await setupMoQSession();
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    auto streamId = serverObjectStreamId();
+    eventBase_.add([this, pub, sub, streamId] {
+      EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+      EXPECT_CALL(
+          *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+      auto subgroup = pub->beginSubgroup(0, 0, 0).value();
+      EXPECT_TRUE(pub->awaitDelivery().isReady());
+      auto& stream = serverWt_->writeHandles[streamId];
+      stream->setImmediateDelivery(false);
+      ASSERT_TRUE(
+          subgroup->object(0, makeBuf(10), noExtensions(), /*finSubgroup=*/true)
+              .hasValue());
+
+      auto delivery = pub->awaitDelivery();
+      auto otherWaiter = pub->awaitDelivery();
+      EXPECT_FALSE(delivery.isReady());
+      EXPECT_FALSE(otherWaiter.isReady());
+      stream->deliverInflightData();
+      ASSERT_TRUE(delivery.isReady());
+      ASSERT_TRUE(otherWaiter.isReady());
+      EXPECT_NO_THROW(std::move(delivery).get());
+      EXPECT_NO_THROW(std::move(otherWaiter).get());
+      pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+    });
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  auto subgroup = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(subgroup));
+  EXPECT_CALL(*subgroup, object(0, _, _, _))
+      .WillOnce(testing::Return(folly::unit));
+  expectPublishDone();
+  co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, AwaitDelivery_FinOnlyWaitsForAck) {
+  co_await setupMoQSession();
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    auto streamId = serverObjectStreamId();
+    eventBase_.add([this, pub, sub, streamId] {
+      EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+      EXPECT_CALL(
+          *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+      auto subgroup = pub->beginSubgroup(0, 0, 0).value();
+      ASSERT_TRUE(subgroup->object(0, makeBuf(10)).hasValue());
+      EXPECT_TRUE(pub->awaitDelivery().isReady());
+      auto& stream = serverWt_->writeHandles[streamId];
+      stream->setImmediateDelivery(false);
+      ASSERT_TRUE(subgroup->endOfSubgroup().hasValue());
+
+      auto delivery = pub->awaitDelivery();
+      EXPECT_FALSE(delivery.isReady());
+      stream->deliverInflightData();
+      ASSERT_TRUE(delivery.isReady());
+      EXPECT_NO_THROW(std::move(delivery).get());
+      pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+    });
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  auto subgroup = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(subgroup));
+  EXPECT_CALL(*subgroup, object(0, _, _, _))
+      .WillOnce(testing::Return(folly::unit));
+  expectPublishDone();
+  co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, AwaitDelivery_CancelledWriteFails) {
+  co_await publishValidationTest(
+      [this](const auto& sub, auto pub, auto subgroup, auto receiver) {
+        EXPECT_CALL(*receiver, object(0, _, _, _))
+            .WillOnce(testing::Return(folly::unit));
+        const auto streamId = serverObjectStreamId();
+        ASSERT_TRUE(subgroup->object(0, makeBuf(10)).hasValue());
+        eventBase_.add([this, sub, pub, subgroup, streamId] {
+          auto& stream = serverWt_->writeHandles[streamId];
+          stream->setImmediateDelivery(false);
+          ASSERT_TRUE(subgroup->object(1, makeBuf(10)).hasValue());
+          auto delivery = pub->awaitDelivery();
+          EXPECT_FALSE(delivery.isReady());
+          subgroup->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+          ASSERT_TRUE(delivery.isReady());
+          EXPECT_THROW(std::move(delivery).get(), std::runtime_error);
+          auto settled = pub->awaitDelivery();
+          ASSERT_TRUE(settled.isReady());
+          EXPECT_THROW(std::move(settled).get(), std::runtime_error);
+          pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+        });
+      });
+}
+
 CO_TEST_P_X(MoQSessionTest, DeliveryCallbackBasic) {
   co_await setupMoQSession();
   auto deliveryCallback =

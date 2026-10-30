@@ -211,6 +211,13 @@ class TrackConsumer {
     // Default implementation is a no-op. This is only implemented by the
     // library-provided implementation of TrackConsumer.
   }
+
+  // Wait for accepted stream writes, including FIN, to be acknowledged.
+  // Cancelled delivery completes with an error. Consumers without an
+  // asynchronous delivery stage are already settled.
+  virtual folly::SemiFuture<folly::Unit> awaitDelivery() {
+    return folly::makeSemiFuture();
+  }
 };
 
 // Interface for Publishing and Receiving objects for a Fetch
