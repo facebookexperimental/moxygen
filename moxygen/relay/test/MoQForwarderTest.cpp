@@ -178,10 +178,14 @@ struct CountingCallback : public MoQForwarder::Callback {
   void onEmpty(MoQForwarder*) override {
     onEmptyCount++;
   }
+  void onPublishDone(MoQForwarder*) override {
+    onPublishDoneCount++;
+  }
   void forwardChanged(MoQForwarder*, bool forward) override {
     forwardChanges.push_back(forward);
   }
   size_t onEmptyCount{0};
+  size_t onPublishDoneCount{0};
   std::vector<bool> forwardChanges;
 };
 
@@ -472,6 +476,106 @@ TEST_F(MoQForwarderTest, DrainingSubscriberDoesNotOpenLateSubgroup) {
   EXPECT_TRUE(sg1->object(0, test::makeBuf(10)).hasValue());
   EXPECT_TRUE(sg1->endOfSubgroup().hasValue());
   EXPECT_TRUE(sg0->endOfSubgroup().hasValue());
+}
+
+TEST_F(MoQForwarderTest, DeferredPublishDoneKeepsLateSubscriber) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  forwarder->setDeferPublishDone(true);
+  auto callback = std::make_shared<CountingCallback>();
+  forwarder->setCallback(callback);
+  auto observer = createMockConsumer();
+  auto observed = createMockSubgroupConsumer();
+  EXPECT_CALL(*observer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(observed)));
+  addSubscriber(
+      *forwarder,
+      createMockSession(),
+      observer,
+      RequestID(1),
+      LocationFilter::absoluteStart({0, 0}));
+  auto source = forwarder->beginSubgroup(0, 0, 0).value();
+
+  auto consumer = createMockConsumer();
+  auto subgroup = createMockSubgroupConsumer();
+  addSubscriber(
+      *forwarder,
+      createMockSession(),
+      consumer,
+      RequestID(2),
+      LocationFilter::absoluteStart({0, 0}));
+  bool delivered{false};
+  bool doneSent{false};
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(subgroup)));
+  EXPECT_CALL(*observed, object(10, _, _, true))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*subgroup, object(10, _, _, true))
+      .WillOnce([&](uint64_t, Payload, const Extensions&, bool) {
+        delivered = true;
+        return folly::makeExpected<MoQPublishError>(folly::unit);
+      });
+  EXPECT_CALL(*consumer, publishDone(_)).WillOnce([&](const PublishDone&) {
+    EXPECT_TRUE(delivered);
+    doneSent = true;
+    return folly::makeExpected<MoQPublishError>(folly::unit);
+  });
+
+  endPublish(*forwarder);
+  EXPECT_FALSE(doneSent);
+  EXPECT_EQ(callback->onPublishDoneCount, 1);
+  EXPECT_EQ(callback->onEmptyCount, 0);
+  ASSERT_TRUE(source->object(10, makeBuf(1), {}, true).hasValue());
+
+  EXPECT_TRUE(doneSent);
+  EXPECT_TRUE(forwarder->empty());
+  EXPECT_EQ(callback->onEmptyCount, 1);
+}
+
+TEST_F(MoQForwarderTest, DeferredPublishDoneMayDestroyForwarderOnReset) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  forwarder->setDeferPublishDone(true);
+  forwarder->setCallback(
+      std::make_shared<ForwarderDestroyingCallback>(forwarder));
+  auto consumer = createMockConsumer();
+  auto subgroup = createMockSubgroupConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(subgroup)));
+  EXPECT_CALL(*subgroup, reset(ResetStreamErrorCode::CANCELLED));
+  EXPECT_CALL(*consumer, publishDone(_));
+  addSubscriber(
+      *forwarder,
+      createMockSession(),
+      consumer,
+      RequestID(1),
+      LocationFilter::absoluteStart({0, 0}));
+  auto source = forwarder->beginSubgroup(0, 0, 0).value();
+
+  endPublish(*forwarder);
+  ASSERT_NE(forwarder, nullptr);
+  source->reset(ResetStreamErrorCode::CANCELLED);
+
+  EXPECT_EQ(forwarder, nullptr);
+}
+
+TEST_F(MoQForwarderTest, DeferredPublishDoneDeliveredWhenOwnerReleases) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  forwarder->setDeferPublishDone(true);
+  auto consumer = createMockConsumer();
+  auto subgroup = createMockSubgroupConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(subgroup)));
+  addSubscriber(
+      *forwarder,
+      createMockSession(),
+      consumer,
+      RequestID(1),
+      LocationFilter::absoluteStart({0, 0}));
+  auto source = forwarder->beginSubgroup(0, 0, 0).value();
+  endPublish(*forwarder);
+
+  EXPECT_CALL(*consumer, publishDone(_))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  forwarder.reset();
 }
 
 // Test: A subgroup begun after publishDone is CANCELLED rather than registered

@@ -85,6 +85,14 @@ class MoQForwarder : public TrackConsumer {
 
   void setCallback(std::shared_ptr<Callback> callback);
 
+  // Holds PUBLISH_DONE for subscribers until the source's open subgroups
+  // finish. Configure before PUBLISH_DONE. onPublishDone still fires
+  // immediately, and the owner must bound the wait (e.g. tear down after its
+  // own timeout). Destroying the forwarder delivers a pending PUBLISH_DONE.
+  void setDeferPublishDone(bool defer) {
+    deferPublishDone_ = defer;
+  }
+
   struct SubgroupIdentifier {
     uint64_t group;
     uint64_t subgroup;
@@ -451,6 +459,8 @@ class MoQForwarder : public TrackConsumer {
   // fires onEmpty callback if so
   void checkAndFireOnEmpty();
 
+  void drainSubscribers(const PublishDone& pubDone);
+
   // onEmpty may destroy this forwarder, so a live OnEmptyGuard defers it until
   // iteration unwinds; the outermost guard re-checks emptiness and fires once.
   // Only onEmpty is deferred; another callback that frees us still dangles.
@@ -509,6 +519,8 @@ class MoQForwarder : public TrackConsumer {
   std::shared_ptr<Callback> callback_;
   uint64_t forwardingSubscribers_{0};
   bool draining_{false};
+  bool deferPublishDone_{false};
+  std::optional<PublishDone> pendingPublishDone_;
 };
 
 } // namespace moxygen

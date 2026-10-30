@@ -177,11 +177,29 @@ MoQForwarder::MoQForwarder(
     : fullTrackName_(std::move(ftn)), largest_(std::move(largest)) {}
 
 MoQForwarder::~MoQForwarder() {
+  std::vector<std::pair<std::shared_ptr<TrackConsumer>, RequestID>> waiting;
+  if (pendingPublishDone_) {
+    for (const auto& [_, sub] : subscribers_) {
+      if (sub->trackConsumer) {
+        waiting.emplace_back(sub->trackConsumer, sub->requestID);
+      }
+    }
+  }
   for (auto& [id, subgroupForwarder] : subgroups_) {
     subgroupForwarder->detach();
   }
   for (auto& [_, sub] : subscribers_) {
     sub->detach();
+  }
+  // Subscribers must still learn the track ended if the owner released this
+  // forwarder while a deferred PUBLISH_DONE was pending.
+  for (const auto& [consumer, requestID] : waiting) {
+    consumer->publishDone(
+        PublishDone{
+            requestID,
+            pendingPublishDone_->statusCode,
+            0, // filled in by session
+            pendingPublishDone_->reasonPhrase});
   }
 }
 
@@ -393,6 +411,13 @@ void MoQForwarder::removeSubscriber(
 }
 
 void MoQForwarder::checkAndFireOnEmpty() {
+  if (pendingPublishDone_ && subgroups_.empty()) {
+    OnEmptyGuard guard(this);
+    auto done = std::exchange(pendingPublishDone_, std::nullopt);
+    drainSubscribers(*done);
+    checkAndFireOnEmpty();
+    return;
+  }
   if (subscribers_.empty()) {
     if (subgroups_.empty()) {
       if (deferOnEmptyDepth_ > 0) {
@@ -710,11 +735,24 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::publishDone(
   XLOG(DBG1) << __func__ << " pubDone reason=" << pubDone.reasonPhrase;
   OnEmptyGuard guard(this);
   draining_ = true;
-  if (callback_) {
-    // Signal source termination before draining subscribers, so any owning
-    // registry can release this forwarder (identity-scoped via the pointer).
-    callback_->onPublishDone(this);
+  // Signal source termination before draining subscribers, so any owning
+  // registry can release this forwarder (identity-scoped via the pointer).
+  auto notifySource = [this] {
+    if (callback_) {
+      callback_->onPublishDone(this);
+    }
+  };
+  if (deferPublishDone_ && !subgroups_.empty()) {
+    pendingPublishDone_ = std::move(pubDone);
+    notifySource();
+    return folly::unit;
   }
+  notifySource();
+  drainSubscribers(pubDone);
+  return folly::unit;
+}
+
+void MoQForwarder::drainSubscribers(const PublishDone& pubDone) {
   forEachSubscriber([&](const std::shared_ptr<Subscriber>& sub) {
     drainSubscriber(
         sub->sessionId,
@@ -725,8 +763,6 @@ folly::Expected<folly::Unit, MoQPublishError> MoQForwarder::publishDone(
             pubDone.reasonPhrase},
         "publishDone");
   });
-  // Cleanup/draining operation - succeed even with no subscribers
-  return folly::unit;
 }
 
 void MoQForwarder::addForwardingSubscriber() {
