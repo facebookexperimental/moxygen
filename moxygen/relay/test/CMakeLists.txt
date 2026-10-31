@@ -38,4 +38,5 @@ moxygen_add_test(TARGET MoQRelayTest
     moqtestutils
     moxygen_events_moq_folly_executor_impl
     testmain
+    Folly::folly_logging_logging
 )

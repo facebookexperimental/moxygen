@@ -64,6 +64,18 @@ folly::coro::Task<void> MoQRelay::doSubscribeUpdate(
   }
 }
 
+folly::coro::Task<void> MoQRelay::doPublishForwardUpdate(
+    std::shared_ptr<Publisher::SubscriptionHandle> handle,
+    bool forward) {
+  RequestUpdate update;
+  update.forward = forward;
+  auto updateRes = co_await handle->requestUpdate(std::move(update));
+  if (updateRes.hasError()) {
+    XLOG(ERR) << "PUBLISH forward update failed: "
+              << updateRes.error().reasonPhrase;
+  }
+}
+
 // Sends a REQUEST_UPDATE that carries only the NEW_GROUP_REQUEST parameter.
 folly::coro::Task<void> MoQRelay::doNewGroupRequestUpdate(
     std::shared_ptr<Publisher::SubscriptionHandle> handle,
@@ -458,6 +470,8 @@ Subscriber::PublishResult MoQRelay::publish(
   }
 
   auto session = MoQSession::getRequestSession();
+  const auto majorVersion =
+      getDraftMajorVersion(*session->getNegotiatedVersion());
   bool wasEmpty = !nodePtr->hasLocalSessions();
 
   auto it = subscriptions_.find(pub.fullTrackName);
@@ -546,14 +560,32 @@ Subscriber::PublishResult MoQRelay::publish(
 
   wakePendingRendezvousForTrack(pub.fullTrackName);
 
+  const bool shouldForward = nSubscribers > 0;
+  PublishOk publishOk;
+  publishOk.requestID = pub.requestID;
+  if (majorVersion >= 22) {
+    if (pub.forward != shouldForward) {
+      auto exec = session->getExecutor();
+      co_withExecutor(exec, doPublishForwardUpdate(rsub.handle, shouldForward))
+          .start([](folly::Try<void>&& result) {
+            if (result.hasException()) {
+              XLOG(ERR) << "PUBLISH forward update failed with exception: "
+                        << result.exception().what();
+            }
+          });
+    }
+  } else {
+    publishOk.forward = shouldForward;
+    publishOk.subscriberPriority = kDefaultPriority;
+    publishOk.groupOrder = pub.groupOrder;
+    publishOk.filter =
+        LocationFilter::range(kLocationMin, {kLocationMax.group, 0});
+  }
+
   return PublishConsumerAndReplyTask{
       filter, // Return filter, not forwarder directly
-      folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(PublishOk{
-          pub.requestID,
-          /*forward=*/(nSubscribers > 0),
-          kDefaultPriority,
-          pub.groupOrder,
-          LocationFilter::range(kLocationMin, {kLocationMax.group, 0})}),
+      folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
+          std::move(publishOk)),
       /*consumerReady=*/true};
 }
 
@@ -627,8 +659,6 @@ folly::coro::Task<void> MoQRelay::publishToSession(
   XLOG(DBG1) << "Publish OK sess=" << session.get();
   auto& pubOk = pubResult.value().value();
 
-  // Process the PUBLISH_OK response - updates range, forward flag, and
-  // handles NEW_GROUP_REQUEST forwarding via callback
   subscriber->onPublishOk(pubOk);
 }
 

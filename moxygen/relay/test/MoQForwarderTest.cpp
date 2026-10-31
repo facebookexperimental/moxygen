@@ -2234,6 +2234,44 @@ TEST_F(MoQForwarderTest, SubscriberOnPublishOkDoesNotStrandPartialObject) {
           std::string(kObjectLength - kInitialLength, 'b'));
 }
 
+TEST_F(MoQForwarderTest, Draft22PublishOkPreservesPublishState) {
+  auto session = createMockSession(kVersionDraft22);
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto subscriber =
+      forwarder->addSubscriber(session->sessionId(), /*forward=*/false);
+  ASSERT_NE(subscriber, nullptr);
+
+  PublishOk pubOk{
+      RequestID(7),
+      /*forward=*/true,
+      0,
+      GroupOrder::OldestFirst,
+      LocationFilter::absoluteStart({5, 0}),
+      TrackRequestParameters(FrameType::PUBLISH_OK)};
+  pubOk.params.setMajorVersion(22);
+  subscriber->onPublishOk(pubOk);
+
+  EXPECT_EQ(subscriber->requestID, RequestID(7));
+  EXPECT_FALSE(subscriber->shouldForward);
+  EXPECT_EQ(subscriber->range.start, (AbsoluteLocation{0, 0}));
+}
+
+TEST_F(MoQForwarderTest, Draft18PublishOkAppliesDefaultForwardState) {
+  auto session = createMockSession(kVersionDraft18);
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto subscriber =
+      forwarder->addSubscriber(session->sessionId(), /*forward=*/false);
+  ASSERT_NE(subscriber, nullptr);
+
+  PublishOk pubOk;
+  pubOk.requestID = RequestID(7);
+  pubOk.params.setMajorVersion(18);
+  subscriber->onPublishOk(pubOk);
+
+  EXPECT_TRUE(subscriber->shouldForward);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 1);
+}
+
 // Test: Destroying the forwarder detaches all subscribers; subsequent
 // unsubscribe / requestUpdate calls on the surviving Subscriber handle must
 // not crash.

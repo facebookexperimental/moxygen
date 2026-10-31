@@ -136,8 +136,6 @@ class MoQForwarder : public TrackConsumer {
     // requestID and trackAlias are placeholders (overwritten by MoQSession).
     PublishRequest getPublishRequest() const;
 
-    // Process PUBLISH_OK response, updating range, forward flag, and handling
-    // NEW_GROUP_REQUEST forwarding via callback
     void onPublishOk(const PublishOk& pubOk);
 
     folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(

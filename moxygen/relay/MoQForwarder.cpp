@@ -900,6 +900,9 @@ void MoQForwarder::Subscriber::onPublishOk(const PublishOk& pubOk) {
   // PUBLISH-served subscriptions carry the real id only after PUBLISH_OK; a
   // later joining fetch matches against it in resolveJoiningFetch.
   requestID = pubOk.requestID;
+  if (!pubOk.params.isParamAllowed(TrackRequestParamKey::FORWARD)) {
+    return;
+  }
   range = toSubscribeRange(pubOk.filter, forwarder->largest());
 
   updateForwardState(pubOk.forward);

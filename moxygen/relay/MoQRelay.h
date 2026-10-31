@@ -349,6 +349,10 @@ class MoQRelay : public Publisher,
       std::shared_ptr<Publisher::SubscriptionHandle> handle,
       bool forward);
 
+  folly::coro::Task<void> doPublishForwardUpdate(
+      std::shared_ptr<Publisher::SubscriptionHandle> handle,
+      bool forward);
+
   folly::coro::Task<void> doNewGroupRequestUpdate(
       std::shared_ptr<Publisher::SubscriptionHandle> handle,
       uint64_t newGroupRequestValue);

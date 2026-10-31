@@ -6,6 +6,7 @@
 
 #include <folly/coro/BlockingWait.h>
 #include <folly/io/async/EventBase.h>
+#include <folly/logging/LoggerDB.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <moxygen/MoQTrackProperties.h>
@@ -15,6 +16,7 @@
 #include <moxygen/test/MockMoQSession.h>
 #include <moxygen/test/Mocks.h>
 #include <moxygen/test/TestUtils.h>
+#include <stdexcept>
 
 using namespace testing;
 
@@ -2292,6 +2294,78 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkPostprocessing) {
 
   removeSession(publisherSession);
   removeSession(subscriberSession);
+}
+
+TEST_F(MoQRelayTest, Draft22PublishPausesWithHandleUpdate) {
+  auto publisherSession = createMockSession();
+  ON_CALL(*publisherSession, getNegotiatedVersion())
+      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft22)));
+
+  PublishRequest publish;
+  publish.fullTrackName = kTestTrackName;
+  publish.forward = true;
+  auto handle = std::static_pointer_cast<MockSubscriptionHandle>(
+      createMockSubscriptionHandle());
+  bool updateSent = false;
+  EXPECT_CALL(*handle, requestUpdateCalled)
+      .WillOnce([&](const RequestUpdate& update) {
+        EXPECT_EQ(update.forward, false);
+        EXPECT_FALSE(update.priority.has_value());
+        EXPECT_FALSE(update.filter.has_value());
+        updateSent = true;
+      });
+  EXPECT_CALL(*handle, requestUpdateResult).WillOnce(Return(RequestOk{}));
+  auto result = withSessionContext(publisherSession, [&] {
+    return relay_->publish(std::move(publish), handle);
+  });
+  ASSERT_TRUE(result.hasValue());
+  exec_->drive();
+  EXPECT_TRUE(updateSent);
+
+  const auto reply =
+      folly::coro::blockingWait(std::move(result->reply), exec_.get());
+  ASSERT_TRUE(reply.hasValue());
+
+  getOrCreateMockState(publisherSession)
+      ->publishConsumers.push_back(std::move(result->consumer));
+  removeSession(publisherSession);
+}
+
+TEST_F(MoQRelayTest, Draft22PublishForwardUpdateLogsException) {
+  auto publisherSession = createMockSession();
+  ON_CALL(*publisherSession, getNegotiatedVersion())
+      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft22)));
+
+  PublishRequest publish;
+  publish.fullTrackName = kTestTrackName;
+  publish.forward = true;
+  auto handle = std::static_pointer_cast<MockSubscriptionHandle>(
+      createMockSubscriptionHandle());
+  EXPECT_CALL(*handle, requestUpdateCalled(_));
+  EXPECT_CALL(*handle, requestUpdateResult())
+      .WillOnce(Throw(std::runtime_error("forward update failure")));
+  auto result = withSessionContext(publisherSession, [&] {
+    return relay_->publish(std::move(publish), handle);
+  });
+  ASSERT_TRUE(result.hasValue());
+
+  testing::internal::CaptureStderr();
+  exec_->drive();
+  folly::LoggerDB::get().flushAllHandlers();
+  const auto output = testing::internal::GetCapturedStderr();
+  EXPECT_THAT(
+      output,
+      AllOf(
+          HasSubstr("PUBLISH forward update failed with exception:"),
+          HasSubstr("forward update failure")));
+
+  const auto reply =
+      folly::coro::blockingWait(std::move(result->reply), exec_.get());
+  ASSERT_TRUE(reply.hasValue());
+
+  getOrCreateMockState(publisherSession)
+      ->publishConsumers.push_back(std::move(result->consumer));
+  removeSession(publisherSession);
 }
 
 // Test: Duplicate beginSubgroup with active consumers resets them and creates
