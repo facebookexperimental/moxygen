@@ -1494,12 +1494,12 @@ SubscribeRequest pastRangeSubscribe(RequestID requestID) {
 } // namespace
 
 // Refusing a past range refuses the fill that would have retrieved it.
-TEST_F(MoQRelayTest, PastRangeSubscriptionAcceptedAtDraft20) {
+TEST_F(MoQRelayTest, PastRangeSubscriptionAcceptedAtDraft22) {
   auto publisherSession = createMockSession();
   auto subscriber1 = createMockSession();
   auto subscriber2 = createMockSession();
   ON_CALL(*subscriber2, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft20)));
+      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft22)));
 
   doPublishNamespace(publisherSession, kTestNamespace);
 
@@ -1536,8 +1536,8 @@ TEST_F(MoQRelayTest, PastRangeSubscriptionAcceptedAtDraft20) {
   removeSession(subscriber2);
 }
 
-// The drafts below 20 still refuse the same request.
-TEST_F(MoQRelayTest, PastRangeSubscriptionRefusedBeforeDraft20) {
+// The drafts below 22 still refuse the same request.
+TEST_F(MoQRelayTest, PastRangeSubscriptionRefusedBeforeDraft22) {
   auto publisherSession = createMockSession();
   auto subscriber1 = createMockSession();
   auto subscriber2 = createMockSession();

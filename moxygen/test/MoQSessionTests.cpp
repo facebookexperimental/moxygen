@@ -304,7 +304,8 @@ INSTANTIATE_TEST_SUITE_P(
     CurrentVersionOnly,
     testing::Values(
         VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent},
-        VersionParams{{kVersionDraft18}, kVersionDraft18}));
+        VersionParams{{kVersionDraft18}, kVersionDraft18},
+        VersionParams{{kVersionDraft22}, kVersionDraft22}));
 namespace {
 class ScopedTestHandler : public Publisher,
                           public Subscriber,
@@ -1095,7 +1096,9 @@ class Draft18GoawayTimeoutTest : public MoQSessionTest {
 INSTANTIATE_TEST_SUITE_P(
     Draft18GoawayTimeoutTest,
     Draft18GoawayTimeoutTest,
-    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+    testing::Values(
+        VersionParams{{kVersionDraft18}, kVersionDraft18},
+        VersionParams{{kVersionDraft22}, kVersionDraft22}));
 
 CO_TEST_P_X(Draft18GoawayTimeoutTest, TimeoutClosesOpenPeerSubscription) {
   auto subscription = co_await openPeerSubscription();
@@ -1259,7 +1262,9 @@ class Draft18RequestStreamGoawayTest : public MoQSessionTest {
 INSTANTIATE_TEST_SUITE_P(
     Draft18RequestStreamGoawayTest,
     Draft18RequestStreamGoawayTest,
-    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+    testing::Values(
+        VersionParams{{kVersionDraft18}, kVersionDraft18},
+        VersionParams{{kVersionDraft22}, kVersionDraft22}));
 
 CO_TEST_P_X(
     Draft18RequestStreamGoawayTest,
@@ -2003,7 +2008,9 @@ class MoQBidiSetupGateTest : public MoQSessionTest {
 INSTANTIATE_TEST_SUITE_P(
     MoQBidiSetupGateTest,
     MoQBidiSetupGateTest,
-    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+    testing::Values(
+        VersionParams{{kVersionDraft18}, kVersionDraft18},
+        VersionParams{{kVersionDraft22}, kVersionDraft22}));
 
 CO_TEST_P_X(MoQBidiSetupGateTest, PublishWaitsForAcceptedSetup) {
   prepareServerSetup();
@@ -2189,7 +2196,9 @@ class MoQUniControlTest : public MoQSessionTest {};
 INSTANTIATE_TEST_SUITE_P(
     MoQUniControlTest,
     MoQUniControlTest,
-    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+    testing::Values(
+        VersionParams{{kVersionDraft18}, kVersionDraft18},
+        VersionParams{{kVersionDraft22}, kVersionDraft22}));
 
 CO_TEST_P_X(MoQUniControlTest, UniControlSetup) {
   co_await setupMoQSession();
@@ -3311,7 +3320,8 @@ INSTANTIATE_TEST_SUITE_P(
     MoQSessionDeleteFromCallbackTest,
     testing::Values(
         VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent},
-        VersionParams{{kVersionDraft18}, kVersionDraft18}));
+        VersionParams{{kVersionDraft18}, kVersionDraft18},
+        VersionParams{{kVersionDraft22}, kVersionDraft22}));
 
 // Demonstrate and verify that cleanup() breaks the shared_ptr cycle between
 // a session and a handler that holds a back-reference to that session.

@@ -1693,7 +1693,7 @@ MoQRelay::subscribeToExistingRelaySubscription(
     }
   }
   auto& forwarder = subscriptionIt->second.forwarder;
-  // Draft 20 accepts a filter entirely before Largest Object. Older drafts
+  // Draft 22 accepts a filter entirely before Largest Object. Older drafts
   // refuse it, but only for a subscriber joining an existing subscription.
   // TODO: retire the asymmetry along with the drafts that need it.
   if (!useFillFetch(downstreamSession->getNegotiatedVersion().value_or(0))) {
@@ -1861,7 +1861,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
 
   auto [standalone, joining] = fetchType(fetch);
   if (joining && useFillFetch(session->getNegotiatedVersion().value_or(0))) {
-    // Only a locally built request can reach here at draft 20.
+    // Only a locally built request can reach here at draft 22.
     co_return folly::makeUnexpected(FetchError(
         {fetch.requestID,
          FetchErrorCode::NOT_SUPPORTED,
@@ -1878,7 +1878,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
            "No subscription for joining fetch"}));
     }
     const auto& upstream = subscriptionIt->second.upstream;
-    // A draft 20 upstream refuses Joining FETCH, so resolve the join here once
+    // A draft 22 upstream refuses Joining FETCH, so resolve the join here once
     // the subscribe completes.
     if (!subscriptionIt->second.promise.isFulfilled() && upstream &&
         useFillFetch(upstream->getNegotiatedVersion().value_or(0))) {

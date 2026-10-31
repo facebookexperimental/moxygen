@@ -474,7 +474,7 @@ struct SubscribeRange {
   AbsoluteLocation end; // inclusive
 };
 
-// Draft-20 Location Filter. How many optional varints are present on the wire
+// Draft-22 Location Filter. How many optional varints are present on the wire
 // decides which fields they are, so the count is part of the value.
 class LocationFilter {
  public:
@@ -514,7 +514,7 @@ class LocationFilter {
     return LocationFilter{4, start, end};
   }
 
-  // The draft < 20 inclusive End Group, or nullopt if open-ended. An end at a
+  // The draft < 22 inclusive End Group, or nullopt if open-ended. An end at a
   // specific Object rounds up to the end of that Group.
   std::optional<uint64_t> legacyEndGroup() const {
     if (isOpenEnded()) {
@@ -621,7 +621,7 @@ class LocationFilter {
   // For the relative form, start_.group is a count of groups back rather than
   // a group ID.
   AbsoluteLocation start_;
-  // Absolute, not the delta the wire carries: drafts below 20 can send an end
+  // Absolute, not the delta the wire carries: drafts below 22 can send an end
   // group behind the start, and the endpoint has to see that to reject it.
   AbsoluteLocation end_;
 };
@@ -660,7 +660,7 @@ enum class GroupOrder : uint8_t {
   NewestFirst = 0x2
 };
 
-// Draft-20 FILL_PARAMETERS, which requests a fill fetch stream. Each member
+// Draft-22 FILL_PARAMETERS, which requests a fill fetch stream. Each member
 // overrides the subscription's value for that stream only.
 struct FillParameters {
   // Absent means the fill covers the subscription's own range; a zero-length
@@ -768,13 +768,13 @@ enum class TrackRequestParamKey : uint64_t {
   RENDEZVOUS_TIMEOUT = 4,
   PUBLISHER_PRIORITY = 0x0E,
   SUBSCRIBER_PRIORITY = 0x20,
-  // Key 0x21: SUBSCRIPTION_FILTER for drafts < 20, LOCATION_FILTER for
-  // drafts >= 20.
+  // Key 0x21: SUBSCRIPTION_FILTER for drafts < 22, LOCATION_FILTER for
+  // drafts >= 22.
   SUBSCRIPTION_FILTER = 0x21,
   LOCATION_FILTER = 0x21,
   EXPIRES = 8,
   GROUP_ORDER = 0x22,
-  FILL_PARAMETERS = 0x23, // draft 20+
+  FILL_PARAMETERS = 0x23, // draft 22+
   LARGEST_OBJECT = 0x9,
   FILL_TIMEOUT = 0x0A,
   FORWARD = 0x10,
@@ -1356,7 +1356,7 @@ struct SubscribeRequest {
   GroupOrder groupOrder{GroupOrder::Default};
   bool forward{true};
   LocationFilter filter{LocationFilter::nextObject()};
-  std::optional<FillParameters> fill; // draft 20+
+  std::optional<FillParameters> fill; // draft 22+
   TrackRequestParameters params{FrameType::SUBSCRIBE};
   bool includeProperties{true};
 };
@@ -1370,7 +1370,7 @@ struct RequestUpdate {
   // Optional forward field. When absent, existing forward state is
   // preserved.
   std::optional<bool> forward;
-  std::optional<FillParameters> fill; // draft 20+
+  std::optional<FillParameters> fill; // draft 22+
   TrackRequestParameters params{FrameType::SUBSCRIBE_UPDATE};
 };
 
@@ -1538,7 +1538,7 @@ struct Fetch {
   uint8_t priority{kDefaultPriority};
   GroupOrder groupOrder{GroupOrder::Default};
   TrackRequestParameters params{FrameType::FETCH};
-  // Draft 20+ carries the range in LOCATION_FILTER. `args` holds it resolved,
+  // Draft 22+ carries the range in LOCATION_FILTER. `args` holds it resolved,
   // so code below the framer reads the range from `args` at every draft.
   LocationFilter filter{LocationFilter::none()};
   std::variant<StandaloneFetch, JoiningFetch> args;

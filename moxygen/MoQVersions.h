@@ -33,20 +33,15 @@ constexpr std::string_view kAlpnMoqtDraft16Latest = kAlpnMoqtDraft16Meta00;
 constexpr std::string_view kAlpnMoqtDraft18 = "moqt-18";
 constexpr std::string_view kAlpnMoqtDraft18Latest = kAlpnMoqtDraft18;
 
-// Meta-scoped draft 20 ALPNs, since only part of the draft is implemented.
-// Each wire-breaking step adds a revision and moves kAlpnMoqtDraft20Latest.
-//   meta-00: draft 18, with the range in LOCATION_FILTER
-//   meta-01: adds FILL_PARAMETERS and fill fetch streams
-//   meta-02: drops Fetch Type from FETCH, retiring Joining FETCH
-constexpr std::string_view kAlpnMoqtDraft20Meta00 = "moqt-20-meta-00";
-constexpr std::string_view kAlpnMoqtDraft20Meta01 = "moqt-20-meta-01";
-constexpr std::string_view kAlpnMoqtDraft20Meta02 = "moqt-20-meta-02";
-constexpr std::string_view kAlpnMoqtDraft20Latest = kAlpnMoqtDraft20Meta02;
+// Meta-scoped draft 22 ALPNs, since only part of the draft is implemented.
+// Each wire-breaking step adds a revision and moves kAlpnMoqtDraft22Latest.
+constexpr std::string_view kAlpnMoqtDraft22Meta00 = "moqt-22-meta-00";
+constexpr std::string_view kAlpnMoqtDraft22Latest = kAlpnMoqtDraft22Meta00;
 
 constexpr std::array<uint64_t, 3> kSupportedVersions{
     kVersionDraft16,
     kVersionDraft18,
-    kVersionDraft20};
+    kVersionDraft22};
 
 // In the terminology I'm using for this function, each draft has a "major"
 // and a "minor" version. For example, 0xff080002 has the major version 8 and
@@ -91,7 +86,7 @@ bool useBidiRequestStreams(uint64_t version);
 // True if a subscription can request a fill with FILL_PARAMETERS.
 bool useFillFetch(uint64_t version);
 
-// True if the request range is carried in LOCATION_FILTER (draft 20+).
+// True if the request range is carried in LOCATION_FILTER (draft 22+).
 bool useLocationFilter(uint64_t version);
 
 // Returns a comma-separated list of supported versions, useful for logging.

@@ -899,7 +899,7 @@ set_section "10" "Joining FETCH"
 # two together cover the track.  Every test but the last runs against a track
 # a background subscriber is already holding open.
 #
-# From draft 20 the same flags produce a fill fetch stream instead.  These
+# From draft 22 the same flags produce a fill fetch stream instead.  These
 # cases check the backfill the client reports, so they cover either wire form.
 
 # 16 groups of 6 objects at 50ms is a little under five seconds of track, so

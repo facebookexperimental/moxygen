@@ -420,7 +420,7 @@ class MoQFrameParser {
       ObjectHeader& objectHeader,
       bool allowImmutable = true) const noexcept;
 
-  // Tail of parseFetch, shared by the draft-20 and legacy field layouts.
+  // Tail of parseFetch, shared by the draft-22 and legacy field layouts.
   folly::Expected<Fetch, ErrorCode> parseFetchParams(
       folly::io::Cursor& cursor,
       size_t length,
@@ -490,13 +490,13 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t& length) const noexcept;
 
-  // Draft 20+. A nested parameter block with its own allowlist and its own
+  // Draft 22+. A nested parameter block with its own allowlist and its own
   // duplicate scope, so a type may appear both here and in the message.
   folly::Expected<FillParameters, ErrorCode> parseFillParameters(
       folly::io::Cursor& cursor,
       size_t& length) const noexcept;
 
-  // Draft 20+. `length` is the parameter value length; every byte of it must
+  // Draft 22+. `length` is the parameter value length; every byte of it must
   // be consumed by the optional fields, of which there are at most four.
   folly::Expected<LocationFilter, ErrorCode> parseLocationFilter(
       folly::io::Cursor& cursor,

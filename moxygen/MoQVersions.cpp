@@ -66,10 +66,10 @@ std::optional<std::string> getAlpnFromVersion(
     return std::nullopt;
   }
   uint64_t draftNum = getDraftMajorVersion(version);
-  // Only part of draft 20 is implemented, so it never claims the standard
+  // Only part of draft 22 is implemented, so it never claims the standard
   // ALPN, whatever the caller asked for.
-  if (draftNum == 20) {
-    return std::string(kAlpnMoqtDraft20Latest);
+  if (draftNum == 22) {
+    return std::string(kAlpnMoqtDraft22Latest);
   }
   if (useStandard) {
     return "moqt-" + folly::to<std::string>(draftNum);
@@ -94,10 +94,10 @@ std::vector<std::string> getDefaultMoqtProtocols(
   }
   protocols.push_back(getAlpnFromVersion(kVersionDraft16, useStandard).value());
   if (includeExperimental) {
-    // Out of order on purpose: draft 20 is still partial, so offer it for
+    // Out of order on purpose: draft 22 is still partial, so offer it for
     // peers that ask but never prefer it.
     protocols.push_back(
-        getAlpnFromVersion(kVersionDraft20, useStandard).value());
+        getAlpnFromVersion(kVersionDraft22, useStandard).value());
   }
   return protocols;
 }
@@ -144,11 +144,11 @@ bool useBidiRequestStreams(uint64_t version) {
 }
 
 bool useFillFetch(uint64_t version) {
-  return getDraftMajorVersion(version) >= 20;
+  return getDraftMajorVersion(version) >= 22;
 }
 
 bool useLocationFilter(uint64_t version) {
-  return getDraftMajorVersion(version) >= 20;
+  return getDraftMajorVersion(version) >= 22;
 }
 
 std::string getSupportedVersionsString() {

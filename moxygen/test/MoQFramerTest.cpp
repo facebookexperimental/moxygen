@@ -2402,8 +2402,8 @@ TEST(MoQFramerSubscriptionFilter, RequestUpdateEndGroupRoundTripLegacy) {
   }
 }
 
-// Every Location Filter form must survive a draft-20 SUBSCRIBE round trip.
-TEST(MoQFramerLocationFilter, SubscribeRoundTripV20) {
+// Every Location Filter form must survive a draft-22 SUBSCRIBE round trip.
+TEST(MoQFramerLocationFilter, SubscribeRoundTripV22) {
   const std::vector<LocationFilter> filters{
       LocationFilter::none(),
       LocationFilter::relativeStart(0),
@@ -2415,9 +2415,9 @@ TEST(MoQFramerLocationFilter, SubscribeRoundTripV20) {
       LocationFilter::range({10, 20}, {30, 4})};
 
   MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft20);
+  writer.initializeVersion(kVersionDraft22);
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft20);
+  parser.initializeVersion(kVersionDraft22);
   MoQTokenCache tokenCache;
   parser.setTokenCache(&tokenCache);
 
@@ -2446,7 +2446,7 @@ TEST(MoQFramerLocationFilter, SubscribeRoundTripV20) {
 }
 
 namespace {
-// A draft 20 SUBSCRIBE with one request-specific parameter, whose raw value
+// A draft 22 SUBSCRIBE with one request-specific parameter, whose raw value
 // is supplied verbatim.
 std::unique_ptr<folly::IOBuf> subscribeWithRawParam(
     TrackRequestParamKey key,
@@ -2468,7 +2468,7 @@ std::unique_ptr<folly::IOBuf> subscribeWithRawParam(
 
 ErrorCode parseSubscribeBodyError(const std::unique_ptr<folly::IOBuf>& bytes) {
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft20);
+  parser.initializeVersion(kVersionDraft22);
   MoQTokenCache tokenCache;
   parser.setTokenCache(&tokenCache);
   folly::io::Cursor cursor(bytes.get());
@@ -2549,11 +2549,11 @@ folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeFrame(
 }
 } // namespace
 
-TEST(MoQFramerFillParameters, SubscribeRoundTripV20) {
+TEST(MoQFramerFillParameters, SubscribeRoundTripV22) {
   MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft20);
+  writer.initializeVersion(kVersionDraft22);
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft20);
+  parser.initializeVersion(kVersionDraft22);
   MoQTokenCache tokenCache;
   parser.setTokenCache(&tokenCache);
 
@@ -2583,9 +2583,9 @@ TEST(MoQFramerFillParameters, SubscribeRoundTripV20) {
 // A Default group order goes out as an omitted GROUP_ORDER, which still parses.
 TEST(MoQFramerFillParameters, DefaultGroupOrderIsOmitted) {
   MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft20);
+  writer.initializeVersion(kVersionDraft22);
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft20);
+  parser.initializeVersion(kVersionDraft22);
   MoQTokenCache tokenCache;
   parser.setTokenCache(&tokenCache);
 
@@ -2600,9 +2600,9 @@ TEST(MoQFramerFillParameters, DefaultGroupOrderIsOmitted) {
 // A type may appear both in the message and inside FILL_PARAMETERS.
 TEST(MoQFramerFillParameters, NestedAndOuterFilterAreIndependent) {
   MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft20);
+  writer.initializeVersion(kVersionDraft22);
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft20);
+  parser.initializeVersion(kVersionDraft22);
   MoQTokenCache tokenCache;
   parser.setTokenCache(&tokenCache);
 
@@ -2621,9 +2621,9 @@ TEST(MoQFramerFillParameters, NestedAndOuterFilterAreIndependent) {
 // A subscription without FILL_PARAMETERS does not request a fill.
 TEST(MoQFramerFillParameters, AbsentWhenNotRequested) {
   MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft20);
+  writer.initializeVersion(kVersionDraft22);
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft20);
+  parser.initializeVersion(kVersionDraft22);
   MoQTokenCache tokenCache;
   parser.setTokenCache(&tokenCache);
 
@@ -2638,10 +2638,10 @@ TEST(MoQFramerFillParameters, AbsentWhenNotRequested) {
   EXPECT_FALSE(parseRes->fill.has_value());
 }
 
-// FILL_PARAMETERS below draft 20 is a protocol violation.
-TEST(MoQFramerFillParameters, RejectedBelowV20) {
+// FILL_PARAMETERS below draft 22 is a protocol violation.
+TEST(MoQFramerFillParameters, RejectedBelowV22) {
   MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft20);
+  writer.initializeVersion(kVersionDraft22);
   FillParameters fill;
   fill.locationFilter = LocationFilter::relativeStart(1);
   auto bytes = writeFillSubscribe(writer, fill);
@@ -2677,7 +2677,7 @@ TEST(MoQFramerLocationFilter, FillParametersOnFetchIsAViolation) {
 
   auto bytes = body.move();
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft20);
+  parser.initializeVersion(kVersionDraft22);
   MoQTokenCache tokenCache;
   parser.setTokenCache(&tokenCache);
 
@@ -2687,12 +2687,12 @@ TEST(MoQFramerLocationFilter, FillParametersOnFetchIsAViolation) {
   EXPECT_EQ(res.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
-// Draft 20 carries the FETCH range in LOCATION_FILTER.
-TEST(MoQFramerLocationFilter, StandaloneFetchRangeRoundTripV20) {
+// Draft 22 carries the FETCH range in LOCATION_FILTER.
+TEST(MoQFramerLocationFilter, StandaloneFetchRangeRoundTripV22) {
   MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft20);
+  writer.initializeVersion(kVersionDraft22);
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft20);
+  parser.initializeVersion(kVersionDraft22);
   MoQTokenCache tokenCache;
   parser.setTokenCache(&tokenCache);
 
@@ -2770,12 +2770,12 @@ TEST(MoQFramerSubscriptionFilter, EndGroupDeltaOverflowRejectedV18) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
-    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft20));
+    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerAuthTest,
     MoQFramerAuthTest,
-    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft20));
+    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22));
 
 TEST(MoQFramerTestUtils, DraftMajorVersion) {
   EXPECT_EQ(getDraftMajorVersion(0xff080001), 0x8);
@@ -2825,18 +2825,19 @@ TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
 }
 
 TEST(MoQFramerTestUtils, GetMoqtProtocols) {
-  // Empty = all supported versions. Draft 20 trails the others because it is
+  // Empty = all supported versions. Draft 22 trails the others because it is
   // still partial, and never claims the standard ALPN for the same reason.
   auto all = getMoqtProtocols("", true);
   EXPECT_EQ(all.size(), 3);
   EXPECT_EQ(all[0], "moqt-18");
   EXPECT_EQ(all[1], "moqt-16");
-  EXPECT_EQ(all[2], kAlpnMoqtDraft20Latest);
+  EXPECT_EQ(all[2], kAlpnMoqtDraft22Latest);
 
-  auto meta20 = getMoqtProtocols("20");
-  EXPECT_EQ(meta20.size(), 1);
-  EXPECT_EQ(meta20[0], kAlpnMoqtDraft20Latest);
-  EXPECT_EQ(getMoqtProtocols("20", true), meta20);
+  auto meta22 = getMoqtProtocols("22");
+  EXPECT_EQ(meta22.size(), 1);
+  EXPECT_EQ(meta22[0], kAlpnMoqtDraft22Latest);
+  EXPECT_EQ(getMoqtProtocols("22", true), meta22);
+  EXPECT_THROW(getMoqtProtocols("20"), std::invalid_argument);
 
   // Single version
   auto just16 = getMoqtProtocols("16", true);
@@ -2863,11 +2864,11 @@ TEST(MoQFramerTestUtils, GetDefaultMoqtProtocols) {
       (std::vector<std::string>{
           std::string(kAlpnMoqtDraft18Latest),
           std::string(kAlpnMoqtDraft16Latest),
-          std::string(kAlpnMoqtDraft20Latest)}));
+          std::string(kAlpnMoqtDraft22Latest)}));
   EXPECT_EQ(
       getDefaultMoqtProtocols(true, /*useStandard=*/true),
       (std::vector<std::string>{
-          "moqt-18", "moqt-16", std::string(kAlpnMoqtDraft20Latest)}));
+          "moqt-18", "moqt-16", std::string(kAlpnMoqtDraft22Latest)}));
 }
 
 // Test class for immutable extensions feature
@@ -3151,7 +3152,7 @@ TEST_P(MoQImmutableExtensionsTest, WriteOnlyImmutableExtensionsDraft) {
 INSTANTIATE_TEST_SUITE_P(
     MoQImmutableExtensionsTest,
     MoQImmutableExtensionsTest,
-    ::testing::Values(kVersionDraft16, kVersionDraft18));
+    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22));
 
 TEST_P(MoQFramerTest, DatagramWithExtensionsAndNonNormalStatus) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
@@ -4379,7 +4380,11 @@ TEST_P(MoQFramerV16PlusTest, PublishOkExplicitGroupOrder) {
       publishOk,
       getDraftMajorVersion(GetParam()),
       [this](folly::io::Cursor& c) { return frameLength(c); });
-  EXPECT_EQ(parsed.groupOrder, GroupOrder::OldestFirst);
+  // PUBLISH_OK does not carry GROUP_ORDER in draft 22.
+  EXPECT_EQ(
+      parsed.groupOrder,
+      getDraftMajorVersion(GetParam()) >= 22 ? GroupOrder::Default
+                                             : GroupOrder::OldestFirst);
 }
 
 // Test default GroupOrder for Fetch when param not present
@@ -5159,7 +5164,7 @@ TEST_P(MoQFramerV16PlusTest, CalculateExtensionVectorSizeMatchesWritten) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV16PlusTest,
     MoQFramerV16PlusTest,
-    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft20));
+    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22));
 
 // ===========================================================================
 // Draft 18+ tests: SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS split
@@ -6711,8 +6716,7 @@ TEST(MoQFramerV22Test, PublishSubscriptionParamsRoundTrip) {
 TEST(MoQFramerV22Test, PublishOmitsUnsupportedSubscriptionParams) {
   const auto filter =
       LocationFilter::range(AbsoluteLocation{5, 2}, uint64_t(9));
-  for (auto version :
-       {kVersionDraft16, kVersionDraft18, kVersionDraft20, kVersionDraft21}) {
+  for (auto version : {kVersionDraft16, kVersionDraft18}) {
     SCOPED_TRACE(version);
     MoQFrameWriter writer;
     writer.initializeVersion(version);
@@ -6758,25 +6762,11 @@ TEST(MoQFramerV22Test, PublishOmitsUnsupportedSubscriptionParams) {
 
     folly::IOBufQueue baselineBuf{folly::IOBufQueue::cacheChainLength()};
     ASSERT_TRUE(writer.writePublish(baselineBuf, baseline).hasValue());
-    auto expected = baseline;
-    if (getDraftMajorVersion(version) >= 20) {
-      ASSERT_TRUE(
-          expected.params
-              .insertParam(Parameter(
-                  folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER),
-                  filter))
-              .hasValue());
-    }
-    folly::IOBufQueue expectedBuf{folly::IOBufQueue::cacheChainLength()};
-    ASSERT_TRUE(writer.writePublish(expectedBuf, expected).hasValue());
     folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
     ASSERT_TRUE(writer.writePublish(buf, publish).hasValue());
-    if (getDraftMajorVersion(version) >= 20) {
-      EXPECT_GT(buf.chainLength(), baselineBuf.chainLength());
-    }
     auto bytes = buf.move();
-    auto expectedBytes = expectedBuf.move();
-    EXPECT_EQ(bytes->coalesce(), expectedBytes->coalesce());
+    auto baselineBytes = baselineBuf.move();
+    EXPECT_EQ(bytes->coalesce(), baselineBytes->coalesce());
 
     folly::io::Cursor cursor(bytes.get());
     ASSERT_TRUE(decodeMoQVarint(cursor).has_value());

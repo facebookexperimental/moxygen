@@ -278,7 +278,8 @@ INSTANTIATE_TEST_SUITE_P(
     V16PlusSubscribeNamespaceTest,
     testing::Values(
         VersionParams{{kVersionDraft16}, kVersionDraft16},
-        VersionParams{{kVersionDraft18}, kVersionDraft18}));
+        VersionParams{{kVersionDraft18}, kVersionDraft18},
+        VersionParams{{kVersionDraft22}, kVersionDraft22}));
 
 using V16SubscribeNamespaceTest = MoQSessionTest;
 

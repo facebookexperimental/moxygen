@@ -77,7 +77,7 @@ ParamValueEncoding paramEncodingV18(uint64_t key) {
   return ParamValueEncoding::Varint;
 }
 
-// The parameter types draft 20 permits inside FILL_PARAMETERS. Range Filters
+// The parameter types draft 22 permits inside FILL_PARAMETERS. Range Filters
 // are also permitted, but they are rejected here as they are at the top
 // level, until moxygen implements them.
 bool isFillParameterAllowed(uint64_t key) {
@@ -93,8 +93,8 @@ bool isFillParameterAllowed(uint64_t key) {
   }
 }
 
-// The request-specific params whose frame-type allowlists match draft 20.
-bool isDraft20FilterParam(moxygen::TrackRequestParamKey key, uint64_t version) {
+// The request-specific params whose frame-type allowlists match draft 22.
+bool isDraft22FilterParam(moxygen::TrackRequestParamKey key, uint64_t version) {
   if (!moxygen::useFillFetch(version)) {
     return false;
   }
@@ -119,20 +119,11 @@ bool isRequestSpecificParam(moxygen::TrackRequestParamKey key) {
 }
 
 template <typename Params>
-bool containsPublishSubscriptionParameter(
-    const Params& params,
-    uint64_t version) {
-  return std::any_of(
-      params.begin(), params.end(), [version](const auto& param) {
-        if (moxygen::useFillFetch(version) &&
-            param.key ==
-                folly::to_underlying(
-                    moxygen::TrackRequestParamKey::LOCATION_FILTER)) {
-          return false;
-        }
-        return moxygen::isPublishSubscriptionParameter(
-            static_cast<moxygen::TrackRequestParamKey>(param.key));
-      });
+bool containsPublishSubscriptionParameter(const Params& params) {
+  return std::any_of(params.begin(), params.end(), [](const auto& param) {
+    return moxygen::isPublishSubscriptionParameter(
+        static_cast<moxygen::TrackRequestParamKey>(param.key));
+  });
 }
 
 bool isValidGroupOrderParam(uint64_t value) {
@@ -220,12 +211,8 @@ bool isPublishOkRequestSpecificParam(
   if (majorVersion >= 22) {
     return key == moxygen::TrackRequestParamKey::EXPIRES;
   }
-  // Draft 20 does not allow a filter on PUBLISH_OK, so receiving one is a
-  // PROTOCOL_VIOLATION.
-  if (key == moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER) {
-    return majorVersion < 20;
-  }
   switch (key) {
+    case moxygen::TrackRequestParamKey::SUBSCRIPTION_FILTER:
     case moxygen::TrackRequestParamKey::EXPIRES:
     case moxygen::TrackRequestParamKey::GROUP_ORDER:
     case moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY:
@@ -299,12 +286,9 @@ std::vector<moxygen::Parameter> getPublishOkRequestSpecificParams(
     return requestSpecificParams;
   }
 
-  // PUBLISH_OK does not carry a filter in draft 20.
-  if (majorVersion < 20) {
-    requestSpecificParams.emplace_back(
-        folly::to_underlying(moxygen::TrackRequestParamKey::LOCATION_FILTER),
-        publishOk.filter);
-  }
+  requestSpecificParams.emplace_back(
+      folly::to_underlying(moxygen::TrackRequestParamKey::LOCATION_FILTER),
+      publishOk.filter);
 
   if (publishOk.subscriberPriority != moxygen::kDefaultPriority) {
     moxygen::Parameter priorityParam;
@@ -1855,8 +1839,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
       if (isRequestSpecificParam(trackRequestParamKey) &&
           !retainSubscriptionParam) {
         // Request-specific params bypass insertParam, so check them here.
-        // TODO: also check the pre-20 tables once they are audited.
-        if (isDraft20FilterParam(trackRequestParamKey, version) &&
+        // TODO: also check the pre-22 tables once they are audited.
+        if (isDraft22FilterParam(trackRequestParamKey, version) &&
             !params.isParamAllowed(trackRequestParamKey)) {
           XLOG(ERR) << "parseTrackRequestParams: request-specific param not"
                     << " allowed for frame type at param index=" << i
@@ -1889,7 +1873,7 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
 std::optional<FillParameters> MoQFrameParser::extractFillParameters(
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   if (!useFillFetch(*version_)) {
-    // Below draft 20 the key is unknown, so it arrives as an opaque string
+    // Below draft 22 the key is unknown, so it arrives as an opaque string
     // and carries no fill.
     return std::nullopt;
   }
@@ -2293,11 +2277,10 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
   if (!paramRes) {
     return folly::makeUnexpected(paramRes.error());
   }
-  // LOCATION_FILTER is allowed from draft 20; the other subscription
-  // parameters require draft 22.
+  // Subscription parameters on PUBLISH require draft 22.
   auto majorVersion = getDraftMajorVersion(*version_);
   if (majorVersion >= 16 && majorVersion < 22 &&
-      containsPublishSubscriptionParameter(requestSpecificParams, *version_)) {
+      containsPublishSubscriptionParameter(requestSpecificParams)) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
@@ -2743,7 +2726,7 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
   fetch.priority = kDefaultPriority;
   fetch.groupOrder = GroupOrder::OldestFirst;
 
-  // Draft 20 FETCH does not carry a Fetch Type; every fetch is standalone.
+  // Draft 22 FETCH does not carry a Fetch Type; every fetch is standalone.
   FetchType fetchTypeEnum{FetchType::STANDALONE};
   if (!useFillFetch(*version_)) {
     if (length < 1) {
@@ -2770,7 +2753,7 @@ folly::Expected<Fetch, ErrorCode> MoQFrameParser::parseFetch(
     }
     fetch.fullTrackName = std::move(ftn.value());
 
-    // Draft 20 carries the range in LOCATION_FILTER.
+    // Draft 22 carries the range in LOCATION_FILTER.
     if (!useLocationFilter(*version_)) {
       auto start = parseAbsoluteLocation(cursor, length);
       if (!start) {
@@ -5504,7 +5487,7 @@ WriteResult MoQFrameWriter::writeFetch(
           writeBuf, folly::to_underlying(FetchType::STANDALONE), size, error);
     }
     writeFullTrackName(writeBuf, fetch.fullTrackName, size, error);
-    // Draft 20 carries the range in LOCATION_FILTER.
+    // Draft 22 carries the range in LOCATION_FILTER.
     if (!useLocationFilter(*version_)) {
       writeVarint(writeBuf, standalone->start.group, size, error);
       writeVarint(writeBuf, standalone->start.object, size, error);
@@ -5513,7 +5496,7 @@ WriteResult MoQFrameWriter::writeFetch(
     }
   } else {
     XCHECK(joining);
-    XCHECK(writeFetchType) << "draft 20 has no Joining FETCH";
+    XCHECK(writeFetchType) << "draft 22 has no Joining FETCH";
 
     writeVarint(
         writeBuf, folly::to_underlying(joining->fetchType), size, error);

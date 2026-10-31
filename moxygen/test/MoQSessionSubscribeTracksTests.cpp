@@ -477,4 +477,6 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeTracksCancelledWhileOkQueued) {
 INSTANTIATE_TEST_SUITE_P(
     V18PlusSubscribeTracksTest,
     V18PlusSubscribeTracksTest,
-    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+    testing::Values(
+        VersionParams{{kVersionDraft18}, kVersionDraft18},
+        VersionParams{{kVersionDraft22}, kVersionDraft22}));

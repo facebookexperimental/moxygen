@@ -223,7 +223,7 @@ void recordNegotiatedVersion(
 }
 
 // The current group where the negotiated draft has a filter for it (the
-// relative Location Filter, draft 20+), else Next Object. Before draft 20,
+// relative Location Filter, draft 22+), else Next Object. Before draft 22,
 // relativeStart(1) goes out as LargestGroup (250), a filter type those
 // drafts do not define and their relays must reject (draft-18 5.1.2).
 LocationFilter subscribeFilter(const MoQClient& client) {

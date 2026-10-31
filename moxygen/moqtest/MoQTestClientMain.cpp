@@ -122,8 +122,8 @@ DEFINE_string(
     join_start,
     "",
     "With --request=subscribe, also backfill what ran before the "
-    "subscription: a joining FETCH below draft 20, a fill fetch stream from "
-    "draft 20 on. A non-negative value is the absolute group to start from; a "
+    "subscription: a joining FETCH below draft 22, a fill fetch stream from "
+    "draft 22 on. A non-negative value is the absolute group to start from; a "
     "negative value counts that many groups back from where the subscription "
     "begins. Empty means a plain SUBSCRIBE.");
 DEFINE_bool(

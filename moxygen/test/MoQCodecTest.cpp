@@ -1907,12 +1907,12 @@ TEST_P(MoQCodecTest, ObjectPayloadBlockedPropagation) {
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
-    ::testing::Values(kVersionDraft16, kVersionDraft18));
+    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecControlMessagesTest,
     MoQCodecControlMessagesTest,
-    ::testing::Values(kVersionDraft16, kVersionDraft18));
+    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22));
 
 // Draft 18 dropped MAX_REQUEST_ID and REQUESTS_BLOCKED, so a peer that still
 // sends them is speaking an older draft on a draft 18 session.

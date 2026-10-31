@@ -2581,7 +2581,7 @@ class MoQSession::SubscribeTrackReceiveState
     countStream();
   }
 
-  // Draft 20 counts fill streams in PUBLISH_DONE's Stream Count.
+  // Draft 22 counts fill streams in PUBLISH_DONE's Stream Count.
   void onFillStream() {
     countStream();
   }
@@ -5368,7 +5368,7 @@ MoQSession::openFillStream(
   }
   fillPublisher->setFillOwner(trackPublisher);
   trackPublisher->addFill(fillPublisher);
-  // Draft 20 counts fill streams in PUBLISH_DONE's Stream Count.
+  // Draft 22 counts fill streams in PUBLISH_DONE's Stream Count.
   trackPublisher->onStreamCreated();
   XLOG(DBG1) << "Opening fill fetch stream id=" << requestID
              << " sess=" << this;
@@ -6456,7 +6456,7 @@ void MoQSession::onFetchImpl(
   }
   if (standalone) {
     if (fetch.filter.needsLargest()) {
-      // Both forms depend on Largest Object. Draft 20 allows a relative start,
+      // Both forms depend on Largest Object. Draft 22 allows a relative start,
       // but each relay would resolve it against its own Largest.
       fetchError(
           {fetch.requestID,
@@ -7423,7 +7423,7 @@ folly::coro::Task<void> MoQSession::sendFetchForFill(
   const auto& filter = sub.fill->locationFilter.value_or(sub.filter);
   const auto priority = sub.fill->subscriberPriority.value_or(sub.priority);
   const auto groupOrder = sub.fill->groupOrder.value_or(sub.groupOrder);
-  // Draft 20 fills inherit the subscription's parameters; match that.
+  // Draft 22 fills inherit the subscription's parameters; match that.
   const std::vector<Parameter> params(sub.params.begin(), sub.params.end());
   auto start = filter.absoluteStartLocation();
   std::optional<Fetch> fetchReq;
@@ -8123,7 +8123,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
   if (useFillFetch(negotiatedVersion_.value_or(0)) &&
       std::holds_alternative<JoiningFetch>(fetch.args)) {
-    // Draft 20 replaces Joining FETCH with a fill.
+    // Draft 22 replaces Joining FETCH with a fill.
     FetchError fetchError = {
         fetch.requestID,
         FetchErrorCode::NOT_SUPPORTED,

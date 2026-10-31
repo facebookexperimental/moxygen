@@ -635,13 +635,15 @@ CO_TEST_P_X(MoQSessionTest, PublishWithFilterParameters) {
   // Verify subscriber filtering parameters are preserved
   const auto& publishOk = replyResult.value();
   EXPECT_TRUE(publishOk.forward);
-  EXPECT_EQ(publishOk.subscriberPriority, 64);
-  EXPECT_EQ(publishOk.groupOrder, GroupOrder::NewestFirst);
-  // PUBLISH_OK does not carry a filter in draft 20, so the publisher sees the
-  // unfiltered default.
-  if (getDraftMajorVersion(getServerSelectedVersion()) >= 20) {
+  // PUBLISH_OK does not carry the subscription parameters in draft 22, so the
+  // publisher gets the defaults.
+  if (getDraftMajorVersion(getServerSelectedVersion()) >= 22) {
+    EXPECT_EQ(publishOk.subscriberPriority, kDefaultPriority);
+    EXPECT_EQ(publishOk.groupOrder, GroupOrder::Default);
     EXPECT_EQ(publishOk.filter, LocationFilter::none());
   } else {
+    EXPECT_EQ(publishOk.subscriberPriority, 64);
+    EXPECT_EQ(publishOk.groupOrder, GroupOrder::NewestFirst);
     EXPECT_EQ(
         publishOk.filter, LocationFilter::range(AbsoluteLocation{50, 25}, 200));
   }
@@ -1432,7 +1434,6 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
   auto replyResult = co_await std::move(result->reply);
   EXPECT_TRUE(replyResult.hasValue());
 
-  EXPECT_GE(replyResult->params.size(), 1);
   bool foundDeliveryTimeout = false;
   for (const auto& param : replyResult->params) {
     if (param.key ==
@@ -1441,7 +1442,10 @@ CO_TEST_P_X(MoQSessionTest, PublishOkWithDeliveryTimeout) {
       EXPECT_GT(param.asUint64, 0);
     }
   }
-  EXPECT_TRUE(foundDeliveryTimeout);
+  // PUBLISH_OK does not carry DELIVERY_TIMEOUT in draft 22.
+  EXPECT_EQ(
+      foundDeliveryTimeout,
+      getDraftMajorVersion(getServerSelectedVersion()) < 22);
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }

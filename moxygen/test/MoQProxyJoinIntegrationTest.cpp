@@ -827,7 +827,7 @@ TEST_P(ProxyJoinIntegrationTest, CancelledJoinStopsOnlyItsOwnReplay) {
   }));
 }
 
-// Draft 20 retires Joining FETCH.
+// Draft 22 retires Joining FETCH.
 static std::vector<uint64_t> joiningFetchVersions() {
   std::vector<uint64_t> versions;
   for (auto version : kSupportedVersions) {

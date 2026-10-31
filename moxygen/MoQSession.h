@@ -828,7 +828,7 @@ class MoQSession : public Subscriber,
       GroupOrder groupOrder,
       RequestID owningSubscribeID);
 
-  // Serves a subscription's fill below draft 20, as a standalone FETCH for an
+  // Serves a subscription's fill below draft 22, as a standalone FETCH for an
   // absolute range and a Joining FETCH otherwise.
   folly::coro::Task<void> sendFetchForFill(
       RequestID subscribeID,

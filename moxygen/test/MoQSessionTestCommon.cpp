@@ -700,7 +700,9 @@ folly::coro::Task<void> MoQSessionTest::rescheduleN(int n) {
 INSTANTIATE_TEST_SUITE_P(
     Draft18Test,
     Draft18Test,
-    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+    testing::Values(
+        VersionParams{{kVersionDraft18}, kVersionDraft18},
+        VersionParams{{kVersionDraft22}, kVersionDraft22}));
 
 INSTANTIATE_TEST_SUITE_P(
     Draft22Test,
@@ -725,10 +727,5 @@ INSTANTIATE_TEST_SUITE_P(
     PreDraft18Test,
     PreDraft18Test,
     testing::ValuesIn(getPreDraft18VersionParams()));
-
-INSTANTIATE_TEST_SUITE_P(
-    Draft20Test,
-    Draft20Test,
-    testing::Values(VersionParams{{kVersionDraft20}, kVersionDraft20}));
 
 }} // namespace moxygen::test

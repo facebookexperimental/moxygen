@@ -112,7 +112,7 @@ TEST(Location, NonRangeWithNonZeroEndGroup) {
 }
 
 namespace {
-// One case per row of the draft-20 Location Filter table.
+// One case per row of the draft-22 Location Filter table.
 struct ResolveCase {
   std::string name;
   LocationFilter filter;
@@ -311,7 +311,7 @@ TEST(LocationFilter, LegacyRoundTrip) {
   }
 }
 
-// Drafts below 20 can carry an end group behind the start; the endpoint has to
+// Drafts below 22 can carry an end group behind the start; the endpoint has to
 // see that rather than have it normalized away.
 TEST(LocationFilter, EndBeforeStartSurvives) {
   auto filter = LocationFilter::range({5, 10}, 3);

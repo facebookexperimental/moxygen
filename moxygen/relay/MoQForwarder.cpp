@@ -343,7 +343,7 @@ folly::Expected<SubscribeRange, FetchError> MoQForwarder::resolveJoiningFetch(
   auto& largest = *subIt->second->joiningLocation;
   // Not LocationFilter::relativeStart(): that clamps a start before the track
   // to group 0, but a joining FETCH does not.
-  // TODO: fold these together once drafts below 20 are dropped.
+  // TODO: fold these together once drafts below 22 are dropped.
   if (joining.fetchType == FetchType::RELATIVE_JOINING) {
     AbsoluteLocation start{largest};
     start.group -=

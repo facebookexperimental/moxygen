@@ -1679,7 +1679,7 @@ CO_TEST_P_X(Draft18Test, PublishRequestUpdateFailsOnPeerStopSending) {
 
 // A fill exists only for a subscription, so FILL_PARAMETERS on a FETCH's
 // REQUEST_UPDATE closes the session.
-CO_TEST_P_X(Draft20Test, FetchRequestUpdateWithFillClosesSession) {
+CO_TEST_P_X(Draft22Test, FetchRequestUpdateWithFillClosesSession) {
   co_await setupMoQSession();
   std::shared_ptr<MockFetchHandle> mockFetchHandle = nullptr;
   std::shared_ptr<FetchConsumer> heldFetchConsumer = nullptr;
@@ -2099,7 +2099,7 @@ CO_TEST_P_X(MoQSessionTest, SubscriberRequestUpdateAfterPublishDoneFails) {
   RequestUpdate update;
   update.forward = false;
   bool fillReset = false;
-  const bool withFill = getDraftMajorVersion(getServerSelectedVersion()) >= 20;
+  const bool withFill = getDraftMajorVersion(getServerSelectedVersion()) >= 22;
   if (withFill) {
     EXPECT_CALL(*subscribeCallback_, beginFill(_)).WillOnce([&](RequestID) {
       return folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>(
@@ -3257,7 +3257,7 @@ CO_TEST_P_X(PreDraft18Test, SubscribeNamespaceRequestUpdateNormalizesErrorID) {
 }
 
 // A REQUEST_UPDATE's fill opens a stream named by the update's request ID.
-CO_TEST_P_X(Draft20Test, RequestUpdateFillOpensItsOwnStream) {
+CO_TEST_P_X(Draft22Test, RequestUpdateFillOpensItsOwnStream) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle;
   std::shared_ptr<TrackConsumer> trackConsumer;
@@ -3349,7 +3349,7 @@ CO_TEST_P_X(Draft20Test, RequestUpdateFillOpensItsOwnStream) {
 
 // A REQUEST_UPDATE's fill without its own order uses the subscription's order,
 // not the order in the SUBSCRIBE's FILL_PARAMETERS.
-CO_TEST_P_X(Draft20Test, RequestUpdateFillUsesTheSubscriptionOrder) {
+CO_TEST_P_X(Draft22Test, RequestUpdateFillUsesTheSubscriptionOrder) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle;
   std::shared_ptr<TrackConsumer> trackConsumer;
@@ -3449,7 +3449,7 @@ CO_TEST_P_X(Draft20Test, RequestUpdateFillUsesTheSubscriptionOrder) {
 }
 
 // A fill the subscriber's consumer refuses is left off the REQUEST_UPDATE.
-CO_TEST_P_X(Draft20Test, RefusedRequestUpdateFillIsNotRequested) {
+CO_TEST_P_X(Draft22Test, RefusedRequestUpdateFillIsNotRequested) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle;
   std::shared_ptr<TrackConsumer> trackConsumer;
@@ -3504,7 +3504,7 @@ CO_TEST_P_X(Draft20Test, RefusedRequestUpdateFillIsNotRequested) {
 }
 
 // A REQUEST_UPDATE fill that never gets a stream ends with its subscription.
-CO_TEST_P_X(Draft20Test, UnservedRequestUpdateFillEndsWithSubscription) {
+CO_TEST_P_X(Draft22Test, UnservedRequestUpdateFillEndsWithSubscription) {
   co_await setupMoQSession();
   std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle;
   std::shared_ptr<TrackConsumer> trackConsumer;
@@ -3594,7 +3594,7 @@ folly::coro::Task<std::pair<RequestID, RequestID>> fireFillUpdatePair(
 } // namespace
 
 // Coalescing must neither drop a fill nor move it to another update's ID.
-class Draft20FillCoalesceTest : public Draft20Test {
+class Draft22FillCoalesceTest : public Draft22Test {
  protected:
   // Outlive the coroutine frame below, because the expectations that write to
   // them are owned by the mocks and run after it has gone.
@@ -3723,12 +3723,12 @@ class Draft20FillCoalesceTest : public Draft20Test {
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    Draft20FillCoalesceTest,
-    Draft20FillCoalesceTest,
-    testing::Values(VersionParams{{kVersionDraft20}, kVersionDraft20}));
+    Draft22FillCoalesceTest,
+    Draft22FillCoalesceTest,
+    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}));
 
 // Only the second update requests a fill, so the fill carries its ID.
-CO_TEST_P_X(Draft20FillCoalesceTest, NoFillThenFillServesTheSecondID) {
+CO_TEST_P_X(Draft22FillCoalesceTest, NoFillThenFillServesTheSecondID) {
   co_await setupMoQSession();
   co_await runFillBurst(std::nullopt, fillFrom(10), 1);
   CO_ASSERT_EQ(servedIDs_.size(), 1);
@@ -3739,7 +3739,7 @@ CO_TEST_P_X(Draft20FillCoalesceTest, NoFillThenFillServesTheSecondID) {
 
 // The second update supersedes the first, but the fill keeps the first
 // update's ID, which is the one the subscriber registered.
-CO_TEST_P_X(Draft20FillCoalesceTest, FillThenNoFillServesTheFirstID) {
+CO_TEST_P_X(Draft22FillCoalesceTest, FillThenNoFillServesTheFirstID) {
   co_await setupMoQSession();
   co_await runFillBurst(fillFrom(10), std::nullopt, 1);
   CO_ASSERT_EQ(servedIDs_.size(), 1);
@@ -3749,7 +3749,7 @@ CO_TEST_P_X(Draft20FillCoalesceTest, FillThenNoFillServesTheFirstID) {
 }
 
 // Two fills open two streams, each under its own request ID.
-CO_TEST_P_X(Draft20FillCoalesceTest, FillThenFillOpensBothStreams) {
+CO_TEST_P_X(Draft22FillCoalesceTest, FillThenFillOpensBothStreams) {
   co_await setupMoQSession();
   holdFirstFillOpen_ = true;
   co_await runFillBurst(fillFrom(10), fillFrom(12), 2);
