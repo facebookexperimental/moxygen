@@ -64,9 +64,10 @@ class MoQWebTransportBootstrapHandler final
     }
   }
 
-  void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override {
+  void onDatagrams(
+      std::vector<std::unique_ptr<folly::IOBuf>> datagrams) noexcept override {
     if (auto session = session_.lock()) {
-      session->onDatagram(std::move(datagram));
+      session->onDatagrams(std::move(datagrams));
     }
   }
 

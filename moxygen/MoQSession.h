@@ -780,7 +780,8 @@ class MoQSession : public Subscriber,
   };
   std::optional<BidiStreamConfig> getBidiStreamConfig(FrameType frameType);
 
-  void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override;
+  void onDatagrams(
+      std::vector<std::unique_ptr<folly::IOBuf>> datagrams) noexcept override;
   void onSessionEnd(folly::Optional<uint32_t> err) noexcept override;
   void onSessionDrain() noexcept override {
     XLOG(DBG1) << __func__ << " sess=" << this;
@@ -947,6 +948,8 @@ class MoQSession : public Subscriber,
 
  private:
   static const folly::RequestToken& sessionRequestToken();
+
+  void handleDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept;
 
   static SessionId makeSessionId();
 
@@ -1644,7 +1647,7 @@ class MoQSession : public Subscriber,
       pubTracks_;
   folly::F14FastSet<FullTrackName, FullTrackName::hash> pendingPublishTracks_;
   folly::F14FastSet<FullTrackName, FullTrackName::hash> pendingSubscribeTracks_;
-  folly::F14FastMap<TrackAlias, std::list<Payload>, TrackAlias::hash>
+  folly::F14FastMap<TrackAlias, std::vector<Payload>, TrackAlias::hash>
       bufferedDatagrams_;
   folly::F14FastMap<
       RequestID,

@@ -2438,7 +2438,8 @@ class NullWebTransportHandler : public proxygen::WebTransportHandler {
       proxygen::WebTransport::StreamReadHandle*) noexcept override {}
   void onNewBidiStream(
       proxygen::WebTransport::BidiStreamHandle) noexcept override {}
-  void onDatagram(std::unique_ptr<folly::IOBuf>) noexcept override {}
+  void onDatagrams(
+      std::vector<std::unique_ptr<folly::IOBuf>>) noexcept override {}
   void onSessionEnd(folly::Optional<uint32_t>) noexcept override {}
   void onSessionDrain() noexcept override {}
 };

@@ -5763,9 +5763,7 @@ void MoQSession::deliverBufferedData(TrackAlias trackAlias) {
   if (datagramsIt != bufferedDatagrams_.end()) {
     auto datagrams = std::move(datagramsIt->second);
     bufferedDatagrams_.erase(datagramsIt);
-    for (auto& datagram : datagrams) {
-      onDatagram(std::move(datagram));
-    }
+    onDatagrams(std::move(datagrams));
   }
 
   auto subgroupsIt = bufferedSubgroups_.find(trackAlias);
@@ -8755,16 +8753,29 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
   }
 }
 
-void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
+void MoQSession::onDatagrams(
+    std::vector<std::unique_ptr<folly::IOBuf>> datagrams) noexcept {
   XLOG(DBG1) << __func__ << " sess=" << this;
   if (!setupComplete_) {
     XLOG(ERR) << "Datagram before setup complete sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
+  auto guard = shared_from_this();
+  for (auto& datagram : datagrams) {
+    handleDatagram(std::move(datagram));
+    // The callback may close the session; drop the rest of the batch.
+    if (closed_) {
+      return;
+    }
+  }
+}
 
+void MoQSession::handleDatagram(
+    std::unique_ptr<folly::IOBuf> datagram) noexcept {
+  folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
   readBuf.append(std::move(datagram));
+
   size_t remainingLength = readBuf.chainLength();
   folly::io::Cursor cursor(readBuf.front());
   MoQFrameParser parser;
@@ -8821,7 +8832,7 @@ void MoQSession::onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept {
                  << alias << " sess = " << this;
       return;
     }
-    auto it = bufferedDatagrams_.emplace(alias, std::list<Payload>());
+    auto it = bufferedDatagrams_.emplace(alias, std::vector<Payload>());
     if (it.first->second.size() > kMaxBufferedDatagramsPerTrack) {
       XLOG(DBG2)
           << " Too many buffered datagrams for track, dropping datagram for alias="
