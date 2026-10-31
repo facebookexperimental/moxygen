@@ -76,10 +76,10 @@ moxygen_add_library(moxygen_moq
     BidiStreamControl.cpp
     FillFetch.cpp
     MoQSession.cpp
+    UniStreamQueue.cpp
   DEPS
     moxygen_events_moq_delivery_timeout_manager
     mvfst::mvfst_common_circular_deque
-    mvfst::mvfst_priority_http_priority_queue
     Folly::folly_chrono
     Folly::folly_concurrency_process_local_unique_id
     Folly::folly_coro_baton
@@ -97,13 +97,16 @@ moxygen_add_library(moxygen_moq
     moxygen_stats_moq_stats
     proxygen::proxygen_http_webtransport
     mvfst::mvfst_config
+    mvfst::mvfst_priority_http_priority_queue
     Folly::folly_cancellation_token
     Folly::folly_container_f14_hash
     Folly::folly_container_intrusive_list
     Folly::folly_coro_promise
     Folly::folly_coro_task
     Folly::folly_coro_timeout
+    Folly::folly_executor
     Folly::folly_function
+    Folly::folly_futures_core
     Folly::folly_io_iobuf
     Folly::folly_logging_logging
     Folly::folly_maybe_managed_ptr

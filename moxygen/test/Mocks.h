@@ -248,6 +248,27 @@ class MockSubgroupConsumer : public SubgroupConsumer {
       (override));
 };
 
+class MockDeliveryCallback : public DeliveryCallback {
+ public:
+  MOCK_METHOD(
+      void,
+      onDelivered,
+      (const std::optional<TrackAlias>&,
+       uint64_t groupId,
+       uint64_t subgroupId,
+       uint64_t objectId),
+      (override));
+
+  MOCK_METHOD(
+      void,
+      onDeliveryCancelled,
+      (const std::optional<TrackAlias>&,
+       uint64_t groupId,
+       uint64_t subgroupId,
+       uint64_t objectId),
+      (override));
+};
+
 class MockSubscriptionHandle : public SubscriptionHandle {
  public:
   explicit MockSubscriptionHandle(SubscribeOk ok)

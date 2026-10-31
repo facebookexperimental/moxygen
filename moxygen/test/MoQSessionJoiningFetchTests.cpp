@@ -807,9 +807,9 @@ CO_TEST_P_X(MoQSessionTest, FetchReadinessWaitsForStreamCredit) {
 }
 
 // Raw QUIC transports allow a single uni stream credit waiter. FETCHes held
-// for their first stream, including one that abandoned an earlier wait, share
-// one transport waiter. When credit for one stream arrives, the other FETCH
-// waits again and goes out once that stream finishes.
+// for their first stream share one transport waiter. When credit for one
+// stream arrives, the other FETCH waits again and goes out once that stream
+// finishes. A second readiness call while one is pending fails.
 CO_TEST_P_X(MoQSessionTest, ConcurrentFetchesShareOneStreamCreditWaiter) {
   co_await setupMoQSession();
   const auto openUni = serverWt_->openLocalUniStreams().size();
@@ -821,18 +821,22 @@ CO_TEST_P_X(MoQSessionTest, ConcurrentFetchesShareOneStreamCreditWaiter) {
   auto holdThenEnd = [](auto fetchPub,
                         folly::coro::Baton& waiting,
                         folly::coro::Baton& release,
-                        bool abandonFirstWait) -> folly::coro::Task<void> {
+                        bool callTwice) -> folly::coro::Task<void> {
     auto blocked =
         fetchPub->object(0, 0, 0, makeBuf(10), noExtensions(), false);
     EXPECT_TRUE(blocked.hasError());
     if (blocked.hasError()) {
       EXPECT_EQ(blocked.error().code, MoQPublishError::BLOCKED);
     }
-    if (abandonFirstWait) {
-      EXPECT_TRUE(fetchPub->awaitReadyToConsume().hasValue());
-    }
     auto ready = fetchPub->awaitReadyToConsume();
     EXPECT_TRUE(ready.hasValue());
+    if (callTwice) {
+      auto again = fetchPub->awaitReadyToConsume();
+      EXPECT_TRUE(again.hasError());
+      if (again.hasError()) {
+        EXPECT_EQ(again.error().code, MoQPublishError::API_ERROR);
+      }
+    }
     waiting.post();
     if (ready.hasValue()) {
       co_await std::move(ready.value());

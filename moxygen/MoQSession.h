@@ -27,6 +27,7 @@
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/Publisher.h>
 #include <moxygen/Subscriber.h>
+#include <moxygen/UniStreamQueue.h>
 #include <moxygen/stats/MoQStats.h>
 #include <memory>
 #include <optional>
@@ -68,6 +69,9 @@ struct MoQSettings {
   size_t maxDeferredJoiningFetches{16};
   bool acceptRequestUpdatesAfterReceivedGoaway{false};
   bool closeOnControlStreamFailure{false};
+  // Subgroups that may wait for peer uni stream credit. beginSubgroup fails
+  // with BLOCKED past this limit.
+  size_t maxPendingUniStreams{64};
 };
 
 class ReplyContext;
@@ -540,20 +544,23 @@ class MoQSession : public Subscriber,
       return nullptr;
     }
 
-    // See MoQSession::awaitUniStreamCredit.
-    auto awaitUniStreamCredit() {
+    std::optional<uint64_t> requestUniStream(
+        quic::PriorityQueue::Priority priority,
+        UniStreamQueue::Grant grant) {
       if (!session_) {
-        return UniStreamCreditWait{
-            .credit = folly::makeSemiFuture<folly::Unit>(
-                std::runtime_error("session closed"))};
+        return std::nullopt;
       }
-      return session_->awaitUniStreamCredit();
+      return session_->uniStreamQueue_.request(priority, std::move(grant));
     }
 
-    void cancelUniStreamCreditWait(uint64_t waiterId) {
+    void cancelUniStreamRequest(uint64_t id) {
       if (session_) {
-        session_->cancelUniStreamCreditWait(waiterId);
+        session_->uniStreamQueue_.cancel(id);
       }
+    }
+
+    size_t numUniStreamRequests() const {
+      return session_ ? session_->uniStreamQueue_.size() : 0;
     }
 
     uint64_t getVersion() const {
@@ -1658,18 +1665,14 @@ class MoQSession : public Subscriber,
 
   // QuicWebTransport allows one uni stream credit waiter at a time, so every
   // request on the session shares a single transport wait.
-  struct UniStreamCreditWait {
-    // Zero when credit was already available.
-    uint64_t waiterId{0};
-    folly::SemiFuture<folly::Unit> credit;
-  };
-  UniStreamCreditWait awaitUniStreamCredit();
-  // Drops the waiter; its future fails.
-  void cancelUniStreamCreditWait(uint64_t waiterId);
-  quic::InlineMap<uint64_t, folly::Promise<folly::Unit>, 4>
-      uniStreamCreditWaiters_;
-  uint64_t nextUniStreamCreditWaiter_{1};
+  folly::SemiFuture<folly::Unit> awaitUniStreamCredit();
+  std::vector<folly::Promise<folly::Unit>> uniStreamCreditWaiters_;
   bool waitingForUniStreamCredit_{false};
+  UniStreamQueue uniStreamQueue_{
+      wt_.get(),
+      exec_.get(),
+      [this] { return awaitUniStreamCredit(); },
+      cancellationSource_.getToken()};
   // F14Node: moving an intrusive list head would relink every waiter.
   folly::F14NodeMap<TrackAlias, AliasWaiterList, TrackAlias::hash>
       bufferedSubgroups_;

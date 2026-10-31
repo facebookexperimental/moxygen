@@ -905,28 +905,6 @@ CO_TEST_P_X(MoQSessionTest, ObjectPayloadStatusMismatchResetsStream) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// Mock delivery callback for testing
-class MockDeliveryCallback : public DeliveryCallback {
- public:
-  MOCK_METHOD(
-      void,
-      onDelivered,
-      (const std::optional<TrackAlias>&,
-       uint64_t groupId,
-       uint64_t subgroupId,
-       uint64_t objectId),
-      (override));
-
-  MOCK_METHOD(
-      void,
-      onDeliveryCancelled,
-      (const std::optional<TrackAlias>&,
-       uint64_t groupId,
-       uint64_t subgroupId,
-       uint64_t objectId),
-      (override));
-};
-
 CO_TEST_P_X(MoQSessionTest, AwaitDelivery_FinalObjectWaitsForAck) {
   co_await setupMoQSession();
   expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
