@@ -2882,6 +2882,13 @@ class MoQImmutableExtensionsTest : public ::testing::TestWithParam<uint64_t> {
   MoQFrameParser parser_;
   MoQFrameWriter writer_;
 
+  void writeVarintTo(folly::IOBufQueue& q, uint64_t v) {
+    size_t size = 0;
+    bool error = false;
+    writer_.writeVarint(q, v, size, error);
+    EXPECT_FALSE(error);
+  }
+
   // Creates the following extensions (encoded back-to-back):
   // {type = 20, value = 100, immutable}
   // {type = 21, value = binary(0xAB,0xCD,0xEF), immutable}
@@ -2987,7 +2994,7 @@ TEST_P(MoQImmutableExtensionsTest, ParseEncodedExtensionsBlob) {
   // Extensions block: length prefix + encoded blob from createExtensionsBuf()
   auto blob = createExtensionsBuf();
   auto blobLen = blob ? blob->computeChainDataLength() : 0;
-  writeVarint(writeBuf, blobLen, size, error);
+  writer_.writeVarint(writeBuf, blobLen, size, error);
   if (blob) {
     writeBuf.append(std::move(blob));
   }
@@ -3031,7 +3038,7 @@ TEST_P(MoQImmutableExtensionsTest, ParseMalformedNestedImmutableExtensions) {
 
   auto blob = createExtensionsBufMalformed();
   auto blobLen = blob ? blob->computeChainDataLength() : 0;
-  writeVarint(writeBuf, blobLen, size, error);
+  writer_.writeVarint(writeBuf, blobLen, size, error);
   if (blob) {
     writeBuf.append(std::move(blob));
   }
@@ -3144,7 +3151,7 @@ TEST_P(MoQImmutableExtensionsTest, WriteOnlyImmutableExtensionsDraft) {
 INSTANTIATE_TEST_SUITE_P(
     MoQImmutableExtensionsTest,
     MoQImmutableExtensionsTest,
-    ::testing::Values(kVersionDraft16));
+    ::testing::Values(kVersionDraft16, kVersionDraft18));
 
 TEST_P(MoQFramerTest, DatagramWithExtensionsAndNonNormalStatus) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};

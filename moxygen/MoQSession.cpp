@@ -8505,7 +8505,11 @@ folly::coro::Task<void> MoQSession::handlePreSetupUniStream(
     }
 
     proxygen::WebTransport::StreamData initialData{readBuf.move(), fin};
-    co_await controlReadLoop(std::move(readHandle), std::move(initialData));
+    // The owner must be able to free the session, and dropping this reference
+    // can free it, so the loop is created before the reference is dropped.
+    auto loop = controlReadLoop(std::move(readHandle), std::move(initialData));
+    session.reset();
+    co_await std::move(loop);
   } else if (setupComplete_) {
     // Setup already completed while we were reading — dispatch directly
     co_await dataStreamReadLoop(

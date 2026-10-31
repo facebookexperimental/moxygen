@@ -64,6 +64,10 @@ class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
   MOCK_METHOD(void, onNamespaceDone, (NamespaceDone nsDone));
   MOCK_METHOD(void, onTrackStatusError, (TrackStatusError trackStatusError));
   MOCK_METHOD(void, onGoaway, (Goaway goaway));
+  MOCK_METHOD(
+      void,
+      onRequestStreamGoaway,
+      (RequestID requestID, Goaway goaway));
   MOCK_METHOD(void, onConnectionError, (ErrorCode error));
 
   MOCK_METHOD(MoQCodec::ParseResult, onFetchHeader, (RequestID));

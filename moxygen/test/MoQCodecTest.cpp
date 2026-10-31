@@ -73,7 +73,148 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
     subscribeNamespaceCodec_.initializeVersion(GetParam());
   }
 
+  enum class Feed { WHOLE, BYTE_AT_A_TIME };
+
+  static void
+  feed(MoQControlCodec& codec, std::unique_ptr<folly::IOBuf> data, Feed how) {
+    if (how == Feed::WHOLE) {
+      codec.onIngress(std::move(data), true);
+      return;
+    }
+    folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
+    readBuf.append(std::move(data));
+    while (!readBuf.empty()) {
+      codec.onIngress(readBuf.split(1), false);
+    }
+    codec.onIngress(nullptr, true);
+  }
+
+  // Draft 18+: the control stream carries only SETUP and GOAWAY.
+  void testControlStream(MoQControlCodec::Direction dir, Feed how) {
+    auto msgs = moxygen::test::writeControlStreamMessages(
+        fromDir(dir), moqFrameWriter_, GetParam());
+    MoQControlCodec& codec = dir == MoQControlCodec::Direction::SERVER
+        ? serverControlCodec_
+        : clientControlCodec_;
+    auto& callback = dir == MoQControlCodec::Direction::SERVER
+        ? serverControlCodecCallback_
+        : clientControlCodecCallback_;
+    if (dir == MoQControlCodec::Direction::SERVER) {
+      EXPECT_CALL(callback, onClientSetup(testing::_));
+    } else {
+      EXPECT_CALL(callback, onServerSetup(testing::_));
+    }
+    EXPECT_CALL(callback, onGoaway(testing::_));
+    EXPECT_CALL(callback, onFrame(testing::_)).Times(2);
+    EXPECT_CALL(callback, onConnectionError(testing::_)).Times(0);
+    feed(codec, std::move(msgs), how);
+  }
+
+  // Each frame fires its callback once, carrying the expected request ID.
+  static void expectFrames(
+      testing::NiceMock<MockMoQCodecCallback>& callback,
+      const std::vector<ExpectedFrame>& frames,
+      RequestID streamID) {
+    using testing::Field;
+    for (const auto& frame : frames) {
+      const auto id = frame.requestID;
+      EXPECT_CALL(callback, onFrame(frame.type));
+      switch (frame.type) {
+        case FrameType::SUBSCRIBE:
+          EXPECT_CALL(
+              callback, onSubscribe(Field(&SubscribeRequest::requestID, id)));
+          break;
+        case FrameType::REQUEST_UPDATE:
+          EXPECT_CALL(
+              callback,
+              onRequestUpdate(
+                  testing::AllOf(
+                      Field(&RequestUpdate::requestID, id),
+                      Field(&RequestUpdate::existingRequestID, streamID))));
+          break;
+        case FrameType::SUBSCRIBE_OK:
+          EXPECT_CALL(
+              callback, onSubscribeOk(Field(&SubscribeOk::requestID, id)));
+          break;
+        case FrameType::REQUEST_OK:
+          EXPECT_CALL(
+              callback,
+              onRequestOk(
+                  Field(&RequestOk::requestID, id), FrameType::REQUEST_OK));
+          break;
+        case FrameType::REQUEST_ERROR:
+          EXPECT_CALL(
+              callback,
+              onRequestError(
+                  Field(&RequestError::requestID, id),
+                  FrameType::REQUEST_ERROR));
+          break;
+        case FrameType::PUBLISH_DONE:
+          EXPECT_CALL(
+              callback, onPublishDone(Field(&PublishDone::requestID, id)));
+          break;
+        case FrameType::PUBLISH:
+          EXPECT_CALL(
+              callback, onPublish(Field(&PublishRequest::requestID, id)));
+          break;
+        case FrameType::PUBLISH_NAMESPACE:
+          EXPECT_CALL(
+              callback,
+              onPublishNamespace(Field(&PublishNamespace::requestID, id)));
+          break;
+        case FrameType::TRACK_STATUS:
+          EXPECT_CALL(
+              callback, onTrackStatus(Field(&TrackStatus::requestID, id)));
+          break;
+        case FrameType::FETCH:
+          EXPECT_CALL(callback, onFetch(Field(&Fetch::requestID, id)));
+          break;
+        case FrameType::FETCH_OK:
+          EXPECT_CALL(callback, onFetchOk(Field(&FetchOk::requestID, id)));
+          break;
+        case FrameType::GOAWAY:
+          EXPECT_CALL(callback, onRequestStreamGoaway(id, testing::_));
+          break;
+        default:
+          ADD_FAILURE() << "No expectation for frame type " << frame.type;
+      }
+    }
+    EXPECT_CALL(callback, onConnectionError(testing::_)).Times(0);
+  }
+
+  // Draft 18+: parse every request stream from both ends.
+  void testRequestStreams(Feed how) {
+    if (!useBidiRequestStreams(GetParam())) {
+      return;
+    }
+    for (auto& exchange : moxygen::test::writeAllRequestStreamMessages(
+             moqFrameWriter_, GetParam())) {
+      SCOPED_TRACE(exchange.name);
+      testing::NiceMock<MockMoQCodecCallback> responderCallback;
+      MoQBidiStreamCodec responder(
+          &responderCallback, exchange.responderAllowedFrames);
+      responder.initializeVersion(GetParam());
+      expectFrames(responderCallback, exchange.atResponder, exchange.requestID);
+      feed(responder, std::move(exchange.toResponder), how);
+
+      testing::NiceMock<MockMoQCodecCallback> requesterCallback;
+      MoQBidiStreamCodec requester(
+          &requesterCallback,
+          exchange.postTerminal,
+          exchange.requestID,
+          exchange.okType);
+      requester.initializeVersion(GetParam());
+      requester.setResponseIDQueue(&exchange.pendingUpdateIDs);
+      expectFrames(requesterCallback, exchange.atRequester, exchange.requestID);
+      feed(requester, std::move(exchange.toRequester), how);
+    }
+  }
+
   void testAll(MoQControlCodec::Direction dir) {
+    if (useBidiRequestStreams(GetParam())) {
+      testControlStream(dir, Feed::WHOLE);
+      return;
+    }
     auto allMsgs = moxygen::test::writeAllControlMessages(
         fromDir(dir), moqFrameWriter_, GetParam());
     testing::NiceMock<MockMoQCodecCallback>* callbackPtr = nullptr;
@@ -120,6 +261,10 @@ class MoQCodecTest : public ::testing::TestWithParam<uint64_t> {
   }
 
   void testUnderflow(MoQControlCodec::Direction dir) {
+    if (useBidiRequestStreams(GetParam())) {
+      testControlStream(dir, Feed::BYTE_AT_A_TIME);
+      return;
+    }
     auto allMsgs = moxygen::test::writeAllControlMessages(
         fromDir(dir), moqFrameWriter_, GetParam());
     testing::NiceMock<MockMoQCodecCallback>* callbackPtr = nullptr;
@@ -206,6 +351,7 @@ class MoQCodecControlMessagesTest : public MoQCodecTest {};
 TEST_P(MoQCodecControlMessagesTest, All) {
   testAll(MoQControlCodec::Direction::CLIENT);
   testAll(MoQControlCodec::Direction::SERVER);
+  testRequestStreams(Feed::WHOLE);
 }
 
 TEST_P(MoQCodecTest, AllObject) {
@@ -337,6 +483,7 @@ TEST(MoQCodecPaddingTest, PaddingStreamRejectsNonZeroBytes) {
 TEST_P(MoQCodecControlMessagesTest, Underflow) {
   testUnderflow(MoQControlCodec::Direction::CLIENT);
   testUnderflow(MoQControlCodec::Direction::SERVER);
+  testRequestStreams(Feed::BYTE_AT_A_TIME);
 }
 
 TEST_P(MoQCodecTest, UnderflowObjects) {
@@ -628,6 +775,10 @@ TEST_P(MoQCodecTest, InvalidFrame) {
 }
 
 TEST_P(MoQCodecTest, ClientGetsClientSetup) {
+  if (getDraftMajorVersion(GetParam()) >= 18) {
+    // Both directions send the same SETUP frame.
+    return;
+  }
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
   // client gets client setup
@@ -679,6 +830,10 @@ TEST_P(MoQCodecTest, TwoSetups) {
 }
 
 TEST_P(MoQCodecTest, ServerGetsServerSetup) {
+  if (getDraftMajorVersion(GetParam()) >= 18) {
+    // Both directions send the same SETUP frame.
+    return;
+  }
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
 
   auto setupFrame = [version = GetParam()]() {
@@ -1056,13 +1211,13 @@ TEST_P(MoQCodecTest, FetchEndOfUnknownRange) {
       writeBuf, streamType, obj, folly::IOBuf::copyBuffer("hello"));
   EXPECT_TRUE(res);
 
-  // Write End of Unknown Range marker (0x10C) + Group ID (5) + Object ID (10)
-  // 0x10C as 2-byte varint: 0x41 0x0C
-  folly::IOBufQueue endOfRangeBuf{folly::IOBufQueue::cacheChainLength()};
-  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x41\x0C")); // 0x10C varint
-  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x05"));     // Group 5
-  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x0A"));     // Object 10
-  writeBuf.append(endOfRangeBuf.move());
+  // End of Unknown Range marker (0x10C) + Group ID (5) + Object ID (10)
+  size_t size = 0;
+  bool error = false;
+  moqFrameWriter_.writeVarint(writeBuf, 0x10C, size, error);
+  moqFrameWriter_.writeVarint(writeBuf, 5, size, error);
+  moqFrameWriter_.writeVarint(writeBuf, 10, size, error);
+  EXPECT_FALSE(error);
 
   EXPECT_CALL(objectStreamCodecCallback_, onFetchHeader(testing::_))
       .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
@@ -1092,13 +1247,13 @@ TEST_P(MoQCodecTest, FetchEndOfNonExistentRange) {
       writeBuf, streamType, obj, folly::IOBuf::copyBuffer("hello"));
   EXPECT_TRUE(res);
 
-  // Write End of Non-Existent Range marker (0x8C) + Group ID (3) + Object ID
-  // (7) 0x8C (140) as 2-byte varint: 0x40 0x8C
-  folly::IOBufQueue endOfRangeBuf{folly::IOBufQueue::cacheChainLength()};
-  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x40\x8C")); // 0x8C varint
-  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x03"));     // Group 3
-  endOfRangeBuf.append(folly::IOBuf::copyBuffer("\x07"));     // Object 7
-  writeBuf.append(endOfRangeBuf.move());
+  // End of Non-Existent Range marker (0x8C) + Group ID (3) + Object ID (7)
+  size_t size = 0;
+  bool error = false;
+  moqFrameWriter_.writeVarint(writeBuf, 0x8C, size, error);
+  moqFrameWriter_.writeVarint(writeBuf, 3, size, error);
+  moqFrameWriter_.writeVarint(writeBuf, 7, size, error);
+  EXPECT_FALSE(error);
 
   EXPECT_CALL(objectStreamCodecCallback_, onFetchHeader(testing::_))
       .WillOnce(testing::Return(MoQCodec::ParseResult::CONTINUE));
@@ -1752,12 +1907,12 @@ TEST_P(MoQCodecTest, ObjectPayloadBlockedPropagation) {
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecTest,
     MoQCodecTest,
-    ::testing::Values(kVersionDraft16));
+    ::testing::Values(kVersionDraft16, kVersionDraft18));
 
 INSTANTIATE_TEST_SUITE_P(
     MoQCodecControlMessagesTest,
     MoQCodecControlMessagesTest,
-    ::testing::Values(kVersionDraft16));
+    ::testing::Values(kVersionDraft16, kVersionDraft18));
 
 // Draft 18 dropped MAX_REQUEST_ID and REQUESTS_BLOCKED, so a peer that still
 // sends them is speaking an older draft on a draft 18 session.

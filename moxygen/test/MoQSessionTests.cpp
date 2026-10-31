@@ -303,7 +303,8 @@ INSTANTIATE_TEST_SUITE_P(
     CurrentVersionOnly,
     CurrentVersionOnly,
     testing::Values(
-        VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent}));
+        VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent},
+        VersionParams{{kVersionDraft18}, kVersionDraft18}));
 namespace {
 class ScopedTestHandler : public Publisher,
                           public Subscriber,
@@ -2325,6 +2326,25 @@ CO_TEST_P_X(MoQUniControlTest, UniControlDataStreamBeforeSetup) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// The owner releases the session before SETUP arrives on the peer's control
+// stream. The session is freed once SETUP arrives.
+CO_TEST_P_X(MoQUniControlTest, ReleaseBeforePeerSetupFreesTheSession) {
+  clientSession_->start();
+  serverSession_->start();
+  co_await rescheduleN(2);
+
+  std::weak_ptr<MoQSession> weakClient = clientSession_;
+  clientSession_.reset();
+  serverSession_->sendSetup(moxygen::Setup{});
+  co_await rescheduleN(2);
+  EXPECT_TRUE(weakClient.expired());
+
+  // serverWt_ still holds a raw peer pointer to the freed client; drop it so
+  // closing the server doesn't call onSessionEnd() on the dead session.
+  serverWt_->setPeerHandler(nullptr);
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // The peer resolves the alias and ends the subscription in one batch of control
 // messages, so the waiting read loop wakes to find the state gone again.
 CO_TEST_P_X(MoQUniControlTest, UnknownAliasResolvedThenRemovedAbandonsStream) {
@@ -3237,19 +3257,25 @@ CO_TEST_P_X(
   // Get weak_ptr to track session lifetime
   std::weak_ptr<MoQSession> weakClient = clientSession_;
 
-  // The control stream is stream ID 0. We need to:
+  // We need to:
   // 1. Pause data delivery so controlReadLoop blocks on co_await
   // 2. Release the session shared_ptr
   // 3. Deliver data to trigger the coroutine resume
   // 4. Verify it exits gracefully (with our fix) instead of crashing
 
-  // Pause data delivery on the control stream (ID 0)
-  // This ensures controlReadLoop is blocked waiting for data
-  serverWt_->writeHandles[0]->setImmediateDelivery(false);
+  // The server writes control data on the client's bidi stream before draft
+  // 18, and on its own uni stream from draft 18.
+  const uint64_t controlStreamId =
+      useUniControlStreams(getServerSelectedVersion()) ? 3 : 0;
+  auto controlWriteHandle = serverWt_->writeHandles[controlStreamId];
+  CO_ASSERT_NE(controlWriteHandle, nullptr);
+
+  // Pause data delivery so that controlReadLoop blocks waiting for data
+  controlWriteHandle->setImmediateDelivery(false);
 
   // Write some data that will be held in the inflight buffer
   auto data = folly::IOBuf::copyBuffer("test");
-  serverWt_->writeHandles[0]->writeStreamData(std::move(data), false, nullptr);
+  controlWriteHandle->writeStreamData(std::move(data), false, nullptr);
 
   // Now release the client session shared_ptr WITHOUT calling close()
   // This simulates the scenario where all external references are released
@@ -3264,7 +3290,7 @@ CO_TEST_P_X(
   // Before the fix: shared_from_this() would throw bad_weak_ptr
   // After the fix: weak_from_this().lock() returns nullptr, coroutine exits
   // gracefully
-  serverWt_->writeHandles[0]->deliverInflightData();
+  controlWriteHandle->deliverInflightData();
 
   // Drive the event loop to let the coroutine process
   co_await folly::coro::co_reschedule_on_current_executor;
@@ -3284,7 +3310,8 @@ INSTANTIATE_TEST_SUITE_P(
     MoQSessionDeleteFromCallbackTests,
     MoQSessionDeleteFromCallbackTest,
     testing::Values(
-        VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent}));
+        VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent},
+        VersionParams{{kVersionDraft18}, kVersionDraft18}));
 
 // Demonstrate and verify that cleanup() breaks the shared_ptr cycle between
 // a session and a handler that holds a back-reference to that session.
