@@ -8,6 +8,7 @@
 
 #include <moxygen/samples/media_server/sources/FilePrFaultState.h>
 
+#include <folly/String.h>
 #include <folly/dynamic.h>
 #include <folly/json.h>
 #include <folly/logging/xlog.h>
