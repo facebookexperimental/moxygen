@@ -165,6 +165,7 @@ class MoQForwarder : public TrackConsumer {
     // What a fill inherits from the subscription.
     LocationFilter filter{LocationFilter::nextObject()};
     uint8_t priority{kDefaultPriority};
+    std::optional<GroupOrder> groupOrder;
     TrackRequestParameters params{FrameType::SUBSCRIBE};
     std::shared_ptr<TrackConsumer> trackConsumer;
     // Stores the SubgroupConsumer for this subscriber for all currently

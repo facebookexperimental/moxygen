@@ -272,7 +272,7 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t>,
       std::shared_ptr<TrackConsumer> live,
       std::shared_ptr<FetchConsumer> history,
       uint64_t joiningStart,
-      GroupOrder groupOrder = GroupOrder::Default) {
+      GroupOrder groupOrder = GroupOrder::OldestFirst) {
     return folly::coro::co_withExecutor(
                &eventBase_,
                viewer.client->join(

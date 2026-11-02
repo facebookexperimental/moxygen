@@ -164,13 +164,15 @@ std::optional<uint8_t> getPublisherPriority(const Msg& msg) {
 }
 
 // GROUP_ORDER getter
+inline std::optional<GroupOrder> getPublisherGroupOrder(
+    const Extensions& extensions) {
+  auto val = extensions.getIntExtension(kPublisherGroupOrderExtensionType);
+  return val ? toGroupOrder(*val) : std::nullopt;
+}
+
 template <typename Msg>
 std::optional<GroupOrder> getPublisherGroupOrder(const Msg& msg) {
-  auto val = detail::getIntExtension(msg, kPublisherGroupOrderExtensionType);
-  if (val && *val <= folly::to_underlying(GroupOrder::NewestFirst)) {
-    return static_cast<GroupOrder>(*val);
-  }
-  return std::nullopt;
+  return getPublisherGroupOrder(msg.extensions);
 }
 
 // DYNAMIC_GROUPS getter

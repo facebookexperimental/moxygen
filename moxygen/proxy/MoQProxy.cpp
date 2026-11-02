@@ -430,12 +430,7 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::joiningFetch(
   if (range.hasError()) {
     co_return folly::makeUnexpected(std::move(range.error()));
   }
-  // A FETCH that omits its group order is ascending from draft 15, and
-  // MoQSession writes and reads a Default-order FETCH stream oldest first.
-  const auto groupOrder = fetch.groupOrder == GroupOrder::Default
-      ? GroupOrder::OldestFirst
-      : fetch.groupOrder;
-  fetch.groupOrder = groupOrder;
+  const auto groupOrder = fetch.groupOrder;
   auto cache = track->groupCache();
   auto coverage = cache ? cache->inspect(range->start, range->end)
                         : MoQGroupCache::Coverage::Miss;

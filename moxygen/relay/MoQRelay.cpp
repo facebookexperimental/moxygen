@@ -1752,7 +1752,7 @@ MoQRelay::subscribeToFirstRelaySubscription(
 
   auto upstreamSubReq = subReq;
   upstreamSubReq.priority = kDefaultUpstreamPriority;
-  upstreamSubReq.groupOrder = GroupOrder::Default;
+  upstreamSubReq.groupOrder.reset();
   // We only subscribe upstream from the Next Object. This is to satisfy other
   // subscribers that join with narrower filters
   upstreamSubReq.filter = LocationFilter::nextObject();
@@ -1966,6 +1966,10 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
     TrackStatusOk trackStatusOk;
     trackStatusOk.requestID = trackStatus.requestID;
     trackStatusOk.groupOrder = forwarder->groupOrder();
+    trackStatusOk.trackProperties.insertMutableExtension(
+        Extension{
+            kPublisherGroupOrderExtensionType,
+            folly::to_underlying(forwarder->groupOrder())});
     trackStatusOk.largest = forwarder->largest();
 
     XLOG(DBG1) << "Returning local track status for "

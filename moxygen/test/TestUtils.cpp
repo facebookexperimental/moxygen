@@ -108,7 +108,7 @@ static WriteResult writeTestSubscribe(
   auto req = SubscribeRequest::make(
       FullTrackName({TrackNamespace({"hello"}), "world"}),
       255,
-      GroupOrder::Default,
+      std::nullopt,
       true,
       LocationType::LargestObject,
       std::nullopt,
@@ -173,7 +173,7 @@ static WriteResult writeTestPublish(
   publishRequest.requestID = RequestID(0);
   publishRequest.fullTrackName =
       FullTrackName({TrackNamespace({"hello"}), "world"});
-  publishRequest.groupOrder = GroupOrder::Default;
+  publishRequest.groupOrder = GroupOrder::OldestFirst;
   publishRequest.largest = std::nullopt;
   publishRequest.forward = true;
   publishRequest.extensions.insertMutableExtensions(getTestExtensions());
@@ -195,7 +195,7 @@ static WriteResult writeTestPublishOk(
   publishOk.requestID = 0;
   publishOk.forward = false;
   publishOk.subscriberPriority = 128;
-  publishOk.groupOrder = GroupOrder::Default;
+  publishOk.groupOrder = std::nullopt;
   publishOk.filter = LocationFilter::nextObject();
   addTestParams(publishOk.params, moqFrameWriter, version);
   return moqFrameWriter.writePublishOk(writeBuf, publishOk);

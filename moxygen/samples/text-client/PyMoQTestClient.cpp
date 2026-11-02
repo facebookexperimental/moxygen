@@ -259,7 +259,7 @@ class PyMoQSubscriber : public Subscriber,
     publishOk.requestID = pub.requestID;
     publishOk.forward = true;
     publishOk.subscriberPriority = kDefaultPriority;
-    publishOk.groupOrder = moxygen::GroupOrder::Default;
+    publishOk.groupOrder = std::nullopt;
     publishOk.filter = moxygen::LocationFilter::absoluteStart({0, 0});
 
     if (handle) {
@@ -364,7 +364,7 @@ class PyMoQSubscriber : public Subscriber,
             *subStart,
             fetchEnd,
             sub.priority,
-            sub.groupOrder);
+            sub.groupOrder.value_or(GroupOrder::OldestFirst));
         auto res =
             co_await moqClient_.getSession()->fetch(fetchReq, subReceiver_);
         if (!res.hasValue()) {

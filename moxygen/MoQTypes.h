@@ -654,11 +654,9 @@ struct SubscriptionFilter {
 SubscriptionFilter toSubscriptionFilter(const LocationFilter& filter);
 LocationFilter fromSubscriptionFilter(const SubscriptionFilter& filter);
 
-enum class GroupOrder : uint8_t {
-  Default = 0x0,
-  OldestFirst = 0x1,
-  NewestFirst = 0x2
-};
+enum class GroupOrder : uint8_t { OldestFirst = 0x1, NewestFirst = 0x2 };
+
+std::optional<GroupOrder> toGroupOrder(uint64_t value);
 
 // Draft-22 FILL_PARAMETERS, which requests a fill fetch stream. Each member
 // overrides the subscription's value for that stream only.
@@ -667,6 +665,7 @@ struct FillParameters {
   // filter on the wire means the whole track up to Largest Object.
   std::optional<LocationFilter> locationFilter;
   std::optional<uint8_t> subscriberPriority;
+  // Not inherited from the subscription: absent means ascending, as on a FETCH.
   std::optional<GroupOrder> groupOrder;
   // Carried through but not enforced yet.
   std::optional<std::chrono::milliseconds> fillTimeout;
@@ -918,6 +917,12 @@ std::optional<uint64_t> getFirstIntParam(
     }
   }
   return std::nullopt;
+}
+
+template <class T>
+std::optional<GroupOrder> getGroupOrderParam(const T& params) {
+  auto value = getFirstIntParam(params, TrackRequestParamKey::GROUP_ORDER);
+  return value ? toGroupOrder(*value) : std::nullopt;
 }
 
 // Helper function to extract a string parameter by key from a parameter list
@@ -1333,7 +1338,7 @@ struct SubscribeRequest {
   static SubscribeRequest make(
       const FullTrackName& fullTrackName,
       uint8_t priority = kDefaultPriority,
-      GroupOrder groupOrder = GroupOrder::Default,
+      std::optional<GroupOrder> groupOrder = std::nullopt,
       bool forward = true,
       LocationFilter filter = LocationFilter::relativeStart(1),
       const std::vector<Parameter>& inputParams = {});
@@ -1343,7 +1348,7 @@ struct SubscribeRequest {
   static SubscribeRequest make(
       const FullTrackName& fullTrackName,
       uint8_t priority,
-      GroupOrder groupOrder,
+      std::optional<GroupOrder> groupOrder,
       bool forward,
       LocationType locType,
       std::optional<AbsoluteLocation> start = std::nullopt,
@@ -1353,7 +1358,7 @@ struct SubscribeRequest {
   RequestID requestID;
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
-  GroupOrder groupOrder{GroupOrder::Default};
+  std::optional<GroupOrder> groupOrder;
   bool forward{true};
   LocationFilter filter{LocationFilter::nextObject()};
   std::optional<FillParameters> fill; // draft 22+
@@ -1416,7 +1421,7 @@ struct PublishOk {
   RequestID requestID;
   bool forward{true};
   uint8_t subscriberPriority{kDefaultPriority};
-  GroupOrder groupOrder{GroupOrder::OldestFirst};
+  std::optional<GroupOrder> groupOrder;
   LocationFilter filter{LocationFilter::nextObject()};
   TrackRequestParameters params{FrameType::PUBLISH_OK};
 };
@@ -1519,7 +1524,7 @@ struct Fetch {
       AbsoluteLocation st,
       AbsoluteLocation e,
       uint8_t p = kDefaultPriority,
-      GroupOrder g = GroupOrder::Default,
+      GroupOrder g = GroupOrder::OldestFirst,
       const std::vector<Parameter>& pa = {});
 
   // Used for absolute or relative joining fetches. Pass std::nullopt for jsid
@@ -1530,13 +1535,13 @@ struct Fetch {
       uint64_t joiningStart,
       FetchType fetchType,
       uint8_t p = kDefaultPriority,
-      GroupOrder g = GroupOrder::Default,
+      GroupOrder g = GroupOrder::OldestFirst,
       const std::vector<Parameter>& pa = {});
 
   RequestID requestID;
   FullTrackName fullTrackName;
   uint8_t priority{kDefaultPriority};
-  GroupOrder groupOrder{GroupOrder::Default};
+  GroupOrder groupOrder{GroupOrder::OldestFirst};
   TrackRequestParameters params{FrameType::FETCH};
   // Draft 22+ carries the range in LOCATION_FILTER. `args` holds it resolved,
   // so code below the framer reads the range from `args` at every draft.

@@ -82,7 +82,7 @@ class MoQRelayTest : public ::testing::Test {
     ok.requestID = RequestID(0);
     ok.trackAlias = TrackAlias(0);
     ok.expires = std::chrono::milliseconds(0);
-    ok.groupOrder = GroupOrder::Default;
+    ok.groupOrder = GroupOrder::OldestFirst;
     auto handle =
         std::make_shared<NiceMock<MockSubscriptionHandle>>(std::move(ok));
     return handle;
@@ -383,7 +383,7 @@ class MoQRelayTest : public ::testing::Test {
                   pub.requestID,
                   /*forward=*/pub.forward,
                   /*priority=*/128,
-                  GroupOrder::Default,
+                  std::nullopt,
                   LocationFilter::nextObject()};
               return Subscriber::PublishConsumerAndReplyTask{
                   createMockConsumer(),
@@ -398,7 +398,7 @@ class MoQRelayTest : public ::testing::Test {
     ok.requestID = RequestID(0);
     ok.trackAlias = TrackAlias(0);
     ok.expires = std::chrono::milliseconds(0);
-    ok.groupOrder = GroupOrder::Default;
+    ok.groupOrder = GroupOrder::OldestFirst;
     auto handle =
         std::make_shared<NiceMock<MockSubscriptionHandle>>(std::move(ok));
     ON_CALL(*handle, requestUpdateResult())
@@ -419,7 +419,7 @@ class MoQRelayTest : public ::testing::Test {
     upstreamOk.requestID = RequestID(1);
     upstreamOk.trackAlias = TrackAlias(1);
     upstreamOk.expires = std::chrono::milliseconds(0);
-    upstreamOk.groupOrder = GroupOrder::Default;
+    upstreamOk.groupOrder = GroupOrder::OldestFirst;
     EXPECT_CALL(*publisher, subscribe(_, _))
         .WillOnce([upstreamOk](const auto& /*req*/, auto /*consumer*/) {
           auto handle =
@@ -1629,7 +1629,7 @@ TEST_F(MoQRelayTest, RelaySubscribePropagatesDynamicGroupsToAllSubscribers) {
   removeSession(subscriber2);
 }
 
-// Test: the upstream SUBSCRIBE is normalized to Default group order and
+// Test: the upstream SUBSCRIBE omits the group order and starts at
 // LargestObject, but the first downstream subscriber keeps the group order and
 // range it asked for.
 TEST_F(MoQRelayTest, RelaySubscribePreservesFirstSubscriberRequest) {
@@ -1676,7 +1676,7 @@ TEST_F(MoQRelayTest, RelaySubscribePreservesFirstSubscriberRequest) {
   ASSERT_NE(handle, nullptr);
   getOrCreateMockState(subscriberSession)->subscribeHandles.push_back(handle);
 
-  EXPECT_EQ(upstreamReq.groupOrder, GroupOrder::Default);
+  EXPECT_EQ(upstreamReq.groupOrder, std::nullopt);
   EXPECT_EQ(upstreamReq.filter, LocationFilter::nextObject());
   EXPECT_FALSE(upstreamReq.fill.has_value());
 

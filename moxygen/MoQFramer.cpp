@@ -7,6 +7,7 @@
 #include "moxygen/MoQFramer.h"
 #include <folly/lang/Bits.h>
 #include <folly/logging/xlog.h>
+#include "moxygen/MoQTrackProperties.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -127,13 +128,7 @@ bool containsPublishSubscriptionParameter(const Params& params) {
 }
 
 bool isValidGroupOrderParam(uint64_t value) {
-  switch (value) {
-    case folly::to_underlying(moxygen::GroupOrder::OldestFirst):
-    case folly::to_underlying(moxygen::GroupOrder::NewestFirst):
-      return true;
-    default:
-      return false;
-  }
+  return moxygen::toGroupOrder(value).has_value();
 }
 
 bool isValidSubscriberPriorityParam(uint64_t value) {
@@ -298,11 +293,11 @@ std::vector<moxygen::Parameter> getPublishOkRequestSpecificParams(
     requestSpecificParams.push_back(priorityParam);
   }
 
-  if (publishOk.groupOrder != moxygen::GroupOrder::Default) {
+  if (publishOk.groupOrder) {
     moxygen::Parameter groupOrderParam;
     groupOrderParam.key =
         folly::to_underlying(moxygen::TrackRequestParamKey::GROUP_ORDER);
-    groupOrderParam.asUint64 = folly::to_underlying(publishOk.groupOrder);
+    groupOrderParam.asUint64 = folly::to_underlying(*publishOk.groupOrder);
     requestSpecificParams.push_back(groupOrderParam);
   }
 
@@ -349,6 +344,21 @@ folly::Expected<uint64_t, moxygen::ErrorCode> decodeDelta(
     return folly::makeUnexpected(moxygen::ErrorCode::PROTOCOL_VIOLATION);
   }
   return previous + delta;
+}
+
+folly::Expected<std::optional<moxygen::GroupOrder>, moxygen::ErrorCode>
+parsePublisherGroupOrder(const moxygen::Extensions& extensions) {
+  auto value =
+      extensions.getIntExtension(moxygen::kPublisherGroupOrderExtensionType);
+  if (!value) {
+    return std::nullopt;
+  }
+  auto order = moxygen::toGroupOrder(*value);
+  if (!order) {
+    XLOG(ERR) << "Invalid DEFAULT_PUBLISHER_GROUP_ORDER=" << *value;
+    return folly::makeUnexpected(moxygen::ErrorCode::PROTOCOL_VIOLATION);
+  }
+  return order;
 }
 
 folly::Expected<uint64_t, moxygen::ErrorCode> resolveFetchGroupID(
@@ -858,7 +868,7 @@ folly::Expected<FillParameters, ErrorCode> MoQFrameParser::parseFillParameters(
         fill.subscriberPriority = static_cast<uint8_t>((*res)->asUint64);
         break;
       case TrackRequestParamKey::GROUP_ORDER:
-        fill.groupOrder = static_cast<GroupOrder>((*res)->asUint64);
+        fill.groupOrder = toGroupOrder((*res)->asUint64);
         break;
       default:
         break;
@@ -1200,8 +1210,7 @@ MoQFrameParser::parseFetchHeader(folly::io::Cursor& cursor, size_t length)
 }
 
 void MoQFrameParser::setFetchGroupOrder(GroupOrder groupOrder) noexcept {
-  fetchGroupOrder_ =
-      groupOrder == GroupOrder::Default ? GroupOrder::OldestFirst : groupOrder;
+  fetchGroupOrder_ = groupOrder;
 }
 
 void MoQFrameParser::resetFetchContext() const noexcept {
@@ -1972,8 +1981,7 @@ void MoQFrameParser::handleRequestSpecificParams(
   subscribeRequest.fill = extractFillParameters(requestSpecificParams);
 
   // GROUP_ORDER
-  handleGroupOrderParam(
-      subscribeRequest.groupOrder, requestSpecificParams, GroupOrder::Default);
+  subscribeRequest.groupOrder = getGroupOrderParam(requestSpecificParams);
 
   // SUBSCRIBER_PRIORITY
   handleSubscriberPriorityParam(
@@ -2135,10 +2143,12 @@ folly::Expected<SubscribeOk, ErrorCode> MoQFrameParser::parseSubscribeOk(
   }
 
   // Extract GROUP_ORDER from extensions into struct field
-  auto go =
-      subscribeOk.extensions.getIntExtension(kPublisherGroupOrderExtensionType);
-  if (go) {
-    subscribeOk.groupOrder = static_cast<GroupOrder>(*go);
+  auto publisherGroupOrder = parsePublisherGroupOrder(subscribeOk.extensions);
+  if (!publisherGroupOrder) {
+    return folly::makeUnexpected(publisherGroupOrder.error());
+  }
+  if (*publisherGroupOrder) {
+    subscribeOk.groupOrder = **publisherGroupOrder;
   }
 
   if (auto res =
@@ -2159,9 +2169,6 @@ void MoQFrameParser::handleRequestSpecificParams(
     switch (static_cast<TrackRequestParamKey>(param.key)) {
       case TrackRequestParamKey::EXPIRES:
         subscribeOk.expires = std::chrono::milliseconds(param.asUint64);
-        break;
-      case TrackRequestParamKey::GROUP_ORDER:
-        subscribeOk.groupOrder = static_cast<GroupOrder>(param.asUint64);
         break;
       case TrackRequestParamKey::LARGEST_OBJECT:
         subscribeOk.largest = param.largestObject;
@@ -2288,11 +2295,8 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
   // (0x1). Default to OldestFirst; overridden in handleRequestSpecificParams.
   publish.groupOrder = GroupOrder::OldestFirst;
   handleRequestSpecificParams(publish, requestSpecificParams);
-  auto subscriptionGroupOrder =
-      getFirstIntParam(publish.params, TrackRequestParamKey::GROUP_ORDER);
-  if (subscriptionGroupOrder.has_value()) {
-    publish.groupOrder = static_cast<GroupOrder>(*subscriptionGroupOrder);
-  }
+  auto subscriptionGroupOrder = getGroupOrderParam(publish.params);
+  publish.groupOrder = subscriptionGroupOrder.value_or(publish.groupOrder);
 
   // Parse extensions (bare key-value pairs, no length prefix)
   ObjectHeader tempHeader;
@@ -2309,10 +2313,12 @@ folly::Expected<PublishRequest, ErrorCode> MoQFrameParser::parsePublish(
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
-  auto go =
-      publish.extensions.getIntExtension(kPublisherGroupOrderExtensionType);
-  if (go && !subscriptionGroupOrder.has_value()) {
-    publish.groupOrder = static_cast<GroupOrder>(*go);
+  auto publisherGroupOrder = parsePublisherGroupOrder(publish.extensions);
+  if (!publisherGroupOrder) {
+    return folly::makeUnexpected(publisherGroupOrder.error());
+  }
+  if (*publisherGroupOrder && !subscriptionGroupOrder) {
+    publish.groupOrder = **publisherGroupOrder;
   }
 
   if (auto validateRes =
@@ -2329,10 +2335,8 @@ void MoQFrameParser::handleRequestSpecificParams(
     PublishRequest& publishRequest,
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   // GROUP_ORDER
-  handleGroupOrderParam(
-      publishRequest.groupOrder,
-      requestSpecificParams,
-      GroupOrder::OldestFirst);
+  publishRequest.groupOrder = getGroupOrderParam(requestSpecificParams)
+                                  .value_or(GroupOrder::OldestFirst);
 
   // FORWARD
   handleForwardParam(publishRequest.forward, requestSpecificParams);
@@ -2398,8 +2402,7 @@ void MoQFrameParser::handleRequestSpecificParams(
                          .value_or(LocationFilter::absoluteStart(kLocationMin));
 
   // GROUP_ORDER
-  handleGroupOrderParam(
-      publishOk.groupOrder, requestSpecificParams, GroupOrder::Default);
+  publishOk.groupOrder = getGroupOrderParam(requestSpecificParams);
 
   // SUBSCRIBER_PRIORITY
   handleSubscriberPriorityParam(
@@ -2407,19 +2410,6 @@ void MoQFrameParser::handleRequestSpecificParams(
 
   // FORWARD
   handleForwardParam(publishOk.forward, requestSpecificParams);
-}
-
-void MoQFrameParser::handleGroupOrderParam(
-    GroupOrder& groupOrderField,
-    const std::vector<Parameter>& requestSpecificParams,
-    GroupOrder defaultGroupOrder) const noexcept {
-  auto maybeGroupOrder = getFirstIntParam(
-      requestSpecificParams, TrackRequestParamKey::GROUP_ORDER);
-  if (maybeGroupOrder.has_value()) {
-    groupOrderField = (GroupOrder)*maybeGroupOrder;
-  } else {
-    groupOrderField = defaultGroupOrder;
-  }
 }
 
 void MoQFrameParser::handleSubscriberPriorityParam(
@@ -2558,6 +2548,9 @@ folly::Expected<PublishNamespaceOk, ErrorCode> MoQFrameParser::parseRequestOk(
       XLOG(DBG4) << "parseRequestOk: error in parseExtensionKvPairs: "
                  << folly::to_underlying(ext.error());
       return folly::makeUnexpected(ext.error());
+    }
+    if (auto order = parsePublisherGroupOrder(tempHeader.extensions); !order) {
+      return folly::makeUnexpected(order.error());
     }
     requestOk.trackProperties = std::move(tempHeader.extensions);
     length = 0;
@@ -2821,8 +2814,8 @@ void MoQFrameParser::handleRequestSpecificParams(
     Fetch& fetchRequest,
     const std::vector<Parameter>& requestSpecificParams) const noexcept {
   // GROUP_ORDER
-  handleGroupOrderParam(
-      fetchRequest.groupOrder, requestSpecificParams, GroupOrder::OldestFirst);
+  fetchRequest.groupOrder = getGroupOrderParam(requestSpecificParams)
+                                .value_or(GroupOrder::OldestFirst);
 
   // SUBSCRIBER_PRIORITY
   handleSubscriberPriorityParam(fetchRequest.priority, requestSpecificParams);
@@ -2908,9 +2901,8 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   }
 
   // GROUP_ORDER comes from request-specific params (not fixed field)
-  fetchOk.groupOrder = GroupOrder::OldestFirst;
-  handleGroupOrderParam(
-      fetchOk.groupOrder, requestSpecificParams, GroupOrder::OldestFirst);
+  fetchOk.groupOrder = getGroupOrderParam(requestSpecificParams)
+                           .value_or(GroupOrder::OldestFirst);
 
   // Parse extensions (bare key-value pairs, no length prefix)
   ObjectHeader tempHeader;
@@ -2927,10 +2919,12 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
 
-  auto go =
-      fetchOk.extensions.getIntExtension(kPublisherGroupOrderExtensionType);
-  if (go) {
-    fetchOk.groupOrder = static_cast<GroupOrder>(*go);
+  auto publisherGroupOrder = parsePublisherGroupOrder(fetchOk.extensions);
+  if (!publisherGroupOrder) {
+    return folly::makeUnexpected(publisherGroupOrder.error());
+  }
+  if (*publisherGroupOrder) {
+    fetchOk.groupOrder = **publisherGroupOrder;
   }
 
   return fetchOk;
@@ -3508,18 +3502,18 @@ TrackStatusOk RequestOk::toTrackStatusOk() const {
   // since we only need the request Id to resolve the promise, except for
   // logging. We still do the best we can here to move all fields
 
-  // Extra fields (expires, groupOrder, largest) are encoded as params
-  // Track Alias is NOT USED per spec
+  // Expires and largest are encoded as params, and the group order as a track
+  // property. Track Alias is NOT USED per spec
   trackStatusOk.trackAlias = TrackAlias{0};
+  if (auto order = getPublisherGroupOrder(trackProperties)) {
+    trackStatusOk.groupOrder = *order;
+  }
 
   // Go through request specific params and assign the fields
   for (const auto& param : requestSpecificParams) {
     switch (static_cast<TrackRequestParamKey>(param.key)) {
       case TrackRequestParamKey::EXPIRES:
         trackStatusOk.expires = std::chrono::milliseconds(param.asUint64);
-        break;
-      case TrackRequestParamKey::GROUP_ORDER:
-        trackStatusOk.groupOrder = static_cast<GroupOrder>(param.asUint64);
         break;
       case TrackRequestParamKey::LARGEST_OBJECT:
         trackStatusOk.largest = param.largestObject;
@@ -3585,11 +3579,7 @@ static folly::Expected<PublishOk, ErrorCode> requestOkToPublishOk(
   publishOk.filter =
       filter.value_or(LocationFilter::absoluteStart(kLocationMin));
 
-  auto maybeGroupOrder = getFirstIntParam(
-      requestOk.requestSpecificParams, TrackRequestParamKey::GROUP_ORDER);
-  publishOk.groupOrder = maybeGroupOrder.has_value()
-      ? static_cast<GroupOrder>(*maybeGroupOrder)
-      : GroupOrder::Default;
+  publishOk.groupOrder = getGroupOrderParam(requestOk.requestSpecificParams);
 
   auto maybePriority = getFirstIntParam(
       requestOk.requestSpecificParams,
@@ -3984,8 +3974,7 @@ WriteResult MoQFrameWriter::writePaddingDatagram(
 }
 
 void MoQFrameWriter::setFetchGroupOrder(GroupOrder groupOrder) noexcept {
-  fetchGroupOrder_ =
-      groupOrder == GroupOrder::Default ? GroupOrder::OldestFirst : groupOrder;
+  fetchGroupOrder_ = groupOrder;
 }
 
 void MoQFrameWriter::writeKeyValuePairs(
@@ -4422,8 +4411,7 @@ void MoQFrameWriter::writeFillParameters(
     writeBuf.append(tmpBuf.move());
     size += tmpSize;
   }
-  // Default is not a wire value; omitting GROUP_ORDER means the same thing.
-  if (fill.groupOrder && *fill.groupOrder != GroupOrder::Default) {
+  if (fill.groupOrder) {
     writeKey(TrackRequestParamKey::GROUP_ORDER);
     auto order = folly::to_underlying(*fill.groupOrder);
     writeBuf.append(&order, 1);
@@ -4800,12 +4788,12 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
       requestSpecificParams.push_back(priorityParam);
     }
 
-    if (subscribeRequest.groupOrder != GroupOrder::Default) {
+    if (subscribeRequest.groupOrder) {
       Parameter groupOrderParam;
       groupOrderParam.key =
           folly::to_underlying(TrackRequestParamKey::GROUP_ORDER);
       groupOrderParam.asUint64 =
-          folly::to_underlying(subscribeRequest.groupOrder);
+          folly::to_underlying(*subscribeRequest.groupOrder);
       requestSpecificParams.push_back(groupOrderParam);
     }
 
@@ -5523,7 +5511,7 @@ WriteResult MoQFrameWriter::writeFetch(
     requestSpecificParams.push_back(priorityParam);
   }
 
-  if (fetch.groupOrder != GroupOrder::Default) {
+  if (fetch.groupOrder != GroupOrder::OldestFirst) {
     Parameter groupOrderParam;
     groupOrderParam.key =
         folly::to_underlying(TrackRequestParamKey::GROUP_ORDER);

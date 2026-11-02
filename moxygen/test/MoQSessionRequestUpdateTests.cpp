@@ -108,7 +108,7 @@ class Draft18RequestUpdateGoawayTest : public MoQSessionTest {
             RequestID(0),
             FullTrackName{TrackNamespace{{"test"}}, "test-track"},
             TrackAlias(100),
-            GroupOrder::Default,
+            GroupOrder::OldestFirst,
             AbsoluteLocation{0, 100},
             true,
             {},
@@ -1601,7 +1601,7 @@ CO_TEST_P_X(Draft18Test, PublishRequestUpdateFailsOnPeerStopSending) {
       RequestID(0),
       TrackAlias(100),
       std::chrono::milliseconds(0),
-      GroupOrder::Default,
+      GroupOrder::OldestFirst,
       std::nullopt,
   });
   auto publishResult = clientSession_->publish(
@@ -1609,7 +1609,7 @@ CO_TEST_P_X(Draft18Test, PublishRequestUpdateFailsOnPeerStopSending) {
           RequestID(0),
           FullTrackName{TrackNamespace{{"test"}}, "test-track"},
           TrackAlias(100),
-          GroupOrder::Default,
+          GroupOrder::OldestFirst,
           AbsoluteLocation{0, 100},
           true,
       },
@@ -3347,65 +3347,178 @@ CO_TEST_P_X(Draft22Test, RequestUpdateFillOpensItsOwnStream) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// A REQUEST_UPDATE's fill without its own order uses the subscription's order,
-// not the order in the SUBSCRIBE's FILL_PARAMETERS.
-CO_TEST_P_X(Draft22Test, RequestUpdateFillUsesTheSubscriptionOrder) {
+// The order of a REQUEST_UPDATE's fill, on a subscription whose publisher
+// default is newest first.
+class Draft22UpdateFillOrderTest : public Draft22Test {
+ protected:
+  // Outlive the coroutine frame below, because the expectations that write to
+  // them are owned by the mocks and run after it has gone.
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle_;
+  std::shared_ptr<TrackConsumer> trackConsumer_;
+  std::vector<uint64_t> groups_;
+  folly::coro::Baton updateFillBegun_;
+  folly::coro::Baton fillDone_;
+
+  // Subscribes, refuses the SUBSCRIBE's own fill, then serves a REQUEST_UPDATE
+  // fill whose objects are published in `publishedGroups` order.
+  folly::coro::Task<void> runUpdateFill(
+      std::optional<GroupOrder> requestedOrder,
+      std::optional<GroupOrder> updateFillOrder,
+      std::vector<uint64_t> publishedGroups) {
+    expectPublishDone();
+    expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+      trackConsumer_ = pub;
+      SubscribeOk ok{
+          sub.requestID,
+          TrackAlias(sub.requestID.value),
+          std::chrono::milliseconds(0),
+          GroupOrder::NewestFirst,
+          AbsoluteLocation{15, 20},
+          Extensions{},
+      };
+      setPublisherGroupOrder(ok, GroupOrder::NewestFirst);
+      mockSubscriptionHandle_ = std::make_shared<MockSubscriptionHandle>(ok);
+      co_return mockSubscriptionHandle_;
+    });
+
+    auto subscribeRequest = getSubscribe(kTestTrackName);
+    subscribeRequest.groupOrder = requestedOrder;
+    subscribeRequest.fill =
+        FillParameters{LocationFilter::absoluteStart({10, 0}), {}, {}, {}};
+    EXPECT_CALL(*subscribeCallback_, beginFill(_))
+        .WillOnce([](RequestID) {
+          return folly::
+              Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>(
+                  folly::makeUnexpected(
+                      MoQPublishError(MoQPublishError::CANCELLED, "no fill")));
+        })
+        .WillOnce([this](RequestID) {
+          updateFillBegun_.post();
+          return folly::
+              Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>(
+                  fetchCallback_);
+        });
+    auto res = co_await clientSession_->subscribe(
+        subscribeRequest, subscribeCallback_);
+    CO_ASSERT_TRUE(!res.hasError());
+    auto subscribeHandle = res.value();
+
+    EXPECT_CALL(*serverPublisher, fetch(_, _))
+        .WillOnce(
+            [publishedGroups](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+              for (auto group : publishedGroups) {
+                fetchPub->object(
+                    group,
+                    /*subgroupID=*/0,
+                    /*objectID=*/0,
+                    moxygen::test::makeBuf(10),
+                    noExtensions(),
+                    /*finFetch=*/group == publishedGroups.back());
+              }
+              co_return makeFetchOkResult(fetch, AbsoluteLocation{15, 20});
+            });
+    EXPECT_CALL(*fetchCallback_, object(_, _, _, _, _, _, _))
+        .WillRepeatedly(
+            [this](
+                uint64_t group, auto, auto, auto, const auto&, bool fin, auto) {
+              groups_.push_back(group);
+              if (fin) {
+                fillDone_.post();
+              }
+              return folly::unit;
+            });
+    EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+    EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+    EXPECT_CALL(*mockSubscriptionHandle_, requestUpdateCalled)
+        .WillOnce([this](const RequestUpdate& update) {
+          serveFill(
+              update.requestID,
+              update.fill,
+              trackConsumer_,
+              AbsoluteLocation{15, 20});
+        });
+    EXPECT_CALL(*mockSubscriptionHandle_, requestUpdateResult)
+        .WillOnce(
+            testing::Return(
+                RequestOk{.requestID = subscribeRequest.requestID}));
+
+    RequestUpdate update;
+    update.existingRequestID = subscribeRequest.requestID;
+    update.fill = FillParameters{
+        LocationFilter::absoluteStart({10, 0}), {}, updateFillOrder, {}};
+    auto updateRes = co_await subscribeHandle->requestUpdate(update);
+    EXPECT_FALSE(updateRes.hasError());
+    co_await updateFillBegun_;
+    co_await fillDone_;
+
+    EXPECT_CALL(*fetchCallback_, reset(_)).WillRepeatedly(testing::Return());
+    trackConsumer_->publishDone(
+        getTrackEndedPublishDone(subscribeRequest.requestID));
+    co_await publishDone_;
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    Draft22UpdateFillOrderTest,
+    Draft22UpdateFillOrderTest,
+    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}));
+
+// A fill without its own order is ascending, even though the subscription
+// requested newest first.
+CO_TEST_P_X(Draft22UpdateFillOrderTest, IsAscendingWithoutItsOwnOrder) {
   co_await setupMoQSession();
-  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle;
-  std::shared_ptr<TrackConsumer> trackConsumer;
-  expectPublishDone();
-  expectSubscribe(
-      [&mockSubscriptionHandle, &trackConsumer](
-          auto sub, auto pub) -> TaskSubscribeResult {
-        trackConsumer = pub;
-        SubscribeOk ok{
-            sub.requestID,
-            TrackAlias(sub.requestID.value),
-            std::chrono::milliseconds(0),
-            GroupOrder::NewestFirst,
-            AbsoluteLocation{15, 20},
-            Extensions{},
-        };
-        setPublisherGroupOrder(ok, GroupOrder::NewestFirst);
-        mockSubscriptionHandle = std::make_shared<MockSubscriptionHandle>(ok);
-        co_return mockSubscriptionHandle;
-      });
+  co_await runUpdateFill(GroupOrder::NewestFirst, std::nullopt, {10, 11});
+  EXPECT_EQ(groups_, (std::vector<uint64_t>{10, 11}));
+}
 
-  auto subscribeRequest = getSubscribe(kTestTrackName);
-  subscribeRequest.groupOrder = GroupOrder::Default;
-  subscribeRequest.fill =
-      FillParameters{LocationFilter::absoluteStart({10, 0}), {}, {}, {}};
-  folly::coro::Baton updateFillBegun;
-  EXPECT_CALL(*subscribeCallback_, beginFill(_))
-      .WillOnce([](RequestID) {
-        // The SUBSCRIBE's own fill is refused; only its order matters here.
-        return folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>(
-            folly::makeUnexpected(
-                MoQPublishError(MoQPublishError::CANCELLED, "no fill")));
-      })
-      .WillOnce([&](RequestID) {
-        updateFillBegun.post();
-        return folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>(
-            fetchCallback_);
-      });
-  auto res =
-      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
-  CO_ASSERT_TRUE(!res.hasError());
-  auto subscribeHandle = res.value();
+CO_TEST_P_X(Draft22UpdateFillOrderTest, UsesItsOwnOrder) {
+  co_await setupMoQSession();
+  co_await runUpdateFill(std::nullopt, GroupOrder::NewestFirst, {11, 10});
+  EXPECT_EQ(groups_, (std::vector<uint64_t>{11, 10}));
+}
 
-  EXPECT_CALL(*serverPublisher, fetch(_, _))
-      .WillOnce([&](Fetch fetch, auto fetchPub) -> TaskFetchResult {
-        for (uint64_t group : {11, 10}) {
-          fetchPub->object(
-              group,
-              /*subgroupID=*/0,
-              /*objectID=*/0,
-              moxygen::test::makeBuf(10),
-              noExtensions(),
-              /*finFetch=*/group == 10);
-        }
-        co_return makeFetchOkResult(fetch, AbsoluteLocation{15, 20});
-      });
+// On a PUBLISH that announced newest first, a fill without its own order is
+// ascending.
+CO_TEST_P_X(Draft22Test, PublishFillWithoutItsOwnOrderIsAscending) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+  std::shared_ptr<SubscriptionHandle> serverHandle;
+  RequestID publishID{0};
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce(
+          [&](const PublishRequest& pub, std::shared_ptr<SubscriptionHandle> h)
+              -> Subscriber::PublishResult {
+            publishID = pub.requestID;
+            serverHandle = std::move(h);
+            auto result = makePublishOkResult(pub);
+            auto consumer =
+                std::static_pointer_cast<MockTrackConsumer>(result->consumer);
+            EXPECT_CALL(*consumer, beginFill(_))
+                .WillOnce(
+                    testing::Return(
+                        folly::Expected<
+                            std::shared_ptr<FetchConsumer>,
+                            MoQPublishError>(fetchCallback_)));
+            return result;
+          });
+
+  auto clientHandle = makePublishHandle();
+  PublishRequest pub{
+      RequestID(0),
+      kTestTrackName,
+      TrackAlias(100),
+      GroupOrder::NewestFirst,
+      AbsoluteLocation{15, 20},
+      true,
+      {},
+  };
+  setPublisherGroupOrder(pub, GroupOrder::NewestFirst);
+  auto publishResult = clientSession_->publish(pub, clientHandle);
+  CO_ASSERT_TRUE(publishResult.hasValue());
+  auto clientConsumer = publishResult.value().consumer;
+  auto reply = co_await std::move(publishResult.value().reply);
+  CO_ASSERT_TRUE(reply.hasValue());
+
   std::vector<uint64_t> groups;
   folly::coro::Baton fillDone;
   EXPECT_CALL(*fetchCallback_, object(_, _, _, _, _, _, _))
@@ -3417,34 +3530,35 @@ CO_TEST_P_X(Draft22Test, RequestUpdateFillUsesTheSubscriptionOrder) {
             }
             return folly::unit;
           });
-  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
-  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
-  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
+  EXPECT_CALL(*clientHandle, requestUpdateCalled)
       .WillOnce([&](const RequestUpdate& update) {
-        serveFill(
-            update.requestID,
-            update.fill,
-            trackConsumer,
-            AbsoluteLocation{15, 20});
+        auto fill = clientConsumer->beginFill(update.requestID);
+        ASSERT_TRUE(fill.hasValue());
+        for (uint64_t group : {10, 11}) {
+          EXPECT_TRUE((*fill)
+                          ->object(
+                              group,
+                              /*subgroupID=*/0,
+                              /*objectID=*/0,
+                              moxygen::test::makeBuf(10),
+                              noExtensions(),
+                              /*finFetch=*/group == 11)
+                          .hasValue());
+        }
       });
-  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
-      .WillOnce(
-          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+  EXPECT_CALL(*clientHandle, requestUpdateResult)
+      .WillOnce(testing::Return(RequestOk{.requestID = publishID}));
 
   RequestUpdate update;
-  update.existingRequestID = subscribeRequest.requestID;
+  update.existingRequestID = publishID;
   update.fill =
       FillParameters{LocationFilter::absoluteStart({10, 0}), {}, {}, {}};
-  auto updateRes = co_await subscribeHandle->requestUpdate(update);
+  auto updateRes = co_await serverHandle->requestUpdate(update);
   EXPECT_FALSE(updateRes.hasError());
-  co_await updateFillBegun;
   co_await fillDone;
-  EXPECT_EQ(groups, (std::vector<uint64_t>{11, 10}));
+  EXPECT_EQ(groups, (std::vector<uint64_t>{10, 11}));
 
   EXPECT_CALL(*fetchCallback_, reset(_)).WillRepeatedly(testing::Return());
-  trackConsumer->publishDone(
-      getTrackEndedPublishDone(subscribeRequest.requestID));
-  co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

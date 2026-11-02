@@ -706,7 +706,7 @@ MoQProxyTrack::establishWithProvider(
 
   auto upstreamRequest = subscribeRequest;
   upstreamRequest.priority = kDefaultPriority;
-  upstreamRequest.groupOrder = GroupOrder::Default;
+  upstreamRequest.groupOrder.reset();
   upstreamRequest.filter = LocationFilter::nextObject();
   // The upstream subscription is shared, so the fill stays off it.
   upstreamRequest.fill.reset();

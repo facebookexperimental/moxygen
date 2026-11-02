@@ -52,7 +52,7 @@ Extensions makeGroupGapExtensions(uint64_t gap) {
 Fetch getFetch(
     AbsoluteLocation start,
     AbsoluteLocation end,
-    GroupOrder order = GroupOrder::Default) {
+    GroupOrder order = GroupOrder::OldestFirst) {
   return Fetch{0, kTestTrackName, start, end, kDefaultPriority, order};
 }
 
@@ -60,7 +60,7 @@ Fetch getFetch(
     const FullTrackName& ftn,
     AbsoluteLocation start,
     AbsoluteLocation end,
-    GroupOrder order = GroupOrder::Default) {
+    GroupOrder order = GroupOrder::OldestFirst) {
   return Fetch{0, ftn, start, end, kDefaultPriority, order};
 }
 

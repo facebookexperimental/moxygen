@@ -274,7 +274,7 @@ CO_TEST_P_X(MoQSessionTest, BadRelativeJoiningFetch) {
           1,
           FetchType::RELATIVE_JOINING,
           128,
-          GroupOrder::Default),
+          GroupOrder::OldestFirst),
       fetchCallback_);
   EXPECT_TRUE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -354,7 +354,7 @@ CO_TEST_P_X(MoQSessionTest, BadAbsoluteJoiningFetch) {
           1,
           FetchType::ABSOLUTE_JOINING,
           128,
-          GroupOrder::Default),
+          GroupOrder::OldestFirst),
       fetchCallback_);
   EXPECT_TRUE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -1256,7 +1256,7 @@ CO_TEST_P_X(Draft22Test, JoiningFetchRefused) {
           1,
           FetchType::RELATIVE_JOINING,
           128,
-          GroupOrder::Default),
+          GroupOrder::OldestFirst),
       fetchCallback_);
   CO_ASSERT_TRUE(res.hasError());
   EXPECT_EQ(res.error().errorCode, FetchErrorCode::NOT_SUPPORTED);
@@ -1415,28 +1415,6 @@ CO_TEST_P_X(Draft22Test, PausedSubscribeOpensNoFill) {
   CO_ASSERT_TRUE(!res.hasError());
   co_await rescheduleN(4);
   EXPECT_EQ(serverWt_->writeHandles.count(serverObjectStreamId()), 0);
-  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
-}
-
-// With no order on the subscription or the fill, the subscriber requests
-// Ascending, so parsing the fill stream does not depend on SUBSCRIBE_OK.
-CO_TEST_P_X(Draft22Test, FillWithDefaultOrderRequestsAscending) {
-  co_await setupMoQSession();
-  std::optional<GroupOrder> fillOrder;
-  expectSubscribe([&fillOrder](auto sub, auto) -> TaskSubscribeResult {
-    fillOrder = sub.fill->groupOrder;
-    co_return makeSubscribeOkResult(sub, AbsoluteLocation{4, 0});
-  });
-  EXPECT_CALL(*fetchCallback_, reset(_)).WillRepeatedly(testing::Return());
-  EXPECT_CALL(*subscribeCallback_, publishDone(_))
-      .WillRepeatedly(testing::Return(folly::unit));
-  expectBeginFill();
-
-  auto sub = subscribeWithFill(kTestTrackName, /*joiningStart=*/1);
-  sub.groupOrder = GroupOrder::Default;
-  auto res = co_await clientSession_->subscribe(sub, subscribeCallback_);
-  CO_ASSERT_TRUE(!res.hasError());
-  EXPECT_EQ(fillOrder, GroupOrder::OldestFirst);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
@@ -1726,8 +1704,9 @@ CO_TEST_P_X(Draft22Test, FillArrivesBeforeSubscribeOk) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// A fill inherits the subscription's priority, group order and authorization,
-// except where FILL_PARAMETERS override them.
+// A fill inherits the subscription's priority and authorization, except where
+// FILL_PARAMETERS override them. Without its own group order a fill is
+// ascending.
 TEST(MakeFillFetch, InheritsTheSubscription) {
   TrackRequestParameters params{FrameType::SUBSCRIBE};
   params.insertParam(Parameter(
@@ -1743,12 +1722,11 @@ TEST(MakeFillFetch, InheritsTheSubscription) {
       FillParameters{},
       largest,
       /*priority=*/64,
-      GroupOrder::NewestFirst,
       params);
   ASSERT_TRUE(fetch.has_value());
   EXPECT_EQ(fetch->requestID, RequestID(7));
   EXPECT_EQ(fetch->priority, 64);
-  EXPECT_EQ(fetch->groupOrder, GroupOrder::NewestFirst);
+  EXPECT_EQ(fetch->groupOrder, GroupOrder::OldestFirst);
   EXPECT_EQ(
       std::get<StandaloneFetch>(fetch->args).start, (AbsoluteLocation{2, 0}));
   ASSERT_EQ(fetch->params.size(), 1);
@@ -1761,15 +1739,14 @@ TEST(MakeFillFetch, InheritsTheSubscription) {
       FillParameters{
           LocationFilter::absoluteStart({3, 0}),
           8,
-          GroupOrder::OldestFirst,
+          GroupOrder::NewestFirst,
           {}},
       largest,
       /*priority=*/64,
-      GroupOrder::NewestFirst,
       params);
   ASSERT_TRUE(overridden.has_value());
   EXPECT_EQ(overridden->priority, 8);
-  EXPECT_EQ(overridden->groupOrder, GroupOrder::OldestFirst);
+  EXPECT_EQ(overridden->groupOrder, GroupOrder::NewestFirst);
   EXPECT_EQ(
       std::get<StandaloneFetch>(overridden->args).start,
       (AbsoluteLocation{3, 0}));
@@ -1785,7 +1762,6 @@ TEST(MakeFillFetch, NothingToFill) {
                    FillParameters{},
                    std::nullopt,
                    kDefaultPriority,
-                   GroupOrder::OldestFirst,
                    params)
                    .has_value());
   EXPECT_FALSE(makeFillFetch(
@@ -1795,7 +1771,6 @@ TEST(MakeFillFetch, NothingToFill) {
                    FillParameters{},
                    AbsoluteLocation{4, 0},
                    kDefaultPriority,
-                   GroupOrder::OldestFirst,
                    params)
                    .has_value());
 }

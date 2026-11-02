@@ -900,7 +900,7 @@ CO_TEST_P_X(
             RequestID(0),
             FullTrackName{TrackNamespace{{"test"}}, "test-track"},
             TrackAlias(100),
-            GroupOrder::Default,
+            GroupOrder::OldestFirst,
             AbsoluteLocation{0, 100},
             true,
         };
@@ -1001,7 +1001,7 @@ CO_TEST_P_X(
             RequestID(0),
             FullTrackName{TrackNamespace{{"test"}}, "test-track"},
             TrackAlias(100),
-            GroupOrder::Default,
+            GroupOrder::OldestFirst,
             AbsoluteLocation{0, 100},
             true,
         };
@@ -1949,7 +1949,7 @@ class MoQBidiSetupGateTest : public MoQSessionTest {
         RequestID(sequence * 2),
         FullTrackName{TrackNamespace{{"setup-gate"}}, std::to_string(sequence)},
         TrackAlias(100 + sequence),
-        GroupOrder::Default,
+        GroupOrder::OldestFirst,
         AbsoluteLocation{0, 100},
         true,
         {}};

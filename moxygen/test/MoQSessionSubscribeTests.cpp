@@ -41,6 +41,31 @@ CO_TEST_P_X(Draft22Test, SubscribeOmitsUnrequestedTrackProperties) {
   co_await rescheduleN(4);
 }
 
+// The subscriber's requested order wins over the publisher's default.
+CO_TEST_P_X(MoQSessionTest, SubscribeOkReportsTheRequestedGroupOrder) {
+  co_await setupMoQSession();
+  expectSubscribe([](auto sub, auto) -> TaskSubscribeResult {
+    auto ok = makeSubscribeOkResult(sub)->subscribeOk();
+    setPublisherGroupOrder(ok, GroupOrder::OldestFirst);
+    co_return std::make_shared<MockSubscriptionHandle>(std::move(ok));
+  });
+
+  auto request = getSubscribe(kTestTrackName);
+  request.groupOrder = GroupOrder::NewestFirst;
+  auto result = co_await clientSession_->subscribe(request, subscribeCallback_);
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+  EXPECT_EQ(result.value()->subscribeOk().groupOrder, GroupOrder::NewestFirst);
+
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+}
+
 CO_TEST_P_X(MoQSessionTest, SubscribeOkDuplicateTrackAlias) {
   co_await setupMoQSession();
   const TrackAlias alias(100);

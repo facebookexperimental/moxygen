@@ -15,7 +15,8 @@ namespace moxygen {
 // The FETCH that serves a fill, or nullopt if there is nothing to fill.
 // requestID is the SUBSCRIBE or REQUEST_UPDATE that requested the fill. The
 // fill inherits the subscription's values, except those FILL_PARAMETERS
-// override.
+// override. Group order is not inherited: as on a FETCH, a fill without one is
+// ascending.
 std::optional<Fetch> makeFillFetch(
     const FullTrackName& fullTrackName,
     RequestID requestID,
@@ -23,7 +24,6 @@ std::optional<Fetch> makeFillFetch(
     const FillParameters& fill,
     std::optional<AbsoluteLocation> largest,
     uint8_t priority,
-    GroupOrder groupOrder,
     const TrackRequestParameters& subscriptionParams);
 
 using FillFetchFn = folly::Function<folly::coro::Task<Publisher::FetchResult>(

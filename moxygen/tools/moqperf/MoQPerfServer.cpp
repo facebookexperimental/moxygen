@@ -30,7 +30,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQPerfServer::subscribe(
       subscribeRequest.requestID,
       alias,
       std::chrono::milliseconds(0) /* never expires */,
-      subscribeRequest.groupOrder,
+      subscribeRequest.groupOrder.value_or(GroupOrder::OldestFirst),
       std::nullopt};
   return folly::coro::makeTask<SubscribeResult>(
       std::make_shared<PerfSubscriptionHandle>(ok, &cancellationSource_));

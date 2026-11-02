@@ -59,7 +59,7 @@ class JoiningFetchTestHelper {
                    std::move(subscribeCallback),
                    /*joiningStart=*/0,
                    /*fetchPri=*/129,
-                   GroupOrder::Default,
+                   GroupOrder::OldestFirst,
                    {},
                    std::move(fetchCallback),
                    FetchType::RELATIVE_JOINING))
@@ -301,7 +301,7 @@ CO_TEST_P_X(Draft18Test, JoiningFetchOnPublishFollowsThePublishReply) {
                       co_return PublishOk{
                           .requestID = requestID,
                           .subscriberPriority = 128,
-                          .groupOrder = GroupOrder::Default};
+                          .groupOrder = std::nullopt};
                     }),
                 /*consumerReady=*/true};
           });
@@ -318,7 +318,7 @@ CO_TEST_P_X(Draft18Test, JoiningFetchOnPublishFollowsThePublishReply) {
           .requestID = RequestID(0),
           .fullTrackName = kTestTrackName,
           .trackAlias = TrackAlias(100),
-          .groupOrder = GroupOrder::Default,
+          .groupOrder = GroupOrder::OldestFirst,
           .largest = AbsoluteLocation{0, 100},
           .forward = true},
       makePublishHandle());
@@ -377,7 +377,7 @@ CO_TEST_P_X(MoQSessionTest, JoiningFetchFailsWithItsSubscription) {
       subscribeCallback_,
       0,
       129,
-      GroupOrder::Default,
+      GroupOrder::OldestFirst,
       {},
       fetchCallback_,
       FetchType::RELATIVE_JOINING);
@@ -524,7 +524,7 @@ CO_TEST_P_X(MoQSessionTest, CancellingAHeldJoiningFetchFreesItsSlot) {
       0,
       FetchType::RELATIVE_JOINING,
       129,
-      GroupOrder::Default);
+      GroupOrder::OldestFirst);
   heldFetch.fullTrackName = kTestTrackName;
   folly::CancellationSource cancelHeld;
   auto held =
@@ -573,7 +573,7 @@ CO_TEST_P_X(PreDraft18Test, JoiningFetchOnNonLargestObjectSubscriptionCloses) {
       subscribeCallback_,
       0,
       129,
-      GroupOrder::Default,
+      GroupOrder::OldestFirst,
       {},
       fetchCallback_,
       FetchType::RELATIVE_JOINING);

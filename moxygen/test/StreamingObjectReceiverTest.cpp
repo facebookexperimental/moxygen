@@ -1354,20 +1354,6 @@ TEST(StreamingObjectReceiverTest, NewestFirstFetchRejectsAscendingGroups) {
   EXPECT_EQ(callback->allDataReceivedCount, 0);
 }
 
-TEST(StreamingObjectReceiverTest, DefaultOrderFetchRejectsDescendingGroups) {
-  auto callback = std::make_shared<RecordingReceiverCallback>();
-  auto receiver = std::make_shared<StreamingObjectReceiver>(
-      StreamingObjectReceiver::FETCH, callback, GroupOrder::Default);
-  ASSERT_TRUE(
-      receiver->object(5, 0, 1, makePayload("a"), {}, false).hasValue());
-
-  auto result = receiver->object(3, 0, 0, makePayload("b"), {}, false);
-
-  ASSERT_TRUE(result.hasError());
-  EXPECT_EQ(callback->contexts.size(), 1);
-  EXPECT_EQ(callback->errors.size(), 1);
-}
-
 TEST(StreamingObjectReceiverTest, FetchRejectsDuplicateStatusLocation) {
   auto callback = std::make_shared<RecordingReceiverCallback>();
   auto receiver = std::make_shared<StreamingObjectReceiver>(

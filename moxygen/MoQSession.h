@@ -385,7 +385,9 @@ class MoQSession : public Subscriber,
     initializeNegotiatedVersion(version);
   }
 
-  static GroupOrder resolveGroupOrder(GroupOrder pubOrder, GroupOrder subOrder);
+  static GroupOrder resolveGroupOrder(
+      GroupOrder pubOrder,
+      std::optional<GroupOrder> subOrder);
 
   static std::string getMoQTImplementationString();
 

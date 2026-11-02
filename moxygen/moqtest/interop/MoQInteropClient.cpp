@@ -93,11 +93,7 @@ class SimplePublisher : public moxygen::Publisher {
     moxygen::SubscribeOk ok;
     ok.requestID = sub.requestID;
     ok.expires = std::chrono::milliseconds(0);
-    // GroupOrder::Default (0x0) is invalid in SUBSCRIBE_OK wire format.
-    // Use OldestFirst as the resolved value when request has Default.
-    ok.groupOrder = (sub.groupOrder == moxygen::GroupOrder::Default)
-        ? moxygen::GroupOrder::OldestFirst
-        : sub.groupOrder;
+    ok.groupOrder = sub.groupOrder.value_or(moxygen::GroupOrder::OldestFirst);
     ok.largest = std::nullopt;
     co_return std::make_shared<SimpleSubscriptionHandle>(std::move(ok));
   }

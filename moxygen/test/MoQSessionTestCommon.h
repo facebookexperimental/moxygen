@@ -101,7 +101,7 @@ inline Subscriber::PublishResult makePublishOkResult(
       pub.requestID,
       true, // forward
       128,  // subscriber priority
-      GroupOrder::Default,
+      std::nullopt,
       LocationFilter::nextObject(),
   };
 

@@ -2254,7 +2254,7 @@ TEST_P(MoQFramerTest, ParseSubscriptionFilterLargestGroup) {
   auto req = SubscribeRequest::make(
       ftn,
       /*priority*/ kDefaultPriority,
-      /*groupOrder*/ GroupOrder::Default,
+      /*groupOrder*/ std::nullopt,
       /*forward*/ true,
       /*locType*/ LocationType::LargestGroup,
       /*start*/ std::nullopt,
@@ -2291,7 +2291,7 @@ std::unique_ptr<folly::IOBuf> writeAbsoluteRangeSubscribe(
   auto req = SubscribeRequest::make(
       FullTrackName{TrackNamespace({"ns"}), "track"},
       /*priority*/ kDefaultPriority,
-      /*groupOrder*/ GroupOrder::Default,
+      /*groupOrder*/ std::nullopt,
       /*forward*/ true,
       /*locType*/ LocationType::AbsoluteRange,
       /*start*/ std::make_optional(start),
@@ -2426,7 +2426,7 @@ TEST(MoQFramerLocationFilter, SubscribeRoundTripV22) {
     auto req = SubscribeRequest::make(
         FullTrackName{TrackNamespace({"ns"}), "track"},
         kDefaultPriority,
-        GroupOrder::Default,
+        std::nullopt,
         /*forward=*/true,
         filter);
 
@@ -2529,7 +2529,7 @@ std::unique_ptr<folly::IOBuf> writeFillSubscribe(
   auto req = SubscribeRequest::make(
       FullTrackName{TrackNamespace({"ns"}), "track"},
       kDefaultPriority,
-      GroupOrder::Default,
+      std::nullopt,
       /*forward=*/true,
       filter);
   req.fill = fill;
@@ -2580,8 +2580,7 @@ TEST(MoQFramerFillParameters, SubscribeRoundTripV22) {
   }
 }
 
-// A Default group order goes out as an omitted GROUP_ORDER, which still parses.
-TEST(MoQFramerFillParameters, DefaultGroupOrderIsOmitted) {
+TEST(MoQFramerFillParameters, InvalidGroupOrderIsAViolation) {
   MoQFrameWriter writer;
   writer.initializeVersion(kVersionDraft22);
   MoQFrameParser parser;
@@ -2590,11 +2589,11 @@ TEST(MoQFramerFillParameters, DefaultGroupOrderIsOmitted) {
   parser.setTokenCache(&tokenCache);
 
   auto bytes = writeFillSubscribe(
-      writer, FillParameters{{}, {}, GroupOrder::Default, {}});
+      writer, FillParameters{{}, {}, static_cast<GroupOrder>(3), {}});
   auto parseRes = parseSubscribeFrame(parser, bytes);
-  ASSERT_TRUE(parseRes.hasValue());
-  ASSERT_TRUE(parseRes->fill.has_value());
-  EXPECT_EQ(*parseRes->fill, FillParameters{});
+
+  ASSERT_TRUE(parseRes.hasError());
+  EXPECT_EQ(parseRes.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
 // A type may appear both in the message and inside FILL_PARAMETERS.
@@ -4095,8 +4094,7 @@ TEST_P(MoQFramerV16PlusTest, SubscribeRequestDefaultGroupOrder) {
   SubscribeRequest req = SubscribeRequest::make(
       FullTrackName({TrackNamespace({"ns"}), "track"}),
       /*priority*/ 128,
-      /*groupOrder*/ GroupOrder::Default, // Writer won't write GROUP_ORDER
-                                          // param
+      /*groupOrder*/ std::nullopt,
       /*forward*/ true,
       /*locType*/ LocationType::LargestObject,
       /*start*/ std::nullopt,
@@ -4115,8 +4113,7 @@ TEST_P(MoQFramerV16PlusTest, SubscribeRequestDefaultGroupOrder) {
   auto parseResult = parser_.parseSubscribeRequest(cursor, frameLength(cursor));
   EXPECT_TRUE(parseResult.hasValue());
 
-  // When GROUP_ORDER param is not written, parser should set to Default
-  EXPECT_EQ(parseResult->groupOrder, GroupOrder::Default);
+  EXPECT_EQ(parseResult->groupOrder, std::nullopt);
 }
 
 // Test explicit GroupOrder param overrides default for SubscribeRequest
@@ -4150,6 +4147,23 @@ TEST_P(MoQFramerV16PlusTest, SubscribeRequestExplicitGroupOrder) {
   EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
 }
 
+TEST_P(MoQFramerV16PlusTest, SubscribeRequestInvalidGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  auto req = SubscribeRequest::make(
+      FullTrackName({TrackNamespace({"ns"}), "track"}),
+      /*priority*/ 128,
+      /*groupOrder*/ static_cast<GroupOrder>(0));
+  ASSERT_TRUE(writer_.writeSubscribeRequest(writeBuf, req).hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  quic::follyutils::decodeQuicInteger(cursor);
+
+  auto parseResult = parser_.parseSubscribeRequest(cursor, frameLength(cursor));
+
+  ASSERT_TRUE(parseResult.hasError());
+  EXPECT_EQ(parseResult.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
 // Test default GroupOrder for SubscribeOk when param not present
 TEST_P(MoQFramerV16PlusTest, SubscribeOkDefaultGroupOrder) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
@@ -4158,8 +4172,6 @@ TEST_P(MoQFramerV16PlusTest, SubscribeOkDefaultGroupOrder) {
   subscribeOk.requestID = RequestID(42);
   subscribeOk.trackAlias = TrackAlias(1);
   subscribeOk.expires = std::chrono::milliseconds(1000);
-  subscribeOk.groupOrder =
-      GroupOrder::Default; // Writer won't write GROUP_ORDER param
   subscribeOk.largest = AbsoluteLocation{10, 20};
 
   auto writeResult = writer_.writeSubscribeOk(writeBuf, subscribeOk);
@@ -4202,6 +4214,58 @@ TEST_P(MoQFramerV16PlusTest, SubscribeOkExplicitGroupOrder) {
   EXPECT_TRUE(parseResult.hasValue());
 
   EXPECT_EQ(parseResult->groupOrder, GroupOrder::NewestFirst);
+}
+
+TEST_P(MoQFramerV16PlusTest, SubscribeOkInvalidPublisherGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  SubscribeOk subscribeOk;
+  subscribeOk.requestID = RequestID(42);
+  subscribeOk.trackAlias = TrackAlias(1);
+  setPublisherGroupOrder(subscribeOk, static_cast<GroupOrder>(3));
+  ASSERT_TRUE(writer_.writeSubscribeOk(writeBuf, subscribeOk).hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  quic::follyutils::decodeQuicInteger(cursor);
+
+  auto parseResult = parser_.parseSubscribeOk(cursor, frameLength(cursor));
+
+  ASSERT_TRUE(parseResult.hasError());
+  EXPECT_EQ(parseResult.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST_P(MoQFramerV16PlusTest, PublishInvalidPublisherGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  PublishRequest publishRequest;
+  publishRequest.requestID = RequestID(100);
+  publishRequest.fullTrackName =
+      FullTrackName({TrackNamespace({"test"}), "pub"});
+  setPublisherGroupOrder(publishRequest, static_cast<GroupOrder>(0));
+  ASSERT_TRUE(writer_.writePublish(writeBuf, publishRequest).hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  quic::follyutils::decodeQuicInteger(cursor);
+
+  auto parseResult = parser_.parsePublish(cursor, frameLength(cursor));
+
+  ASSERT_TRUE(parseResult.hasError());
+  EXPECT_EQ(parseResult.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST_P(MoQFramerV16PlusTest, FetchOkInvalidPublisherGroupOrder) {
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  FetchOk fetchOk;
+  fetchOk.requestID = RequestID(7);
+  fetchOk.endLocation = AbsoluteLocation{1, 0};
+  setPublisherGroupOrder(fetchOk, static_cast<GroupOrder>(3));
+  ASSERT_TRUE(writer_.writeFetchOk(writeBuf, fetchOk).hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  quic::follyutils::decodeQuicInteger(cursor);
+
+  auto parseResult = parser_.parseFetchOk(cursor, frameLength(cursor));
+
+  ASSERT_TRUE(parseResult.hasError());
+  EXPECT_EQ(parseResult.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
 TEST_P(MoQFramerV16PlusTest, SubscribeOkExpiresParameter) {
@@ -4272,8 +4336,6 @@ TEST_P(MoQFramerV16PlusTest, PublishDefaultGroupOrder) {
   publishRequest.requestID = RequestID(100);
   publishRequest.fullTrackName =
       FullTrackName({TrackNamespace({"test"}), "pub"});
-  publishRequest.groupOrder =
-      GroupOrder::Default; // Will be overridden by parser default
 
   auto writeResult = writer_.writePublish(writeBuf, publishRequest);
   EXPECT_TRUE(writeResult.hasValue());
@@ -4350,8 +4412,6 @@ TEST_P(MoQFramerV16PlusTest, PublishOkDefaultGroupOrder) {
   publishOk.requestID = RequestID(200);
   publishOk.forward = true;
   publishOk.subscriberPriority = 128;
-  publishOk.groupOrder =
-      GroupOrder::Default; // Writer won't write GROUP_ORDER param
   publishOk.filter = LocationFilter::nextObject();
 
   auto parsed = roundTripPublishOk(
@@ -4360,8 +4420,7 @@ TEST_P(MoQFramerV16PlusTest, PublishOkDefaultGroupOrder) {
       publishOk,
       getDraftMajorVersion(GetParam()),
       [this](folly::io::Cursor& c) { return frameLength(c); });
-  // When GROUP_ORDER param is not written, parser should set to Default
-  EXPECT_EQ(parsed.groupOrder, GroupOrder::Default);
+  EXPECT_EQ(parsed.groupOrder, std::nullopt);
 }
 
 // Test explicit GroupOrder param overrides default for PublishOk
@@ -4383,8 +4442,9 @@ TEST_P(MoQFramerV16PlusTest, PublishOkExplicitGroupOrder) {
   // PUBLISH_OK does not carry GROUP_ORDER in draft 22.
   EXPECT_EQ(
       parsed.groupOrder,
-      getDraftMajorVersion(GetParam()) >= 22 ? GroupOrder::Default
-                                             : GroupOrder::OldestFirst);
+      getDraftMajorVersion(GetParam()) >= 22
+          ? std::nullopt
+          : std::optional<GroupOrder>(GroupOrder::OldestFirst));
 }
 
 // Test default GroupOrder for Fetch when param not present
@@ -4396,8 +4456,7 @@ TEST_P(MoQFramerV16PlusTest, FetchDefaultGroupOrder) {
       FullTrackName({TrackNamespace({"test"}), "fetch"}),
       AbsoluteLocation{5, 10},  // start
       AbsoluteLocation{15, 20}, // end
-      kDefaultPriority,         // priority
-      GroupOrder::Default);     // Writer won't write GROUP_ORDER param
+      kDefaultPriority);        // priority
 
   auto writeResult = writer_.writeFetch(writeBuf, fetchRequest);
   EXPECT_TRUE(writeResult.hasValue());
@@ -5493,7 +5552,7 @@ TEST(MoQFramerV22Test, PublishOkCarriesOnlyExpires) {
   ASSERT_TRUE(parsed.hasValue());
   EXPECT_TRUE(parsed->forward);
   EXPECT_EQ(parsed->subscriberPriority, kDefaultPriority);
-  EXPECT_EQ(parsed->groupOrder, GroupOrder::Default);
+  EXPECT_EQ(parsed->groupOrder, std::nullopt);
   EXPECT_EQ(
       getFirstIntParam(parsed->params, TrackRequestParamKey::EXPIRES),
       kExpiresMs);
@@ -5835,6 +5894,44 @@ TEST_F(MoQFramerV18Test, RequestOkTrackPropertiesRoundtrip) {
   EXPECT_EQ(parsed.largest->object, 7);
 
   EXPECT_EQ(parsed.trackProperties, trackStatusOk.trackProperties);
+}
+
+TEST_F(MoQFramerV18Test, TrackStatusOkGroupOrderFromTrackProperty) {
+  TrackStatusOk trackStatusOk;
+  trackStatusOk.requestID = 42;
+  trackStatusOk.trackProperties.insertMutableExtension(
+      Extension{
+          kPublisherGroupOrderExtensionType,
+          folly::to_underlying(GroupOrder::NewestFirst)});
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeTrackStatusOk(writeBuf, trackStatusOk).hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  quic::follyutils::decodeQuicInteger(cursor);
+
+  auto result = parser_.parseRequestOk(
+      cursor, frameLength(cursor), FrameType::REQUEST_OK);
+
+  ASSERT_TRUE(result.hasValue());
+  EXPECT_EQ(result->toTrackStatusOk().groupOrder, GroupOrder::NewestFirst);
+}
+
+TEST_F(MoQFramerV18Test, RequestOkInvalidPublisherGroupOrder) {
+  TrackStatusOk trackStatusOk;
+  trackStatusOk.requestID = 42;
+  trackStatusOk.trackProperties.insertMutableExtension(
+      Extension{kPublisherGroupOrderExtensionType, 0});
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writer_.writeTrackStatusOk(writeBuf, trackStatusOk).hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  quic::follyutils::decodeQuicInteger(cursor);
+
+  auto result = parser_.parseRequestOk(
+      cursor, frameLength(cursor), FrameType::REQUEST_OK);
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
 // REQUEST_OK with empty Track Properties must not emit any additional bytes
@@ -7063,7 +7160,7 @@ TEST_F(ParameterValidationFlowTest, SubscribeRequestMakeSkipsInvalidParam) {
   auto req = SubscribeRequest::make(
       FullTrackName({TrackNamespace({"ns"}), "track"}),
       kDefaultPriority,
-      GroupOrder::Default,
+      std::nullopt,
       true,
       LocationType::LargestGroup,
       std::nullopt,
@@ -7086,7 +7183,7 @@ TEST_F(ParameterValidationFlowTest, FetchConstructorSkipsInvalidParam) {
       AbsoluteLocation{0, 0},
       AbsoluteLocation{10, 10},
       kDefaultPriority,
-      GroupOrder::Default,
+      GroupOrder::OldestFirst,
       inputParams);
 
   // The invalid param should have been skipped
@@ -7101,7 +7198,7 @@ TEST_F(ParameterValidationFlowTest, ParseParamsIgnoresInvalidParam) {
   auto req = SubscribeRequest::make(
       FullTrackName({TrackNamespace({"ns"}), "track"}),
       kDefaultPriority,
-      GroupOrder::Default,
+      std::nullopt,
       true,
       LocationType::LargestGroup,
       std::nullopt,
@@ -7124,7 +7221,7 @@ TEST_F(ParameterValidationFlowTest, ParseParamsIgnoresInvalidParam) {
       RequestID(0),
       FullTrackName({TrackNamespace({"ns2"}), "track2"}),
       kDefaultPriority,
-      GroupOrder::Default,
+      GroupOrder::OldestFirst,
       true,
       LocationFilter::relativeStart(1),
       std::nullopt};
@@ -7183,7 +7280,7 @@ TEST_F(ParameterValidationFlowTest, SubscribeOkRejectsInvalidParam) {
   subscribeOk.requestID = RequestID(1);
   subscribeOk.trackAlias = TrackAlias(1);
   subscribeOk.expires = std::chrono::milliseconds(1000);
-  subscribeOk.groupOrder = GroupOrder::Default;
+  subscribeOk.groupOrder = GroupOrder::OldestFirst;
   subscribeOk.largest = std::nullopt;
 
   // Try to insert a param that's not allowed for SUBSCRIBE_OK

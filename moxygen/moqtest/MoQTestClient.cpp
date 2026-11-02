@@ -230,7 +230,7 @@ Subscriber::PublishResult MoQTestClient::publish(
   ok.requestID = pub.requestID;
   ok.forward = true;
   ok.subscriberPriority = kDefaultPriority;
-  ok.groupOrder = GroupOrder::Default;
+  ok.groupOrder = std::nullopt;
   ok.filter = LocationFilter::absoluteStart({0, 0});
 
   return Subscriber::PublishConsumerAndReplyTask{

@@ -103,7 +103,7 @@ class DatePublisher : public Publisher,
         requestId,
         FullTrackName{ns, "date"},
         TrackAlias(requestId),
-        GroupOrder::Default,
+        GroupOrder::OldestFirst,
         std::nullopt,
         true,
     };

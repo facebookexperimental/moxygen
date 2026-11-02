@@ -506,7 +506,7 @@ class TestSubscriber : public Subscriber {
     publishOk.requestID = pub.requestID;
     publishOk.forward = true;
     publishOk.subscriberPriority = kDefaultPriority;
-    publishOk.groupOrder = GroupOrder::Default;
+    publishOk.groupOrder = std::nullopt;
     publishOk.filter = LocationFilter::nextObject();
 
     auto replyTask =

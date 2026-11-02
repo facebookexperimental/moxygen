@@ -507,10 +507,7 @@ class StreamingObjectReceiver
       Type type,
       std::shared_ptr<StreamingObjectReceiverCallback> callback,
       GroupOrder fetchGroupOrder = GroupOrder::OldestFirst)
-      : callback_(std::move(callback)),
-        fetchGroupOrder_(
-            fetchGroupOrder == GroupOrder::Default ? GroupOrder::OldestFirst
-                                                   : fetchGroupOrder) {
+      : callback_(std::move(callback)), fetchGroupOrder_(fetchGroupOrder) {
     if (type == FETCH) {
       // FetchConsumer does not carry the wire priority, so FETCH objects
       // report kDefaultPriority.

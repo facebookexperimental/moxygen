@@ -225,7 +225,7 @@ class MoQTextClient : public Subscriber,
     // Default Params for Now
     publishOk.forward = true;
     publishOk.subscriberPriority = kDefaultPriority;
-    publishOk.groupOrder = moxygen::GroupOrder::Default;
+    publishOk.groupOrder = std::nullopt;
     publishOk.filter = moxygen::LocationFilter::absoluteStart({0, 0});
 
     if (handle) {
@@ -350,7 +350,7 @@ class MoQTextClient : public Subscriber,
                 subStart.value_or(kLocationMin),
                 fetchEnd,
                 sub.priority,
-                sub.groupOrder),
+                sub.groupOrder.value_or(GroupOrder::OldestFirst)),
             fetchTextReceiver_);
         if (fetchTrack.hasError()) {
           XLOG(ERR) << "Fetch failed err="

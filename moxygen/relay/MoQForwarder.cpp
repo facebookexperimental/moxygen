@@ -256,6 +256,7 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
       subReq.forward);
   subscriber->filter = subReq.filter;
   subscriber->priority = subReq.priority;
+  subscriber->groupOrder = subReq.groupOrder;
   subscriber->params = subReq.params;
   // If the session already has a subscriber (e.g. from a prior
   // addSubscriber(sessionId, forward) call), emplace is a no-op. Return the
@@ -834,7 +835,7 @@ MoQForwarder::Subscriber::Subscriber(
 void MoQForwarder::Subscriber::setPublisherGroupOrder(
     GroupOrder pubGroupOrder) {
   subscribeOk_->groupOrder =
-      MoQSession::resolveGroupOrder(pubGroupOrder, subscribeOk_->groupOrder);
+      MoQSession::resolveGroupOrder(pubGroupOrder, groupOrder);
 }
 
 void MoQForwarder::Subscriber::updateLargest(AbsoluteLocation largest) {
@@ -846,10 +847,10 @@ void MoQForwarder::Subscriber::updateLargest(AbsoluteLocation largest) {
 
 void MoQForwarder::Subscriber::setExtensions(Extensions extensions) {
   subscribeOk_->extensions = std::move(extensions);
-  auto groupOrder = getPublisherGroupOrder(*subscribeOk_);
-  if (groupOrder) {
+  auto publisherGroupOrder = getPublisherGroupOrder(*subscribeOk_);
+  if (publisherGroupOrder) {
     subscribeOk_->groupOrder =
-        MoQSession::resolveGroupOrder(*groupOrder, subscribeOk_->groupOrder);
+        MoQSession::resolveGroupOrder(*publisherGroupOrder, groupOrder);
   }
 }
 
@@ -987,7 +988,6 @@ void MoQForwarder::Subscriber::requestFill(
       fill,
       forwarder->largest(),
       priority,
-      subscribeOk().groupOrder,
       params);
   if (!fetch) {
     return;

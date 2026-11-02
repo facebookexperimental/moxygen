@@ -1615,7 +1615,7 @@ TEST(MoQCodecTest, BidiCodecRejectsDuplicateRequestOnSameStreamV18) {
   auto sub = SubscribeRequest::make(
       FullTrackName({TrackNamespace({"hello"}), "world"}),
       255,
-      GroupOrder::Default,
+      std::nullopt,
       true,
       LocationType::LargestObject,
       std::nullopt,
@@ -1642,7 +1642,7 @@ TEST(MoQCodecTest, BidiCodecSetsExistingRequestIdOnRequestUpdateV18) {
   auto sub = SubscribeRequest::make(
       FullTrackName({TrackNamespace({"hello"}), "world"}),
       255,
-      GroupOrder::Default,
+      std::nullopt,
       true,
       LocationType::LargestObject,
       std::nullopt,
@@ -1687,7 +1687,7 @@ TEST(MoQCodecTest, BidiRequestSideRequestOkUsesPendingUpdateIdV18) {
   pub.requestID = RequestID(0);
   pub.fullTrackName = FullTrackName({TrackNamespace({"hello"}), "world"});
   pub.trackAlias = TrackAlias(100);
-  pub.groupOrder = GroupOrder::Default;
+  pub.groupOrder = GroupOrder::OldestFirst;
   pub.largest = std::nullopt;
   pub.forward = true;
   ASSERT_TRUE(writer.writePublish(buf, pub).hasValue());

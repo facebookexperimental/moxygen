@@ -1235,7 +1235,7 @@ TEST_F(MoQProxyJoiningTest, DefaultOrderJoinIsOldestFirstOnNewestFirstTrack) {
           RequestID(5),
           41,
           FetchType::ABSOLUTE_JOINING,
-          GroupOrder::Default),
+          GroupOrder::OldestFirst),
       defaultOrder);
   auto newestResult = fetch(
       viewer,

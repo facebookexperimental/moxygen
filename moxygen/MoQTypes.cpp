@@ -363,6 +363,17 @@ LocationFilter fromSubscriptionFilter(const SubscriptionFilter& filter) {
   return LocationFilter::absoluteStart(filter.location.value_or(kLocationMin));
 }
 
+std::optional<GroupOrder> toGroupOrder(uint64_t value) {
+  switch (value) {
+    case folly::to_underlying(GroupOrder::OldestFirst):
+      return GroupOrder::OldestFirst;
+    case folly::to_underlying(GroupOrder::NewestFirst):
+      return GroupOrder::NewestFirst;
+    default:
+      return std::nullopt;
+  }
+}
+
 std::string toString(LocationType loctype) {
   switch (loctype) {
     case LocationType::NextGroupStart: {
@@ -737,7 +748,7 @@ std::pair<const StandaloneFetch*, const JoiningFetch*> fetchType(
 SubscribeRequest SubscribeRequest::make(
     const FullTrackName& fullTrackName,
     uint8_t priority,
-    GroupOrder groupOrder,
+    std::optional<GroupOrder> groupOrder,
     bool forward,
     LocationFilter filter,
     const std::vector<Parameter>& inputParams) {
@@ -764,7 +775,7 @@ SubscribeRequest SubscribeRequest::make(
 SubscribeRequest SubscribeRequest::make(
     const FullTrackName& fullTrackName,
     uint8_t priority,
-    GroupOrder groupOrder,
+    std::optional<GroupOrder> groupOrder,
     bool forward,
     LocationType locType,
     std::optional<AbsoluteLocation> start,

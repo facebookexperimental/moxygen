@@ -2637,22 +2637,16 @@ class MoQSession::SubscribeTrackReceiveState
     return cancelSource_.isCancellationRequested() ? nullptr : callback_;
   }
 
-  // The subscription's group order, unless FILL_PARAMETERS overrides it.
-  void setFillGroupOrderOverride(std::optional<GroupOrder> order) {
-    fillGroupOrderOverride_ = order;
+  void setRequestedGroupOrder(std::optional<GroupOrder> order) {
+    requestedGroupOrder_ = order;
+  }
+
+  void setFillGroupOrder(std::optional<GroupOrder> order) {
+    fillGroupOrder_ = order;
   }
 
   GroupOrder getFillGroupOrder() const {
-    return fillGroupOrderOverride_.value_or(groupOrder_);
-  }
-
-  // The order a REQUEST_UPDATE's fill uses. The SUBSCRIBE's override does not
-  // apply to it.
-  GroupOrder getUpdateFillGroupOrder(const FillParameters& fill) const {
-    if (fill.groupOrder && *fill.groupOrder != GroupOrder::Default) {
-      return *fill.groupOrder;
-    }
-    return groupOrder_;
+    return fillGroupOrder_.value_or(GroupOrder::OldestFirst);
   }
 
   void cancel() {
@@ -2669,7 +2663,8 @@ class MoQSession::SubscribeTrackReceiveState
   // Returns false if the subscribe was already cancelled.
   bool processSubscribeOK(SubscribeOk subscribeOK) {
     alias_ = subscribeOK.trackAlias;
-    groupOrder_ = subscribeOK.groupOrder;
+    subscribeOK.groupOrder = MoQSession::resolveGroupOrder(
+        subscribeOK.groupOrder, requestedGroupOrder_);
     return subscribePromise_.trySetValue(std::move(subscribeOK));
   }
 
@@ -2815,8 +2810,8 @@ class MoQSession::SubscribeTrackReceiveState
   std::optional<PublishDone> pendingPublishDone_;
   uint64_t streamCount_{0};
   uint64_t currentStreamId_{0};
-  GroupOrder groupOrder_{GroupOrder::OldestFirst};
-  std::optional<GroupOrder> fillGroupOrderOverride_;
+  std::optional<GroupOrder> requestedGroupOrder_;
+  std::optional<GroupOrder> fillGroupOrder_;
 
   // Indicates whether receiveState is for Publish
   bool publish_;
@@ -2880,9 +2875,7 @@ class MoQSession::FetchTrackReceiveState
       std::shared_ptr<MLogger> logger = nullptr)
       : TrackReceiveStateBase(std::move(fullTrackName), requestID),
         callback_(std::move(fetchCallback)),
-        fetchGroupOrder_(
-            fetchGroupOrder == GroupOrder::Default ? GroupOrder::OldestFirst
-                                                   : fetchGroupOrder) {
+        fetchGroupOrder_(fetchGroupOrder) {
     logger_ = std::move(logger);
   }
 
@@ -4536,7 +4529,7 @@ bool MoQSession::registerUpdateFill(
       subState->fullTrackName(),
       updateID,
       std::move(consumer.value()),
-      subState->getUpdateFillGroupOrder(fill),
+      fill.groupOrder.value_or(GroupOrder::OldestFirst),
       subscribeID);
   return true;
 }
@@ -5320,7 +5313,7 @@ void MoQSession::onSubscribeImpl(
       subscribeRequest.requestID,
       std::nullopt,
       subscribeRequest.priority,
-      subscribeRequest.groupOrder,
+      subscribeRequest.groupOrder.value_or(GroupOrder::OldestFirst),
       *negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription,
       forward,
@@ -5444,7 +5437,7 @@ MoQSession::openFillStream(
       trackPublisher->fullTrackName(),
       requestID,
       fill.subscriberPriority.value_or(trackPublisher->subPriority()),
-      fill.groupOrder.value_or(trackPublisher->getGroupOrder()),
+      fill.groupOrder.value_or(GroupOrder::OldestFirst),
       *negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription);
   fillPublisher->setLogger(logger_);
@@ -5683,7 +5676,9 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
     trackPublisher->onPublishOk(publishOk);
     if (getDraftMajorVersion(*getNegotiatedVersion()) < 22) {
       trackPublisher->setForward(publishOk.forward);
-      trackPublisher->setGroupOrder(publishOk.groupOrder);
+      if (publishOk.groupOrder) {
+        trackPublisher->setGroupOrder(*publishOk.groupOrder);
+      }
       trackPublisher->setSubPriority(publishOk.subscriberPriority);
     }
     pendingPublishTracks_.erase(trackPublisher->fullTrackName());
@@ -7381,15 +7376,12 @@ Subscriber::PublishResult MoQSession::publish(
   }
 
   uint8_t subscriberPriority = 0;
-  auto initialGroupOrder = pub.groupOrder;
+  std::optional<GroupOrder> subscriptionGroupOrder;
   if (getDraftMajorVersion(*negotiatedVersion_) >= 22) {
     subscriberPriority = static_cast<uint8_t>(
         getFirstIntParam(pub.params, TrackRequestParamKey::SUBSCRIBER_PRIORITY)
             .value_or(kDefaultPriority));
-    if (auto groupOrder =
-            getFirstIntParam(pub.params, TrackRequestParamKey::GROUP_ORDER)) {
-      initialGroupOrder = static_cast<GroupOrder>(*groupOrder);
-    }
+    subscriptionGroupOrder = getGroupOrderParam(pub.params);
   }
 
   auto trackPublisher = std::make_shared<TrackPublisherImpl>(
@@ -7398,7 +7390,7 @@ Subscriber::PublishResult MoQSession::publish(
       pub.requestID,
       pub.trackAlias,
       subscriberPriority,
-      initialGroupOrder,
+      subscriptionGroupOrder.value_or(pub.groupOrder),
       *negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription,
       pub.forward);
@@ -7505,7 +7497,8 @@ folly::coro::Task<void> MoQSession::sendFetchForFill(
     std::shared_ptr<FetchConsumer> consumer) {
   const auto& filter = sub.fill->locationFilter.value_or(sub.filter);
   const auto priority = sub.fill->subscriberPriority.value_or(sub.priority);
-  const auto groupOrder = sub.fill->groupOrder.value_or(sub.groupOrder);
+  const auto groupOrder =
+      sub.fill->groupOrder.value_or(GroupOrder::OldestFirst);
   // Draft 22 fills inherit the subscription's parameters; match that.
   const std::vector<Parameter> params(sub.params.begin(), sub.params.end());
   auto start = filter.absoluteStartLocation();
@@ -7608,16 +7601,6 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   sub.requestID = reqID;
   TrackAlias trackAlias = reqID.value;
   aliasifyAuthTokens(sub.params);
-  if (sub.fill && sub.fill->groupOrder == GroupOrder::Default) {
-    sub.fill->groupOrder.reset();
-  }
-  if (sub.fill && !sub.fill->groupOrder &&
-      sub.groupOrder == GroupOrder::Default &&
-      useFillFetch(*negotiatedVersion_)) {
-    // The fill stream can arrive before the SUBSCRIBE_OK that carries the
-    // publisher's order, and the stream cannot be parsed without an order.
-    sub.fill->groupOrder = GroupOrder::OldestFirst;
-  }
   folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
   auto wres = moqFrameWriter_.writeSubscribeRequest(buf, sub);
   if (!wres) {
@@ -7671,8 +7654,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
   auto trackReceiveState = std::make_shared<SubscribeTrackReceiveState>(
       fullTrackName, reqID, callback, this, trackAlias, logger_);
   trackReceiveState->setBidiControl(control);
+  trackReceiveState->setRequestedGroupOrder(sub.groupOrder);
   if (sub.fill) {
-    trackReceiveState->setFillGroupOrderOverride(sub.fill->groupOrder);
+    trackReceiveState->setFillGroupOrder(sub.fill->groupOrder);
   }
   pendingRequests_.emplace(
       reqID, PendingRequestState::makeSubscribeTrack(trackReceiveState));
@@ -7692,7 +7676,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
         fullTrackName,
         reqID,
         std::move(fillConsumer),
-        sub.fill->groupOrder.value_or(sub.groupOrder),
+        sub.fill->groupOrder.value_or(GroupOrder::OldestFirst),
         reqID);
     fillConsumer.reset();
   }
@@ -9458,8 +9442,8 @@ SessionId MoQSession::makeSessionId() {
 
 GroupOrder MoQSession::resolveGroupOrder(
     GroupOrder pubOrder,
-    GroupOrder subOrder) {
-  return subOrder == GroupOrder::Default ? pubOrder : subOrder;
+    std::optional<GroupOrder> subOrder) {
+  return subOrder.value_or(pubOrder);
 }
 
 void MoQSession::setServerMaxTokenCacheSizeGuess(size_t size) {

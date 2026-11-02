@@ -9,6 +9,12 @@
 
 namespace moxygen {
 
+namespace {
+uint8_t toLogGroupOrder(std::optional<GroupOrder> groupOrder) {
+  return groupOrder ? folly::to_underlying(*groupOrder) : 0;
+}
+} // namespace
+
 void MLogger::setDcid(const quic::ConnectionId& dcid) {
   dcid_ = dcid;
 }
@@ -244,7 +250,7 @@ void MLogger::logSubscribe(
   baseMsg->trackName =
       convertTrackNameToByteStringFormat(req.fullTrackName.trackName, type);
   baseMsg->subscriberPriority = req.priority;
-  baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
+  baseMsg->groupOrder = toLogGroupOrder(req.groupOrder);
   auto legacyFilter = toSubscriptionFilter(req.filter);
   baseMsg->filterType = static_cast<uint8_t>(legacyFilter.filterType);
   if (legacyFilter.location.has_value()) {
@@ -412,7 +418,7 @@ void MLogger::logTrackStatus(
   baseMsg->trackName =
       convertTrackNameToByteStringFormat(req.fullTrackName.trackName, type);
   baseMsg->subscriberPriority = req.priority;
-  baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
+  baseMsg->groupOrder = toLogGroupOrder(req.groupOrder);
   baseMsg->forward = req.forward;
   baseMsg->filterType = 0;
   if (auto start = req.filter.absoluteStartLocation()) {
@@ -708,7 +714,7 @@ void MLogger::logPublishOk(
   baseMsg->requestId = req.requestID.value;
   baseMsg->forward = req.forward ? 1 : 0;
   baseMsg->subscriberPriority = req.subscriberPriority;
-  baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
+  baseMsg->groupOrder = toLogGroupOrder(req.groupOrder);
   auto legacyFilter = toSubscriptionFilter(req.filter);
   baseMsg->filterType = static_cast<uint64_t>(legacyFilter.filterType);
   if (legacyFilter.location.has_value()) {

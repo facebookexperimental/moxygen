@@ -94,7 +94,7 @@ TrackStatus getTrackStatus() {
   return TrackStatus{
       .requestID = RequestID(0),
       .fullTrackName = kTestTrackName,
-      .groupOrder = GroupOrder::Default,
+      .groupOrder = std::nullopt,
       .filter = LocationFilter::nextObject()};
 }
 
@@ -117,7 +117,7 @@ std::shared_ptr<MockSubscriptionHandle> makePublishHandle() {
       RequestID(0),
       TrackAlias(100),
       std::chrono::milliseconds(0), // expires
-      GroupOrder::Default,          // groupOrder
+      GroupOrder::OldestFirst,      // groupOrder
       std::nullopt,                 // largest
   });
 }
@@ -447,7 +447,7 @@ folly::coro::Task<void> MoQSessionTest::publishRequestUpdateRoundTrip(
       RequestID(0),
       FullTrackName{TrackNamespace{{"test"}}, "test-track"},
       TrackAlias(100),
-      GroupOrder::Default,
+      GroupOrder::OldestFirst,
       AbsoluteLocation{0, 100},
       true,
       {}, // extensions
@@ -544,7 +544,6 @@ void MoQSessionTest::serveFill(
       *fill,
       largest,
       kDefaultPriority,
-      GroupOrder::OldestFirst,
       TrackRequestParameters{FrameType::SUBSCRIBE});
   if (fetch) {
     serveFillFromFetch(serverPublisher, std::move(pub), std::move(*fetch));

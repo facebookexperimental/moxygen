@@ -159,7 +159,7 @@ TEST_F(MoQProxyTrackTest, FirstSubscriberEstablishesUpstreamSubscription) {
   EXPECT_EQ(provider_->receivedTrackName, kTrackName);
   EXPECT_EQ(provider_->receivedHasFallbackProvider, false);
   EXPECT_EQ(upstreamRequest.priority, kDefaultPriority);
-  EXPECT_EQ(upstreamRequest.groupOrder, GroupOrder::Default);
+  EXPECT_EQ(upstreamRequest.groupOrder, std::nullopt);
   EXPECT_EQ(upstreamRequest.filter, LocationFilter::nextObject());
   EXPECT_EQ(result.value()->subscribeOk().largest, AbsoluteLocation(10, 2));
   // The upstream subscription feeds the downstream subscriber.

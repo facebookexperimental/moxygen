@@ -19,7 +19,6 @@ std::optional<Fetch> makeFillFetch(
     const FillParameters& fill,
     std::optional<AbsoluteLocation> largest,
     uint8_t priority,
-    GroupOrder groupOrder,
     const TrackRequestParameters& subscriptionParams) {
   if (!largest) {
     return std::nullopt;
@@ -43,7 +42,7 @@ std::optional<Fetch> makeFillFetch(
       range.start,
       range.end,
       fill.subscriberPriority.value_or(priority),
-      fill.groupOrder.value_or(groupOrder),
+      fill.groupOrder.value_or(GroupOrder::OldestFirst),
       auth);
 }
 
