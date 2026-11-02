@@ -86,7 +86,7 @@ std::shared_ptr<MoQSession> MoQAudioPublisher::getSession() const {
 folly::Executor::KeepAlive<folly::EventBase> MoQAudioPublisher::getExecutor()
     const {
   if (evbThread_) {
-    return folly::getKeepAliveToken(evbThread_->getEventBase());
+    return evbThread_->getEventBaseKeepAlive();
   }
   return nullptr;
 }
