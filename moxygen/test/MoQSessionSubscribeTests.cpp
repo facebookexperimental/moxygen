@@ -1446,7 +1446,7 @@ CO_TEST_P_X(Draft18Test, SubscribeFailsOnPeerResetWithoutReply) {
 
   co_await serverSawSubscribe;
 
-  serverWt_->writeHandles.at(0)->resetStream(
+  clientWt_->readHandles.at(0)->deliverPeerReset(
       folly::to_underlying(ResetStreamErrorCode::CANCELLED));
 
   co_await done;
@@ -1535,6 +1535,35 @@ CO_TEST_P_X(Draft18Test, BidiStreamStopSending) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A peer STOP_SENDING without RESET_STREAM gets exactly one STOP_SENDING back.
+CO_TEST_P_X(Draft18Test, PeerStopSendingWithoutResetStopsSendingOnce) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> pubHandle;
+  expectSubscribe([&pubHandle](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+    pubHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return pubHandle;
+  });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_TRUE(res.hasValue());
+
+  folly::coro::Baton unsubBaton;
+  EXPECT_CALL(*pubHandle, unsubscribe()).WillOnce([&] { unsubBaton.post(); });
+  EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
+
+  auto serverRead = serverWt_->readHandles.at(0);
+  EXPECT_EQ(serverRead->stopSendingCount_, 0);
+  clientWt_->readHandles.at(0)->stopSending(0);
+  EXPECT_EQ(serverRead->stopSendingCount_, 1);
+  co_await unsubBaton;
+  EXPECT_EQ(serverRead->stopSendingCount_, 1);
+
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Subscriber-initiated unsubscribe() (RST write + STOP_SENDING read) must
 // reach the publisher's unsubscribe handle — same outcome as peer-initiated
 // STOP_SENDING above, exercised from the other side.
@@ -1582,6 +1611,37 @@ CO_TEST_P_X(Draft18Test, UnsubscribeResetsRequestStreamOnce) {
 
   res.value()->unsubscribe();
   EXPECT_EQ(clientWt_->writeHandles.at(0)->resetCount_, 1);
+  co_await unsubBaton;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// After SUBSCRIBE_OK the publisher stops writing on the request stream, so the
+// subscriber's read stays pending. unsubscribe() must STOP_SENDING anyway.
+CO_TEST_P_X(Draft18Test, UnsubscribeStopsSendingWhileReadPending) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> pubHandle;
+  expectSubscribe([&pubHandle](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+    pubHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return pubHandle;
+  });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_TRUE(res.hasValue());
+
+  folly::coro::Baton unsubBaton;
+  EXPECT_CALL(*pubHandle, unsubscribe()).WillOnce([&] { unsubBaton.post(); });
+  EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
+
+  auto& readHandle = clientWt_->readHandles.at(0);
+  EXPECT_EQ(readHandle->stopSendingCount_, 0);
+  res.value()->unsubscribe();
+  EXPECT_EQ(readHandle->stopSendingCount_, 1);
+  EXPECT_EQ(
+      readHandle->stopSendingErr_,
+      toWireResetStreamErrorCode(
+          ResetStreamErrorCode::CANCELLED, GetParam().serverVersion));
   co_await unsubBaton;
 
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);

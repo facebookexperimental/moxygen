@@ -3015,11 +3015,12 @@ class MoQSession::FetchTrackReceiveState
       return;
     }
     auto callback = std::exchange(callback_, nullptr);
+    // Data stream first, or the peer resets it on the bidi's STOP_SENDING.
+    dataStreamCancelCode_ = ResetStreamErrorCode::SESSION_CLOSED;
+    cancelSource_.requestCancellation();
     if (bidiControl_) {
       bidiControl_->cancel(ResetStreamErrorCode::SESSION_CLOSED);
     }
-    dataStreamCancelCode_ = ResetStreamErrorCode::SESSION_CLOSED;
-    cancelSource_.requestCancellation();
     if (callback) {
       callback->reset(ResetStreamErrorCode::SESSION_CLOSED);
     }
@@ -4203,6 +4204,13 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   auto* controlCodec = codec ? codec.get() : controlCodec_.get();
   auto streamId = readHandle.id();
   controlCodec->setStreamId(streamId);
+  // STOP_SENDING on cancel, or a pending read can wait until session close.
+  std::optional<folly::CancellationCallback> cancelCb;
+  if (control) {
+    cancelCb.emplace(control->getReadCancelToken(), [&readHandle, &control] {
+      readHandle.stopSending(control->readCancelCode());
+    });
+  }
   // Seeded so a handed-over FIN still reaches the close handling below.
   bool fin = initialData.fin;
 
@@ -4285,10 +4293,10 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
       control->writeFin();
     }
   }
-  // Anything above can still call control->cancel(), so take the code last.
-  // Otherwise ~ReadHandleRef sends 0.
-  if (control) {
-    readHandle.stopSending(control->readCancelCode());
+  // Only session close leaves the read side open here.
+  if (control && negotiatedVersion) {
+    readHandle.setStopSendingCode(toWireResetStreamErrorCode(
+        ResetStreamErrorCode::SESSION_CLOSED, *negotiatedVersion));
   }
 }
 
