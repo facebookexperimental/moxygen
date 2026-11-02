@@ -332,13 +332,13 @@ class StreamPublisherImpl
       }
       pendingDeliveries_.pop_front();
     }
-    onByteEventCommon(id, offset, false);
+    onByteEventCommon(id, offset);
   }
 
   void onByteEventCanceled(quic::StreamId id, uint64_t offset) noexcept
       override {
     cancelDeliveriesFrom(offset);
-    onByteEventCommon(id, offset, true);
+    onByteEventCommon(id, offset);
   }
 
   // Notify delivery cancelled for all objects delivered after this offset.
@@ -432,8 +432,7 @@ class StreamPublisherImpl
   };
   quic::CircularDeque<ObjectDeliveryInfo> pendingDeliveries_;
 
-  void
-  onByteEventCommon(quic::StreamId /*id*/, uint64_t offset, bool cancelled) {
+  void onByteEventCommon(quic::StreamId /*id*/, uint64_t offset) {
     // The FIN takes a stream offset of its own but was never buffered.
     uint64_t bytesDeliveredOrCanceled =
         std::min<uint64_t>(offset + 1, bytesWritten_);
@@ -443,12 +442,10 @@ class StreamPublisherImpl
       bytesDeliveredOrCanceled_ = bytesDeliveredOrCanceled;
     }
 
-    auto publisher = publisher_;
     refCountForCallbacks_--;
     if (refCountForCallbacks_ == 0) {
       keepaliveForDeliveryCallbacks_.reset();
     }
-    publisher->onDeliveryCallbackSettled(cancelled);
   }
 
   bool setGroupAndSubgroup(uint64_t groupID, uint64_t subgroupID) {
@@ -815,7 +812,6 @@ StreamPublisherImpl::writeToStream(bool finStream, bool endObject) {
       keepaliveForDeliveryCallbacks_ = shared_from_this();
     }
     refCountForCallbacks_++;
-    publisher_->onDeliveryCallbackAdded();
   }
   auto writeRes = writeHandle->writeStreamData(
       writeBuf_.move(), finStream, deliveryCallback);
@@ -840,7 +836,7 @@ StreamPublisherImpl::writeToStream(bool finStream, bool endObject) {
   auto self = shared_from_this();
   if (deliveryCallback) {
     // A rejected write never registers its byte event, so settle it here.
-    onByteEventCommon(writeHandle->getID(), bytesWritten_, /*cancelled=*/true);
+    onByteEventCommon(writeHandle->getID(), bytesWritten_);
   }
   reset(ResetStreamErrorCode::INTERNAL_ERROR);
   return folly::makeUnexpected(
@@ -1245,8 +1241,6 @@ void StreamPublisherImpl::requestStream(
       });
   if (id) {
     streamRequest_.emplace(StreamRequest{.id = *id});
-    // Held writes are pending delivery until the request ends.
-    publisher_->onDeliveryCallbackAdded();
   } else {
     reset(ResetStreamErrorCode::SESSION_CLOSED);
   }
@@ -1256,7 +1250,6 @@ void StreamPublisherImpl::cancelStreamRequest() {
   if (auto request = std::exchange(streamRequest_, std::nullopt)) {
     if (publisher_) {
       publisher_->cancelUniStreamRequest(request->id);
-      publisher_->onDeliveryCallbackSettled(/*cancelled=*/true);
     }
     if (request->readiness.valid()) {
       request->readiness.setException(std::runtime_error("Stream reset"));
@@ -1273,7 +1266,6 @@ void StreamPublisherImpl::onStreamGranted(
     if (request->readiness.valid()) {
       request->readiness.setException(std::runtime_error("No uni stream"));
     }
-    publisher_->onDeliveryCallbackSettled(/*cancelled=*/true);
     reset(ResetStreamErrorCode::INTERNAL_ERROR);
     return;
   }
@@ -1282,8 +1274,6 @@ void StreamPublisherImpl::onStreamGranted(
   writeHandle->setPriority(priority);
   setWriteHandle(writeHandle);
   auto writeRes = writeToStream(std::exchange(pendingFin_, false));
-  // The held data now has its own byte event, so the hold settles last.
-  publisher_->onDeliveryCallbackSettled(/*cancelled=*/false);
   if (request->readiness.valid()) {
     if (writeRes) {
       request->readiness.setValue(0);
@@ -1946,10 +1936,6 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
       PublishDone pubDone) override;
 
   void setDeliveryCallback(std::shared_ptr<DeliveryCallback> callback) override;
-
-  folly::SemiFuture<folly::Unit> awaitDelivery() override {
-    return PublisherImpl::awaitDelivery();
-  }
 
   void setLogger(std::shared_ptr<MLogger> logger) {
     logger_ = logger;
@@ -3677,37 +3663,6 @@ MoQSession::PublisherImpl::PublisherImpl(
 
 MoQSession::PublisherImpl::~PublisherImpl() {
   cancelGoawayResetTimer();
-}
-
-void MoQSession::PublisherImpl::onDeliveryCallbackAdded() {
-  ++pendingDeliveryCallbacks_;
-}
-
-void MoQSession::PublisherImpl::onDeliveryCallbackSettled(bool cancelled) {
-  deliveryCancelled_ |= cancelled;
-  if (--pendingDeliveryCallbacks_ != 0 || !deliveryWaiters_) {
-    return;
-  }
-  auto waiters = std::exchange(deliveryWaiters_, std::nullopt);
-  if (deliveryCancelled_) {
-    waiters->setException(std::runtime_error("Stream delivery cancelled"));
-  } else {
-    waiters->setValue();
-  }
-}
-
-folly::SemiFuture<folly::Unit> MoQSession::PublisherImpl::awaitDelivery() {
-  if (pendingDeliveryCallbacks_ == 0) {
-    if (deliveryCancelled_) {
-      return folly::makeSemiFuture<folly::Unit>(
-          std::runtime_error("Stream delivery cancelled"));
-    }
-    return folly::makeSemiFuture();
-  }
-  if (!deliveryWaiters_) {
-    deliveryWaiters_.emplace();
-  }
-  return deliveryWaiters_->getSemiFuture();
 }
 
 void MoQSession::onGoawayTimeoutExpired() {

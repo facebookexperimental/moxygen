@@ -21,7 +21,6 @@
 #include <folly/container/IntrusiveList.h>
 #include <folly/coro/Promise.h>
 #include <folly/coro/Task.h>
-#include <folly/futures/SharedPromise.h>
 #include <folly/logging/xlog.h>
 #include <quic/mvfst-config.h>
 #include <moxygen/MoQConsumers.h>
@@ -575,10 +574,6 @@ class MoQSession : public Subscriber,
       bytesBuffered_ -= amount;
     }
 
-    void onDeliveryCallbackAdded();
-    void onDeliveryCallbackSettled(bool cancelled);
-    folly::SemiFuture<folly::Unit> awaitDelivery();
-
     const MoQSettings* getMoqSettings() const {
       if (session_) {
         return &session_->getMoqSettings();
@@ -679,9 +674,6 @@ class MoQSession : public Subscriber,
     bool goawayResetPending_{false};
 
    private:
-    uint64_t pendingDeliveryCallbacks_{0};
-    bool deliveryCancelled_{false};
-    std::optional<folly::SharedPromise<folly::Unit>> deliveryWaiters_;
     class GoawayResetTimeoutCallback;
     void onGoawayResetTimerExpired();
     std::unique_ptr<GoawayResetTimeoutCallback> goawayResetTimer_;

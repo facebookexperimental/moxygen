@@ -57,10 +57,6 @@ class TrackConsumerFilter : public TrackConsumer {
     downstream_->setDeliveryCallback(std::move(callback));
   }
 
-  folly::SemiFuture<folly::Unit> awaitDelivery() override {
-    return downstream_->awaitDelivery();
-  }
-
   void setDownstream(std::shared_ptr<TrackConsumer> downstream) {
     downstream_ = std::move(downstream);
   }
