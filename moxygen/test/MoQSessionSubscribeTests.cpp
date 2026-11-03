@@ -1556,6 +1556,10 @@ CO_TEST_P_X(Draft18Test, PeerStopSendingWithoutResetStopsSendingOnce) {
   EXPECT_EQ(serverRead->stopSendingCount_, 0);
   clientWt_->readHandles.at(0)->stopSending(0);
   EXPECT_EQ(serverRead->stopSendingCount_, 1);
+  EXPECT_EQ(
+      serverRead->stopSendingErr_,
+      toWireResetStreamErrorCode(
+          ResetStreamErrorCode::CANCELLED, GetParam().serverVersion));
   co_await unsubBaton;
   EXPECT_EQ(serverRead->stopSendingCount_, 1);
 
