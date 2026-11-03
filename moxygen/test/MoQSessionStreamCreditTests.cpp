@@ -60,6 +60,44 @@ CO_TEST_P_X(MoQSessionTest, SubgroupWaitsForStreamCredit) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A draining session stays open while a subgroup waits for stream credit.
+CO_TEST_P_X(MoQSessionTest, DrainWaitsForStreamCredit) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> pub;
+  RequestID requestID;
+  expectSubscribe([&](auto sub, auto p) -> TaskSubscribeResult {
+    pub = p;
+    requestID = sub.requestID;
+    co_return makeSubscribeOkResult(sub);
+  });
+  auto sg = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(0, _, _, true))
+      .WillOnce(testing::Return(folly::unit));
+  expectPublishDone();
+  co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+
+  const auto openUni = serverWt_->openLocalUniStreams().size();
+  serverWt_->setMaxLocalUniStreams(openUni);
+  auto subgroup = pub->beginSubgroup(0, 0, 0).value();
+  EXPECT_TRUE(
+      subgroup->object(0, makeBuf(10), noExtensions(), /*finSubgroup=*/true)
+          .hasValue());
+  EXPECT_TRUE(pub->publishDone(getTrackEndedPublishDone(requestID)).hasValue());
+  serverSession_->drain();
+  co_await rescheduleN(5);
+  EXPECT_FALSE(serverSession_->isClosed());
+
+  serverWt_->setMaxLocalUniStreams(openUni + 1);
+  co_await publishDone_;
+  co_await rescheduleN(5);
+  EXPECT_TRUE(serverSession_->isClosed());
+  EXPECT_EQ(
+      serverSession_->getCloseResult()->error, SessionCloseErrorCode::NO_ERROR);
+}
+
 // Objects written while a subgroup waits for credit are each reported
 // delivered once.
 CO_TEST_P_X(MoQSessionTest, WaitingSubgroupReportsEachDeliveryOnce) {

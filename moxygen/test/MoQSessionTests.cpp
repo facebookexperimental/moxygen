@@ -1166,6 +1166,41 @@ CO_TEST_P_X(
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// Waiting for acks does not push the close past a sooner GOAWAY deadline.
+CO_TEST_P_X(Draft18GoawayTimeoutTest, DrainFlushKeepsSoonerGoawayDeadline) {
+  co_await setupMoQSession();
+  for (auto& [id, stream] : serverWt_->writeHandles) {
+    stream->setImmediateDelivery(false);
+  }
+
+  Goaway goaway;
+  goaway.timeout = 20;
+  serverSession_->goaway(goaway);
+  co_await rescheduleN(5);
+  EXPECT_FALSE(serverSession_->isClosed());
+
+  co_await folly::coro::sleep(std::chrono::milliseconds(100));
+  EXPECT_TRUE(serverSession_->isClosed());
+  EXPECT_EQ(
+      serverSession_->getCloseResult()->error, SessionCloseErrorCode::NO_ERROR);
+}
+
+// A GOAWAY sent with no open requests reaches the peer before the close.
+CO_TEST_P_X(MoQSessionTest, GoawayWithoutRequestsReachesPeer) {
+  co_await setupMoQSession();
+  folly::coro::Baton goawayBaton;
+  EXPECT_CALL(*serverPublisher, goaway(_)).WillOnce([&](auto) {
+    goawayBaton.post();
+  });
+
+  clientSession_->goaway(Goaway{});
+  co_await goawayBaton;
+  co_await rescheduleN(5);
+  EXPECT_TRUE(clientSession_->isClosed());
+  EXPECT_EQ(
+      clientSession_->getCloseResult()->error, SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, Goaway) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
@@ -1197,6 +1232,9 @@ CO_TEST_P_X(MoQSessionTest, Goaway) {
   co_await goawayBaton;
 
   subscribeHandler->unsubscribe();
+  // Pre-draft-18, the drain waits for the UNSUBSCRIBE on the control stream.
+  co_await rescheduleN(5);
+  EXPECT_TRUE(clientSession_->isClosed());
 }
 
 CO_TEST_P_X(Draft22Test, GoawayOmitsRequestID) {

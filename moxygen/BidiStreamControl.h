@@ -10,6 +10,7 @@
 #include <folly/Function.h>
 #include <folly/io/IOBufQueue.h>
 #include <proxygen/lib/http/webtransport/WebTransport.h>
+#include <moxygen/EgressAckTracker.h>
 #include <moxygen/MoQTypes.h>
 #include <moxygen/ReplyContext.h>
 #include <cstdint>
@@ -32,7 +33,8 @@ class BidiStreamControl {
       proxygen::WebTransport::StreamWriteHandle* writeHandle,
       folly::CancellationToken sessionShutdownToken,
       uint64_t negotiatedVersion,
-      bool finIsCancellation);
+      bool finIsCancellation,
+      std::shared_ptr<EgressAckTracker> egressTracker);
 
   ~BidiStreamControl() = default;
   BidiStreamControl(const BidiStreamControl&) = delete;
@@ -160,6 +162,7 @@ class BidiStreamControl {
   PeerClose peerClose_{PeerClose::None};
   bool finIsCancellation_{false};
   bool readLoopExited_{false};
+  std::shared_ptr<EgressAckTracker> egressTracker_;
 };
 
 // ReplyContext that writes to the bidi reply stream wrapped by a

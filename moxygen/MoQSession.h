@@ -23,6 +23,7 @@
 #include <folly/coro/Task.h>
 #include <folly/logging/xlog.h>
 #include <quic/mvfst-config.h>
+#include <moxygen/EgressAckTracker.h>
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/Publisher.h>
 #include <moxygen/Subscriber.h>
@@ -71,6 +72,8 @@ struct MoQSettings {
   // Subgroups that may wait for peer uni stream credit. beginSubgroup fails
   // with BLOCKED past this limit.
   size_t maxPendingUniStreams{64};
+  // Timeout for waiting for acks once a draining session has no open requests
+  std::chrono::milliseconds drainFlushTimeout{std::chrono::seconds(2)};
 };
 
 class ReplyContext;
@@ -349,7 +352,12 @@ class MoQSession : public Subscriber,
   ~MoQSession() override;
 
   void start();
+
+  // Refuses new requests. Once the open requests end, waits up to
+  // MoQSettings::drainFlushTimeout for the peer to ack everything written,
+  // then closes with NO_ERROR.
   void drain();
+
   void close(
       SessionCloseErrorCode error,
       folly::Optional<uint32_t> wtError = folly::none);
@@ -585,6 +593,10 @@ class MoQSession : public Subscriber,
 
     std::shared_ptr<MoQExecutor> getExecutor() const {
       return session_ ? session_->exec_ : nullptr;
+    }
+
+    std::shared_ptr<EgressAckTracker> getEgressTracker() const {
+      return session_ ? session_->egressTracker_ : nullptr;
     }
 
     quic::TransportInfo getTransportInfo() const {
@@ -1642,6 +1654,7 @@ class MoQSession : public Subscriber,
   void cancelGoawayTimeout();
   void onGoawayTimeoutExpired();
   bool hasOpenRequests() const;
+  bool egressIdle() const;
 
   // Private session state
   folly::F14FastMap<RequestID, std::shared_ptr<PublisherImpl>, RequestID::hash>
@@ -1688,6 +1701,9 @@ class MoQSession : public Subscriber,
   };
   std::vector<BufferedUniStream> bufferedPreSetupUniStreams_;
   bool draining_{false};
+  bool drainFlushing_{false};
+  std::shared_ptr<EgressAckTracker> egressTracker_{
+      std::make_shared<EgressAckTracker>()};
   bool receivedGoaway_{false};
   std::optional<RequestID> receivedGoawayRequestID_;
 

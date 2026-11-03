@@ -15,11 +15,13 @@ BidiStreamControl::BidiStreamControl(
     proxygen::WebTransport::StreamWriteHandle* writeHandle,
     folly::CancellationToken sessionShutdownToken,
     uint64_t negotiatedVersion,
-    bool finIsCancellation)
+    bool finIsCancellation,
+    std::shared_ptr<EgressAckTracker> egressTracker)
     : writeHandle_(writeHandle),
       sessionShutdownToken_(std::move(sessionShutdownToken)),
       negotiatedVersion_(negotiatedVersion),
-      finIsCancellation_(finIsCancellation) {
+      finIsCancellation_(finIsCancellation),
+      egressTracker_(std::move(egressTracker)) {
   if (writeHandle_) {
     writeCancelCb_.emplace(
         writeHandle_->getCancelToken(), [this] { onPeerStopSending(); });
@@ -68,7 +70,7 @@ void BidiStreamControl::write(std::unique_ptr<folly::IOBuf> data, bool fin) {
   if (!writeHandle_) {
     return;
   }
-  writeHandle_->writeStreamData(std::move(data), fin, nullptr);
+  egressTracker_->write(*writeHandle_, std::move(data), fin);
   if (fin) {
     onLocalWriteClose();
   }

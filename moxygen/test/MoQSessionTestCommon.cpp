@@ -185,6 +185,8 @@ void MoQSessionTest::SetUp() {
   MoQExecutor_ = std::make_shared<RecordingMoQExecutor>(&eventBase_);
   std::tie(clientWt_, serverWt_) =
       proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  clientWt_->setDeliveryExecutor(&eventBase_);
+  serverWt_->setDeliveryExecutor(&eventBase_);
   clientSession_ = std::make_shared<MoQRelaySession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt_.get()),
       MoQExecutor_);

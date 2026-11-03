@@ -442,6 +442,9 @@ class StreamPublisherImpl
       bytesDeliveredOrCanceled_ = bytesDeliveredOrCanceled;
     }
 
+    if (egressTracker_) {
+      egressTracker_->onWriteComplete();
+    }
     refCountForCallbacks_--;
     if (refCountForCallbacks_ == 0) {
       keepaliveForDeliveryCallbacks_.reset();
@@ -532,6 +535,7 @@ class StreamPublisherImpl
 
   std::shared_ptr<StreamPublisherImpl> keepaliveForDeliveryCallbacks_{nullptr};
   uint32_t refCountForCallbacks_{0};
+  std::shared_ptr<EgressAckTracker> egressTracker_;
 
   uint32_t bytesWritten_{0};
   uint32_t bytesDeliveredOrCanceled_{0};
@@ -556,6 +560,7 @@ StreamPublisherImpl::StreamPublisherImpl(
           ObjectStatus::NORMAL) {
   logger_ = std::move(logger);
   deliveryCallback_ = std::move(deliveryCallback);
+  egressTracker_ = publisher->getEgressTracker();
 
   // Create delivery timer if timeout is provided
   if (deliveryTimeout.has_value() && deliveryTimeout->count() > 0) {
@@ -812,6 +817,9 @@ StreamPublisherImpl::writeToStream(bool finStream, bool endObject) {
       keepaliveForDeliveryCallbacks_ = shared_from_this();
     }
     refCountForCallbacks_++;
+    if (egressTracker_) {
+      egressTracker_->onWrite();
+    }
   }
   auto writeRes = writeHandle->writeStreamData(
       writeBuf_.move(), finStream, deliveryCallback);
@@ -3240,6 +3248,7 @@ MoQSession::~MoQSession() {
 
 void MoQSession::cleanup() {
   cancelGoawayTimeout();
+  egressTracker_->setOnIdle(nullptr);
   for (auto& waiter : std::exchange(uniStreamCreditWaiters_, {})) {
     waiter.setException(std::runtime_error("session closed"));
   }
@@ -3546,9 +3555,30 @@ void MoQSession::requestStreamGoaway(
 }
 
 void MoQSession::checkForCloseOnDrain() {
-  if (draining_ && !hasOpenRequests()) {
-    close(SessionCloseErrorCode::NO_ERROR);
+  if (!draining_ || closed_ || drainFlushing_ || hasOpenRequests()) {
+    return;
   }
+  drainFlushing_ = true;
+  if (moqSettings_.drainFlushTimeout.count() == 0 || egressIdle()) {
+    close(SessionCloseErrorCode::NO_ERROR);
+    return;
+  }
+  // The GOAWAY timer bounds the flush, and a sooner GOAWAY deadline still
+  // applies.
+  if (!goawayTimeout_ || !goawayTimeout_->isTimerCallbackScheduled() ||
+      goawayTimeout_->getTimerCallbackTimeRemaining() >
+          moqSettings_.drainFlushTimeout) {
+    scheduleGoawayTimeout(moqSettings_.drainFlushTimeout.count());
+  }
+  egressTracker_->setOnIdle([this] {
+    if (egressIdle()) {
+      close(SessionCloseErrorCode::NO_ERROR);
+    }
+  });
+}
+
+bool MoQSession::egressIdle() const {
+  return controlWriteBuf_.empty() && egressTracker_->pending() == 0;
 }
 
 void MoQSession::scheduleGoawayTimeout(uint64_t timeoutMs) {
@@ -3662,6 +3692,11 @@ void MoQSession::onGoawayTimeoutExpired() {
   if (closed_ || !draining_) {
     return;
   }
+  if (drainFlushing_) {
+    XLOG(DBG1) << "Drain timed out waiting for acks sess=" << this;
+    close(SessionCloseErrorCode::NO_ERROR);
+    return;
+  }
   if (!hasOpenRequests()) {
     checkForCloseOnDrain();
     return;
@@ -3722,8 +3757,8 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
       }
     }
     co_await folly::coro::co_safe_point;
-    auto writeRes =
-        controlStream->writeStreamData(controlWriteBuf_.move(), false, nullptr);
+    auto writeRes = egressTracker_->write(
+        *controlStream, controlWriteBuf_.move(), /*fin=*/false);
     if (!writeRes) {
       XLOG(ERR) << "Write error: " << uint64_t(writeRes.error());
       break;
@@ -4361,14 +4396,15 @@ MoQSession::SendRequestResult MoQSession::sendRequest(
           SendRequestError{bidiStream.error(), "Failed to create bidi stream"});
     }
     bidiStream->writeHandle->setPriority(controlPriority());
-    bidiStream->writeHandle->writeStreamData(
-        writeBuf.move(), /*fin=*/false, nullptr);
+    egressTracker_->write(
+        *bidiStream->writeHandle, writeBuf.move(), /*fin=*/false);
     auto* cb = senderCallback ? senderCallback.get() : this;
     auto control = std::make_shared<BidiStreamControl>(
         bidiStream->writeHandle,
         cancellationSource_.getToken(),
         *negotiatedVersion_,
-        /*finIsCancellation=*/true);
+        /*finIsCancellation=*/true,
+        egressTracker_);
     control->setRequestID(requestID);
     auto codec = makeBidiCodec(
         cb,
@@ -8115,7 +8151,7 @@ bool MoQSession::requestUpdate(
       XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
       return false;
     }
-    auto writeRes = wh->writeStreamData(buf.move(), /*fin=*/false, nullptr);
+    auto writeRes = egressTracker_->write(*wh, buf.move(), /*fin=*/false);
     if (!writeRes) {
       XLOG(ERR) << "REQUEST_UPDATE write error=" << uint64_t(writeRes.error())
                 << " sess=" << this;
@@ -8795,7 +8831,8 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
           writeHandle,
           cancellationSource_.getToken(),
           *negotiatedVersion_,
-          config->finIsCancellation);
+          config->finIsCancellation,
+          egressTracker_);
       auto cb = std::make_unique<BidiRequestCallback>(
           this, control, std::move(config->onPeerTermination));
       auto* cbPtr = cb.get();

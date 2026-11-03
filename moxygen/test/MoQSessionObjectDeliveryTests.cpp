@@ -606,6 +606,168 @@ CO_TEST_P_X(MoQSessionTest, DrainWaitsForInflightSubgroup) {
   co_await rescheduleN(2);
   EXPECT_TRUE(serverWt_->isSessionClosed());
 }
+
+// A draining session stays open until the subgroup's FIN is acked.
+CO_TEST_P_X(MoQSessionTest, DrainWaitsForSubgroupAck) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> pub;
+  RequestID requestID;
+  expectSubscribe([&](auto sub, auto p) -> TaskSubscribeResult {
+    pub = p;
+    requestID = sub.requestID;
+    co_return makeSubscribeOkResult(sub);
+  });
+  auto sg = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(0, _, _, false))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*sg, endOfSubgroup()).WillOnce(testing::Return(folly::unit));
+  expectPublishDone();
+  co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+
+  auto streamId = serverObjectStreamId();
+  auto subgroup = pub->beginSubgroup(0, 0, 0).value();
+  EXPECT_TRUE(subgroup->object(0, makeBuf(10)).hasValue());
+  co_await rescheduleN(5);
+  auto& stream = serverWt_->writeHandles[streamId];
+  stream->setImmediateDelivery(false);
+  EXPECT_TRUE(subgroup->endOfSubgroup().hasValue());
+  EXPECT_TRUE(pub->publishDone(getTrackEndedPublishDone(requestID)).hasValue());
+  serverSession_->drain();
+  co_await rescheduleN(5);
+  EXPECT_FALSE(serverSession_->isClosed());
+
+  stream->deliverInflightData();
+  co_await publishDone_;
+  co_await rescheduleN(5);
+  EXPECT_TRUE(serverSession_->isClosed());
+  EXPECT_EQ(
+      serverSession_->getCloseResult()->error, SessionCloseErrorCode::NO_ERROR);
+}
+
+// A draining session stays open until PUBLISH_DONE is acked, whether it goes
+// on the control stream or the request stream.
+CO_TEST_P_X(MoQSessionTest, DrainWaitsForPublishDoneAck) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> pub;
+  RequestID requestID;
+  expectSubscribe([&](auto sub, auto p) -> TaskSubscribeResult {
+    pub = p;
+    requestID = sub.requestID;
+    co_return makeSubscribeOkResult(sub);
+  });
+  auto sg = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(0, _, _, true))
+      .WillOnce(testing::Return(folly::unit));
+  // deliverInflightData acks synchronously, so the server can close before the
+  // client reads PUBLISH_DONE, and then the client ends the subscription
+  // locally.
+  EXPECT_CALL(*subscribeCallback_, publishDone(_)).WillOnce([&] {
+    publishDone_.post();
+    return folly::unit;
+  });
+  co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+
+  auto subgroup = pub->beginSubgroup(0, 0, 0).value();
+  EXPECT_TRUE(
+      subgroup->object(0, makeBuf(10), noExtensions(), /*finSubgroup=*/true)
+          .hasValue());
+  co_await rescheduleN(5);
+  for (auto& [id, stream] : serverWt_->writeHandles) {
+    stream->setImmediateDelivery(false);
+  }
+  EXPECT_TRUE(pub->publishDone(getTrackEndedPublishDone(requestID)).hasValue());
+  serverSession_->drain();
+  co_await rescheduleN(5);
+  EXPECT_FALSE(serverSession_->isClosed());
+
+  // The last ack closes the session, which clears writeHandles.
+  auto streams = serverWt_->writeHandles;
+  for (auto& [id, stream] : streams) {
+    stream->setImmediateDelivery(true);
+    stream->deliverInflightData();
+  }
+  co_await publishDone_;
+  co_await rescheduleN(5);
+  EXPECT_TRUE(serverSession_->isClosed());
+  EXPECT_EQ(
+      serverSession_->getCloseResult()->error, SessionCloseErrorCode::NO_ERROR);
+}
+
+// A draining session closes after drainFlushTimeout even if its GOAWAY is
+// never acked.
+CO_TEST_P_X(MoQSessionTest, DrainFlushTimeoutCloses) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.drainFlushTimeout = std::chrono::milliseconds(20);
+  serverSession_->setMoqSettings(moqSettings);
+  for (auto& [id, stream] : serverWt_->writeHandles) {
+    stream->setImmediateDelivery(false);
+  }
+  serverSession_->goaway(Goaway{});
+  co_await rescheduleN(5);
+  EXPECT_FALSE(serverSession_->isClosed());
+  co_await folly::coro::sleep(std::chrono::milliseconds(100));
+  EXPECT_TRUE(serverSession_->isClosed());
+  EXPECT_EQ(
+      serverSession_->getCloseResult()->error, SessionCloseErrorCode::NO_ERROR);
+}
+
+// close() during the flush closes at once with the given error.
+CO_TEST_P_X(MoQSessionTest, CloseDuringDrainFlush) {
+  co_await setupMoQSession();
+  for (auto& [id, stream] : serverWt_->writeHandles) {
+    stream->setImmediateDelivery(false);
+  }
+  serverSession_->goaway(Goaway{});
+  co_await rescheduleN(5);
+  EXPECT_FALSE(serverSession_->isClosed());
+  serverSession_->close(SessionCloseErrorCode::INTERNAL_ERROR);
+  EXPECT_EQ(
+      serverSession_->getCloseResult()->error,
+      SessionCloseErrorCode::INTERNAL_ERROR);
+  co_await rescheduleN(5);
+}
+
+// Data cancelled by a subgroup reset does not hold a drain open.
+CO_TEST_P_X(MoQSessionTest, DrainIgnoresResetSubgroup) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> pub;
+  RequestID requestID;
+  expectSubscribe([&](auto sub, auto p) -> TaskSubscribeResult {
+    pub = p;
+    requestID = sub.requestID;
+    co_return makeSubscribeOkResult(sub);
+  });
+  auto sg = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(0, _, _, _)).WillOnce(testing::Return(folly::unit));
+  expectPublishDone();
+  co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+
+  auto streamId = serverObjectStreamId();
+  auto subgroup = pub->beginSubgroup(0, 0, 0).value();
+  EXPECT_TRUE(subgroup->object(0, makeBuf(10)).hasValue());
+  co_await rescheduleN(5);
+  serverWt_->writeHandles[streamId]->setImmediateDelivery(false);
+  EXPECT_TRUE(subgroup->object(1, makeBuf(10)).hasValue());
+  subgroup->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+  EXPECT_TRUE(pub->publishDone(getTrackEndedPublishDone(requestID)).hasValue());
+  serverSession_->drain();
+  co_await publishDone_;
+  co_await rescheduleN(5);
+  EXPECT_TRUE(serverSession_->isClosed());
+  EXPECT_EQ(
+      serverSession_->getCloseResult()->error, SessionCloseErrorCode::NO_ERROR);
+}
+
 // beginSubgroup is legal inside the subscribe handler -- publishEnded() is
 // false until the subscription is DONE -- so a handler may open subgroups and
 // then reject. Dropping the publisher without resetting those streams or

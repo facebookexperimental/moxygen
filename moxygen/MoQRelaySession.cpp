@@ -629,7 +629,7 @@ MoQRelaySession::sendRequestUpdateOnBidi(
     // Draft 18+: REQUEST_OK / REQUEST_ERROR carry no requestID on the wire; the
     // response codec correlates them FIFO from this queue.
     control->responseIDQueue().push_back(reqUpdate.requestID);
-    writeHandle->writeStreamData(buf.move(), /*fin=*/false, nullptr);
+    control->write(buf.move(), /*fin=*/false);
   } else {
     // Pre-draft-18: ride the shared control stream.
     controlWriteBuf_.append(buf.move());
