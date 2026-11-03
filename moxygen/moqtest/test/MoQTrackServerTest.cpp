@@ -174,7 +174,8 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceZero) {
     EXPECT_CALL(
         *mockConsumer, beginSubgroup(groupId, 0, testing::_, testing::_))
         .WillRepeatedly(testing::Return(mockSubgroupConsumer));
-    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+    for (uint64_t objectId = 0; objectId <= params_.lastObjectInTrack;
+         objectId++) {
       // Find Object Size
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
 
@@ -228,7 +229,8 @@ TEST_F(
     EXPECT_CALL(
         *mockConsumer, beginSubgroup(groupId, 0, testing::_, testing::_))
         .WillRepeatedly(testing::Return(mockSubgroupConsumer));
-    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+    for (uint64_t objectId = 0; objectId <= params_.lastObjectInTrack;
+         objectId++) {
       // Find Object Size
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
 
@@ -293,7 +295,8 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceOne) {
 
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
-    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+    for (uint64_t objectId = 0; objectId <= params_.lastObjectInTrack;
+         objectId++) {
       // Set expectations for beginObject
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
       // Create a mock subgroup consumer
@@ -349,7 +352,8 @@ TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceTwo) {
         *mockConsumer, beginSubgroup(groupId, 1, testing::_, testing::_))
         .WillRepeatedly(testing::Return(mockSubgroupConsumerOne));
 
-    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+    for (uint64_t objectId = 0; objectId <= params_.lastObjectInTrack;
+         objectId++) {
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
       // Set expectations for beginObject
       if (objectId % 2 == 0) {
@@ -432,7 +436,8 @@ TEST_F(
 
         .WillRepeatedly(testing::Return(mockSubgroupConsumerOne));
 
-    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+    for (uint64_t objectId = 0; objectId <= params_.lastObjectInTrack;
+         objectId++) {
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
       // Set expectations for beginObject
       if (objectId % 2 == 0) {
@@ -579,7 +584,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceZero) {
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
     // Create a mock subgroup consumer
-    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+    for (uint64_t objectId = 0; objectId <= params_.lastObjectInTrack;
+         objectId++) {
       // Find Object Size
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
 
@@ -643,7 +649,8 @@ TEST_F(
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
     // Create a mock subgroup consumer
-    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+    for (uint64_t objectId = 0; objectId <= params_.lastObjectInTrack;
+         objectId++) {
       // Find Object Size
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
 
@@ -719,7 +726,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceOne) {
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
     // Create a mock subgroup consumer
-    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+    for (uint64_t objectId = 0; objectId <= params_.lastObjectInTrack;
+         objectId++) {
       // Find Object Size
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
 
@@ -779,7 +787,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceTwo) {
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
     // Create a mock subgroup consumer
-    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+    for (uint64_t objectId = 0; objectId <= params_.lastObjectInTrack;
+         objectId++) {
       // Find Object Size
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
       int subGroupId = objectId % 2;
@@ -840,7 +849,8 @@ TEST_F(
   // Set expectations for beginSubgroup
   for (int groupId = 0; groupId <= 10; groupId++) {
     // Create a mock subgroup consumer
-    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+    for (uint64_t objectId = 0; objectId <= params_.lastObjectInTrack;
+         objectId++) {
       // Find Object Size
       auto objectSize = moxygen::getObjectSize(objectId, &params_);
       int subGroupId = (objectId - params_.startObject) % 2;
@@ -907,7 +917,8 @@ TEST_F(MoQTrackServerTest, ValidateFetchWithForwardPreferenceThree) {
   // Build Expect Calls
   for (int groupId = 0; groupId <= 10; groupId++) {
     // Create a mock subgroup consumer
-    for (int objectId = 0; objectId <= params_.lastObjectInTrack; objectId++) {
+    for (uint64_t objectId = 0; objectId <= params_.lastObjectInTrack;
+         objectId++) {
       moxygen::ObjectHeader expectedHeader;
       expectedHeader.group = groupId;
       expectedHeader.id = objectId;

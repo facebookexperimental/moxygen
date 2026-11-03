@@ -608,7 +608,7 @@ class Fmp4Track : public SegmentSource {
         filePrFaults_(enableFilePrFaults),
         subgroupsPerGroup_(subgroupsPerGroup),
         loop_(loop) {
-    XCHECK_GT(subgroupsPerGroup_, 0);
+    XCHECK_GT(subgroupsPerGroup_, 0u);
     timeline_->addTrack();
     if (filePrFaults_) {
       filePrFaultState().registerTrack(spec_.name, role);
@@ -1052,8 +1052,8 @@ std::shared_ptr<SegmentSource> Fmp4MediaSource::openTrack(
     uint64_t dropSeed,
     bool enableFilePrFaults,
     uint64_t subgroupsPerGroup) {
-  XCHECK_LE(dropPercent, 100);
-  XCHECK_GT(subgroupsPerGroup, 0);
+  XCHECK_LE(dropPercent, 100u);
+  XCHECK_GT(subgroupsPerGroup, 0u);
   if (trackName == kCatalogTrackName) {
     return std::make_shared<CatalogSource>(catalog());
   }

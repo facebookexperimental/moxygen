@@ -43,7 +43,6 @@ DEFINE_string(
     versions,
     "",
     "Comma-separated MoQ draft versions (e.g. \"16,18\"). Empty = all supported.");
-DEFINE_int32(delivery_timeout, 0, "the delivery timeout in ms for server");
 DEFINE_bool(
     insecure,
     false,
@@ -79,14 +78,8 @@ class DatePublisher : public Publisher,
  public:
   enum class Mode { STREAM_PER_GROUP, STREAM_PER_OBJECT, DATAGRAM };
 
-  explicit DatePublisher(
-      Mode mode,
-      std::string ns = "moq-date",
-      int deliveryTimeout = 0)
-      : mode_(mode),
-        ns_(std::move(ns)),
-        deliveryTimeout_(deliveryTimeout),
-        forwarder_(dateTrackName()) {
+  explicit DatePublisher(Mode mode, std::string ns = "moq-date")
+      : mode_(mode), ns_(std::move(ns)), forwarder_(dateTrackName()) {
     forwarder_.setLargest(nowLocation());
     auto cb = std::make_shared<FillCallback>();
     cb->publisher = this;
@@ -528,7 +521,6 @@ class DatePublisher : public Publisher,
 
   Mode mode_{Mode::STREAM_PER_GROUP};
   std::string ns_;
-  int deliveryTimeout_;
   MoQForwarder forwarder_;
   folly::Executor* publisherEvb_{nullptr};
   std::shared_ptr<SubgroupConsumer> subgroupPub_;
@@ -643,8 +635,7 @@ int main(int argc, char* argv[]) {
   }
 
   // Create publisher
-  auto publisher =
-      std::make_shared<DatePublisher>(mode, FLAGS_ns, FLAGS_delivery_timeout);
+  auto publisher = std::make_shared<DatePublisher>(mode, FLAGS_ns);
 
   // Create logger factory if mlog path is specified
   std::shared_ptr<moxygen::FileMLoggerFactory> loggerFactory;

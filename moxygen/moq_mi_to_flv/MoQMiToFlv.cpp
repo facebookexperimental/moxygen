@@ -91,7 +91,7 @@ std::list<flv::FlvTag> MoQMiToFlv::MoQMiToFlvPayload(
   return ret;
 }
 
-const uint32_t MoQMiToFlv::convertTsToFlv(uint64_t ts, uint64_t timescale) {
+uint32_t MoQMiToFlv::convertTsToFlv(uint64_t ts, uint64_t timescale) {
   uint64_t flv_ts = static_cast<uint64_t>((ts * 1000) / timescale);
   uint32_t final_ts =
       static_cast<int32_t>(flv_ts & 0x7FFFFFFF); // 31 lower bits

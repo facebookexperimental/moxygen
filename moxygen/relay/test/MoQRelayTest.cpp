@@ -26,28 +26,29 @@ const TrackNamespace kTestNamespace{{"test", "namespace"}};
 const TrackNamespace kAllowedPrefix{{"test"}};
 const FullTrackName kTestTrackName{kTestNamespace, "track1"};
 
-// TestMoQExecutor that can be driven for tests
-class TestMoQExecutor : public MoQFollyExecutorImpl,
-                        public folly::DrivableExecutor {
+// TestMoQExecutor that can be driven for tests. MoQExecutor is a member so
+// that this class has a single folly::Executor base.
+class TestMoQExecutor : public folly::DrivableExecutor,
+                        public std::enable_shared_from_this<TestMoQExecutor> {
  public:
-  explicit TestMoQExecutor() : MoQFollyExecutorImpl(&evb_) {}
-  ~TestMoQExecutor() override = default;
-
   void add(folly::Func func) override {
-    MoQFollyExecutorImpl::add(std::move(func));
+    moqExecutor_.add(std::move(func));
   }
 
   // Implements DrivableExec::drive
   void drive() override {
-    // Run the event loop until there is nothing left to do
-    // (simulate a "tick" for test event loop)
-    if (auto* evb = getBackingEventBase()) {
-      evb->loopOnce();
-    }
+    evb_.loopOnce();
+  }
+
+  // Shares ownership of this TestMoQExecutor, so that the EventBase stays
+  // alive while the result is held.
+  std::shared_ptr<MoQExecutor> moqExecutor() {
+    return {shared_from_this(), &moqExecutor_};
   }
 
  private:
   folly::EventBase evb_;
+  MoQFollyExecutorImpl moqExecutor_{&evb_};
 };
 
 // Test fixture for MoQRelay tests
@@ -68,7 +69,8 @@ class MoQRelayTest : public ::testing::Test {
 
   // Helper to create a mock session
   std::shared_ptr<MockMoQSession> createMockSession() {
-    auto session = std::make_shared<NiceMock<MockMoQSession>>(exec_);
+    auto session =
+        std::make_shared<NiceMock<MockMoQSession>>(exec_->moqExecutor());
     ON_CALL(*session, getNegotiatedVersion())
         .WillByDefault(Return(std::optional<uint64_t>(kVersionDraftCurrent)));
     auto state = getOrCreateMockState(session);
@@ -3247,7 +3249,8 @@ class MoQRelayTracksTest : public MoQRelayTest {
 
   // Like createMockSession() but reports draft 18 for the negotiated version.
   std::shared_ptr<MockMoQSession> createV18Session() {
-    auto session = std::make_shared<NiceMock<MockMoQSession>>(exec_);
+    auto session =
+        std::make_shared<NiceMock<MockMoQSession>>(exec_->moqExecutor());
     ON_CALL(*session, getNegotiatedVersion())
         .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft18)));
     getOrCreateMockState(session);
@@ -3255,7 +3258,8 @@ class MoQRelayTracksTest : public MoQRelayTest {
   }
 
   std::shared_ptr<MockMoQSession> createV21Session() {
-    auto session = std::make_shared<NiceMock<MockMoQSession>>(exec_);
+    auto session =
+        std::make_shared<NiceMock<MockMoQSession>>(exec_->moqExecutor());
     ON_CALL(*session, getNegotiatedVersion())
         .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft21)));
     getOrCreateMockState(session);
@@ -3263,7 +3267,8 @@ class MoQRelayTracksTest : public MoQRelayTest {
   }
 
   std::shared_ptr<MockMoQSession> createV22Session() {
-    auto session = std::make_shared<NiceMock<MockMoQSession>>(exec_);
+    auto session =
+        std::make_shared<NiceMock<MockMoQSession>>(exec_->moqExecutor());
     ON_CALL(*session, getNegotiatedVersion())
         .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft22)));
     getOrCreateMockState(session);

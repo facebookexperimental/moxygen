@@ -69,7 +69,7 @@ std::unique_ptr<folly::IOBuf> FlvCoder::writeTag(FlvTag tag) {
     tagSize += audioTag->data->computeChainDataLength();
     queue.append(std::move(audioTag->data));
   }
-  XCHECK_GT(tagSize, 0);
+  XCHECK_GT(tagSize, 0u);
   queue.append(write4Bytes(static_cast<uint32_t>(tagSize)));
   return queue.move();
 }

@@ -311,7 +311,7 @@ void MoQChatClient::handleInput(const std::string& input) {
 
 folly::coro::Task<void> MoQChatClient::subscribeToUser(
     TrackNamespace trackNamespace) {
-  XCHECK_GE(trackNamespace.size(), 5);
+  XCHECK_GE(trackNamespace.size(), 5u);
   std::string username = trackNamespace[2];
   std::string deviceId = trackNamespace[3];
   std::string timestampStr = trackNamespace[4];

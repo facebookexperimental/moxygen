@@ -3711,7 +3711,7 @@ uint16_t* MoQFrameWriter::writeFrameHeader(
   writeVarint(writeBuf, folly::to_underlying(frameType), size, error);
   auto res = writeBuf.preallocate(2, 256);
   writeBuf.postallocate(2);
-  XCHECK_GE(res.second, 2);
+  XCHECK_GE(res.second, 2u);
   return static_cast<uint16_t*>(res.first);
 }
 

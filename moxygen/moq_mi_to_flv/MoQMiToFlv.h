@@ -20,7 +20,7 @@ class MoQMiToFlv {
   std::list<flv::FlvTag> MoQMiToFlvPayload(MoQMi::MoqMiItem moqMiItem);
 
  private:
-  const uint32_t convertTsToFlv(uint64_t ts, uint64_t timescale);
+  uint32_t convertTsToFlv(uint64_t ts, uint64_t timescale);
   void saveAndWriteHeaderIfNeeded(
       std::list<flv::FlvTag>& ret,
       bool isVideoHeader);

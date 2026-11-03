@@ -266,7 +266,7 @@ void MoQRelay::NamespaceNode::incrementActiveChildren() {
 }
 
 void MoQRelay::NamespaceNode::decrementActiveChildren() {
-  XCHECK_GT(activeChildCount_, 0);
+  XCHECK_GT(activeChildCount_, 0u);
   activeChildCount_--;
 }
 
@@ -289,7 +289,7 @@ void MoQRelay::NamespaceNode::tryPruneChild(const std::string& childKey) {
   NamespaceNode* current = this;
 
   while (current) {
-    XCHECK_GT(current->activeChildCount_, 0);
+    XCHECK_GT(current->activeChildCount_, 0u);
     current->activeChildCount_--;
 
     // If current still has content or children after decrement, stop walking
