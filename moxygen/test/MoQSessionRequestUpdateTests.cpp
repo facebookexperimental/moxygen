@@ -2164,6 +2164,53 @@ CO_TEST_P_X(MoQSessionTest, SubscriberRequestUpdateAfterPublishDoneFails) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// The fill's consumer closes the session from reset(), which destroys the
+// fill's state while the unsent update is still ending it.
+CO_TEST_P_X(MoQSessionTest, UnsentRequestUpdateFillResetClosesSession) {
+  if (getDraftMajorVersion(getServerSelectedVersion()) < 22) {
+    co_return;
+  }
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectPublishDone();
+  expectSubscribe([&trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+    trackConsumer = pub;
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  CO_ASSERT_FALSE(res.hasError());
+  auto subscribeHandle = res.value();
+
+  serverWt_->setDeferNewStreamData(true);
+  auto subgroup = trackConsumer->beginSubgroup(0, 0, 0);
+  serverWt_->setDeferNewStreamData(false);
+  CO_ASSERT_TRUE(subgroup.hasValue());
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await rescheduleN(3);
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*subscribeCallback_, beginFill(_)).WillOnce([&](RequestID) {
+    return folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>(
+        fetchCallback_);
+  });
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED))
+      .WillOnce(
+          [&] { clientSession_->close(SessionCloseErrorCode::NO_ERROR); });
+  RequestUpdate update;
+  update.forward = false;
+  update.fill =
+      FillParameters{LocationFilter::absoluteStart({0, 0}), {}, {}, {}};
+  auto result = co_await folly::coro::timeout(
+      subscribeHandle->requestUpdate(std::move(update)),
+      std::chrono::seconds(1));
+  EXPECT_TRUE(result.hasError());
+  EXPECT_TRUE(clientSession_->isClosed());
+}
+
 CO_TEST_P_X(MoQSessionTest, SubscriberRequestUpdateAfterCloseFails) {
   if (getDraftMajorVersion(getServerSelectedVersion()) < 15) {
     co_return;

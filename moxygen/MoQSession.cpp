@@ -2919,10 +2919,12 @@ class MoQSession::FetchTrackReceiveState
 
   // An empty fill range never opens a stream, so this reset is the answer.
   void fillNeverOpened(MoQSession* session) {
+    // reset() can close the session, which destroys this state.
+    const auto requestID = requestID_;
     if (auto callback = std::exchange(callback_, nullptr)) {
       callback->reset(ResetStreamErrorCode::CANCELLED);
     }
-    session->fetches_.erase(requestID_);
+    session->fetches_.erase(requestID);
   }
 
   std::shared_ptr<FetchConsumer> getFetchCallback() const {
