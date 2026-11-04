@@ -1352,7 +1352,7 @@ CO_TEST_P_X(PublisherPriorityTest, SubgroupExplicitPriority) {
   co_await setupMoQSession();
   std::shared_ptr<TrackConsumer> trackConsumer;
 
-  constexpr uint8_t kObjectPriority = 32;
+  static constexpr uint8_t kObjectPriority = 32;
 
   expectSubscribe(
       [this, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
