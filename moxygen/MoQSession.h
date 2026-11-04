@@ -289,6 +289,11 @@ class MoQSession : public Subscriber,
 
   void setVersion(uint64_t version);
   void setMoqSettings(MoQSettings settings);
+  using MessageParameterNegotiator = folly::Function<MessageParameterExtensions(
+      uint64_t /* version */,
+      const SetupParameters& /* localParams */,
+      const SetupParameters& /* peerParams */)>;
+  void setMessageParameterNegotiator(MessageParameterNegotiator negotiator);
   // Accessor used by PublisherImpl and others
   const MoQSettings& getMoqSettings() const {
     return moqSettings_;
@@ -1648,6 +1653,7 @@ class MoQSession : public Subscriber,
 
   // Private implementation methods
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
+  void negotiateMessageParameters();
   void markSetupComplete();
   void pruneBufferedSubgroups(TrackAlias alias);
   void scheduleGoawayTimeout(uint64_t timeoutMs);
@@ -1691,6 +1697,11 @@ class MoQSession : public Subscriber,
 
   folly::coro::Promise<Setup> setupPromise_;
   folly::coro::Future<Setup> setupFuture_;
+  std::optional<SetupParameters> localSetupParams_;
+  std::optional<SetupParameters> peerSetupParams_;
+  std::shared_ptr<MessageParameterExtensions> messageParameterExtensions_{
+      std::make_shared<MessageParameterExtensions>()};
+  MessageParameterNegotiator messageParameterNegotiator_;
   bool setupComplete_{false};
   using SetupWaiters = folly::F14FastMap<uint64_t, folly::coro::Promise<void>>;
   std::shared_ptr<SetupWaiters> setupWaiters_;

@@ -3833,9 +3833,18 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
     XLOG(ERR) << "writeSetup failed sess=" << this;
     return folly::makeUnexpected(res.error());
   }
+  localSetupParams_ = setup.params;
+  negotiateMessageParameters();
   initLocalMaxRequestID(maxRequestID);
   controlWriteEvent_.signal();
   return folly::unit;
+}
+
+void MoQSession::negotiateMessageParameters() {
+  if (messageParameterNegotiator_ && localSetupParams_ && peerSetupParams_) {
+    *messageParameterExtensions_ = messageParameterNegotiator_(
+        *negotiatedVersion_, *localSetupParams_, *peerSetupParams_);
+  }
 }
 
 void MoQSession::initLocalMaxRequestID(uint64_t fromParam) {
@@ -3942,6 +3951,8 @@ void MoQSession::onServerSetup(Setup serverSetup) {
           ? std::min(kMaxSendTokenCacheSize, peerAuthCacheSize)
           : 0,
       /*evict=*/true);
+  peerSetupParams_ = serverSetup.params;
+  negotiateMessageParameters();
   setupPromise_.setValue(std::move(serverSetup));
 }
 
@@ -4022,6 +4033,9 @@ void MoQSession::onClientSetup(Setup clientSetup) {
     return;
   }
 
+  peerSetupParams_ = clientSetup.params;
+  negotiateMessageParameters();
+
   {
     auto negotiatedVersion = *getNegotiatedVersion();
     XLOG(DBG1) << "Negotiated Version=0x" << std::hex << negotiatedVersion
@@ -4059,6 +4073,7 @@ std::unique_ptr<MoQControlCodec> MoQSession::makeBidiCodec(
       callback, std::move(allowedFrames), requestID, okType);
   codec->initializeVersion(*negotiatedVersion_);
   codec->setTokenCache(&receiveTokenCache_);
+  codec->setMessageParameterExtensions(messageParameterExtensions_);
   codec->setResponseIDQueue(responseIDQueue);
   return codec;
 }
@@ -9074,7 +9089,9 @@ bool MoQSession::shouldFailNewLocalRequestDueToGoaway() const {
 void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {
   negotiatedVersion_ = negotiatedVersion;
   moqFrameWriter_.initializeVersion(*negotiatedVersion_);
+  moqFrameWriter_.setMessageParameterExtensions(messageParameterExtensions_);
   controlCodec_->initializeVersion(*negotiatedVersion_);
+  controlCodec_->setMessageParameterExtensions(messageParameterExtensions_);
   if (useBidiRequestStreams(*negotiatedVersion_)) {
     receiveTokenCache_.setMaxSize(0, /*evict=*/true);
   }
@@ -9517,6 +9534,13 @@ void MoQSession::setVersion(uint64_t version) {
 
 void MoQSession::setMoqSettings(MoQSettings settings) {
   moqSettings_ = settings;
+}
+
+void MoQSession::setMessageParameterNegotiator(
+    MessageParameterNegotiator negotiator) {
+  XCHECK(!setupComplete_);
+  messageParameterNegotiator_ = std::move(negotiator);
+  negotiateMessageParameters();
 }
 
 void SessionScoped::bind(const std::shared_ptr<MoQSession>& session) {

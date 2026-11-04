@@ -2802,6 +2802,79 @@ CO_TEST_P_X(MoQUniControlTest, BidiRequestBeforeClientSetupWaitsForSetup) {
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQUniControlTest, NegotiatesParameterBeforeBufferedRequest) {
+  constexpr uint64_t kTestSetupOption = 0x4d;
+  constexpr uint64_t kTestParameter = 0x4f;
+  const std::string kTestValue = "route";
+
+  auto extensions = std::make_shared<MessageParameterExtensions>();
+  extensions->emplace(
+      kTestParameter,
+      MessageParameterExtension{
+          ParameterValueEncoding::LengthPrefixed, {FrameType::SUBSCRIBE}});
+  serverSession_->setMessageParameterNegotiator(
+      [extensions, kTestValue](uint64_t, const auto& local, const auto& peer) {
+        auto hasOption = [&](const auto& params) {
+          return getFirstStringParam(params, kTestSetupOption) == kTestValue;
+        };
+        return hasOption(local) && hasOption(peer)
+            ? *extensions
+            : MessageParameterExtensions{};
+      });
+
+  NullWebTransportHandler nullHandler;
+  serverWt_->setPeerHandler(&nullHandler);
+  auto peerHandlerGuard =
+      folly::makeGuard([this] { serverWt_->setPeerHandler(nullptr); });
+  serverSession_->setPublishHandler(serverPublisher);
+  serverSession_->start();
+  moxygen::Setup serverSetup;
+  serverSetup.params.insertParam(Parameter(kTestSetupOption, kTestValue));
+  serverSession_->sendSetup(std::move(serverSetup));
+
+  auto [subscribedPromise, subscribed] =
+      folly::coro::makePromiseContract<void>();
+  bool sawSubscribe = false;
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .WillOnce([&](auto sub, auto /*pub*/) -> TaskSubscribeResult {
+        EXPECT_EQ(sub.params.size(), 1);
+        EXPECT_EQ(sub.params.at(0).key, kTestParameter);
+        EXPECT_EQ(sub.params.at(0).asString, kTestValue);
+        sawSubscribe = true;
+        subscribedPromise.setValue();
+        co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+      });
+
+  MoQFrameWriter writer;
+  writer.initializeVersion(getServerSelectedVersion());
+  writer.setMessageParameterExtensions(extensions);
+  auto request = getSubscribe(kTestTrackName);
+  request.params.insertParam(Parameter(kTestParameter, kTestValue));
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  CO_ASSERT_TRUE(writer.writeSubscribeRequest(writeBuf, request).hasValue());
+  auto bidi = clientWt_->createBidiStream();
+  CO_ASSERT_TRUE(bidi.hasValue());
+  bidi->writeHandle->writeStreamData(writeBuf.move(), false, nullptr);
+  for (int i = 0; i < 10; ++i) {
+    co_await folly::coro::co_reschedule_on_current_executor;
+  }
+  EXPECT_FALSE(sawSubscribe);
+
+  moxygen::Setup clientSetup = getClientSetup(initialMaxRequestID_);
+  clientSetup.params.insertParam(Parameter(kTestSetupOption, kTestValue));
+  auto* controlWh =
+      CHECK_NOTNULL(clientWt_->createUniStream().value_or(nullptr));
+  CO_ASSERT_TRUE(
+      writeClientSetup(writeBuf, clientSetup, getServerSelectedVersion())
+          .hasValue());
+  controlWh->writeStreamData(writeBuf.move(), false, nullptr);
+  auto reached = co_await folly::coro::co_awaitTry(
+      folly::coro::timeout(std::move(subscribed), std::chrono::seconds(1)));
+  EXPECT_FALSE(reached.hasException());
+
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQUniControlTest, BidiRequestStreamFinWithFirstFrame) {
   // A peer that packs its request frame and the FIN into one write leaves
   // nothing more to read. bidiStreamDemuxer hands the FIN to controlReadLoop
