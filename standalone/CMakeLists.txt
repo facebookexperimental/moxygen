@@ -60,8 +60,9 @@ function(read_rev_hash ORG PROJECT OUT_VAR)
             message(FATAL_ERROR "Failed to parse rev from ${REV_FILE}")
         endif()
     else()
-        message(FATAL_ERROR "Rev file not found: ${REV_FILE}\n"
-            "Make sure you cloned moxygen with build/deps/github_hashes/")
+        # The hashes export sometimes drops rev files; build tip instead.
+        message(WARNING "Rev file not found: ${REV_FILE}; using main")
+        set(${OUT_VAR} "main" PARENT_SCOPE)
     endif()
 endfunction()
 
