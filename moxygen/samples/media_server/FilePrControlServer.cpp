@@ -14,6 +14,7 @@
 #include <folly/logging/xlog.h>
 
 #include <arpa/inet.h>
+#include <fcntl.h> // IWYU pragma: keep
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
