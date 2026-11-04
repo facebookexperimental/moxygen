@@ -25,6 +25,32 @@ CO_TEST_P_X(MoQSessionTest, NoPublishHandler) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(MoQSessionTest, FailedPublishWriteDoesNotReachPeer) {
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce([](const PublishRequest& request, auto) {
+        return makePublishOkResult(request);
+      });
+
+  PublishRequest invalid;
+  invalid.fullTrackName = FullTrackName{TrackNamespace{{"test"}}, "invalid"};
+  CO_ASSERT_TRUE(
+      invalid.params.insertParam(Parameter(0xBEEF, std::string("unregistered")))
+          .hasValue());
+  auto failed =
+      clientSession_->publish(std::move(invalid), makePublishHandle());
+  CO_ASSERT_TRUE(failed.hasError());
+
+  PublishRequest valid;
+  valid.fullTrackName = FullTrackName{TrackNamespace{{"test"}}, "valid"};
+  auto result = clientSession_->publish(std::move(valid), makePublishHandle());
+  CO_ASSERT_TRUE(result.hasValue());
+  auto reply = co_await std::move(result->reply);
+  EXPECT_TRUE(reply.hasValue());
+  EXPECT_FALSE(serverSession_->isClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(Draft22Test, PublishOkDoesNotOverrideInitialForwardState) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
 

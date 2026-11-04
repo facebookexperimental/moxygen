@@ -48,6 +48,11 @@ class MoQCodec {
     moqFrameParser_.setTokenCache(cache);
   }
 
+  void setMessageParameterExtensions(
+      std::shared_ptr<const MessageParameterExtensions> extensions) {
+    moqFrameParser_.setMessageParameterExtensions(std::move(extensions));
+  }
+
   // If ParseResult::BLOCKED is returned, must call onIngress again to restart
   virtual ParseResult onIngress(
       std::unique_ptr<folly::IOBuf> data,

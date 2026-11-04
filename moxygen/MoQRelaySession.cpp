@@ -828,7 +828,15 @@ MoQRelaySession::publishNamespace(
   pubNs.requestID = getNextRequestID();
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  moqFrameWriter_.writePublishNamespace(writeBuf, pubNs);
+  auto writeResult = moqFrameWriter_.writePublishNamespace(writeBuf, pubNs);
+  if (!writeResult) {
+    XLOG(ERR) << "writePublishNamespace failed sess=" << this;
+    co_return folly::makeUnexpected(
+        PublishNamespaceError{
+            pubNs.requestID,
+            PublishNamespaceErrorCode::INTERNAL_ERROR,
+            "local write failed"});
+  }
   auto sendResult = sendRequest(
       writeBuf,
       FrameType::REQUEST_OK,
@@ -1936,6 +1944,9 @@ WriteResult SeparateStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {
   }
   auto res = moqFrameWriter_.writeSubscribeNamespaceOk(
       replyContext_->writeBuf(), subNsOk);
+  if (!res) {
+    return res;
+  }
   replyContext_->flush();
   okSent_ = true;
   flushPendingMessages();

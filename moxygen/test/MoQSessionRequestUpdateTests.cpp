@@ -632,6 +632,50 @@ CO_TEST_P_X(PreDraft18Test, RequestUpdateRetiresItsRequestID) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(PreDraft18Test, FailedRequestUpdateDoesNotPoisonControlStream) {
+  initialMaxRequestID_ = 10;
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> serverHandle;
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  expectPublishDone();
+  expectSubscribe([&](auto request, auto consumer) -> TaskSubscribeResult {
+    trackConsumer = std::move(consumer);
+    serverHandle = makeSubscribeOkResult(request, AbsoluteLocation{0, 0});
+    co_return serverHandle;
+  });
+
+  auto request = getSubscribe(kTestTrackName);
+  auto subscribe =
+      co_await clientSession_->subscribe(request, subscribeCallback_);
+  CO_ASSERT_TRUE(subscribe.hasValue());
+  auto handle = subscribe.value();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate()).Times(2);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+  folly::coro::Baton updateHandled;
+  EXPECT_CALL(*serverHandle, requestUpdateCalled)
+      .WillOnce([&](const RequestUpdate&) { updateHandled.post(); });
+  EXPECT_CALL(*serverHandle, requestUpdateResult)
+      .WillOnce(testing::Return(RequestOk{.requestID = request.requestID}));
+
+  RequestUpdate invalid;
+  CO_ASSERT_TRUE(
+      invalid.params.insertParam(Parameter(0xBEEF, std::string("unregistered")))
+          .hasValue());
+  auto failed = co_await handle->requestUpdate(std::move(invalid));
+  CO_ASSERT_TRUE(failed.hasError());
+
+  RequestUpdate valid;
+  valid.forward = true;
+  auto succeeded = co_await handle->requestUpdate(std::move(valid));
+  CO_ASSERT_TRUE(succeeded.hasValue());
+  co_await updateHandled;
+  EXPECT_FALSE(serverSession_->isClosed());
+  trackConsumer->publishDone(getTrackEndedPublishDone(request.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Test that missing filter fields in SubscribeUpdate preserve existing values
 CO_TEST_P_X(
     MoQSessionTest,

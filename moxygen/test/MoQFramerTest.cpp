@@ -1016,6 +1016,164 @@ TEST_P(MoQFramerTest, TestSetupAcceptUnknownParams) {
   }
 }
 
+TEST_P(MoQFramerTest, WriteSetupRetainsUnknownParams) {
+  constexpr uint64_t kCustomSetupOption = 0xBEEF;
+  moxygen::Setup setup;
+  ASSERT_TRUE(
+      setup.params
+          .insertParam(Parameter(kCustomSetupOption, std::string("enabled")))
+          .hasValue());
+
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writeClientSetup(writeBuf, setup, GetParam()).hasValue());
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  ASSERT_TRUE(parser_.decodeVarint(cursor).has_value());
+
+  auto parsed = parser_.parseClientSetup(cursor, frameLength(cursor));
+  ASSERT_TRUE(parsed.hasValue());
+  ASSERT_EQ(parsed->params.size(), 1);
+  EXPECT_EQ(parsed->params.at(0).key, kCustomSetupOption);
+  EXPECT_EQ(parsed->params.at(0).asString, "enabled");
+}
+
+TEST(MoQFramerMessageParameterExtensionTest, NegotiatedParametersRoundTrip) {
+  constexpr uint64_t kIntegerParameter = 0xBEEF;
+  constexpr uint64_t kStringParameter = 0xBEF0;
+  for (auto version : {kVersionDraft18, kVersionDraft22}) {
+    SCOPED_TRACE(version);
+    auto extensions = std::make_shared<MessageParameterExtensions>();
+    MoQFrameWriter writer;
+    MoQFrameParser parser;
+    writer.initializeVersion(version);
+    parser.initializeVersion(version);
+    writer.setMessageParameterExtensions(extensions);
+    parser.setMessageParameterExtensions(extensions);
+    extensions->emplace(
+        kIntegerParameter,
+        MessageParameterExtension{
+            ParameterValueEncoding::Varint, {FrameType::SUBSCRIBE}});
+    extensions->emplace(
+        kStringParameter,
+        MessageParameterExtension{
+            ParameterValueEncoding::LengthPrefixed, {FrameType::SUBSCRIBE}});
+
+    auto request =
+        SubscribeRequest::make(FullTrackName{TrackNamespace({"ns"}), "track"});
+    ASSERT_TRUE(request.params.insertParam(Parameter(kIntegerParameter, 42))
+                    .hasValue());
+    ASSERT_TRUE(
+        request.params
+            .insertParam(Parameter(kStringParameter, std::string("route")))
+            .hasValue());
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    ASSERT_TRUE(writer.writeSubscribeRequest(writeBuf, request).hasValue());
+    auto serialized = writeBuf.move();
+    folly::io::Cursor cursor(serialized.get());
+    ASSERT_TRUE(parser.decodeVarint(cursor).has_value());
+
+    auto parsed =
+        parser.parseSubscribeRequest(cursor, cursor.readBE<uint16_t>());
+    ASSERT_TRUE(parsed.hasValue());
+    std::vector<std::tuple<uint64_t, uint64_t, std::string>> parsedParams;
+    for (const auto& param : parsed->params) {
+      parsedParams.emplace_back(param.key, param.asUint64, param.asString);
+    }
+    const std::vector<std::tuple<uint64_t, uint64_t, std::string>> expected{
+        {kIntegerParameter, 42, ""}, {kStringParameter, 0, "route"}};
+    EXPECT_EQ(parsedParams, expected);
+  }
+}
+
+TEST(
+    MoQFramerMessageParameterExtensionTest,
+    UnknownOrDisallowedParametersAreRejected) {
+  constexpr uint64_t kCustomParameter = 0xBEEF;
+  for (auto version : {kVersionDraft18, kVersionDraft22}) {
+    SCOPED_TRACE(version);
+    auto writerExtensions = std::make_shared<MessageParameterExtensions>();
+    writerExtensions->emplace(
+        kCustomParameter,
+        MessageParameterExtension{
+            ParameterValueEncoding::LengthPrefixed, {FrameType::SUBSCRIBE}});
+    MoQFrameWriter writer;
+    writer.initializeVersion(version);
+    writer.setMessageParameterExtensions(writerExtensions);
+    auto request =
+        SubscribeRequest::make(FullTrackName{TrackNamespace({"ns"}), "track"});
+    ASSERT_TRUE(
+        request.params
+            .insertParam(Parameter(kCustomParameter, std::string("route")))
+            .hasValue());
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    ASSERT_TRUE(writer.writeSubscribeRequest(writeBuf, request).hasValue());
+    auto serialized = writeBuf.move();
+
+    auto emptyExtensions = std::make_shared<MessageParameterExtensions>();
+    auto disallowedExtensions = std::make_shared<MessageParameterExtensions>();
+    disallowedExtensions->emplace(
+        kCustomParameter,
+        MessageParameterExtension{
+            ParameterValueEncoding::LengthPrefixed, {FrameType::FETCH}});
+    for (const auto& extensions : {emptyExtensions, disallowedExtensions}) {
+      MoQFrameParser parser;
+      parser.initializeVersion(version);
+      parser.setMessageParameterExtensions(extensions);
+      folly::io::Cursor cursor(serialized.get());
+      ASSERT_TRUE(parser.decodeVarint(cursor).has_value());
+
+      auto parsed =
+          parser.parseSubscribeRequest(cursor, cursor.readBE<uint16_t>());
+      ASSERT_TRUE(parsed.hasError());
+      EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
+    }
+  }
+}
+
+TEST(MoQFramerMessageParameterExtensionTest, FailedResponseWritesAreAtomic) {
+  constexpr uint64_t kCustomParameter = 0xBEEF;
+  for (auto version : {kVersionDraft16, kVersionDraft18, kVersionDraft22}) {
+    SCOPED_TRACE(version);
+    MoQFrameWriter writer;
+    writer.initializeVersion(version);
+
+    auto expectAtomicFailure = [&](auto message, auto writeFrame) {
+      ASSERT_TRUE(
+          message.params
+              .insertParam(Parameter(kCustomParameter, std::string("route")))
+              .hasValue());
+      folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+      const uint8_t existingByte = 0xFF;
+      writeBuf.append(&existingByte, 1);
+
+      EXPECT_TRUE(writeFrame(writeBuf, message).hasError());
+      EXPECT_EQ(writeBuf.chainLength(), 1);
+    };
+
+    expectAtomicFailure(
+        SubscribeOk{.requestID = RequestID(0), .trackAlias = TrackAlias(0)},
+        [&](auto& writeBuf, const auto& message) {
+          return writer.writeSubscribeOk(writeBuf, message);
+        });
+    expectAtomicFailure(
+        RequestOk{.requestID = RequestID(0)},
+        [&](auto& writeBuf, const auto& message) {
+          return writer.writeRequestOk(
+              writeBuf, message, FrameType::REQUEST_OK);
+        });
+    expectAtomicFailure(
+        PublishOk{.requestID = RequestID(0)},
+        [&](auto& writeBuf, const auto& message) {
+          return writer.writePublishOk(writeBuf, message);
+        });
+    expectAtomicFailure(
+        FetchOk{.requestID = RequestID(0), .endLocation = {0, 0}},
+        [&](auto& writeBuf, const auto& message) {
+          return writer.writeFetchOk(writeBuf, message);
+        });
+  }
+}
+
 ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
     folly::IOBufQueue& writeBuf,
     bool isStatus,

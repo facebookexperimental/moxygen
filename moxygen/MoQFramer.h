@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBufQueue.h>
 #include <folly/logging/xlog.h>
@@ -18,6 +19,7 @@
 #include <quic/codec/QuicInteger.h>
 #include <quic/folly_utils/Utils.h>
 
+#include <memory>
 #include <variant>
 
 namespace moxygen {
@@ -26,6 +28,21 @@ namespace moxygen {
 const size_t kMaxFrameHeaderSize = 32;
 
 using WriteResult = folly::Expected<size_t, quic::TransportErrorCode>;
+
+enum class ParameterValueEncoding {
+  Uint8,
+  Varint,
+  Location,
+  LengthPrefixed,
+};
+
+struct MessageParameterExtension {
+  ParameterValueEncoding encoding;
+  std::vector<FrameType> allowedFrames;
+};
+
+using MessageParameterExtensions =
+    folly::F14FastMap<uint64_t, MessageParameterExtension>;
 
 // Test-only free helpers that always operate on QUIC varints (drafts <17
 // behavior). Production code should use MoQFrameWriter::writeVarint /
@@ -357,6 +374,11 @@ class MoQFrameParser {
     tokenCache_ = cache;
   }
 
+  void setMessageParameterExtensions(
+      std::shared_ptr<const MessageParameterExtensions> extensions) {
+    messageParameterExtensions_ = std::move(extensions);
+  }
+
   // Test only
   void reset() {
     previousObjectID_ = std::nullopt;
@@ -520,7 +542,8 @@ class MoQFrameParser {
       folly::io::Cursor& cursor,
       size_t& length,
       uint64_t version,
-      uint64_t key) const noexcept;
+      uint64_t key,
+      ParameterValueEncoding encoding) const noexcept;
 
   folly::Expected<uint64_t, ErrorCode> parseParamKey(
       folly::io::Cursor& cursor,
@@ -543,6 +566,7 @@ class MoQFrameParser {
   bool useMoQVarint_{false};
   mutable MoQTokenCache fallbackTokenCache_;
   MoQTokenCache* tokenCache_{nullptr};
+  std::shared_ptr<const MessageParameterExtensions> messageParameterExtensions_;
   mutable std::optional<uint64_t> previousObjectID_;
   // Context for FETCH object delta encoding
   mutable std::optional<uint64_t> previousFetchGroup_;
@@ -766,6 +790,11 @@ class MoQFrameWriter {
     return version_;
   }
 
+  void setMessageParameterExtensions(
+      std::shared_ptr<const MessageParameterExtensions> extensions) {
+    messageParameterExtensions_ = std::move(extensions);
+  }
+
   // Encode a TrackNamespace as a TRACK_NAMESPACE_PREFIX parameter (a Track
   // Namespace tuple value, §2.4.1) for the given negotiated version. The
   // resulting parameter can be added to a REQUEST_UPDATE's parameter list to
@@ -887,6 +916,8 @@ class MoQFrameWriter {
   void writeV18ParamValue(
       folly::IOBufQueue& writeBuf,
       const Parameter& param,
+      ParameterValueEncoding encoding,
+      bool isExtension,
       size_t& size,
       bool& error) const noexcept;
 
@@ -929,6 +960,7 @@ class MoQFrameWriter {
 
   std::optional<uint64_t> version_;
   bool useMoQVarint_{false};
+  std::shared_ptr<const MessageParameterExtensions> messageParameterExtensions_;
   mutable std::optional<uint64_t> previousObjectID_;
   // Context for FETCH object delta encoding
   mutable std::optional<uint64_t> previousFetchGroup_;

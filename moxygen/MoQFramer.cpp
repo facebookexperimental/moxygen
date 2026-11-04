@@ -39,23 +39,16 @@ uint64_t getLocationTypeValue(
   return folly::to_underlying(locationType);
 }
 
-// Per-key value encoding for draft-18 Message Parameters (§10.2).
-enum class ParamValueEncoding {
-  Uint8,
-  Varint,
-  Location,
-  LengthPrefixed,
-};
-
 // Caller must reject unknown keys (Parameters::isKnownParamKey) before calling.
-ParamValueEncoding paramEncodingV18(uint64_t key) {
+moxygen::ParameterValueEncoding paramEncodingV18(uint64_t key) {
   using K = moxygen::TrackRequestParamKey;
+  using E = moxygen::ParameterValueEncoding;
   switch (static_cast<K>(key)) {
     case K::SUBSCRIBER_PRIORITY:
     case K::GROUP_ORDER:
     case K::FORWARD:
     case K::INCLUDE_PROPERTIES:
-      return ParamValueEncoding::Uint8;
+      return E::Uint8;
     case K::OBJECT_DELIVERY_TIMEOUT:
     case K::RENDEZVOUS_TIMEOUT:
     case K::SUBGROUP_DELIVERY_TIMEOUT:
@@ -65,17 +58,55 @@ ParamValueEncoding paramEncodingV18(uint64_t key) {
     // PUBLISHER_PRIORITY is extensions-only; parsed as varint so the
     // caller's allowlist check can reject it cleanly.
     case K::PUBLISHER_PRIORITY:
-      return ParamValueEncoding::Varint;
+      return E::Varint;
     case K::LARGEST_OBJECT:
-      return ParamValueEncoding::Location;
+      return E::Location;
     case K::AUTHORIZATION_TOKEN:
     case K::SUBSCRIPTION_FILTER:
     case K::TRACK_NAMESPACE_PREFIX:
     case K::FILL_PARAMETERS:
-      return ParamValueEncoding::LengthPrefixed;
+      return E::LengthPrefixed;
   }
   XLOG(DFATAL) << "paramEncodingV18: unknown key " << key;
-  return ParamValueEncoding::Varint;
+  return E::Varint;
+}
+
+const moxygen::MessageParameterExtension* findMessageParameterExtension(
+    const std::shared_ptr<const moxygen::MessageParameterExtensions>&
+        extensions,
+    uint64_t key) {
+  if (!extensions) {
+    return nullptr;
+  }
+  auto it = extensions->find(key);
+  return it == extensions->end() ? nullptr : &it->second;
+}
+
+bool isMessageParameterAllowed(
+    const moxygen::MessageParameterExtension& extension,
+    moxygen::FrameType frameType) {
+  return extension.allowedFrames.empty() ||
+      std::find(
+          extension.allowedFrames.begin(),
+          extension.allowedFrames.end(),
+          frameType) != extension.allowedFrames.end();
+}
+
+bool containsInvalidMessageParameterExtension(
+    const std::vector<moxygen::Parameter>& parameters,
+    uint64_t majorVersion,
+    moxygen::FrameType frameType,
+    const std::shared_ptr<const moxygen::MessageParameterExtensions>&
+        extensions) {
+  return std::any_of(
+      parameters.begin(), parameters.end(), [&](const auto& parameter) {
+        if (moxygen::Parameters::isKnownParamKey(parameter.key, majorVersion)) {
+          return false;
+        }
+        const auto* extension =
+            findMessageParameterExtension(extensions, parameter.key);
+        return !extension || !isMessageParameterAllowed(*extension, frameType);
+      });
 }
 
 // The parameter types draft 22 permits inside FILL_PARAMETERS. Range Filters
@@ -141,7 +172,7 @@ bool isValidBooleanParam(uint64_t value) {
   return value <= 1;
 }
 
-bool isIntParamValid(uint64_t /*version*/, uint64_t key, uint64_t value) {
+bool isIntParamValid(uint64_t version, uint64_t key, uint64_t value) {
   switch (key) {
     case folly::to_underlying(moxygen::TrackRequestParamKey::GROUP_ORDER):
       return isValidGroupOrderParam(value);
@@ -152,7 +183,8 @@ bool isIntParamValid(uint64_t /*version*/, uint64_t key, uint64_t value) {
       return isValidBooleanParam(value);
     case folly::to_underlying(
         moxygen::TrackRequestParamKey::INCLUDE_PROPERTIES):
-      return isValidBooleanParam(value);
+      return moxygen::getDraftMajorVersion(version) < 22 ||
+          isValidBooleanParam(value);
     default:
       return true;
   }
@@ -517,7 +549,7 @@ bool datagramTypeEndOfGroup(uint64_t version, DatagramType datagramType);
 
 void writeSize(uint16_t* sizePtr, size_t size, bool& error, uint64_t versionIn);
 
-bool includeSetupParam(uint64_t version, SetupKey key);
+bool includeSetupParam(uint64_t version, uint64_t key);
 
 bool isPaddingStreamType(uint64_t version, uint64_t streamType) {
   return getDraftMajorVersion(version) >= 18 &&
@@ -853,7 +885,8 @@ folly::Expected<FillParameters, ErrorCode> MoQFrameParser::parseFillParameters(
       fill.locationFilter = filter.value();
       continue;
     }
-    auto res = parseV18ParamValue(cursor, length, version, *key);
+    auto res = parseV18ParamValue(
+        cursor, length, version, *key, paramEncodingV18(*key));
     if (!res) {
       return folly::makeUnexpected(res.error());
     }
@@ -998,9 +1031,10 @@ MoQFrameParser::parseV18ParamValue(
     folly::io::Cursor& cursor,
     size_t& length,
     uint64_t version,
-    uint64_t key) const noexcept {
-  switch (paramEncodingV18(key)) {
-    case ParamValueEncoding::Uint8: {
+    uint64_t key,
+    ParameterValueEncoding encoding) const noexcept {
+  switch (encoding) {
+    case ParameterValueEncoding::Uint8: {
       if (length < 1 || !cursor.canAdvance(1)) {
         XLOG(DBG4) << "parseV18ParamValue: UNDERFLOW on uint8, key=" << key;
         return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
@@ -1012,16 +1046,16 @@ MoQFrameParser::parseV18ParamValue(
       }
       return Parameter(key, static_cast<uint64_t>(value));
     }
-    case ParamValueEncoding::Varint:
+    case ParameterValueEncoding::Varint:
       return parseIntParam(cursor, length, version, key);
-    case ParamValueEncoding::Location: {
+    case ParameterValueEncoding::Location: {
       auto loc = parseAbsoluteLocation(cursor, length);
       if (!loc) {
         return folly::makeUnexpected(loc.error());
       }
       return Parameter(key, std::optional<AbsoluteLocation>(loc.value()));
     }
-    case ParamValueEncoding::LengthPrefixed:
+    case ParameterValueEncoding::LengthPrefixed:
       return parseVariableParam(cursor, length, version, key);
   }
   XLOG(DFATAL) << "parseV18ParamValue: unreachable, key=" << key;
@@ -1786,15 +1820,29 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
     }
     const auto key = keyRes.value();
 
-    if (!Parameters::isKnownParamKey(key, getDraftMajorVersion(version))) {
+    const auto isBuiltIn =
+        Parameters::isKnownParamKey(key, getDraftMajorVersion(version));
+    const auto* extension = isBuiltIn
+        ? nullptr
+        : findMessageParameterExtension(messageParameterExtensions_, key);
+    if (!isBuiltIn && !extension) {
       XLOG(ERR) << "Unknown parameter key " << key;
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+    if (extension &&
+        !isMessageParameterAllowed(*extension, params.getFrameType())) {
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
 
     folly::Expected<std::optional<Parameter>, ErrorCode> res;
 
     if (getDraftMajorVersion(version) >= 18) {
-      res = parseV18ParamValue(cursor, length, version, key);
+      res = parseV18ParamValue(
+          cursor,
+          length,
+          version,
+          key,
+          extension ? extension->encoding : paramEncodingV18(key));
     } else if ((key & 0x01) == 0) {
       res = parseIntParam(cursor, length, version, key);
     } else if (
@@ -3792,21 +3840,19 @@ std::string MoQFrameWriter::encodeTokenValue(
   return writeBuf.move()->moveToFbString().toStdString();
 }
 
-bool includeSetupParam(uint64_t version, SetupKey key) {
+bool includeSetupParam(uint64_t version, uint64_t key) {
   // Draft 18 removed this param in favor of QUIC stream limits.
-  if (key == SetupKey::MAX_REQUEST_ID && useBidiRequestStreams(version)) {
+  if (key == folly::to_underlying(SetupKey::MAX_REQUEST_ID) &&
+      useBidiRequestStreams(version)) {
     return false;
   }
   // Draft 18+ delivers requests on independent bidi streams, so we don't use
   // auth token aliasing there -- it relies on request ordering.
-  if (key == SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE &&
+  if (key == folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE) &&
       useBidiRequestStreams(version)) {
     return false;
   }
-  return key == SetupKey::MAX_REQUEST_ID || key == SetupKey::PATH ||
-      key == SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE ||
-      key == SetupKey::AUTHORIZATION_TOKEN || key == SetupKey::AUTHORITY ||
-      key == SetupKey::MOQT_IMPLEMENTATION;
+  return true;
 }
 
 WriteResult writeSetup(
@@ -3833,7 +3879,7 @@ WriteResult writeSetup(
   // Collect params that should be included
   std::vector<Parameter> filteredParams;
   for (const auto& param : setup.params) {
-    if (includeSetupParam(version, SetupKey(param.key))) {
+    if (includeSetupParam(version, param.key)) {
       filteredParams.push_back(param);
     }
   }
@@ -4176,17 +4222,19 @@ void MoQFrameWriter::writeTrackRequestParams(
               (majorVersion < 22 || param.asUint64 > 1);
         });
   };
-  if (includePropertiesIsInvalid(params) ||
-      includePropertiesIsInvalid(requestSpecificParams)) {
+  auto allParams = mergeAndSortParams(requestSpecificParams, params);
+  if (includePropertiesIsInvalid(allParams) ||
+      containsInvalidMessageParameterExtension(
+          allParams,
+          majorVersion,
+          params.getFrameType(),
+          messageParameterExtensions_)) {
     error = true;
     return;
   }
   // Write total count of all parameters
   writeVarint(
       writeBuf, params.size() + requestSpecificParams.size(), size, error);
-
-  // Merge, sort, and delta encode
-  auto allParams = mergeAndSortParams(requestSpecificParams, params);
 
   uint64_t previousKey = 0;
   for (const auto& param : allParams) {
@@ -4199,10 +4247,12 @@ void MoQFrameWriter::writeTrackRequestParams(
 void MoQFrameWriter::writeV18ParamValue(
     folly::IOBufQueue& writeBuf,
     const Parameter& param,
+    ParameterValueEncoding encoding,
+    bool isExtension,
     size_t& size,
     bool& error) const noexcept {
-  switch (paramEncodingV18(param.key)) {
-    case ParamValueEncoding::Uint8: {
+  switch (encoding) {
+    case ParameterValueEncoding::Uint8: {
       if (param.asUint64 > 0xff) {
         error = true;
         return;
@@ -4212,10 +4262,10 @@ void MoQFrameWriter::writeV18ParamValue(
       size += 1;
       return;
     }
-    case ParamValueEncoding::Varint:
+    case ParameterValueEncoding::Varint:
       writeVarint(writeBuf, param.asUint64, size, error);
       return;
-    case ParamValueEncoding::Location:
+    case ParameterValueEncoding::Location:
       if (!param.largestObject) {
         error = true;
         return;
@@ -4223,12 +4273,14 @@ void MoQFrameWriter::writeV18ParamValue(
       writeVarint(writeBuf, param.largestObject->group, size, error);
       writeVarint(writeBuf, param.largestObject->object, size, error);
       return;
-    case ParamValueEncoding::LengthPrefixed: {
+    case ParameterValueEncoding::LengthPrefixed: {
       const bool isFill = param.key ==
           folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS);
-      if (!isFill &&
-          param.key !=
-              folly::to_underlying(TrackRequestParamKey::SUBSCRIPTION_FILTER)) {
+      if (isExtension ||
+          (!isFill &&
+           param.key !=
+               folly::to_underlying(
+                   TrackRequestParamKey::SUBSCRIPTION_FILTER))) {
         writeFixedString(writeBuf, param.asString, size, error);
         return;
       }
@@ -4269,7 +4321,17 @@ void MoQFrameWriter::writeParamValue(
       folly::to_underlying(TrackRequestParamKey::GROUP_ORDER);
 
   if (version_.has_value() && getDraftMajorVersion(*version_) >= 18) {
-    writeV18ParamValue(writeBuf, param, size, error);
+    const auto* extension =
+        Parameters::isKnownParamKey(param.key, getDraftMajorVersion(*version_))
+        ? nullptr
+        : findMessageParameterExtension(messageParameterExtensions_, param.key);
+    writeV18ParamValue(
+        writeBuf,
+        param,
+        extension ? extension->encoding : paramEncodingV18(param.key),
+        extension != nullptr,
+        size,
+        error);
     return;
   }
 
@@ -4908,10 +4970,11 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
     const SubscribeOk& subscribeOk) const noexcept {
   XCHECK(version_.has_value())
       << "Version needs to be set to write subscribe ok";
+  folly::IOBufQueue frameBuf{folly::IOBufQueue::cacheChainLength()};
   size_t size;
   bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::SUBSCRIBE_OK, error);
-  auto res = writeSubscribeOkHelper(writeBuf, subscribeOk);
+  auto sizePtr = writeFrameHeader(frameBuf, FrameType::SUBSCRIBE_OK, error);
+  auto res = writeSubscribeOkHelper(frameBuf, subscribeOk);
   if (!res) {
     return res;
   }
@@ -4920,6 +4983,7 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  writeBuf.append(frameBuf.move());
   return size;
 }
 
@@ -4959,6 +5023,9 @@ WriteResult MoQFrameWriter::writeSubscribeOkHelper(
       size,
       error,
       /*withLengthPrefix=*/false);
+  if (error) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
   return size;
 }
 
@@ -5107,19 +5174,21 @@ WriteResult MoQFrameWriter::writePublishOk(
         FrameType::PUBLISH_OK);
   }
 
+  folly::IOBufQueue frameBuf{folly::IOBufQueue::cacheChainLength()};
   size_t size = 0;
   bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::PUBLISH_OK, error);
-  writeVarint(writeBuf, publishOk.requestID.value, size, error);
+  auto sizePtr = writeFrameHeader(frameBuf, FrameType::PUBLISH_OK, error);
+  writeVarint(frameBuf, publishOk.requestID.value, size, error);
 
   auto requestSpecificParams =
       getPublishOkRequestSpecificParams(publishOk, majorVersion);
   writeTrackRequestParams(
-      writeBuf, publishOk.params, requestSpecificParams, size, error);
+      frameBuf, publishOk.params, requestSpecificParams, size, error);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  writeBuf.append(frameBuf.move());
   return size;
 }
 
@@ -5154,29 +5223,30 @@ WriteResult MoQFrameWriter::writeRequestOk(
     const RequestOk& requestOk,
     FrameType frameType) const noexcept {
   XCHECK(version_.has_value()) << "Version needs to be set to write request ok";
+  folly::IOBufQueue frameBuf{folly::IOBufQueue::cacheChainLength()};
   size_t size = 0;
   bool error = false;
   // Preserve the semantic frame type passed by the caller; we still need it
   // below to decide whether Track Properties are valid (draft 18+).
   const FrameType semanticFrameType = frameType;
   frameType = FrameType::REQUEST_OK;
-  auto sizePtr = writeFrameHeader(writeBuf, frameType, error);
+  auto sizePtr = writeFrameHeader(frameBuf, frameType, error);
   // Draft 18+: requestID is implicit from the bidi request stream context.
   if (getDraftMajorVersion(*version_) < 18) {
-    writeVarint(writeBuf, requestOk.requestID.value, size, error);
+    writeVarint(frameBuf, requestOk.requestID.value, size, error);
   }
   if (semanticFrameType == FrameType::SUBSCRIBE_NAMESPACE_OK &&
       !requestOk.params.empty()) {
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
   }
   writeTrackRequestParams(
-      writeBuf, requestOk.params, requestOk.requestSpecificParams, size, error);
+      frameBuf, requestOk.params, requestOk.requestSpecificParams, size, error);
   // Draft 18+: Track Properties (bare key-value pairs, no length prefix) are
   // only allowed for TRACK_STATUS_OK responses.
   if (getDraftMajorVersion(*version_) >= 18) {
     if (semanticFrameType == FrameType::TRACK_STATUS_OK) {
       writeExtensions(
-          writeBuf,
+          frameBuf,
           requestOk.trackProperties,
           size,
           error,
@@ -5192,6 +5262,7 @@ WriteResult MoQFrameWriter::writeRequestOk(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  writeBuf.append(frameBuf.move());
   return size;
 }
 
@@ -5554,26 +5625,28 @@ WriteResult MoQFrameWriter::writeFetchOk(
     folly::IOBufQueue& writeBuf,
     const FetchOk& fetchOk) const noexcept {
   XCHECK(version_.has_value()) << "Version needs to be set to write fetch ok";
+  folly::IOBufQueue frameBuf{folly::IOBufQueue::cacheChainLength()};
   size_t size = 0;
   bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::FETCH_OK, error);
+  auto sizePtr = writeFrameHeader(frameBuf, FrameType::FETCH_OK, error);
   // Draft 18+: requestID is implicit from the bidi request stream context.
   if (getDraftMajorVersion(*version_) < 18) {
-    writeVarint(writeBuf, fetchOk.requestID.value, size, error);
+    writeVarint(frameBuf, fetchOk.requestID.value, size, error);
   }
-  writeBuf.append(&fetchOk.endOfTrack, 1);
+  frameBuf.append(&fetchOk.endOfTrack, 1);
   size += 1;
-  writeVarint(writeBuf, fetchOk.endLocation.group, size, error);
-  writeVarint(writeBuf, fetchOk.endLocation.object, size, error);
+  writeVarint(frameBuf, fetchOk.endLocation.group, size, error);
+  writeVarint(frameBuf, fetchOk.endLocation.object, size, error);
 
-  writeTrackRequestParams(writeBuf, fetchOk.params, {}, size, error);
+  writeTrackRequestParams(frameBuf, fetchOk.params, {}, size, error);
 
   writeExtensions(
-      writeBuf, fetchOk.extensions, size, error, /*withLengthPrefix=*/false);
+      frameBuf, fetchOk.extensions, size, error, /*withLengthPrefix=*/false);
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  writeBuf.append(frameBuf.move());
   return size;
 }
 

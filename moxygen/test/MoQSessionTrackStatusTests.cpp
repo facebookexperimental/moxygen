@@ -61,6 +61,31 @@ CO_TEST_P_X(TrackStatusTest, TrackStatusOk) {
   EXPECT_FALSE(res.hasError());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(TrackStatusTest, FailedWriteDoesNotReachPeer) {
+  co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onTrackStatus());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onTrackStatus()).Times(2);
+  EXPECT_CALL(*serverPublisher, trackStatus(_))
+      .WillOnce(
+          [](TrackStatus request)
+              -> folly::coro::Task<Publisher::TrackStatusResult> {
+            co_return makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
+          });
+
+  auto invalid = getTrackStatus();
+  CO_ASSERT_TRUE(
+      invalid.params.insertParam(Parameter(0xBEEF, std::string("unregistered")))
+          .hasValue());
+  auto failed = co_await clientSession_->trackStatus(std::move(invalid));
+  EXPECT_TRUE(failed.hasError());
+
+  auto valid = co_await clientSession_->trackStatus(getTrackStatus());
+  EXPECT_TRUE(valid.hasValue());
+  EXPECT_FALSE(serverSession_->isClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(Draft16TrackStatusTest, TrackStatusExceptionReleasesRequestID) {
   co_await setupMoQSession();
   auto initialMaxRequestID = serverSession_->maxRequestID();

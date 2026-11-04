@@ -7047,10 +7047,16 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
   }
   aliasifyAuthTokens(trackStatus.params);
   trackStatus.requestID = getNextRequestID();
+  auto reqID = trackStatus.requestID;
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  moqFrameWriter_.writeTrackStatus(writeBuf, trackStatus);
-  auto reqID = trackStatus.requestID;
+  auto writeResult = moqFrameWriter_.writeTrackStatus(writeBuf, trackStatus);
+  if (!writeResult) {
+    XLOG(ERR) << "writeTrackStatus failed sess=" << this;
+    co_return folly::makeUnexpected(
+        TrackStatusError{
+            reqID, TrackStatusErrorCode::INTERNAL_ERROR, "local write failed"});
+  }
   auto sendResult = sendRequest(
       writeBuf,
       FrameType::REQUEST_OK,
@@ -7365,7 +7371,15 @@ Subscriber::PublishResult MoQSession::publish(
              << " peerMaxRequestID_=" << peerMaxRequestID_ << " sess=" << this;
 
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  moqFrameWriter_.writePublish(writeBuf, pub);
+  auto writeResult = moqFrameWriter_.writePublish(writeBuf, pub);
+  if (!writeResult) {
+    XLOG(ERR) << "writePublish failed sess=" << this;
+    return folly::makeUnexpected(
+        PublishError{
+            pub.requestID,
+            PublishErrorCode::INTERNAL_ERROR,
+            "local write failed"});
+  }
   // Draft 18+ encodes PUBLISH_OK on the wire as REQUEST_OK (see
   // MoQFrameWriter::writePublishOk), so the codec's terminal-first-frame
   // check must look for REQUEST_OK.
@@ -8137,18 +8151,19 @@ bool MoQSession::requestUpdate(
     }
   }
 
+  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
+  auto res = moqFrameWriter_.writeRequestUpdate(buf, reqUpdate);
+  if (!res) {
+    XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
+    return false;
+  }
+
   if (control) {
     // The write handle is null after a local FIN or a peer STOP_SENDING.
     auto* wh = control->writeHandle();
     if (!wh || control->readLoopExited()) {
       XLOG(ERR) << "Request stream closed, REQUEST_UPDATE not sent sess="
                 << this;
-      return false;
-    }
-    folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
-    auto res = moqFrameWriter_.writeRequestUpdate(buf, reqUpdate);
-    if (!res) {
-      XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
       return false;
     }
     auto writeRes = egressTracker_->write(*wh, buf.move(), /*fin=*/false);
@@ -8163,11 +8178,7 @@ bool MoQSession::requestUpdate(
       control->responseIDQueue().push_back(reqUpdate.requestID);
     }
   } else {
-    auto res = moqFrameWriter_.writeRequestUpdate(controlWriteBuf_, reqUpdate);
-    if (!res) {
-      XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
-      return false;
-    }
+    controlWriteBuf_.append(buf.move());
     controlWriteEvent_.signal();
   }
   return true;
@@ -9574,7 +9585,9 @@ bool MoQSession::validateAndSetVersionFromAlpn(const std::string& alpn) {
 WriteResult SubNSReply::ok(const SubscribeNamespaceOk& subNsOk) {
   auto res = moqFrameWriter_.writeSubscribeNamespaceOk(
       replyContext_->writeBuf(), subNsOk);
-  replyContext_->flush();
+  if (res) {
+    replyContext_->flush();
+  }
   return res;
 }
 
@@ -9590,7 +9603,9 @@ WriteResult SubNSReply::error(const SubscribeNamespaceError& subNsError) {
 WriteResult MessageReply::ok(const RequestOk& okMsg) {
   auto res = moqFrameWriter_.writeRequestOk(
       replyContext_->writeBuf(), okMsg, FrameType::REQUEST_OK);
-  replyContext_->flush();
+  if (res) {
+    replyContext_->flush();
+  }
   return res;
 }
 
@@ -9612,6 +9627,9 @@ WriteResult SubscribeTracksReply::ok(const RequestOk& okMsg) {
   }
   auto res = moqFrameWriter_.writeRequestOk(
       replyContext_->writeBuf(), okMsg, FrameType::REQUEST_OK);
+  if (!res) {
+    return res;
+  }
   replyContext_->flush();
   okSent_ = true;
   flushPendingMessages();

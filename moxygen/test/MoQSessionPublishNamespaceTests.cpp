@@ -32,6 +32,29 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespace) {
   co_await folly::coro::co_reschedule_on_current_executor;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(MoQSessionTest, FailedPublishNamespaceWriteDoesNotReachPeer) {
+  co_await setupMoQSession();
+  EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
+      .WillOnce(
+          [](auto request,
+             auto) -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
+            co_return makePublishNamespaceOkResult(request);
+          });
+
+  auto invalid = getPublishNamespace();
+  CO_ASSERT_TRUE(
+      invalid.params.insertParam(Parameter(0xBEEF, std::string("unregistered")))
+          .hasValue());
+  auto failed = co_await clientSession_->publishNamespace(std::move(invalid));
+  CO_ASSERT_TRUE(failed.hasError());
+
+  auto valid = co_await clientSession_->publishNamespace(getPublishNamespace());
+  EXPECT_TRUE(valid.hasValue());
+  EXPECT_FALSE(serverSession_->isClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, PublishNamespaceDone) {
   co_await setupMoQSession();
 
