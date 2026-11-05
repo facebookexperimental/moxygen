@@ -6,12 +6,94 @@
 
 #include "moxygen/mlog/MLogger.h"
 #include <utility>
+#include "moxygen/MoQFramer.h"
 
 namespace moxygen {
 
 namespace {
 uint8_t toLogGroupOrder(std::optional<GroupOrder> groupOrder) {
   return groupOrder ? folly::to_underlying(*groupOrder) : 0;
+}
+
+folly::dynamic namedValue(std::string_view name, folly::dynamic value) {
+  folly::dynamic fields = folly::dynamic::object;
+  fields["name"] = std::string(name);
+  fields["value"] = std::move(value);
+  return fields;
+}
+
+folly::dynamic rawInfoForLength(uint64_t length) {
+  return folly::dynamic::object("length", length);
+}
+
+folly::dynamic
+unknownValue(uint64_t nameBytes, const std::string& bytes, uint64_t integer) {
+  folly::dynamic fields = folly::dynamic::object;
+  fields["name"] = "unknown";
+  fields["name_bytes"] = nameBytes;
+  if (nameBytes % 2 == 0) {
+    fields["value"] = integer;
+  } else {
+    fields["length"] = bytes.size();
+    fields["value_bytes"] = rawInfoForLength(bytes.size());
+  }
+  return fields;
+}
+
+folly::dynamic authorizationToken(const AuthToken& token) {
+  folly::dynamic fields = folly::dynamic::object;
+  fields["name"] = "authorization_token";
+  if (token.alias.has_value()) {
+    fields["alias_type"] = token.tokenValue.empty() ? "use_alias" : "register";
+    fields["token_alias"] = token.alias.value();
+  } else {
+    fields["alias_type"] = "use_value";
+  }
+  if (!token.tokenValue.empty()) {
+    fields["token_type"] = token.tokenType;
+    fields["token_value"] = rawInfoForLength(token.tokenValue.size());
+  }
+  return fields;
+}
+
+folly::dynamic locationFilter(const LocationFilter& filter) {
+  folly::dynamic value = folly::dynamic::object;
+  const auto fields = filter.fields();
+  const auto count = filter.fieldCount();
+  if (count >= 1) {
+    value["start_group"] = fields[0];
+  }
+  if (count >= 2) {
+    value["start_object"] = fields[1];
+  }
+  if (count >= 3) {
+    value["end_group_delta"] = fields[2];
+  }
+  if (count >= 4) {
+    value["end_object"] = fields[3];
+  }
+  return value;
+}
+
+folly::dynamic fillParametersValue(const FillParameters& fill) {
+  std::vector<folly::dynamic> parameters;
+  if (fill.fillTimeout.has_value()) {
+    parameters.push_back(namedValue(
+        "fill_timeout", static_cast<uint64_t>(fill.fillTimeout->count())));
+  }
+  if (fill.subscriberPriority.has_value()) {
+    parameters.push_back(
+        namedValue("subscriber_priority", fill.subscriberPriority.value()));
+  }
+  if (fill.locationFilter.has_value()) {
+    parameters.push_back(namedValue(
+        "location_filter", locationFilter(fill.locationFilter.value())));
+  }
+  if (fill.groupOrder.has_value()) {
+    parameters.push_back(namedValue(
+        "group_order", static_cast<uint64_t>(fill.groupOrder.value())));
+  }
+  return folly::dynamic::array(parameters);
 }
 } // namespace
 
@@ -131,11 +213,10 @@ void MLogger::addFetchObjectParsedLog(MOQTFetchObjectParsed req) {
 
 MOQTSetupMessage MLogger::createSetupControlMessage(
     const std::string& setupType,
-    uint64_t numberOfParameters,
+    uint64_t /*numberOfParameters*/,
     std::vector<MOQTSetupParameter> params) {
   MOQTSetupMessage msg(setupType);
-  msg.numberOfParameters = numberOfParameters;
-  msg.setupParameters = std::move(params);
+  msg.setupOptions = std::move(params);
   return msg;
 }
 
@@ -214,16 +295,14 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
 
 void MLogger::logClientSetup(
     const Setup& setup,
-    uint64_t version,
+    uint64_t /*version*/,
     ControlMessageType controlType) {
   // Add Params to params vector
   std::vector<MOQTSetupParameter> params =
       convertSetupParamsToMoQTSetupParams(setup.params);
 
   auto msg = std::make_unique<MOQTSetupMessage>("client_setup");
-  msg->version = version;
-  msg->numberOfParameters = params.size();
-  msg->setupParameters = std::move(params);
+  msg->setupOptions = std::move(params);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(msg));
@@ -231,16 +310,14 @@ void MLogger::logClientSetup(
 
 void MLogger::logServerSetup(
     const Setup& setup,
-    uint64_t version,
+    uint64_t /*version*/,
     ControlMessageType controlType) {
   // Add Params to params vector
   std::vector<MOQTSetupParameter> params =
       convertSetupParamsToMoQTSetupParams(setup.params);
 
   auto msg = std::make_unique<MOQTSetupMessage>("server_setup");
-  msg->version = version;
-  msg->numberOfParameters = params.size();
-  msg->setupParameters = std::move(params);
+  msg->setupOptions = std::move(params);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(msg));
@@ -280,8 +357,29 @@ void MLogger::logSubscribe(
     baseMsg->startLocation = loc;
   }
   baseMsg->endGroup = legacyFilter.endGroup.value_or(0);
-  baseMsg->numberOfParameters = req.params.size();
   baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
+  baseMsg->subscribeParameters.emplace_back(
+      namedValue("location_filter", locationFilter(req.filter)));
+  if (req.fill.has_value()) {
+    baseMsg->subscribeParameters.emplace_back(
+        namedValue("fill_parameters", fillParametersValue(req.fill.value())));
+  }
+  if (req.priority != kDefaultPriority) {
+    baseMsg->subscribeParameters.emplace_back(
+        namedValue("subscriber_priority", req.priority));
+  }
+  if (req.groupOrder.has_value()) {
+    baseMsg->subscribeParameters.emplace_back(
+        namedValue("group_order", folly::to_underlying(*req.groupOrder)));
+  }
+  if (!req.forward) {
+    baseMsg->subscribeParameters.emplace_back(namedValue("forward", 0));
+  }
+  if (!req.includeProperties) {
+    baseMsg->subscribeParameters.emplace_back(
+        namedValue("include_properties", 0));
+  }
+  baseMsg->numberOfParameters = baseMsg->subscribeParameters.size();
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
@@ -306,8 +404,24 @@ void MLogger::logSubscribeUpdate(
     baseMsg->subscriberPriority = req.priority.value();
   }
   baseMsg->forward = req.forward.value_or(false) ? 1 : 0;
-  baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
+  if (req.filter.has_value()) {
+    baseMsg->parameters.emplace_back(
+        namedValue("location_filter", locationFilter(req.filter.value())));
+  }
+  if (req.fill.has_value()) {
+    baseMsg->parameters.emplace_back(
+        namedValue("fill_parameters", fillParametersValue(req.fill.value())));
+  }
+  if (req.priority.has_value()) {
+    baseMsg->parameters.emplace_back(
+        namedValue("subscriber_priority", req.priority.value()));
+  }
+  if (req.forward.has_value()) {
+    baseMsg->parameters.emplace_back(
+        namedValue("forward", req.forward.value() ? 1 : 0));
+  }
+  baseMsg->numberOfParameters = baseMsg->parameters.size();
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
@@ -365,6 +479,25 @@ void MLogger::logFetch(
   }
 
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
+  if (standalone) {
+    baseMsg->parameters.emplace_back(namedValue(
+        "location_filter",
+        locationFilter(
+            req.filter == LocationFilter::none() ? toLocationFilter(*standalone)
+                                                 : req.filter)));
+  }
+  if (req.priority != kDefaultPriority) {
+    baseMsg->parameters.emplace_back(
+        namedValue("subscriber_priority", req.priority));
+  }
+  if (req.groupOrder != GroupOrder::OldestFirst) {
+    baseMsg->parameters.emplace_back(
+        namedValue("group_order", folly::to_underlying(req.groupOrder)));
+  }
+  if (!req.includeProperties) {
+    baseMsg->parameters.emplace_back(namedValue("include_properties", 0));
+  }
+  baseMsg->numberOfParameters = baseMsg->parameters.size();
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
@@ -504,8 +637,19 @@ void MLogger::logSubscribeOk(
     baseMsg->contentExists = 0;
   }
 
-  baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
+  if (req.expires.count() != 0) {
+    baseMsg->parameters.emplace_back(
+        namedValue("expires", static_cast<uint64_t>(req.expires.count())));
+  }
+  if (req.largest.has_value()) {
+    folly::dynamic largest = folly::dynamic::object;
+    largest["group"] = req.largest->group;
+    largest["object"] = req.largest->object;
+    baseMsg->parameters.emplace_back(
+        namedValue("largest_object", std::move(largest)));
+  }
+  baseMsg->numberOfParameters = baseMsg->parameters.size();
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
@@ -536,8 +680,8 @@ void MLogger::logFetchOk(const FetchOk& req, ControlMessageType controlType) {
   baseMsg->endOfTrack = req.endOfTrack;
   baseMsg->endLocation.group = req.endLocation.group;
   baseMsg->endLocation.object = req.endLocation.object;
-  baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
+  baseMsg->numberOfParameters = baseMsg->parameters.size();
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
@@ -593,7 +737,7 @@ void MLogger::logPublishNamespaceDone(
 
 void MLogger::logTrackStatusOk(
     const TrackStatusOk& req,
-    const MOQTByteStringType& type,
+    const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTTrackStatusOk>();
   baseMsg->requestId = req.requestID.value;
@@ -613,8 +757,19 @@ void MLogger::logTrackStatusOk(
     baseMsg->contentExists = 0;
   }
 
-  baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
+  if (req.expires.count() != 0) {
+    baseMsg->parameters.emplace_back(
+        namedValue("expires", static_cast<uint64_t>(req.expires.count())));
+  }
+  if (req.largest.has_value()) {
+    folly::dynamic largest = folly::dynamic::object;
+    largest["group"] = req.largest->group;
+    largest["object"] = req.largest->object;
+    baseMsg->parameters.emplace_back(
+        namedValue("largest_object", std::move(largest)));
+  }
+  baseMsg->numberOfParameters = baseMsg->parameters.size();
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
@@ -622,7 +777,7 @@ void MLogger::logTrackStatusOk(
 
 void MLogger::logTrackStatusError(
     const TrackStatusError& req,
-    const MOQTByteStringType& type,
+    const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTTrackStatusError>();
 
@@ -720,8 +875,18 @@ void MLogger::logPublish(
     baseMsg->largest = loc;
   }
   baseMsg->forward = req.forward ? 1 : 0;
-  baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
+  if (!req.forward) {
+    baseMsg->parameters.emplace_back(namedValue("forward", 0));
+  }
+  if (req.largest.has_value()) {
+    folly::dynamic largest = folly::dynamic::object;
+    largest["group"] = req.largest->group;
+    largest["object"] = req.largest->object;
+    baseMsg->parameters.emplace_back(
+        namedValue("largest_object", std::move(largest)));
+  }
+  baseMsg->numberOfParameters = baseMsg->parameters.size();
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
@@ -744,8 +909,19 @@ void MLogger::logPublishOk(
     baseMsg->start = loc;
   }
   baseMsg->endGroup = legacyFilter.endGroup;
-  baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
+  if (req.subscriberPriority != kDefaultPriority) {
+    baseMsg->parameters.emplace_back(
+        namedValue("subscriber_priority", req.subscriberPriority));
+  }
+  if (req.groupOrder.has_value()) {
+    baseMsg->parameters.emplace_back(
+        namedValue("group_order", folly::to_underlying(*req.groupOrder)));
+  }
+  if (!req.forward) {
+    baseMsg->parameters.emplace_back(namedValue("forward", 0));
+  }
+  baseMsg->numberOfParameters = baseMsg->parameters.size();
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
@@ -770,64 +946,55 @@ void MLogger::logPublishError(
 
 std::vector<MOQTSetupParameter> MLogger::convertSetupParamsToMoQTSetupParams(
     const SetupParameters& params) {
-  std::vector<MOQTSetupParameter> moqSetupParams;
+  std::vector<MOQTSetupParameter> setupOptions;
 
   for (const auto& param : params) {
     switch (param.key) {
       case folly::to_underlying(SetupKey::PATH): {
-        MOQTPathSetupParameter p;
-        p.value = param.asString;
-        moqSetupParams.emplace_back(std::move(p));
+        setupOptions.emplace_back(namedValue("path", param.asString));
         break;
       }
-      case folly::to_underlying(SetupKey::MAX_REQUEST_ID): {
-        MOQTMaxRequestIdSetupParameter p;
-        p.value = param.asUint64;
-        moqSetupParams.emplace_back(std::move(p));
+      case 0x06: {
+        setupOptions.emplace_back(
+            namedValue("max_filter_ranges", param.asUint64));
+        break;
+      }
+      case 0x08: {
+        setupOptions.emplace_back(
+            namedValue("max_request_updates", param.asUint64));
         break;
       }
       case folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE): {
-        MOQTMaxAuthTokenCacheSizeSetupParameter p;
-        p.value = param.asUint64;
-        moqSetupParams.emplace_back(std::move(p));
+        setupOptions.emplace_back(
+            namedValue("max_auth_token_cache_size", param.asUint64));
         break;
       }
       case folly::to_underlying(SetupKey::AUTHORITY): {
-        MOQTAuthoritySetupParameter p;
-        p.value = param.asString;
-        moqSetupParams.emplace_back(std::move(p));
+        setupOptions.emplace_back(namedValue("authority", param.asString));
         break;
       }
       case folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION): {
-        MOQTImplementationSetupParameter p;
-        p.value = param.asString;
-        moqSetupParams.emplace_back(std::move(p));
+        setupOptions.emplace_back(namedValue("implementation", param.asString));
         break;
       }
       case folly::to_underlying(SetupKey::AUTHORIZATION_TOKEN): {
-        // AUTHORIZATION_TOKEN is more complex, using unknown for now
-        // TODO: properly parse authorization token
-        MOQTUnknownSetupParameter p;
-        p.nameBytes = param.key;
-        moqSetupParams.emplace_back(std::move(p));
+        folly::dynamic auth = folly::dynamic::object;
+        auth["name"] = "authorization_token";
+        auth["alias_type"] = "use_value";
+        if (!param.asString.empty()) {
+          auth["token_value"] = rawInfoForLength(param.asString.size());
+        }
+        setupOptions.emplace_back(std::move(auth));
         break;
       }
       default: {
-        MOQTUnknownSetupParameter p;
-        p.nameBytes = param.key;
-        // Check if string value is initialized (odd keys are strings per MoQ
-        // spec)
-        if (param.key % 2) {
-          p.valueBytes = folly::IOBuf::copyBuffer(param.asString);
-        } else {
-          p.value = param.asUint64;
-        }
-        moqSetupParams.emplace_back(std::move(p));
+        setupOptions.emplace_back(
+            unknownValue(param.key, param.asString, param.asUint64));
         break;
       }
     }
   }
-  return moqSetupParams;
+  return setupOptions;
 }
 
 std::vector<MOQTParameter> MLogger::convertTrackParamsToMoQTParams(
@@ -837,34 +1004,114 @@ std::vector<MOQTParameter> MLogger::convertTrackParamsToMoQTParams(
   for (const auto& param : params) {
     switch (param.key) {
       case folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN): {
-        MOQTAuthorizationTokenParameter p;
-        p.aliasType = param.asUint64;
-        moqParams.emplace_back(std::move(p));
+        moqParams.emplace_back(authorizationToken(param.asAuthToken));
         break;
       }
-      case folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT): {
-        MOQTDeliveryTimeoutParameter p;
-        p.value = param.asUint64;
-        moqParams.emplace_back(std::move(p));
+      case folly::to_underlying(
+          TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT): {
+        moqParams.emplace_back(
+            namedValue("object_delivery_timeout", param.asUint64));
         break;
       }
-      case folly::to_underlying(TrackRequestParamKey::MAX_CACHE_DURATION): {
-        MOQTMaxCacheDurationParameter p;
-        p.value = param.asUint64;
-        moqParams.emplace_back(std::move(p));
+      case folly::to_underlying(
+          TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT): {
+        moqParams.emplace_back(
+            namedValue("subgroup_delivery_timeout", param.asUint64));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::RENDEZVOUS_TIMEOUT): {
+        moqParams.emplace_back(
+            namedValue("rendezvous_timeout", param.asUint64));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::SUBSCRIBER_PRIORITY): {
+        moqParams.emplace_back(
+            namedValue("subscriber_priority", param.asUint64));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::GROUP_ORDER): {
+        moqParams.emplace_back(namedValue("group_order", param.asUint64));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER): {
+        moqParams.emplace_back(namedValue(
+            "location_filter", locationFilter(param.asLocationFilter)));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS): {
+        moqParams.emplace_back(namedValue(
+            "fill_parameters", fillParametersValue(param.asFillParameters)));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::EXPIRES): {
+        moqParams.emplace_back(namedValue("expires", param.asUint64));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::LARGEST_OBJECT): {
+        if (param.largestObject.has_value()) {
+          folly::dynamic largest = folly::dynamic::object;
+          largest["group"] = param.largestObject->group;
+          largest["object"] = param.largestObject->object;
+          moqParams.emplace_back(
+              namedValue("largest_object", std::move(largest)));
+        }
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::FILL_TIMEOUT): {
+        moqParams.emplace_back(namedValue("fill_timeout", param.asUint64));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::FORWARD): {
+        moqParams.emplace_back(namedValue("forward", param.asUint64));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST): {
+        moqParams.emplace_back(namedValue("new_group_request", param.asUint64));
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::TRACK_NAMESPACE_PREFIX): {
+        const auto version =
+            negotiatedMoQVersion_.value_or(kVersionDraftCurrent);
+        auto parsed = MoQFrameParser::parseTrackNamespacePrefixParam(
+            param.asString, version);
+        if (parsed.hasValue()) {
+          std::vector<folly::dynamic> elements;
+          elements.reserve(parsed->trackNamespace.size());
+          for (const auto& element : parsed->trackNamespace) {
+            elements.push_back(folly::dynamic::object("value", element));
+          }
+          moqParams.emplace_back(namedValue(
+              "track_namespace_prefix", folly::dynamic::array(elements)));
+        } else {
+          moqParams.emplace_back(
+              unknownValue(param.key, param.asString, param.asUint64));
+        }
+        break;
+      }
+      case folly::to_underlying(TrackRequestParamKey::INCLUDE_PROPERTIES): {
+        moqParams.emplace_back(
+            namedValue("include_properties", param.asUint64));
+        break;
+      }
+      case 0x25:
+      case 0x26:
+      case 0x27:
+      case 0x28:
+      case 0x29: {
+        static constexpr const char* kFilterNames[] = {
+            "subgroup_filter",
+            "objectid_filter",
+            "priority_filter",
+            "object_property_filter",
+            "track_property_filter"};
+        folly::dynamic filter = folly::dynamic::object;
+        filter["name"] = kFilterNames[param.key - 0x25];
+        moqParams.emplace_back(std::move(filter));
         break;
       }
       default: {
-        MOQTUnknownParameter p;
-        p.nameBytes = param.key;
-        // Check if string value is initialized (odd keys are strings per MoQ
-        // spec)
-        if (param.key % 2) {
-          p.valueBytes = folly::IOBuf::copyBuffer(param.asString);
-        } else {
-          p.value = param.asUint64;
-        }
-        moqParams.emplace_back(std::move(p));
+        moqParams.emplace_back(
+            unknownValue(param.key, param.asString, param.asUint64));
         break;
       }
     }

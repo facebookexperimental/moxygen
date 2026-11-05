@@ -13,7 +13,9 @@
 #include <folly/portability/GTest.h>
 #include <quic/codec/QuicConnectionId.h>
 #include <stdlib.h>
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -558,6 +560,74 @@ TEST(MLogTypesTest, FetchGroupDeltaFollowsObservedDirection) {
   parsed.logFetchObjectParsed(17, second, nullptr);
   EXPECT_EQ(parsed.event(1)["data"]["group_id_delta"], 10);
   EXPECT_EQ(parsed.event(2)["data"]["group_id_delta"], 2);
+}
+
+TEST_F(FileMLoggerTest, LatestSetupAndFillParameterSchemas) {
+  const auto setupPath = (dir_ / "setup.mlog").string();
+  FileMLogger setupLogger(VantagePoint::CLIENT, setupPath);
+  struct Setup setup;
+  ASSERT_TRUE(setup.params
+                  .insertParam(Parameter(
+                      folly::to_underlying(SetupKey::PATH), "/meeting"))
+                  .hasValue());
+  setupLogger.logClientSetup(setup, 20, ControlMessageType::CREATED);
+  setupLogger.outputLogs();
+
+  const auto setupEvent = parseSingleEvent(setupPath);
+  const auto& setupMessage = setupEvent["data"]["message"];
+  EXPECT_EQ(setupMessage["type"], "setup");
+  EXPECT_EQ(setupMessage.count("version"), 0);
+  EXPECT_EQ(setupMessage.count("number_of_parameters"), 0);
+  ASSERT_EQ(setupMessage["setup_options"].size(), 1);
+  EXPECT_EQ(setupMessage["setup_options"][0]["name"], "path");
+  EXPECT_EQ(setupMessage["setup_options"][0]["value"], "/meeting");
+
+  const auto subscribePath = (dir_ / "fill.mlog").string();
+  FileMLogger subscribeLogger(VantagePoint::CLIENT, subscribePath);
+  auto subscribe = SubscribeRequest::make(
+      FullTrackName{TrackNamespace({"room"}), "audio"},
+      42,
+      GroupOrder::NewestFirst,
+      false,
+      LocationFilter::range({7, 8}, {9, 10}));
+  subscribe.requestID = RequestID(11);
+  subscribe.includeProperties = false;
+  subscribe.fill = FillParameters{
+      .locationFilter = LocationFilter::relativeStart(3),
+      .subscriberPriority = 12,
+      .groupOrder = GroupOrder::OldestFirst,
+      .fillTimeout = std::chrono::milliseconds(13)};
+  ASSERT_TRUE(subscribe.params
+                  .insertParam(Parameter(
+                      folly::to_underlying(
+                          TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT),
+                      14))
+                  .hasValue());
+  subscribeLogger.logSubscribe(subscribe);
+  subscribeLogger.outputLogs();
+
+  const auto subscribeEvent = parseSingleEvent(subscribePath);
+  const auto& message = subscribeEvent["data"]["message"];
+  const auto& parameters = message["parameters"];
+  EXPECT_EQ(message["number_of_parameters"], parameters.size());
+  std::vector<std::string> names;
+  for (const auto& parameter : parameters) {
+    names.push_back(parameter["name"].asString());
+  }
+  EXPECT_NE(
+      std::find(names.begin(), names.end(), "object_delivery_timeout"),
+      names.end());
+  EXPECT_NE(
+      std::find(names.begin(), names.end(), "location_filter"), names.end());
+  EXPECT_NE(
+      std::find(names.begin(), names.end(), "fill_parameters"), names.end());
+  EXPECT_NE(
+      std::find(names.begin(), names.end(), "subscriber_priority"),
+      names.end());
+  EXPECT_NE(std::find(names.begin(), names.end(), "group_order"), names.end());
+  EXPECT_NE(std::find(names.begin(), names.end(), "forward"), names.end());
+  EXPECT_NE(
+      std::find(names.begin(), names.end(), "include_properties"), names.end());
 }
 
 } // namespace moxygen

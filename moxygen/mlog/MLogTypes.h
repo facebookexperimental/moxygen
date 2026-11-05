@@ -51,117 +51,25 @@ struct MOQTProperty {
   folly::dynamic toDynamic() const;
 };
 
-// Parameter Types (Section 5.3 of the mLog spec)
+// Parameters are extensible maps in the mlog schema. Keeping their encoded
+// representation here lets MLogger support both current and unknown types.
+struct MOQTParameter {
+  folly::dynamic fields = folly::dynamic::object;
 
-struct MOQTAuthorizationTokenParameter {
-  std::string name = "authorization_token";
-  uint64_t aliasType{0};
-  std::optional<uint64_t> tokenAlias;
-  std::optional<uint64_t> tokenType;
-  std::unique_ptr<folly::IOBuf> tokenValue;
-
-  folly::dynamic toDynamic() const;
+  MOQTParameter() = default;
+  explicit MOQTParameter(folly::dynamic value) : fields(std::move(value)) {}
 };
 
-struct MOQTDeliveryTimeoutParameter {
-  std::string name = "delivery_timeout";
-  uint64_t value{0};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTMaxCacheDurationParameter {
-  std::string name = "max_cache_duration";
-  uint64_t value{0};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTUnknownParameter {
-  std::string name = "unknown";
-  uint64_t nameBytes{0};
-  std::optional<uint64_t> length;
-  std::optional<uint64_t> value;
-  std::unique_ptr<folly::IOBuf> valueBytes;
-
-  folly::dynamic toDynamic() const;
-};
-
-using MOQTParameter = std::variant<
-    MOQTAuthorizationTokenParameter,
-    MOQTDeliveryTimeoutParameter,
-    MOQTMaxCacheDurationParameter,
-    MOQTUnknownParameter>;
-
-// Helper to convert variant to dynamic
 folly::dynamic parameterToDynamic(const MOQTParameter& param);
 
-// Setup Parameter Types (Section 5.2 of the mLog spec)
-enum class MOQTAliasType { UNREGISTER, REGISTER, USE_ALIAS, USE_VALUE };
+struct MOQTSetupOption {
+  folly::dynamic fields = folly::dynamic::object;
 
-struct MOQTAuthoritySetupParameter {
-  std::string name = "authority";
-  std::string value;
-
-  folly::dynamic toDynamic() const;
+  MOQTSetupOption() = default;
+  explicit MOQTSetupOption(folly::dynamic value) : fields(std::move(value)) {}
 };
 
-struct MOQTAuthorizationTokenSetupParameter {
-  std::string name = "authorization_token";
-  MOQTAliasType aliasType;
-  std::optional<uint64_t> tokenAlias;
-  std::optional<uint64_t> tokenType;
-  std::unique_ptr<folly::IOBuf> tokenValue;
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTPathSetupParameter {
-  std::string name = "path";
-  std::string value;
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTMaxRequestIdSetupParameter {
-  std::string name = "max_request_id";
-  uint64_t value{0};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTMaxAuthTokenCacheSizeSetupParameter {
-  std::string name = "max_auth_token_cache_size";
-  uint64_t value{0};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTImplementationSetupParameter {
-  std::string name = "implementation";
-  std::string value;
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTUnknownSetupParameter {
-  std::string name = "unknown";
-  uint64_t nameBytes{0};
-  std::optional<uint64_t> length;
-  std::optional<uint64_t> value;
-  std::unique_ptr<folly::IOBuf> valueBytes;
-
-  folly::dynamic toDynamic() const;
-};
-
-using MOQTSetupParameter = std::variant<
-    MOQTAuthoritySetupParameter,
-    MOQTAuthorizationTokenSetupParameter,
-    MOQTPathSetupParameter,
-    MOQTMaxRequestIdSetupParameter,
-    MOQTMaxAuthTokenCacheSizeSetupParameter,
-    MOQTImplementationSetupParameter,
-    MOQTUnknownSetupParameter>;
+using MOQTSetupParameter = MOQTSetupOption;
 
 // Helper to convert variant to dynamic
 folly::dynamic setupParameterToDynamic(const MOQTSetupParameter& param);
@@ -201,13 +109,11 @@ class MOQTBaseControlMessage {
 
 class MOQTSetupMessage : public MOQTBaseControlMessage {
  public:
-  explicit MOQTSetupMessage(const std::string& setupType) {
-    type = setupType;
+  explicit MOQTSetupMessage(const std::string& /*setupType*/ = "setup") {
+    type = "setup";
   }
   folly::dynamic toDynamic() const override;
-  uint64_t version{0};
-  uint64_t numberOfParameters{0};
-  std::vector<MOQTSetupParameter> setupParameters;
+  std::vector<MOQTSetupOption> setupOptions;
 };
 
 // Keep old names as aliases for backward compatibility
@@ -305,6 +211,7 @@ class MOQTFetch : public MOQTBaseControlMessage {
   std::string fetchType;
   std::optional<MOQTStandaloneFetch> standaloneFetch;
   std::optional<MOQTJoiningFetch> joiningFetch;
+  uint64_t numberOfParameters{0};
   std::vector<MOQTParameter> parameters;
 };
 

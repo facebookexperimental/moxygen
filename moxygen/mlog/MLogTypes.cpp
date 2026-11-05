@@ -35,160 +35,24 @@ folly::dynamic MOQTControlMessageParsed::toDynamic() const {
 folly::dynamic MOQTSetupMessage::toDynamic() const {
   folly::dynamic setupObj = folly::dynamic::object;
   setupObj["type"] = type;
-  setupObj["version"] = version;
-  setupObj["number_of_parameters"] = numberOfParameters;
 
-  if (!setupParameters.empty()) {
+  if (!setupOptions.empty()) {
     std::vector<folly::dynamic> paramObjects;
-    paramObjects.reserve(setupParameters.size());
-    for (const auto& param : setupParameters) {
+    paramObjects.reserve(setupOptions.size());
+    for (const auto& param : setupOptions) {
       paramObjects.push_back(setupParameterToDynamic(param));
     }
-    setupObj["setup_parameters"] = folly::dynamic::array(paramObjects);
+    setupObj["setup_options"] = folly::dynamic::array(paramObjects);
   }
   return setupObj;
 }
 
-// Parameter toDynamic implementations
-folly::dynamic MOQTAuthorizationTokenParameter::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = name;
-  obj["alias_type"] = aliasType;
-  if (tokenAlias.has_value()) {
-    obj["token_alias"] = tokenAlias.value();
-  }
-  if (tokenType.has_value()) {
-    obj["token_type"] = tokenType.value();
-  }
-  if (tokenValue) {
-    obj["token_value"] = tokenValue->to<std::string>();
-  }
-  return obj;
-}
-
-folly::dynamic MOQTDeliveryTimeoutParameter::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = name;
-  obj["value"] = value;
-  return obj;
-}
-
-folly::dynamic MOQTMaxCacheDurationParameter::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = name;
-  obj["value"] = value;
-  return obj;
-}
-
-folly::dynamic MOQTUnknownParameter::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = name;
-  obj["name_bytes"] = nameBytes;
-  if (length.has_value()) {
-    obj["length"] = length.value();
-  }
-  if (value.has_value()) {
-    obj["value"] = value.value();
-  }
-  if (valueBytes) {
-    obj["value_bytes"] = valueBytes->to<std::string>();
-  }
-  return obj;
-}
-
 folly::dynamic parameterToDynamic(const MOQTParameter& param) {
-  return std::visit(
-      [](const auto& p) -> folly::dynamic { return p.toDynamic(); }, param);
-}
-
-// Setup Parameter toDynamic implementations
-folly::dynamic MOQTAuthoritySetupParameter::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = name;
-  obj["value"] = value;
-  return obj;
-}
-
-folly::dynamic MOQTAuthorizationTokenSetupParameter::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = name;
-
-  std::string aliasTypeStr;
-  switch (aliasType) {
-    case MOQTAliasType::UNREGISTER:
-      aliasTypeStr = "delete";
-      break;
-    case MOQTAliasType::REGISTER:
-      aliasTypeStr = "register";
-      break;
-    case MOQTAliasType::USE_ALIAS:
-      aliasTypeStr = "use_alias";
-      break;
-    case MOQTAliasType::USE_VALUE:
-      aliasTypeStr = "use_value";
-      break;
-  }
-  obj["alias_type"] = aliasTypeStr;
-
-  if (tokenAlias.has_value()) {
-    obj["token_alias"] = tokenAlias.value();
-  }
-  if (tokenType.has_value()) {
-    obj["token_type"] = tokenType.value();
-  }
-  if (tokenValue) {
-    obj["token_value"] = tokenValue->to<std::string>();
-  }
-  return obj;
-}
-
-folly::dynamic MOQTPathSetupParameter::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = name;
-  obj["value"] = value;
-  return obj;
-}
-
-folly::dynamic MOQTMaxRequestIdSetupParameter::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = name;
-  obj["value"] = value;
-  return obj;
-}
-
-folly::dynamic MOQTMaxAuthTokenCacheSizeSetupParameter::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = name;
-  obj["value"] = value;
-  return obj;
-}
-
-folly::dynamic MOQTImplementationSetupParameter::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = name;
-  obj["value"] = value;
-  return obj;
-}
-
-folly::dynamic MOQTUnknownSetupParameter::toDynamic() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = name;
-  obj["name_bytes"] = nameBytes;
-  if (length.has_value()) {
-    obj["length"] = length.value();
-  }
-  if (value.has_value()) {
-    obj["value"] = value.value();
-  }
-  if (valueBytes) {
-    obj["value_bytes"] = valueBytes->to<std::string>();
-  }
-  return obj;
+  return param.fields;
 }
 
 folly::dynamic setupParameterToDynamic(const MOQTSetupParameter& param) {
-  return std::visit(
-      [](const auto& p) -> folly::dynamic { return p.toDynamic(); }, param);
+  return param.fields;
 }
 
 folly::dynamic MOQTLocation::toDynamic() const {
@@ -300,6 +164,7 @@ folly::dynamic MOQTFetch::toDynamic() const {
     obj["joining_fetch"] = joiningFetch->toDynamic();
   }
 
+  obj["number_of_parameters"] = numberOfParameters;
   if (!parameters.empty()) {
     std::vector<folly::dynamic> paramObjects;
     paramObjects.reserve(parameters.size());

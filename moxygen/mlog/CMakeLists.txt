@@ -18,6 +18,7 @@ moxygen_add_library(moxygen_mlog_mlogger
   EXPORTED_DEPS
     moxygen_mlog_mlog_events
     moxygen_mlog_mlog_types
+    moxygen_moq_framer
     moxygen_moq_types
     mvfst::mvfst_codec_types
     Folly::folly_json_dynamic
