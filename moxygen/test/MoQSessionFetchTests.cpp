@@ -1976,6 +1976,56 @@ CO_TEST_P_X(MoQSessionTest, FetchWhoseDataKeepsArrivingIsNotReset) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// The consumer stays BLOCKED for longer than the stall timeout while the last
+// object waits in the stream. The fetch must finish, not time out.
+CO_TEST_P_X(MoQSessionTest, FetchConsumerBlockedLongerThanStallTimeout) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.requestTimeout = std::chrono::milliseconds(100);
+  clientSession_->setMoqSettings(moqSettings);
+
+  std::shared_ptr<FetchConsumer> serverPub;
+  expectFetch([&serverPub](Fetch fetch, auto pub) -> TaskFetchResult {
+    serverPub = std::move(pub);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 1});
+  });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+
+  EXPECT_CALL(*fetchCallback_, object(0, 0, 0, _, _, false, _)).WillOnce([] {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::BLOCKED, "test blocked"));
+  });
+  folly::Promise<uint64_t> readyPromise;
+  folly::coro::Baton blockedBaton;
+  EXPECT_CALL(*fetchCallback_, awaitReadyToConsume()).WillOnce([&] {
+    auto [promise, future] = folly::makePromiseContract<uint64_t>();
+    readyPromise = std::move(promise);
+    blockedBaton.post();
+    return std::move(future);
+  });
+  folly::coro::Baton lastObjectBaton;
+  EXPECT_CALL(*fetchCallback_, object(0, 0, 1, _, _, true, _)).WillOnce([&] {
+    lastObjectBaton.post();
+    return folly::unit;
+  });
+
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
+  CO_ASSERT_FALSE(res.hasError());
+  serverPub->object(
+      0, 0, 0, moxygen::test::makeBuf(10), noExtensions(), /*finFetch=*/false);
+  co_await blockedBaton;
+  serverPub->object(
+      0, 0, 1, moxygen::test::makeBuf(10), noExtensions(), /*finFetch=*/true);
+  co_await folly::coro::sleep(std::chrono::milliseconds(400));
+
+  readyPromise.setValue(0);
+  co_await lastObjectBaton;
+  EXPECT_FALSE(clientSession_->isClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Fetch Y's caller is cancelled from inside subscribe X's SUBSCRIBE_OK
 // processing while Y's FETCH_OK is already queued behind it. Y's FETCH_OK is
 // then processed before Y's coroutine resumes. The cancellation must still end

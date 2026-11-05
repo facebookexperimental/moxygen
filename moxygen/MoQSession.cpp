@@ -2946,11 +2946,26 @@ class MoQSession::FetchTrackReceiveState
   void armStallTimeout(MoQSession* session, std::chrono::milliseconds timeout) {
     stallTimeout_ = std::make_unique<StallTimeout>(
         session->weak_from_this(), session->exec_, requestID_, timeout);
-    stallTimeout_->restart();
+    if (!consumerBlocked_) {
+      stallTimeout_->restart();
+    }
   }
 
   void noteDataActivity() {
     if (stallTimeout_ && stallTimeout_->isTimerCallbackScheduled()) {
+      stallTimeout_->restart();
+    }
+  }
+
+  // Nothing is read while the consumer is BLOCKED, so the timer must not run.
+  void pauseStallTimeout() {
+    consumerBlocked_ = true;
+    cancelStallTimeout();
+  }
+
+  void resumeStallTimeout() {
+    consumerBlocked_ = false;
+    if (stallTimeout_ && callback_) {
       stallTimeout_->restart();
     }
   }
@@ -3058,6 +3073,7 @@ class MoQSession::FetchTrackReceiveState
       ResetStreamErrorCode::INTERNAL_ERROR};
   bool fetchEstablished_{false};
   std::unique_ptr<StallTimeout> stallTimeout_;
+  bool consumerBlocked_{false};
   bool isFill_{false};
   bool streamOpened_{false};
   RequestID owningSubscribeID_{0};
@@ -5224,11 +5240,17 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
             cancellationSource_.getToken(), readHandle.cancelToken());
         if (dcb.hasFetchState()) {
           XLOG(DBG4) << "Fetch consumer BLOCKED, awaiting readiness id=" << id;
+          if (fetchState) {
+            fetchState->pauseStallTimeout();
+          }
           auto awaitRes = co_await co_awaitTry(
               folly::coro::co_withCancellation(
                   mergedToken,
                   folly::coro::detachOnCancel(
                       dcb.getFetchBlockedTask().via(exec_.get()))));
+          if (fetchState) {
+            fetchState->resumeStallTimeout();
+          }
           if (awaitRes.hasException()) {
             const bool cancelled =
                 awaitRes.hasException<folly::OperationCancelled>();
