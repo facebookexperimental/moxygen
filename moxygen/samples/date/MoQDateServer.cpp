@@ -409,11 +409,18 @@ class DatePublisher : public Publisher,
     if (minute != currentMinute_) {
       subgroupPub_.reset();
       currentMinute_ = minute;
+      lastSecond_.reset();
     }
     if (forwarder_.empty()) {
       forwarder_.setLargest(nowLocation());
       co_return;
     }
+    // Ticks can repeat a second, or go back after a wall-clock step.
+    // MoQSession rejects an object ID that does not advance.
+    if (lastSecond_ && second <= *lastSecond_) {
+      co_return;
+    }
+    lastSecond_ = second;
     switch (mode_) {
       case Mode::STREAM_PER_GROUP:
         subgroupPub_ = publishDate(subgroupPub_, minute, second);
@@ -525,6 +532,7 @@ class DatePublisher : public Publisher,
   folly::Executor* publisherEvb_{nullptr};
   std::shared_ptr<SubgroupConsumer> subgroupPub_;
   uint64_t currentMinute_{0};
+  std::optional<uint64_t> lastSecond_;
 };
 
 template <typename ServerBase>
