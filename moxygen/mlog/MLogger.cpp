@@ -69,6 +69,18 @@ void MLogger::addObjectDatagramParsedLog(MOQTObjectDatagramParsed req) {
   logs_.push_back(std::move(log));
 }
 
+void MLogger::addPaddingDatagramCreatedLog(MOQTPaddingDatagramCreated req) {
+  auto log = eventCreator_.createPaddingDatagramCreatedEvent(
+      vantagePoint_, std::move(req));
+  logs_.push_back(std::move(log));
+}
+
+void MLogger::addPaddingDatagramParsedLog(MOQTPaddingDatagramParsed req) {
+  auto log = eventCreator_.createPaddingDatagramParsedEvent(
+      vantagePoint_, std::move(req));
+  logs_.push_back(std::move(log));
+}
+
 void MLogger::addSubgroupHeaderCreatedLog(MOQTSubgroupHeaderCreated req) {
   auto log = eventCreator_.createSubgroupHeaderCreatedEvent(
       vantagePoint_, std::move(req));
@@ -154,6 +166,14 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
   } else if (log.name_ == kObjectDatagramParsedName) {
     const MOQTObjectDatagramParsed& msg =
         std::get<MOQTObjectDatagramParsed>(log.data_);
+    logObject["data"] = msg.toDynamic();
+  } else if (log.name_ == kPaddingDatagramCreatedName) {
+    const MOQTPaddingDatagramCreated& msg =
+        std::get<MOQTPaddingDatagramCreated>(log.data_);
+    logObject["data"] = msg.toDynamic();
+  } else if (log.name_ == kPaddingDatagramParsedName) {
+    const MOQTPaddingDatagramParsed& msg =
+        std::get<MOQTPaddingDatagramParsed>(log.data_);
     logObject["data"] = msg.toDynamic();
   } else if (log.name_ == kSubgroupHeaderCreatedName) {
     const MOQTSubgroupHeaderCreated& msg =
@@ -890,52 +910,58 @@ void MLogger::logStreamTypeSet(
   MOQTStreamTypeSet baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.streamType = type;
-  baseMsg.owner = owner.has_value() ? owner.value() : Owner::LOCAL;
-  addStreamTypeSetLog(baseMsg);
+  baseMsg.owner = owner;
+  addStreamTypeSetLog(std::move(baseMsg));
 }
 
 void MLogger::logObjectDatagramCreated(
     TrackAlias trackAlias,
     const ObjectHeader& header,
-    const Payload& payload) {
+    const Payload& payload,
+    bool endOfGroup) {
   MOQTObjectDatagramCreated baseMsg;
   baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
-  baseMsg.publisherPriority = header.priority.value_or(kDefaultPriority);
-  if (header.extensions.size() > 0) {
-    baseMsg.extensionHeadersLength = header.extensions.size();
-  }
-  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
-      header.extensions.getMutableExtensions());
+  baseMsg.publisherPriority = header.priority;
+  baseMsg.properties = convertExtensionsToProperties(header.extensions);
   if (header.status != ObjectStatus::NORMAL) {
     baseMsg.objectStatus = static_cast<uint64_t>(header.status);
   }
-  baseMsg.objectPayloadLength = payload ? payload->computeChainDataLength() : 0;
-  baseMsg.endOfGroup = false; // TODO: Extract from datagram type when available
+  if (payload) {
+    baseMsg.objectPayload = MOQTRawInfo{payload->computeChainDataLength()};
+  }
+  baseMsg.endOfGroup = endOfGroup;
   addObjectDatagramCreatedLog(std::move(baseMsg));
 }
 
 void MLogger::logObjectDatagramParsed(
     TrackAlias trackAlias,
     const ObjectHeader& header,
-    const Payload& payload) {
+    const Payload& payload,
+    bool endOfGroup) {
   MOQTObjectDatagramParsed baseMsg;
   baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = header.group;
   baseMsg.objectId = header.id;
-  baseMsg.publisherPriority = header.priority.value_or(kDefaultPriority);
-  if (header.extensions.size() > 0) {
-    baseMsg.extensionHeadersLength = header.extensions.size();
-  }
-  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
-      header.extensions.getMutableExtensions());
+  baseMsg.publisherPriority = header.priority;
+  baseMsg.properties = convertExtensionsToProperties(header.extensions);
   if (header.status != ObjectStatus::NORMAL) {
     baseMsg.objectStatus = static_cast<uint64_t>(header.status);
   }
-  baseMsg.objectPayloadLength = payload ? payload->computeChainDataLength() : 0;
-  baseMsg.endOfGroup = false; // TODO: Extract from datagram type when available
+  if (payload) {
+    baseMsg.objectPayload = MOQTRawInfo{payload->computeChainDataLength()};
+  }
+  baseMsg.endOfGroup = endOfGroup;
   addObjectDatagramParsedLog(std::move(baseMsg));
+}
+
+void MLogger::logPaddingDatagramCreated(uint64_t paddingLength) {
+  addPaddingDatagramCreatedLog(MOQTPaddingDatagramCreated{paddingLength});
+}
+
+void MLogger::logPaddingDatagramParsed(uint64_t paddingLength) {
+  addPaddingDatagramParsedLog(MOQTPaddingDatagramParsed{paddingLength});
 }
 
 void MLogger::logSubgroupHeaderCreated(
@@ -946,20 +972,25 @@ void MLogger::logSubgroupHeaderCreated(
     uint8_t publisherPriority,
     SubgroupIDFormat format,
     bool includeExtensions,
-    bool endOfGroup) {
+    bool endOfGroup,
+    bool firstObject,
+    bool publisherPriorityPresent) {
   MOQTSubgroupHeaderCreated baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = groupId;
-
-  // Per spec: subgroup_id is omitted if it equals object_id of first object
-  if (format != SubgroupIDFormat::FirstObject) {
+  baseMsg.subgroupIdMode = static_cast<uint8_t>(format);
+  if (format == SubgroupIDFormat::Present) {
     baseMsg.subgroupId = sugroupId;
   }
-
-  baseMsg.publisherPriority = publisherPriority;
+  if (publisherPriorityPresent) {
+    baseMsg.publisherPriority = publisherPriority;
+  }
   baseMsg.containsEndOfGroup = endOfGroup;
-  baseMsg.extensionsPresent = includeExtensions;
+  baseMsg.propertiesPresent = includeExtensions;
+  baseMsg.firstObject = firstObject;
+  createdObjectStreamState_[streamId] = ObjectStreamState{
+      groupId, sugroupId, std::nullopt, baseMsg.publisherPriority};
   addSubgroupHeaderCreatedLog(std::move(baseMsg));
 }
 
@@ -974,71 +1005,84 @@ void MLogger::logSubgroupHeaderParsed(
   baseMsg.streamId = streamId;
   baseMsg.trackAlias = trackAlias.value;
   baseMsg.groupId = groupId;
-  // Only set subgroupId if it's not using FirstObject format
-  if (options.subgroupIDFormat != SubgroupIDFormat::FirstObject) {
+  baseMsg.subgroupIdMode = static_cast<uint8_t>(options.subgroupIDFormat);
+  if (options.subgroupIDFormat == SubgroupIDFormat::Present) {
     baseMsg.subgroupId = sugroupId;
   }
-  baseMsg.publisherPriority = publisherPriority;
+  if (options.priorityPresent) {
+    baseMsg.publisherPriority = publisherPriority;
+  }
   baseMsg.containsEndOfGroup = options.hasEndOfGroup;
-  baseMsg.extensionsPresent = options.hasExtensions;
+  baseMsg.propertiesPresent = options.hasExtensions;
+  baseMsg.firstObject = options.beginsWithFirstObject;
+  parsedObjectStreamState_[streamId] = ObjectStreamState{
+      groupId, sugroupId, std::nullopt, baseMsg.publisherPriority};
   addSubgroupHeaderParsedLog(std::move(baseMsg));
 }
 
 void MLogger::logSubgroupObjectCreated(
     uint64_t streamId,
-    TrackAlias trackAlias,
+    TrackAlias /*trackAlias*/,
     const ObjectHeader& objHeader,
     Payload payload) {
   MOQTSubgroupObjectCreated baseMsg;
   baseMsg.streamId = streamId;
-  baseMsg.groupId = objHeader.group;
-  baseMsg.subgroupId = objHeader.id;
-  baseMsg.objectId = objHeader.id;
-  baseMsg.extensionHeadersLength = objHeader.extensions.size();
-  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
-      objHeader.extensions.getMutableExtensions());
-  baseMsg.objectPayloadLength = payload ? payload->computeChainDataLength() : 0;
-  baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
+  auto& state = createdObjectStreamState_[streamId];
+  baseMsg.objectIdDelta =
+      state.object.has_value() && objHeader.id > state.object.value()
+      ? objHeader.id - state.object.value() - 1
+      : objHeader.id;
+  state.object = objHeader.id;
+  baseMsg.properties = convertExtensionsToProperties(objHeader.extensions);
+  baseMsg.objectPayloadLength = objHeader.length.value_or(
+      payload ? payload->computeChainDataLength() : 0);
+  if (objHeader.status != ObjectStatus::NORMAL) {
+    baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
+  }
   addSubgroupObjectCreatedLog(std::move(baseMsg));
 }
 
 void MLogger::logSubgroupObjectParsed(
     uint64_t streamId,
-    TrackAlias trackAlias,
+    TrackAlias /*trackAlias*/,
     const ObjectHeader& objHeader,
     Payload payload) {
   MOQTSubgroupObjectParsed baseMsg;
   baseMsg.streamId = streamId;
-  baseMsg.groupId = objHeader.group;
-  baseMsg.subgroupId = objHeader.id;
-  baseMsg.objectId = objHeader.id;
-  baseMsg.extensionHeadersLength = objHeader.extensions.size();
-  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
-      objHeader.extensions.getMutableExtensions());
-  baseMsg.objectPayloadLength = payload ? payload->computeChainDataLength() : 0;
-  baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
+  auto& state = parsedObjectStreamState_[streamId];
+  baseMsg.objectIdDelta =
+      state.object.has_value() && objHeader.id > state.object.value()
+      ? objHeader.id - state.object.value() - 1
+      : objHeader.id;
+  state.object = objHeader.id;
+  baseMsg.properties = convertExtensionsToProperties(objHeader.extensions);
+  baseMsg.objectPayloadLength = objHeader.length.value_or(
+      payload ? payload->computeChainDataLength() : 0);
+  if (objHeader.status != ObjectStatus::NORMAL) {
+    baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
+  }
   addSubgroupObjectParsedLog(std::move(baseMsg));
 }
 
 void MLogger::logFetchHeaderCreated(
     const uint64_t streamId,
     const uint64_t requestId,
-    bool isFill) {
+    bool /*isFill*/) {
   MOQTFetchHeaderCreated baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.requestId = requestId;
-  baseMsg.isFill = isFill;
+  createdObjectStreamState_[streamId] = ObjectStreamState{};
   addFetchHeaderCreatedLog(std::move(baseMsg));
 }
 
 void MLogger::logFetchHeaderParsed(
     const uint64_t streamId,
     const uint64_t requestId,
-    bool isFill) {
+    bool /*isFill*/) {
   MOQTFetchHeaderParsed baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.requestId = requestId;
-  baseMsg.isFill = isFill;
+  parsedObjectStreamState_[streamId] = ObjectStreamState{};
   addFetchHeaderParsedLog(std::move(baseMsg));
 }
 
@@ -1048,15 +1092,54 @@ void MLogger::logFetchObjectCreated(
     Payload payload) {
   MOQTFetchObjectCreated baseMsg;
   baseMsg.streamId = streamId;
-  baseMsg.groupId = objHeader.group;
-  baseMsg.subgroupId = objHeader.id;
-  baseMsg.objectId = objHeader.id;
-  baseMsg.publisherPriority = objHeader.priority.value_or(kDefaultPriority);
-  baseMsg.extensionHeadersLength = objHeader.extensions.size();
-  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
-      objHeader.extensions.getMutableExtensions());
-  baseMsg.objectPayloadLength = payload ? payload->computeChainDataLength() : 0;
-  baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
+  auto& state = createdObjectStreamState_[streamId];
+  baseMsg.datagram = objHeader.forwardingPreferenceIsDatagram;
+  if (!baseMsg.datagram) {
+    if (objHeader.subgroup == 0) {
+      baseMsg.subgroupIdBits = 0;
+    } else if (state.subgroup == objHeader.subgroup) {
+      baseMsg.subgroupIdBits = 1;
+    } else if (
+        state.subgroup.has_value() &&
+        objHeader.subgroup == state.subgroup.value() + 1) {
+      baseMsg.subgroupIdBits = 2;
+    } else {
+      baseMsg.subgroupIdBits = 3;
+      baseMsg.subgroupId = objHeader.subgroup;
+    }
+  }
+  if (!state.group.has_value()) {
+    baseMsg.groupIdDelta = objHeader.group;
+  } else if (objHeader.group != state.group.value()) {
+    if (objHeader.group < state.group.value()) {
+      baseMsg.groupIdDelta = state.group.value() - objHeader.group - 1;
+    } else {
+      baseMsg.groupIdDelta = objHeader.group - state.group.value() - 1;
+    }
+  }
+  const bool nextObject =
+      state.object.has_value() && objHeader.id == state.object.value() + 1;
+  if (!state.object.has_value()) {
+    baseMsg.objectIdDelta = objHeader.id;
+  } else if (baseMsg.groupIdDelta.has_value()) {
+    if (!nextObject) {
+      baseMsg.objectIdDelta = objHeader.id;
+    }
+  } else if (!nextObject) {
+    baseMsg.objectIdDelta = objHeader.id >= state.object.value()
+        ? objHeader.id - state.object.value()
+        : objHeader.id;
+  }
+  if (!state.priority.has_value() || objHeader.priority != state.priority) {
+    baseMsg.publisherPriority = objHeader.priority;
+  }
+  state.group = objHeader.group;
+  state.subgroup = objHeader.subgroup;
+  state.object = objHeader.id;
+  state.priority = objHeader.priority;
+  baseMsg.properties = convertExtensionsToProperties(objHeader.extensions);
+  baseMsg.objectPayloadLength = objHeader.length.value_or(
+      payload ? payload->computeChainDataLength() : 0);
   addFetchObjectCreatedLog(std::move(baseMsg));
 }
 
@@ -1066,15 +1149,54 @@ void MLogger::logFetchObjectParsed(
     Payload payload) {
   MOQTFetchObjectParsed baseMsg;
   baseMsg.streamId = streamId;
-  baseMsg.groupId = objHeader.group;
-  baseMsg.subgroupId = objHeader.id;
-  baseMsg.objectId = objHeader.id;
-  baseMsg.publisherPriority = objHeader.priority.value_or(kDefaultPriority);
-  baseMsg.extensionHeadersLength = objHeader.extensions.size();
-  baseMsg.extensionHeaders = convertExtensionToMoQTExtensionHeaders(
-      objHeader.extensions.getMutableExtensions());
-  baseMsg.objectPayloadLength = payload ? payload->computeChainDataLength() : 0;
-  baseMsg.objectStatus = static_cast<uint64_t>(objHeader.status);
+  auto& state = parsedObjectStreamState_[streamId];
+  baseMsg.datagram = objHeader.forwardingPreferenceIsDatagram;
+  if (!baseMsg.datagram) {
+    if (objHeader.subgroup == 0) {
+      baseMsg.subgroupIdBits = 0;
+    } else if (state.subgroup == objHeader.subgroup) {
+      baseMsg.subgroupIdBits = 1;
+    } else if (
+        state.subgroup.has_value() &&
+        objHeader.subgroup == state.subgroup.value() + 1) {
+      baseMsg.subgroupIdBits = 2;
+    } else {
+      baseMsg.subgroupIdBits = 3;
+      baseMsg.subgroupId = objHeader.subgroup;
+    }
+  }
+  if (!state.group.has_value()) {
+    baseMsg.groupIdDelta = objHeader.group;
+  } else if (objHeader.group != state.group.value()) {
+    if (objHeader.group < state.group.value()) {
+      baseMsg.groupIdDelta = state.group.value() - objHeader.group - 1;
+    } else {
+      baseMsg.groupIdDelta = objHeader.group - state.group.value() - 1;
+    }
+  }
+  const bool nextObject =
+      state.object.has_value() && objHeader.id == state.object.value() + 1;
+  if (!state.object.has_value()) {
+    baseMsg.objectIdDelta = objHeader.id;
+  } else if (baseMsg.groupIdDelta.has_value()) {
+    if (!nextObject) {
+      baseMsg.objectIdDelta = objHeader.id;
+    }
+  } else if (!nextObject) {
+    baseMsg.objectIdDelta = objHeader.id >= state.object.value()
+        ? objHeader.id - state.object.value()
+        : objHeader.id;
+  }
+  if (!state.priority.has_value() || objHeader.priority != state.priority) {
+    baseMsg.publisherPriority = objHeader.priority;
+  }
+  state.group = objHeader.group;
+  state.subgroup = objHeader.subgroup;
+  state.object = objHeader.id;
+  state.priority = objHeader.priority;
+  baseMsg.properties = convertExtensionsToProperties(objHeader.extensions);
+  baseMsg.objectPayloadLength = objHeader.length.value_or(
+      payload ? payload->computeChainDataLength() : 0);
   addFetchObjectParsedLog(std::move(baseMsg));
 }
 
@@ -1087,24 +1209,29 @@ bool MLogger::isHexstring(const std::string& s) {
   return true;
 }
 
-std::vector<MOQTExtensionHeader>
-MLogger::convertExtensionToMoQTExtensionHeaders(
-    std::vector<Extension> extensions) {
-  std::vector<MOQTExtensionHeader> moqExtensions;
-  for (auto& ext : extensions) {
-    MOQTExtensionHeader e;
-    e.headerType = ext.type;
-    if (ext.type % 2 == 1) {
-      e.headerLength = ext.arrayValue->length();
-      std::unique_ptr<folly::IOBuf> arrayPayload = folly::IOBuf::copyBuffer(
-          {ext.arrayValue->data(), ext.arrayValue->length()});
-      e.payload = std::move(arrayPayload);
-    } else {
-      e.headerValue = ext.intValue;
+std::vector<MOQTProperty> MLogger::convertExtensionsToProperties(
+    const Extensions& extensions) {
+  std::vector<MOQTProperty> properties;
+  auto append = [&properties](const std::vector<Extension>& source) {
+    properties.reserve(properties.size() + source.size());
+    for (const auto& ext : source) {
+      MOQTProperty property;
+      property.type = ext.type;
+      if (ext.type % 2 == 1) {
+        if (ext.arrayValue) {
+          const auto length = ext.arrayValue->computeChainDataLength();
+          property.length = length;
+          property.valueBytes = MOQTRawInfo{length};
+        }
+      } else {
+        property.value = ext.intValue;
+      }
+      properties.push_back(std::move(property));
     }
-    moqExtensions.push_back(std::move(e));
-  }
-  return moqExtensions;
+  };
+  append(extensions.getMutableExtensions());
+  append(extensions.getImmutableExtensions());
+  return properties;
 }
 
 void MLogger::logControlMessage(

@@ -59,22 +59,22 @@ constexpr std::array<ObjectEventCase, 6> kObjectEvents{{
      false},
     {ObjectEvent::SUBGROUP_CREATED,
      "moqt:subgroup_object_created",
-     "objectPayload",
+     "object_payload",
      false,
      true},
     {ObjectEvent::SUBGROUP_PARSED,
      "moqt:subgroup_object_parsed",
-     "objectPayload",
+     "object_payload",
      false,
      true},
     {ObjectEvent::FETCH_CREATED,
      "moqt:fetch_object_created",
-     "objectPayload",
+     "object_payload",
      false,
      true},
     {ObjectEvent::FETCH_PARSED,
      "moqt:fetch_object_parsed",
-     "objectPayload",
+     "object_payload",
      false,
      true},
 }};
@@ -128,13 +128,9 @@ void expectEventControls(
   const auto* data = event.get_ptr("data");
   ASSERT_NE(data, nullptr);
   const auto* objectId =
-      data->get_ptr(testCase.datagram ? "object_id" : "objectId");
+      data->get_ptr(testCase.datagram ? "object_id" : "object_id_delta");
   ASSERT_NE(objectId, nullptr);
-  if (testCase.datagram) {
-    EXPECT_EQ(objectId->asInt(), 9);
-  } else {
-    EXPECT_EQ(objectId->asString(), "9");
-  }
+  EXPECT_EQ(objectId->asInt(), 9);
 }
 
 // Datagram events keep a qlog RawInfo holding only the length; the other
@@ -153,7 +149,7 @@ const folly::dynamic* payloadLength(
     const folly::dynamic& data,
     const ObjectEventCase& testCase) {
   if (!testCase.datagram) {
-    return data.get_ptr("objectPayloadLength");
+    return data.get_ptr("object_payload_length");
   }
   const auto* payload = data.get_ptr(testCase.payloadField);
   return payload ? payload->get_ptr("length") : nullptr;
@@ -191,6 +187,17 @@ void appendViolation(
   violations += ":";
   violations += detail;
 }
+
+class InspectableMLogger final : public MLogger {
+ public:
+  InspectableMLogger() : MLogger(VantagePoint::SERVER) {}
+
+  void outputLogs() override {}
+
+  folly::dynamic event(size_t index) {
+    return formatLog(logs_.at(index));
+  }
+};
 
 } // namespace
 
@@ -387,11 +394,7 @@ TEST_F(FileMLoggerTest, ObjectPayloadLengthUsesEntireSuppliedChain) {
     const auto* length = payloadLength(data, testCase);
     if (!length) {
       appendViolation(violations, testCase, "payload length missing");
-    } else if (testCase.datagram) {
-      if (length->asInt() != kExpectedLength) {
-        appendViolation(violations, testCase, "payload length mismatch");
-      }
-    } else if (length->asString() != std::to_string(kExpectedLength)) {
+    } else if (length->asInt() != kExpectedLength) {
       appendViolation(violations, testCase, "payload length mismatch");
     }
   }
@@ -415,7 +418,7 @@ TEST_F(FileMLoggerTest, ObjectsWithoutAPayloadLogZeroLength) {
     const auto event = parseSingleEvent(path);
     expectEventControls(event, testCase);
     const auto* length = payloadLength(event["data"], testCase);
-    if (!length || length->asString() != "0") {
+    if (!length || length->asInt() != 0) {
       appendViolation(violations, testCase, "payload length not zero");
     }
   }
@@ -496,6 +499,65 @@ TEST(MLogTypesTest, NamespaceMessagesLogRequestId) {
   auto obj = unsubscribe.toDynamic();
   EXPECT_EQ(obj["request_id"], 7);
   EXPECT_EQ(obj.count("requestID"), 0);
+}
+
+TEST(MLogTypesTest, LatestTransportEventFieldNames) {
+  MOQTStreamTypeSet streamType;
+  streamType.owner = Owner::REMOTE;
+  streamType.streamId = 7;
+  streamType.streamType = MOQTStreamType::PADDING;
+  auto stream = streamType.toDynamic();
+  EXPECT_EQ(stream["owner"], "remote");
+  EXPECT_EQ(stream["stream_id"], 7);
+  EXPECT_EQ(stream["stream_type"], "padding");
+  EXPECT_EQ(stream.count("streamId"), 0);
+
+  MOQTSubgroupHeaderCreated header;
+  header.streamId = 11;
+  header.trackAlias = 12;
+  header.groupId = 13;
+  header.subgroupIdMode = 2;
+  header.containsEndOfGroup = true;
+  header.propertiesPresent = true;
+  header.firstObject = true;
+  auto subgroup = header.toDynamic();
+  EXPECT_EQ(subgroup["subgroup_id_mode"], 2);
+  EXPECT_EQ(subgroup["properties_present"], true);
+  EXPECT_EQ(subgroup["first_object"], true);
+  EXPECT_EQ(subgroup.count("extensions_present"), 0);
+
+  MOQTFetchObjectCreated fetchObject;
+  fetchObject.streamId = 21;
+  fetchObject.endOfTimedOutRange = true;
+  fetchObject.objectPayloadLength = 34;
+  auto fetch = fetchObject.toDynamic();
+  EXPECT_EQ(fetch["datagram"], false);
+  EXPECT_EQ(fetch["end_of_nonexistent_range"], false);
+  EXPECT_EQ(fetch["end_of_unknown_range"], false);
+  EXPECT_EQ(fetch["end_of_timed_out_range"], true);
+  EXPECT_EQ(fetch["object_payload_length"], 34);
+  EXPECT_EQ(fetch.count("objectStatus"), 0);
+
+  EXPECT_EQ(MOQTPaddingDatagramParsed{55}.toDynamic()["padding_length"], 55);
+}
+
+TEST(MLogTypesTest, FetchGroupDeltaFollowsObservedDirection) {
+  ObjectHeader first(10, 1, 4, 12);
+  ObjectHeader second(7, 1, 5, 12);
+
+  InspectableMLogger created;
+  created.logFetchHeaderCreated(17, 19);
+  created.logFetchObjectCreated(17, first, nullptr);
+  created.logFetchObjectCreated(17, second, nullptr);
+  EXPECT_EQ(created.event(1)["data"]["group_id_delta"], 10);
+  EXPECT_EQ(created.event(2)["data"]["group_id_delta"], 2);
+
+  InspectableMLogger parsed;
+  parsed.logFetchHeaderParsed(17, 19);
+  parsed.logFetchObjectParsed(17, first, nullptr);
+  parsed.logFetchObjectParsed(17, second, nullptr);
+  EXPECT_EQ(parsed.event(1)["data"]["group_id_delta"], 10);
+  EXPECT_EQ(parsed.event(2)["data"]["group_id_delta"], 2);
 }
 
 } // namespace moxygen

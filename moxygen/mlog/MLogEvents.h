@@ -23,6 +23,10 @@ inline constexpr std::string_view kObjectDatagramCreatedName =
     "moqt:object_datagram_created";
 inline constexpr std::string_view kObjectDatagramParsedName =
     "moqt:object_datagram_parsed";
+inline constexpr std::string_view kPaddingDatagramCreatedName =
+    "moqt:padding_datagram_created";
+inline constexpr std::string_view kPaddingDatagramParsedName =
+    "moqt:padding_datagram_parsed";
 inline constexpr std::string_view kSubgroupHeaderCreatedName =
     "moqt:subgroup_header_created";
 inline constexpr std::string_view kSubgroupHeaderParsedName =
@@ -55,6 +59,8 @@ class MLogEvent {
       MOQTStreamTypeSet,
       MOQTObjectDatagramCreated,
       MOQTObjectDatagramParsed,
+      MOQTPaddingDatagramCreated,
+      MOQTPaddingDatagramParsed,
       MOQTSubgroupHeaderCreated,
       MOQTSubgroupHeaderParsed,
       MOQTSubgroupObjectCreated,
@@ -93,6 +99,14 @@ class MLogEventCreator {
   MLogEvent createObjectDatagramParsedEvent(
       VantagePoint vantagePoint,
       MOQTObjectDatagramParsed req);
+
+  MLogEvent createPaddingDatagramCreatedEvent(
+      VantagePoint vantagePoint,
+      MOQTPaddingDatagramCreated req);
+
+  MLogEvent createPaddingDatagramParsedEvent(
+      VantagePoint vantagePoint,
+      MOQTPaddingDatagramParsed req);
 
   MLogEvent createSubgroupHeaderCreatedEvent(
       VantagePoint vantagePoint,

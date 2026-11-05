@@ -83,6 +83,34 @@ MLogEvent MLogEventCreator::createObjectDatagramParsedEvent(
   return log;
 }
 
+MLogEvent MLogEventCreator::createPaddingDatagramCreatedEvent(
+    VantagePoint vantagePoint,
+    MOQTPaddingDatagramCreated req) {
+  auto log = MLogEvent(
+      vantagePoint,
+      static_cast<uint64_t>(
+          std::chrono::system_clock::now().time_since_epoch().count()) -
+          startTime_,
+      kPaddingDatagramCreatedName);
+
+  log.data_ = std::move(req);
+  return log;
+}
+
+MLogEvent MLogEventCreator::createPaddingDatagramParsedEvent(
+    VantagePoint vantagePoint,
+    MOQTPaddingDatagramParsed req) {
+  auto log = MLogEvent(
+      vantagePoint,
+      static_cast<uint64_t>(
+          std::chrono::system_clock::now().time_since_epoch().count()) -
+          startTime_,
+      kPaddingDatagramParsedName);
+
+  log.data_ = std::move(req);
+  return log;
+}
+
 MLogEvent MLogEventCreator::createSubgroupHeaderCreatedEvent(
     VantagePoint vantagePoint,
     MOQTSubgroupHeaderCreated req) {
