@@ -11,6 +11,7 @@
 #include <folly/portability/GTest.h>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include "moxygen/events/MoQFollyExecutorImpl.h"
@@ -634,6 +635,98 @@ TEST_F(MoQProxyTrackTest, GoawaysOnTheSessionOfAFailedAttemptAreIgnored) {
   EXPECT_EQ(switchStats_->upstreamGoaways, 0);
   EXPECT_CALL(*upstreamHandle, unsubscribe());
   result.value()->unsubscribe();
+}
+
+// An upstream PUBLISH_DONE status, and whether it means the upstream was lost
+// rather than the track ending.
+struct UpstreamEndCase {
+  std::string name;
+  PublishDoneStatusCode statusCode;
+  bool lost;
+};
+
+class MoQProxyTrackUpstreamEndTest
+    : public MoQProxyTrackTest,
+      public WithParamInterface<UpstreamEndCase> {};
+
+TEST_P(MoQProxyTrackUpstreamEndTest, ViewersGetTheUpstreamPublishDone) {
+  const auto& upstreamEnd = GetParam();
+  auto consumer = makeConsumer();
+  auto downstreamHandle =
+      subscribeThroughUpstream(makeUpstreamHandle(), consumer);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  EXPECT_CALL(
+      *consumer,
+      publishDone(Field(&PublishDone::statusCode, upstreamEnd.statusCode)));
+
+  upstreamConsumer_->publishDone(
+      PublishDone{RequestID(100), upstreamEnd.statusCode, 0, "upstream done"});
+
+  EXPECT_EQ(switchStats_->upstreamsLost, upstreamEnd.lost ? 1 : 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    UpstreamPublishDone,
+    MoQProxyTrackUpstreamEndTest,
+    Values(
+        UpstreamEndCase{"GoingAway", PublishDoneStatusCode::GOING_AWAY, true},
+        UpstreamEndCase{
+            "SessionClosed",
+            PublishDoneStatusCode::SESSION_CLOSED,
+            true},
+        UpstreamEndCase{
+            "TrackEnded",
+            PublishDoneStatusCode::TRACK_ENDED,
+            false},
+        UpstreamEndCase{
+            "SubscriptionEnded",
+            PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+            false},
+        UpstreamEndCase{
+            "Unauthorized",
+            PublishDoneStatusCode::UNAUTHORIZED,
+            false},
+        UpstreamEndCase{"Expired", PublishDoneStatusCode::EXPIRED, false},
+        UpstreamEndCase{
+            "MalformedTrack",
+            PublishDoneStatusCode::MALFORMED_TRACK,
+            false},
+        UpstreamEndCase{
+            "TooFarBehind",
+            PublishDoneStatusCode::TOO_FAR_BEHIND,
+            false},
+        UpstreamEndCase{
+            "UpdateFailed",
+            PublishDoneStatusCode::UPDATE_FAILED,
+            false},
+        // Another upstream might serve it, but every proxy on this upstream
+        // switching at once would only move the load.
+        UpstreamEndCase{
+            "ExcessiveLoad",
+            PublishDoneStatusCode::EXCESSIVE_LOAD,
+            false},
+        // Kept as a track end, as before: nothing says another relay would
+        // fare better.
+        UpstreamEndCase{
+            "InternalError",
+            PublishDoneStatusCode::INTERNAL_ERROR,
+            false}),
+    [](const TestParamInfo<UpstreamEndCase>& info) { return info.param.name; });
+
+TEST_F(MoQProxyTrackTest, UpstreamLossAfterTheTrackClosedIsNotCounted) {
+  auto downstreamHandle =
+      subscribeThroughUpstream(makeUpstreamHandle(), makeConsumer());
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  track_->close();
+
+  upstreamConsumer_->publishDone(
+      PublishDone{
+          RequestID(100),
+          PublishDoneStatusCode::SESSION_CLOSED,
+          0,
+          "session closed"});
+
+  EXPECT_EQ(switchStats_->upstreamsLost, 0);
 }
 
 }} // namespace moxygen

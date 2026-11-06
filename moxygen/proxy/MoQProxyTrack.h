@@ -37,6 +37,9 @@ struct MoQProxySwitchStats {
   // Each session or request-stream GOAWAY, once per track it reaches: a session
   // GOAWAY and a request-stream GOAWAY reaching one track count two.
   uint64_t upstreamGoaways{0};
+  // Upstream subscriptions that ended because their relay went away or their
+  // session closed, rather than because the track ended.
+  uint64_t upstreamsLost{0};
 };
 
 // Shared by the tracks of one proxy; a null member gets a per-track default.
@@ -170,6 +173,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   void onForwarderEmpty();
   void onUpstreamPublishDone();
   void onUpstreamGoaway(const Goaway& goaway);
+  void onUpstreamLost(const PublishDone& publishDone);
   void notifyNoSubscribers();
   void stopCaching();
 

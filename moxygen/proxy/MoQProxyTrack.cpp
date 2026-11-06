@@ -34,6 +34,14 @@ folly::Unexpected<SubscribeError> makeUpstreamFailure(
       request, SubscribeErrorCode::INTERNAL_ERROR, std::move(reasonPhrase));
 }
 
+// Another upstream may still serve the track. A session that closes for any
+// reason, including a crash, idle timeout or transport reset, ends its
+// subscriptions with SESSION_CLOSED.
+bool isUpstreamLoss(PublishDoneStatusCode statusCode) {
+  return statusCode == PublishDoneStatusCode::GOING_AWAY ||
+      statusCode == PublishDoneStatusCode::SESSION_CLOSED;
+}
+
 } // namespace
 
 class MoQProxyTrack::DownstreamSubscriptionHandle final
@@ -422,6 +430,11 @@ class MoQProxyTrack::Recorder final : public TrackConsumer {
       PublishDone pubDone) override {
     if (disabled_) {
       return folly::unit;
+    }
+    if (isUpstreamLoss(pubDone.statusCode)) {
+      if (auto track = track_.lock()) {
+        track->onUpstreamLost(pubDone);
+      }
     }
     return forwarder_->publishDone(std::move(pubDone));
   }
@@ -868,6 +881,14 @@ void MoQProxyTrack::onUpstreamGoaway(const Goaway& goaway) {
              << (goaway.newSessionUri.empty()
                      ? ""
                      : ", ignoring newSessionUri=" + goaway.newSessionUri);
+}
+
+// Only counted and logged for now: viewers still get the PUBLISH_DONE.
+void MoQProxyTrack::onUpstreamLost(const PublishDone& publishDone) {
+  ++switchStats_->upstreamsLost;
+  XLOG(DBG1) << "Upstream lost for " << fullTrackName_
+             << " status=" << folly::to_underlying(publishDone.statusCode)
+             << " reason=" << publishDone.reasonPhrase;
 }
 
 void MoQProxyTrack::notifyNoSubscribers() {
