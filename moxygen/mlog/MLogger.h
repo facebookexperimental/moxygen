@@ -265,10 +265,20 @@ class MLogger {
       const uint64_t streamId,
       const ObjectHeader& header,
       Payload payload);
+  void logFetchObjectCreated(
+      uint64_t streamId,
+      uint64_t endGroup,
+      uint64_t endObject,
+      MOQTFetchRangeEndType rangeEndType);
   void logFetchObjectParsed(
       const uint64_t streamId,
       const ObjectHeader& header,
       Payload payload);
+  void logFetchObjectParsed(
+      uint64_t streamId,
+      uint64_t endGroup,
+      uint64_t endObject,
+      MOQTFetchRangeEndType rangeEndType);
 
   // Setter APIs for connection metadata (used by ScubaMLogger)
   void setDcid(const quic::ConnectionId& dcid);

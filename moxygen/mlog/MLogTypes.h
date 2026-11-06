@@ -28,6 +28,12 @@ enum ControlMessageType : int {
   PARSED = 1,
 };
 
+enum class MOQTFetchRangeEndType : uint8_t {
+  NONEXISTENT,
+  UNKNOWN,
+  TIMED_OUT,
+};
+
 // Data Type Structs
 
 enum MOQTStreamType { CONTROL, SUBGROUP_HEADER, FETCH_HEADER, PADDING };

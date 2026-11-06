@@ -562,6 +562,45 @@ TEST(MLogTypesTest, FetchGroupDeltaFollowsObservedDirection) {
   EXPECT_EQ(parsed.event(2)["data"]["group_id_delta"], 2);
 }
 
+TEST(MLogTypesTest, FetchRangeEndLoggerApis) {
+  static constexpr std::array<MOQTFetchRangeEndType, 3> kRangeEndTypes = {
+      MOQTFetchRangeEndType::NONEXISTENT,
+      MOQTFetchRangeEndType::UNKNOWN,
+      MOQTFetchRangeEndType::TIMED_OUT};
+  for (size_t i = 0; i < kRangeEndTypes.size(); ++i) {
+    const auto type = kRangeEndTypes[i];
+    const auto streamId = 40 + i;
+    const auto endGroup = 50 + i;
+    const auto endObject = 60 + i;
+    auto verify = [&](const folly::dynamic& event) {
+      const auto& data = event["data"];
+      EXPECT_EQ(data["group_id_delta"], endGroup);
+      EXPECT_EQ(data["object_id_delta"], endObject);
+      EXPECT_EQ(data["object_payload_length"], 0);
+      EXPECT_EQ(
+          data["end_of_nonexistent_range"],
+          type == MOQTFetchRangeEndType::NONEXISTENT);
+      EXPECT_EQ(
+          data["end_of_unknown_range"], type == MOQTFetchRangeEndType::UNKNOWN);
+      EXPECT_EQ(
+          data["end_of_timed_out_range"],
+          type == MOQTFetchRangeEndType::TIMED_OUT);
+    };
+
+    InspectableMLogger created;
+    created.logFetchObjectCreated(streamId, endGroup, endObject, type);
+    verify(created.event(0));
+    created.logFetchObjectCreated(
+        streamId, ObjectHeader(endGroup, 0, endObject + 1), nullptr);
+    EXPECT_EQ(created.event(1)["data"].count("group_id_delta"), 0);
+    EXPECT_EQ(created.event(1)["data"].count("object_id_delta"), 0);
+
+    InspectableMLogger parsed;
+    parsed.logFetchObjectParsed(streamId, endGroup, endObject, type);
+    verify(parsed.event(0));
+  }
+}
+
 TEST_F(FileMLoggerTest, LatestSetupAndFillParameterSchemas) {
   const auto setupPath = (dir_ / "setup.mlog").string();
   FileMLogger setupLogger(VantagePoint::CLIENT, setupPath);

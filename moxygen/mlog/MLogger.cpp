@@ -180,6 +180,24 @@ std::optional<folly::dynamic> rangeFilter(const Parameter& parameter) {
   }
   return filter;
 }
+
+template <typename Event>
+void populateFetchRangeEnd(
+    Event& event,
+    uint64_t streamId,
+    uint64_t endGroup,
+    uint64_t endObject,
+    MOQTFetchRangeEndType rangeEndType) {
+  event.streamId = streamId;
+  // An End of Range carries an absolute endpoint. These are the MLog FETCH
+  // object's only fields for the group and object values.
+  event.groupIdDelta = endGroup;
+  event.objectIdDelta = endObject;
+  event.endOfNonexistentRange =
+      rangeEndType == MOQTFetchRangeEndType::NONEXISTENT;
+  event.endOfUnknownRange = rangeEndType == MOQTFetchRangeEndType::UNKNOWN;
+  event.endOfTimedOutRange = rangeEndType == MOQTFetchRangeEndType::TIMED_OUT;
+}
 } // namespace
 
 void MLogger::setDcid(const quic::ConnectionId& dcid) {
@@ -1470,6 +1488,19 @@ void MLogger::logFetchObjectCreated(
   addFetchObjectCreatedLog(std::move(baseMsg));
 }
 
+void MLogger::logFetchObjectCreated(
+    uint64_t streamId,
+    uint64_t endGroup,
+    uint64_t endObject,
+    MOQTFetchRangeEndType rangeEndType) {
+  MOQTFetchObjectCreated baseMsg;
+  populateFetchRangeEnd(baseMsg, streamId, endGroup, endObject, rangeEndType);
+  auto& state = createdObjectStreamState_[streamId];
+  state.group = endGroup;
+  state.object = endObject;
+  addFetchObjectCreatedLog(std::move(baseMsg));
+}
+
 void MLogger::logFetchObjectParsed(
     const uint64_t streamId,
     const ObjectHeader& objHeader,
@@ -1524,6 +1555,19 @@ void MLogger::logFetchObjectParsed(
   baseMsg.properties = convertExtensionsToProperties(objHeader.extensions);
   baseMsg.objectPayloadLength = objHeader.length.value_or(
       payload ? payload->computeChainDataLength() : 0);
+  addFetchObjectParsedLog(std::move(baseMsg));
+}
+
+void MLogger::logFetchObjectParsed(
+    uint64_t streamId,
+    uint64_t endGroup,
+    uint64_t endObject,
+    MOQTFetchRangeEndType rangeEndType) {
+  MOQTFetchObjectParsed baseMsg;
+  populateFetchRangeEnd(baseMsg, streamId, endGroup, endObject, rangeEndType);
+  auto& state = parsedObjectStreamState_[streamId];
+  state.group = endGroup;
+  state.object = endObject;
   addFetchObjectParsedLog(std::move(baseMsg));
 }
 
