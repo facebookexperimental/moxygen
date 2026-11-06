@@ -20,11 +20,10 @@ Or install manually:
 - OpenSSL
 - glog
 - gflags
-- double-conversion
 - libevent
 - libsodium
 - zstd
-- boost (context, filesystem, program_options)
+- boost (context, regex)
 - fmt
 - c-ares
 - gperf
