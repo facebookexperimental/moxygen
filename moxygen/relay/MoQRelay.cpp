@@ -480,7 +480,11 @@ Subscriber::PublishResult MoQRelay::publish(
     // multipublisher
     XLOG(DBG1) << "New publisher for existing subscription";
     nodePtr->publishes.erase(pub.fullTrackName.trackName);
-    it->second.handle->unsubscribe();
+    // onPublishDoneImpl clears the handle but keeps the entry while
+    // subscribers drain.
+    if (it->second.handle) {
+      it->second.handle->unsubscribe();
+    }
     // Move the forwarder out and erase the entry BEFORE calling publishDone.
     // publishDone iterates subscribers via forEachSubscriber; if a subscriber
     // has no open subgroups, drainSubscriber → onEmpty fires. If the entry

@@ -1098,6 +1098,70 @@ TEST_F(MoQRelayTest, SubscribeNamespaceDoesntAddDrainingPublish) {
   removeSession(subscriber2);
 }
 
+TEST_F(MoQRelayTest, RepublishWhileSubscriberDrainsAfterPublishDone) {
+  auto publisherSession = createMockSession();
+  auto publisherSession2 = createMockSession();
+  auto subscriber = createMockSession();
+  const FullTrackName ftn{kTestNamespace, "track_stream"};
+
+  doSubscribeNamespace(subscriber, kTestNamespace, /*addToState=*/false);
+  auto mockConsumer = createMockConsumer();
+  EXPECT_CALL(*subscriber, publish(testing::_, testing::_))
+      .WillOnce([mockConsumer](const auto& /*pubReq*/, auto /*subHandle*/) {
+        return Subscriber::PublishResult(
+            Subscriber::PublishConsumerAndReplyTask{
+                mockConsumer,
+                []() -> folly::coro::Task<
+                         folly::Expected<PublishOk, PublishError>> {
+                  co_return PublishOk{/*requestID=*/RequestID(1),
+                                      /*forward=*/true,
+                                      /*subscriberPriority=*/0,
+                                      /*groupOrder=*/GroupOrder::OldestFirst,
+                                      LocationFilter::nextObject()};
+                }()});
+      })
+      .WillOnce([](const auto& /*pubReq*/, auto /*subHandle*/) {
+        return folly::makeUnexpected(PublishError{});
+      });
+  auto sg = std::make_shared<NiceMock<MockSubgroupConsumer>>();
+  ON_CALL(*sg, endOfSubgroup()).WillByDefault(Return(folly::unit));
+  EXPECT_CALL(*mockConsumer, beginSubgroup(_, _, _, _))
+      .WillOnce([sg](
+                    uint64_t,
+                    uint64_t,
+                    uint8_t,
+                    moxygen::TrackConsumer::BeginSubgroupOptions) {
+        return folly::
+            makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                sg);
+      });
+
+  auto pubConsumer = doPublish(publisherSession, ftn, /*addToState=*/false);
+  exec_->drive();
+  auto subgroup = *pubConsumer->beginSubgroup(0, 0, 0);
+
+  // The open subgroup keeps the subscriber draining, so the relay keeps the
+  // subscription entry after the publisher's handle is cleared.
+  EXPECT_CALL(*mockConsumer, publishDone(testing::_))
+      .WillRepeatedly(Return(folly::unit));
+  EXPECT_TRUE(pubConsumer
+                  ->publishDone(
+                      {RequestID(1),
+                       PublishDoneStatusCode::TRACK_ENDED,
+                       0,
+                       "track ended"})
+                  .hasValue());
+
+  // A reconnecting publisher replaces that entry.
+  auto pubConsumer2 = doPublish(publisherSession2, ftn);
+  exec_->drive();
+
+  subgroup->endOfSubgroup();
+  removeSession(publisherSession);
+  removeSession(publisherSession2);
+  removeSession(subscriber);
+}
+
 TEST_F(MoQRelayTest, SubscribeNamespaceEmptyPrefixAllowedV16) {
   auto session = createMockSession();
   // Override the negotiated version to draft-16
