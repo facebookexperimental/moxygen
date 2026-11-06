@@ -1162,6 +1162,115 @@ TEST_F(MoQRelayTest, RepublishWhileSubscriberDrainsAfterPublishDone) {
   removeSession(subscriber);
 }
 
+class MoQRelayPublisherReconnectTest : public MoQRelayTest {
+ protected:
+  void SetUp() override {
+    MoQRelayTest::SetUp();
+    publisherSession1_ = createMockSession();
+    publisherSession2_ = createMockSession();
+    subscriberSession_ = createMockSession();
+  }
+
+  // Runs inside publisherSession1's upstream subscribe(): publisher 2 takes
+  // over the namespace, which erases the subscribe-path entry, then publishes
+  // the track, which creates a new entry with its promise already satisfied.
+  folly::coro::Task<void> reconnectAndPublish() {
+    {
+      folly::RequestContextScopeGuard ctx;
+      folly::RequestContext::get()->setContextData(
+          sessionRequestToken(),
+          std::make_unique<MoQSession::MoQSessionRequestData>(
+              publisherSession2_));
+      PublishNamespace pubNs;
+      pubNs.trackNamespace = kTestNamespace;
+      auto nsRes = co_await relay_->publishNamespace(std::move(pubNs), nullptr);
+      EXPECT_TRUE(nsRes.hasValue());
+      if (nsRes.hasValue()) {
+        getOrCreateMockState(publisherSession2_)
+            ->publishNamespaceHandles.push_back(*nsRes);
+      }
+      PublishRequest pub;
+      pub.fullTrackName = kTestTrackName;
+      auto res =
+          relay_->publish(std::move(pub), createMockSubscriptionHandle());
+      EXPECT_TRUE(res.hasValue());
+      if (res.hasValue()) {
+        pub2Consumer_ = res->consumer;
+      }
+    }
+  }
+
+  Publisher::SubscribeResult subscribe() {
+    return withSessionContext(subscriberSession_, [&]() {
+      SubscribeRequest sub;
+      sub.fullTrackName = kTestTrackName;
+      sub.requestID = RequestID(1);
+      sub.filter = LocationFilter::nextObject();
+      return folly::coro::blockingWait(
+          relay_->subscribe(std::move(sub), createMockConsumer()), exec_.get());
+    });
+  }
+
+  void cleanup() {
+    if (pub2Consumer_) {
+      pub2Consumer_->publishDone(
+          {RequestID(0),
+           PublishDoneStatusCode::SESSION_CLOSED,
+           0,
+           "test cleanup"});
+    }
+    removeSession(publisherSession1_);
+    removeSession(publisherSession2_);
+    removeSession(subscriberSession_);
+  }
+
+  std::shared_ptr<MockMoQSession> publisherSession1_;
+  std::shared_ptr<MockMoQSession> publisherSession2_;
+  std::shared_ptr<MockMoQSession> subscriberSession_;
+  std::shared_ptr<TrackConsumer> pub2Consumer_;
+};
+
+TEST_F(MoQRelayPublisherReconnectTest, UpstreamSubscribeErrorSkipsStaleGuard) {
+  doPublishNamespace(publisherSession1_, kTestNamespace);
+  EXPECT_CALL(*publisherSession1_, subscribe(_, _))
+      .WillOnce(
+          [this](SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_await reconnectAndPublish();
+            co_return folly::makeUnexpected(
+                SubscribeError{
+                    RequestID(0),
+                    SubscribeErrorCode::INTERNAL_ERROR,
+                    "upstream session cancelled"});
+          });
+
+  EXPECT_FALSE(subscribe().hasValue());
+  cleanup();
+}
+
+TEST_F(MoQRelayPublisherReconnectTest, UpstreamSubscribeOkFailsAfterReconnect) {
+  doPublishNamespace(publisherSession1_, kTestNamespace);
+  EXPECT_CALL(*publisherSession1_, subscribe(_, _))
+      .WillOnce(
+          [this](SubscribeRequest subReq, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_await reconnectAndPublish();
+            SubscribeOk ok;
+            ok.requestID = subReq.requestID;
+            ok.trackAlias = TrackAlias(subReq.requestID.value);
+            ok.expires = std::chrono::milliseconds(0);
+            ok.groupOrder = GroupOrder::OldestFirst;
+            co_return std::make_shared<NiceMock<MockSubscriptionHandle>>(
+                std::move(ok));
+          });
+
+  auto result = subscribe();
+  ASSERT_FALSE(result.hasValue());
+  EXPECT_EQ(
+      result.error().reasonPhrase, "publisher reconnected during subscribe");
+  cleanup();
+}
+
 class MoQRelayRendezvousTest : public MoQRelayTest {
  protected:
   std::shared_ptr<MockMoQSession> createV18Session() {

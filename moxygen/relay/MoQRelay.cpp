@@ -1785,12 +1785,18 @@ MoQRelay::subscribeToFirstRelaySubscription(
   // The iterator returned from emplace does not survive across coroutine
   // resumption, so both the guard and updating the RelaySubscription below
   // require another lookup in the subscriptions_ map.
-  auto g = folly::makeGuard([this, trackName = subReq.fullTrackName] {
+  // A reconnecting publisher may replace this entry before we resume.
+  auto g = folly::makeGuard([this,
+                             trackName = subReq.fullTrackName,
+                             weakForwarder = std::weak_ptr(forwarder)] {
     auto it = subscriptions_.find(trackName);
-    if (it != subscriptions_.end()) {
+    if (it != subscriptions_.end() &&
+        it->second.forwarder == weakForwarder.lock()) {
       it->second.promise.setException(std::runtime_error("failed"));
       XLOG(DBG4) << "Erasing subscription to " << it->first;
       subscriptions_.erase(it);
+    } else {
+      XLOG(DBG4) << "Skipping stale guard for " << trackName;
     }
   });
   // Add subscriber first in case objects come before subscribe OK.
@@ -1846,6 +1852,15 @@ MoQRelay::subscribeToFirstRelaySubscription(
   if (it == subscriptions_.end()) {
     XLOG(ERR) << "Subscription is GONE, returning exception";
     co_yield folly::coro::co_error(std::runtime_error("subscription is gone"));
+  }
+  if (it->second.forwarder != forwarder) {
+    XLOG(ERR) << "Subscription replaced by reconnecting publisher: "
+              << subReq.fullTrackName;
+    co_return folly::makeUnexpected(
+        SubscribeError{
+            subReq.requestID,
+            SubscribeErrorCode::INTERNAL_ERROR,
+            "publisher reconnected during subscribe"});
   }
   auto& rsub = it->second;
   rsub.handle = std::move(subRes.value());
