@@ -92,6 +92,7 @@ moxygen_add_library(moxygen_proxy_moq_proxy_track
     moxygen_proxy_moq_group_cache
     moxygen_proxy_moq_upstream_goaways
     moxygen_proxy_moq_upstream_provider
+    Folly::folly_cancellation_token
     Folly::folly_coro_shared_promise
     Folly::folly_coro_task
     Folly::folly_expected

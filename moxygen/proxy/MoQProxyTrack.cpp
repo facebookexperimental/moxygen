@@ -529,10 +529,10 @@ MoQProxyTrack::MoQProxyTrack(
 MoQProxyTrack::~MoQProxyTrack() {
   forwarder_->setCallback(nullptr);
   stopCaching();
-  if (auto handle = std::move(upstreamHandle_)) {
+  if (auto handle = std::move(upstream_.handle)) {
     handle->unsubscribe();
   }
-  upstreamSession_.reset();
+  upstream_.session.reset();
   if (!viewersEnded_ && !forwarder_->empty()) {
     forwarder_->publishDone(
         PublishDone{
@@ -611,23 +611,26 @@ MoQProxyTrack::handleFirstSubscription(
   }
 
   auto subscriber = subscriberResult.value();
-  auto failure = co_await establishUpstream(subscribeRequest, downstream);
-  if (failure) {
+  auto upstream = co_await establishUpstream(
+      subscribeRequest, downstream, establishing_.getToken());
+  if (upstream.hasError()) {
+    auto& failure = upstream.error();
     if (!upstreamSubscriptionFailure_) {
       completeUpstreamEstablishment(
           UpstreamEstablishmentFailure{
-              failure->errorCode,
-              failure->reasonPhrase,
+              failure.errorCode,
+              failure.reasonPhrase,
           });
     }
     auto returnedFailure = upstreamSubscriptionFailure_
         ? makeSubscribeError(
               subscribeRequest.requestID, *upstreamSubscriptionFailure_)
-        : std::move(*failure);
+        : std::move(failure);
     // Roll back the subscriber registered before upstream establishment.
     subscriber->unsubscribe();
     co_return folly::makeUnexpected(std::move(returnedFailure));
   }
+  adoptFirstUpstream(std::move(upstream.value()));
   auto downstreamHandle =
       std::dynamic_pointer_cast<DownstreamSubscriptionHandle>(subscriber);
   XCHECK(downstreamHandle);
@@ -673,10 +676,12 @@ Publisher::SubscribeResult MoQProxyTrack::addSubscriber(
   return std::make_shared<DownstreamSubscriptionHandle>(std::move(subscriber));
 }
 
-folly::coro::Task<std::optional<SubscribeError>>
+folly::coro::Task<MoQProxyTrack::UpstreamEstablishmentResult>
 MoQProxyTrack::establishUpstream(
-    const SubscribeRequest& subscribeRequest,
-    DownstreamPeer downstream) {
+    SubscribeRequest subscribeRequest,
+    DownstreamPeer downstream,
+    folly::CancellationToken cancelled) {
+  auto self = shared_from_this();
   std::optional<SubscribeError> lastFailure;
   for (size_t providerIndex = 0; providerIndex < upstreamProviders_.size();
        ++providerIndex) {
@@ -684,42 +689,42 @@ MoQProxyTrack::establishUpstream(
     const bool hasFallbackProvider =
         providerIndex + 1 < upstreamProviders_.size();
     auto result = co_await establishWithProvider(
-        upstreamProvider, subscribeRequest, downstream, hasFallbackProvider);
-    if (result.hasError()) {
-      if (state_ != State::CONNECTING) {
-        co_return std::move(result.error());
-      }
-      lastFailure = std::move(result.error());
-      continue;
+        upstreamProvider,
+        subscribeRequest,
+        downstream,
+        hasFallbackProvider,
+        cancelled);
+    if (result.hasValue() || cancelled.isCancellationRequested()) {
+      co_return result;
     }
-
-    auto establishedUpstream = std::move(result.value());
-    const auto& subscribeOk = establishedUpstream.handle->subscribeOk();
-    upstreamLargest_ = subscribeOk.largest;
-    if (subscribeOk.largest) {
-      forwarder_->updateLargest(
-          subscribeOk.largest->group, subscribeOk.largest->object);
-    }
-    forwarder_->setExtensions(subscribeOk.extensions);
-    upstreamSession_ = std::move(establishedUpstream.session);
-    upstreamHandle_ = std::move(establishedUpstream.handle);
-    recorder_ = std::move(establishedUpstream.recorder);
-    upstreamGoawayWatch_ = std::move(establishedUpstream.goawayWatch);
-    co_return std::nullopt;
+    lastFailure = std::move(result.error());
   }
-  co_return lastFailure;
+  XCHECK(lastFailure) << "a proxy track has at least one upstream provider";
+  co_return folly::makeUnexpected(std::move(*lastFailure));
+}
+
+void MoQProxyTrack::adoptFirstUpstream(UpstreamAttempt attempt) {
+  const auto& subscribeOk = attempt.handle->subscribeOk();
+  upstreamLargest_ = subscribeOk.largest;
+  if (subscribeOk.largest) {
+    forwarder_->updateLargest(
+        subscribeOk.largest->group, subscribeOk.largest->object);
+  }
+  forwarder_->setExtensions(subscribeOk.extensions);
+  upstream_ = std::move(attempt);
 }
 
 folly::coro::Task<MoQProxyTrack::UpstreamEstablishmentResult>
 MoQProxyTrack::establishWithProvider(
-    const std::shared_ptr<MoQUpstreamProvider>& upstreamProvider,
-    const SubscribeRequest& subscribeRequest,
+    std::shared_ptr<MoQUpstreamProvider> upstreamProvider,
+    SubscribeRequest subscribeRequest,
     DownstreamPeer downstream,
-    bool hasFallbackProvider) {
+    bool hasFallbackProvider,
+    folly::CancellationToken cancelled) {
   auto sessionResult =
       co_await folly::coro::co_awaitTry(upstreamProvider->getSession(
           fullTrackName_, subscribeRequest.params, hasFallbackProvider));
-  if (state_ != State::CONNECTING) {
+  if (cancelled.isCancellationRequested()) {
     co_return makeUpstreamFailure(
         subscribeRequest,
         SubscribeErrorCode::CANCELLED,
@@ -788,7 +793,7 @@ MoQProxyTrack::establishWithProvider(
   });
   auto subscribeResult = co_await folly::coro::co_awaitTry(
       upstreamSession->subscribe(std::move(upstreamRequest), recorder));
-  if (state_ != State::CONNECTING) {
+  if (cancelled.isCancellationRequested()) {
     if (subscribeResult.hasValue() && subscribeResult->hasValue()) {
       if (auto handle = std::move(subscribeResult->value())) {
         handle->unsubscribe();
@@ -822,7 +827,7 @@ MoQProxyTrack::establishWithProvider(
   }
 
   abandonAttempt.dismiss();
-  co_return EstablishedUpstream{
+  co_return UpstreamAttempt{
       .session = std::move(upstreamSession),
       .handle = std::move(upstreamHandle),
       .recorder = std::move(recorder),
@@ -854,12 +859,13 @@ void MoQProxyTrack::onForwarderEmpty() {
             "proxy track became empty while establishing the upstream"});
   }
   state_ = State::CLOSED;
+  establishing_.requestCancellation();
   stopCaching();
-  if (auto handle = std::move(upstreamHandle_)) {
+  if (auto handle = std::move(upstream_.handle)) {
     handle->unsubscribe();
   }
-  upstreamGoawayWatch_.reset();
-  upstreamSession_.reset();
+  upstream_.goawayWatch.reset();
+  upstream_.session.reset();
   notifyNoSubscribers();
 }
 
@@ -867,9 +873,12 @@ void MoQProxyTrack::onUpstreamPublishDone() {
   viewersEnded_ = true;
   // Publishing ended, but already received data can still serve a joining
   // FETCH, and a miss still needs this upstream for history.
-  upstreamHandle_.reset();
-  upstreamGoawayWatch_.reset();
+  upstream_.handle.reset();
+  upstream_.goawayWatch.reset();
   if (state_ == State::CONNECTING) {
+    // The upstream ended the attempt before the track resumed with its
+    // SUBSCRIBE_OK.
+    establishing_.requestCancellation();
     completeUpstreamEstablishment(
         UpstreamEstablishmentFailure{
             SubscribeErrorCode::DOES_NOT_EXIST,
@@ -919,12 +928,13 @@ void MoQProxyTrack::close() {
             SubscribeErrorCode::GOING_AWAY, "proxy track closed"});
   }
   state_ = State::DRAINING;
+  establishing_.requestCancellation();
   stopCaching();
-  if (auto handle = std::move(upstreamHandle_)) {
+  if (auto handle = std::move(upstream_.handle)) {
     handle->unsubscribe();
   }
-  upstreamGoawayWatch_.reset();
-  upstreamSession_.reset();
+  upstream_.goawayWatch.reset();
+  upstream_.session.reset();
 
   if (forwarder_->empty()) {
     state_ = State::CLOSED;
@@ -943,7 +953,7 @@ void MoQProxyTrack::close() {
 }
 
 void MoQProxyTrack::stopCaching() {
-  if (auto recorder = std::move(recorder_)) {
+  if (auto recorder = std::move(upstream_.recorder)) {
     recorder->disable();
   }
   if (cache_) {

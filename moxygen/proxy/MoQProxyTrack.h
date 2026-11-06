@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <folly/CancellationToken.h>
 #include <folly/Expected.h>
 #include <folly/coro/SharedPromise.h>
 #include <folly/coro/Task.h>
@@ -108,7 +109,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   }
   // Still set after the upstream ends publishing, for historical fallback.
   const std::shared_ptr<MoQSession>& upstreamSession() const {
-    return upstreamSession_;
+    return upstream_.session;
   }
   const Extensions& trackExtensions() const;
 
@@ -125,15 +126,18 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   class Recorder;
   class SubgroupRecorder;
 
-  struct EstablishedUpstream {
+  // One upstream subscription and what serves it.
+  struct UpstreamAttempt {
     std::shared_ptr<MoQSession> session;
     std::shared_ptr<Publisher::SubscriptionHandle> handle;
+    // Records the attempt's data into cache_ before forwarding it.
     std::shared_ptr<Recorder> recorder;
+    // Set while handle is; reports session GOAWAYs.
     MoQUpstreamGoaways::Watch goawayWatch;
   };
 
   using UpstreamEstablishmentResult =
-      folly::Expected<EstablishedUpstream, SubscribeError>;
+      folly::Expected<UpstreamAttempt, SubscribeError>;
 
   class DownstreamSubscriptionHandle;
   class ForwarderCallback;
@@ -154,15 +158,24 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       std::shared_ptr<TrackConsumer> consumer,
       DownstreamPeer downstream);
 
-  folly::coro::Task<std::optional<SubscribeError>> establishUpstream(
-      const SubscribeRequest& subscribeRequest,
-      DownstreamPeer downstream);
+  // Take their arguments by value, and establishUpstream holds the track, so a
+  // caller may run it detached from its frame. establishWithProvider runs only
+  // inside establishUpstream.
+  folly::coro::Task<UpstreamEstablishmentResult> establishUpstream(
+      SubscribeRequest subscribeRequest,
+      DownstreamPeer downstream,
+      folly::CancellationToken cancelled);
 
   folly::coro::Task<UpstreamEstablishmentResult> establishWithProvider(
-      const std::shared_ptr<MoQUpstreamProvider>& upstreamProvider,
-      const SubscribeRequest& subscribeRequest,
+      std::shared_ptr<MoQUpstreamProvider> upstreamProvider,
+      SubscribeRequest subscribeRequest,
       DownstreamPeer downstream,
-      bool hasFallbackProvider);
+      bool hasFallbackProvider,
+      folly::CancellationToken cancelled);
+
+  // Also gives the track the attempt's Largest and extensions, which only the
+  // first upstream may do.
+  void adoptFirstUpstream(UpstreamAttempt attempt);
 
   SubscribeError makeSubscribeError(
       RequestID requestID,
@@ -181,14 +194,13 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders_;
   std::shared_ptr<MoQForwarder> forwarder_;
   std::shared_ptr<MoQGroupCache> cache_;
-  // Records the established upstream attempt into cache_.
-  std::shared_ptr<Recorder> recorder_;
   std::shared_ptr<MoQUpstreamGoaways> goaways_;
   std::shared_ptr<MoQProxySwitchStats> switchStats_;
-  std::shared_ptr<MoQSession> upstreamSession_;
-  std::shared_ptr<Publisher::SubscriptionHandle> upstreamHandle_;
-  // Set while upstreamHandle_ is; reports session GOAWAYs.
-  MoQUpstreamGoaways::Watch upstreamGoawayWatch_;
+  UpstreamAttempt upstream_;
+  // Cancels establishing upstream_ once the track stops waiting for it. A
+  // cancelled source stays cancelled, so each later establishment needs a
+  // fresh one.
+  folly::CancellationSource establishing_;
   // The Largest in the upstream SUBSCRIBE_OK, which anchors the first
   // subscriber even if early data advanced the forwarder.
   std::optional<AbsoluteLocation> upstreamLargest_;

@@ -349,6 +349,107 @@ TEST_F(MoQProxyTrackTest, ClosingDuringProviderAttemptDoesNotTryFallback) {
   EXPECT_EQ(fallbackProvider->calls, 0);
 }
 
+// The upstream ends its subscription before the track sees its SUBSCRIBE_OK.
+TEST_F(MoQProxyTrackTest, UpstreamEndingWhileSubscribingFailsTheSubscribe) {
+  auto upstreamHandle = makeUpstreamHandle();
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [upstreamHandle](SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            cb->publishDone(
+                PublishDone{
+                    RequestID(100),
+                    PublishDoneStatusCode::TRACK_ENDED,
+                    0,
+                    "track ended"});
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+
+  auto result = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(1)),
+          makeConsumer(),
+          makeDownstreamPeer()),
+      &eventBase_);
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().errorCode, SubscribeErrorCode::DOES_NOT_EXIST);
+  EXPECT_EQ(callback_->calls, 1);
+}
+
+// As above, but an open subgroup keeps the viewer draining, so the forwarder
+// does not empty.
+TEST_F(
+    MoQProxyTrackTest,
+    UpstreamEndingWithAnOpenSubgroupWhileSubscribingFailsTheSubscribe) {
+  auto upstreamHandle = makeUpstreamHandle();
+  auto consumer = makeConsumer();
+  ON_CALL(*consumer, beginSubgroup(_, _, _, _))
+      .WillByDefault(Return(
+          folly::makeExpected<MoQPublishError>(
+              std::static_pointer_cast<SubgroupConsumer>(
+                  std::make_shared<NiceMock<MockSubgroupConsumer>>()))));
+  // Held so the subgroup stays open.
+  std::shared_ptr<SubgroupConsumer> openSubgroup;
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [&openSubgroup, upstreamHandle](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            auto subgroup = cb->beginSubgroup(11, 0, kDefaultPriority, {});
+            if (subgroup.hasValue()) {
+              openSubgroup = subgroup.value();
+            }
+            cb->publishDone(
+                PublishDone{
+                    RequestID(100),
+                    PublishDoneStatusCode::TRACK_ENDED,
+                    0,
+                    "track ended"});
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+
+  auto result = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(1)), consumer, makeDownstreamPeer()),
+      &eventBase_);
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().errorCode, SubscribeErrorCode::DOES_NOT_EXIST);
+}
+
+// The only viewer fails before the track sees the upstream SUBSCRIBE_OK, so
+// the forwarder empties.
+TEST_F(
+    MoQProxyTrackTest,
+    LosingTheOnlyViewerWhileSubscribingFailsTheSubscribe) {
+  auto upstreamHandle = makeUpstreamHandle();
+  auto consumer = makeConsumer();
+  ON_CALL(*consumer, beginSubgroup(_, _, _, _))
+      .WillByDefault(Return(
+          folly::makeUnexpected(MoQPublishError(
+              MoQPublishError::CANCELLED, "viewer went away"))));
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [upstreamHandle](SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            cb->beginSubgroup(11, 0, kDefaultPriority, {});
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+
+  auto result = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(1)), consumer, makeDownstreamPeer()),
+      &eventBase_);
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().errorCode, SubscribeErrorCode::CANCELLED);
+  EXPECT_EQ(callback_->calls, 1);
+}
+
 TEST_F(MoQProxyTrackTest, UpstreamSubscribeErrorIsReturnedDownstream) {
   EXPECT_CALL(*upstreamSession_, subscribe(_, _))
       .WillOnce(Invoke(
