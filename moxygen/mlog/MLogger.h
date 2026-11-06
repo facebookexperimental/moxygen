@@ -83,8 +83,20 @@ class MLogger {
       const SubscribeRequest& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
+  // `fillRangeFilters` contains encoded 0x25-0x28 parameter values. It is a
+  // sidecar until moxygen's FillParameters model carries these draft-20
+  // fields itself.
+  void logSubscribe(
+      const SubscribeRequest& req,
+      const std::vector<Parameter>& fillRangeFilters,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeUpdate(
       const SubscribeUpdate& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logSubscribeUpdate(
+      const SubscribeUpdate& req,
+      const std::vector<Parameter>& fillRangeFilters,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logRequestOk(
       const RequestOk& req,

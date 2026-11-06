@@ -659,6 +659,59 @@ TEST_F(FileMLoggerTest, LatestRangeFilterParameterSchema) {
   EXPECT_EQ(parameter["ranges"][1]["end"], 15);
 }
 
+TEST_F(FileMLoggerTest, LatestFillParametersPreserveRangeFilters) {
+  const auto path = (dir_ / "fill_range_filters.mlog").string();
+  FileMLogger logger(VantagePoint::CLIENT, path);
+  auto subscribe =
+      SubscribeRequest::make(FullTrackName{TrackNamespace({"room"}), "audio"});
+  subscribe.fill = FillParameters{.groupOrder = GroupOrder::OldestFirst};
+  std::vector<Parameter> fillRangeFilters = {
+      Parameter(0x25, std::string("\x01\x03\x02", 3)),
+      Parameter(0x25, std::string("\x02\x07", 2)),
+      Parameter(0x26, std::string("\x03\x09\x01", 3)),
+      Parameter(0x27, std::string()),
+      Parameter(0x28, std::string("\x04\x02\x05\x03", 4)),
+  };
+  logger.logSubscribe(subscribe, fillRangeFilters);
+  logger.outputLogs();
+
+  const auto event = parseSingleEvent(path);
+  const auto& parameters = event["data"]["message"]["parameters"];
+  const folly::dynamic* fill = nullptr;
+  for (const auto& parameter : parameters) {
+    if (parameter["name"] == "fill_parameters") {
+      fill = &parameter;
+      break;
+    }
+  }
+  ASSERT_NE(fill, nullptr);
+  const auto& values = (*fill)["value"];
+  ASSERT_EQ(values.size(), 6);
+  EXPECT_EQ(values[0]["name"], "group_order");
+  EXPECT_EQ(values[1]["name"], "subgroup_filter");
+  EXPECT_EQ(values[1]["set_id"], 1);
+  EXPECT_EQ(values[1]["ranges"][0]["start"], 3);
+  EXPECT_EQ(values[1]["ranges"][0]["end"], 5);
+  EXPECT_EQ(values[2]["name"], "subgroup_filter");
+  EXPECT_EQ(values[2]["set_id"], 2);
+  EXPECT_EQ(values[2]["ranges"][0]["start"], 7);
+  EXPECT_EQ(values[2]["ranges"][0].count("end"), 0);
+  EXPECT_EQ(values[3]["name"], "objectid_filter");
+  EXPECT_EQ(values[4]["name"], "priority_filter");
+  EXPECT_EQ(values[4].count("set_id"), 0);
+  EXPECT_EQ(values[5]["name"], "object_property_filter");
+  EXPECT_EQ(values[5]["property_type"], 2);
+
+  InspectableMLogger updateLogger;
+  SubscribeUpdate update;
+  updateLogger.logSubscribeUpdate(
+      update, {Parameter(0x26, std::string("\x05\x0b", 2))});
+  const auto updateEvent = updateLogger.event(0);
+  EXPECT_EQ(
+      updateEvent["data"]["message"]["parameters"][0]["name"],
+      "fill_parameters");
+}
+
 TEST_F(FileMLoggerTest, LatestResponseAndNamespaceControlMessages) {
   const auto errorPath = (dir_ / "request_error.mlog").string();
   FileMLogger errorLogger(VantagePoint::SERVER, errorPath);

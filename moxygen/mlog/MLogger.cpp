@@ -79,7 +79,11 @@ folly::dynamic locationFilter(const LocationFilter& filter) {
   return value;
 }
 
-folly::dynamic fillParametersValue(const FillParameters& fill) {
+std::optional<folly::dynamic> rangeFilter(const Parameter& parameter);
+
+folly::dynamic fillParametersValue(
+    const FillParameters& fill,
+    const std::vector<Parameter>& fillRangeFilters = {}) {
   std::vector<folly::dynamic> parameters;
   if (fill.fillTimeout.has_value()) {
     parameters.push_back(namedValue(
@@ -96,6 +100,15 @@ folly::dynamic fillParametersValue(const FillParameters& fill) {
   if (fill.groupOrder.has_value()) {
     parameters.push_back(namedValue(
         "group_order", static_cast<uint64_t>(fill.groupOrder.value())));
+  }
+  for (const auto& filter : fillRangeFilters) {
+    XCHECK_GE(filter.key, 0x25);
+    XCHECK_LE(filter.key, 0x28);
+    auto value = rangeFilter(filter);
+    parameters.push_back(
+        value.has_value()
+            ? std::move(value.value())
+            : unknownValue(filter.key, filter.asString, filter.asUint64));
   }
   return folly::dynamic::array(parameters);
 }
@@ -409,6 +422,14 @@ void MLogger::logSubscribe(
     const SubscribeRequest& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
+  logSubscribe(req, std::vector<Parameter>{}, type, controlType);
+}
+
+void MLogger::logSubscribe(
+    const SubscribeRequest& req,
+    const std::vector<Parameter>& fillRangeFilters,
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribe>();
   baseMsg->requestId = req.requestID.value;
   baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
@@ -429,9 +450,11 @@ void MLogger::logSubscribe(
   baseMsg->subscribeParameters = convertTrackParamsToMoQTParams(req.params);
   baseMsg->subscribeParameters.emplace_back(
       namedValue("location_filter", locationFilter(req.filter)));
-  if (req.fill.has_value()) {
-    baseMsg->subscribeParameters.emplace_back(
-        namedValue("fill_parameters", fillParametersValue(req.fill.value())));
+  if (req.fill.has_value() || !fillRangeFilters.empty()) {
+    baseMsg->subscribeParameters.emplace_back(namedValue(
+        "fill_parameters",
+        fillParametersValue(
+            req.fill.value_or(FillParameters{}), fillRangeFilters)));
   }
   if (req.priority != kDefaultPriority) {
     baseMsg->subscribeParameters.emplace_back(
@@ -457,6 +480,13 @@ void MLogger::logSubscribe(
 void MLogger::logSubscribeUpdate(
     const SubscribeUpdate& req,
     ControlMessageType controlType) {
+  logSubscribeUpdate(req, std::vector<Parameter>{}, controlType);
+}
+
+void MLogger::logSubscribeUpdate(
+    const SubscribeUpdate& req,
+    const std::vector<Parameter>& fillRangeFilters,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeUpdate>();
   baseMsg->requestId = req.requestID.value;
   baseMsg->subscriptionRequestId = req.existingRequestID.value;
@@ -478,9 +508,11 @@ void MLogger::logSubscribeUpdate(
     baseMsg->parameters.emplace_back(
         namedValue("location_filter", locationFilter(req.filter.value())));
   }
-  if (req.fill.has_value()) {
-    baseMsg->parameters.emplace_back(
-        namedValue("fill_parameters", fillParametersValue(req.fill.value())));
+  if (req.fill.has_value() || !fillRangeFilters.empty()) {
+    baseMsg->parameters.emplace_back(namedValue(
+        "fill_parameters",
+        fillParametersValue(
+            req.fill.value_or(FillParameters{}), fillRangeFilters)));
   }
   if (req.priority.has_value()) {
     baseMsg->parameters.emplace_back(
