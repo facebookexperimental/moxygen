@@ -399,7 +399,9 @@ class MoQRelay : public Publisher,
       const FullTrackName& ftn,
       size_t namespaceIndex,
       const std::shared_ptr<PendingRendezvous>& waiter);
-  static void wakePendingRendezvousSubtree(PendingRendezvousNode& node);
+  static void wakePendingRendezvousSubtree(
+      PendingRendezvousNode& node,
+      PendingRendezvousNode::WaiterList& toWake);
 
   void applyFnAtNamespaceNode(
       const TrackNamespace& ns,

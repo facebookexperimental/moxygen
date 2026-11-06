@@ -1162,6 +1162,114 @@ TEST_F(MoQRelayTest, RepublishWhileSubscriberDrainsAfterPublishDone) {
   removeSession(subscriber);
 }
 
+class MoQRelayRendezvousTest : public MoQRelayTest {
+ protected:
+  std::shared_ptr<MockMoQSession> createV18Session() {
+    auto session = createMockSession();
+    ON_CALL(*session, getNegotiatedVersion())
+        .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft18)));
+    return session;
+  }
+
+  folly::SemiFuture<Publisher::SubscribeResult> startRendezvousSubscribe(
+      std::shared_ptr<MoQSession> session,
+      const FullTrackName& ftn,
+      std::shared_ptr<TrackConsumer> consumer) {
+    SubscribeRequest sub;
+    sub.fullTrackName = ftn;
+    sub.requestID = RequestID(0);
+    sub.filter = LocationFilter::nextObject();
+    sub.params.setMajorVersion(getDraftMajorVersion(kVersionDraft18));
+    EXPECT_TRUE(
+        sub.params
+            .insertParam(Parameter(
+                folly::to_underlying(TrackRequestParamKey::RENDEZVOUS_TIMEOUT),
+                5000))
+            .hasValue());
+    return withSessionContext(session, [&]() {
+      return co_withExecutor(
+                 exec_.get(), relay_->subscribe(std::move(sub), consumer))
+          .start();
+    });
+  }
+};
+
+TEST_F(MoQRelayRendezvousTest, MultipleWaitersOnSameTrackAllResolveOnPublish) {
+  auto subSessionA = createV18Session();
+  auto subSessionB = createV18Session();
+  auto futureA = startRendezvousSubscribe(
+      subSessionA, kTestTrackName, createMockConsumer());
+  auto futureB = startRendezvousSubscribe(
+      subSessionB, kTestTrackName, createMockConsumer());
+  exec_->drive();
+  ASSERT_FALSE(futureA.isReady());
+  ASSERT_FALSE(futureB.isReady());
+
+  auto pubSession = createMockSession();
+  doPublish(pubSession, kTestTrackName);
+  exec_->drive();
+
+  ASSERT_TRUE(futureA.isReady());
+  ASSERT_TRUE(futureB.isReady());
+  auto resultA = std::move(futureA).value();
+  auto resultB = std::move(futureB).value();
+  ASSERT_TRUE(resultA.hasValue());
+  ASSERT_TRUE(resultB.hasValue());
+  getOrCreateMockState(subSessionA)->subscribeHandles.push_back(*resultA);
+  getOrCreateMockState(subSessionB)->subscribeHandles.push_back(*resultB);
+
+  removeSession(pubSession);
+  removeSession(subSessionA);
+  removeSession(subSessionB);
+}
+
+TEST_F(
+    MoQRelayRendezvousTest,
+    MultipleWaitersUnderNamespaceAllResolveOnPublishNamespace) {
+  auto subSessionA = createV18Session();
+  auto subSessionB = createV18Session();
+  const FullTrackName ftnA{kTestNamespace, "track1"};
+  const FullTrackName ftnB{kTestNamespace, "track2"};
+  auto futureA =
+      startRendezvousSubscribe(subSessionA, ftnA, createMockConsumer());
+  auto futureB =
+      startRendezvousSubscribe(subSessionB, ftnB, createMockConsumer());
+  exec_->drive();
+  ASSERT_FALSE(futureA.isReady());
+  ASSERT_FALSE(futureB.isReady());
+
+  auto pubSession = createMockSession();
+  EXPECT_CALL(*pubSession, subscribe(_, _))
+      .Times(2)
+      .WillRepeatedly([](const auto& /*req*/, auto /*consumer*/) {
+        SubscribeOk ok;
+        ok.requestID = RequestID(1);
+        ok.trackAlias = TrackAlias(1);
+        ok.expires = std::chrono::milliseconds(0);
+        ok.groupOrder = GroupOrder::OldestFirst;
+        auto handle = std::make_shared<NiceMock<MockSubscriptionHandle>>(ok);
+        return folly::coro::makeTask<Publisher::SubscribeResult>(
+            folly::
+                Expected<std::shared_ptr<SubscriptionHandle>, SubscribeError>(
+                    handle));
+      });
+  doPublishNamespace(pubSession, kTestNamespace);
+  exec_->drive();
+
+  ASSERT_TRUE(futureA.isReady());
+  ASSERT_TRUE(futureB.isReady());
+  auto resultA = std::move(futureA).value();
+  auto resultB = std::move(futureB).value();
+  ASSERT_TRUE(resultA.hasValue());
+  ASSERT_TRUE(resultB.hasValue());
+  getOrCreateMockState(subSessionA)->subscribeHandles.push_back(*resultA);
+  getOrCreateMockState(subSessionB)->subscribeHandles.push_back(*resultB);
+
+  removeSession(pubSession);
+  removeSession(subSessionA);
+  removeSession(subSessionB);
+}
+
 TEST_F(MoQRelayTest, SubscribeNamespaceEmptyPrefixAllowedV16) {
   auto session = createMockSession();
   // Override the negotiated version to draft-16

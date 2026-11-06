@@ -1614,16 +1614,19 @@ void MoQRelay::erasePendingRendezvousFromNode(
   }
 }
 
-void MoQRelay::wakePendingRendezvousSubtree(PendingRendezvousNode& node) {
+void MoQRelay::wakePendingRendezvousSubtree(
+    PendingRendezvousNode& node,
+    PendingRendezvousNode::WaiterList& toWake) {
   for (auto& [_, trackWaiters] : node.waitersByTrack) {
-    for (auto& waiter : trackWaiters) {
-      waiter->baton.signal();
-    }
-  }
-  for (auto& [_, child] : node.children) {
-    wakePendingRendezvousSubtree(*child);
+    toWake.insert(
+        toWake.end(),
+        std::make_move_iterator(trackWaiters.begin()),
+        std::make_move_iterator(trackWaiters.end()));
   }
   node.waitersByTrack.clear();
+  for (auto& [_, child] : node.children) {
+    wakePendingRendezvousSubtree(*child, toWake);
+  }
   node.children.clear();
 }
 
@@ -1658,22 +1661,29 @@ void MoQRelay::applyFnAtNamespaceNode(
 }
 
 void MoQRelay::wakePendingRendezvousForTrack(const FullTrackName& ftn) {
-  applyFnAtNamespaceNode(
-      ftn.trackNamespace, [&ftn](PendingRendezvousNode& node) {
-        auto waitersIt = node.waitersByTrack.find(ftn.trackName);
-        if (waitersIt != node.waitersByTrack.end()) {
-          for (auto& waiter : waitersIt->second) {
-            waiter->baton.signal();
-          }
-          node.waitersByTrack.erase(waitersIt);
-        }
-      });
+  PendingRendezvousNode::WaiterList toWake;
+  applyFnAtNamespaceNode(ftn.trackNamespace, [&](PendingRendezvousNode& node) {
+    auto waitersIt = node.waitersByTrack.find(ftn.trackName);
+    if (waitersIt != node.waitersByTrack.end()) {
+      toWake = std::move(waitersIt->second);
+      node.waitersByTrack.erase(waitersIt);
+    }
+  });
+  // signal() may resume the waiter inline, and its cleanup re-enters
+  // erasePendingRendezvous(), so signal only once the walk is done.
+  for (auto& waiter : toWake) {
+    waiter->baton.signal();
+  }
 }
 
 void MoQRelay::wakePendingRendezvousUnderNamespace(const TrackNamespace& ns) {
-  applyFnAtNamespaceNode(ns, [](PendingRendezvousNode& node) {
-    wakePendingRendezvousSubtree(node);
+  PendingRendezvousNode::WaiterList toWake;
+  applyFnAtNamespaceNode(ns, [&](PendingRendezvousNode& node) {
+    wakePendingRendezvousSubtree(node, toWake);
   });
+  for (auto& waiter : toWake) {
+    waiter->baton.signal();
+  }
 }
 
 folly::coro::Task<Publisher::SubscribeResult>
