@@ -87,6 +87,8 @@ struct MOQTByteString {
   MOQTByteString& operator=(MOQTByteString&& other) noexcept = default;
 
   ~MOQTByteString() {}
+
+  folly::dynamic toDynamic() const;
 };
 
 class MOQTBaseControlMessage {
@@ -102,9 +104,9 @@ class MOQTBaseControlMessage {
   virtual ~MOQTBaseControlMessage() {}
 
   // Helper Methods Extended to BaseControlMessage Classes
-  std::vector<std::string> parseTrackNamespace(
+  std::vector<folly::dynamic> parseTrackNamespace(
       const std::vector<MOQTByteString>& trackNamespace) const;
-  std::string parseTrackName(const MOQTByteString& trackName) const;
+  folly::dynamic parseTrackName(const MOQTByteString& trackName) const;
 };
 
 class MOQTSetupMessage : public MOQTBaseControlMessage {
@@ -126,10 +128,8 @@ class MOQTGoaway : public MOQTBaseControlMessage {
     type = "goaway";
   }
   folly::dynamic toDynamic() const override;
-  std::optional<uint64_t> length;
-  std::unique_ptr<folly::IOBuf> newSessionUri;
+  MOQTRawInfo newSessionUri;
   uint64_t timeout{0};
-  std::optional<uint64_t> requestId;
 };
 
 struct MOQTLocation {
@@ -137,6 +137,37 @@ struct MOQTLocation {
   uint64_t object{0};
 
   folly::dynamic toDynamic() const;
+};
+
+struct MOQTRedirect {
+  MOQTRawInfo connectUri;
+  std::vector<MOQTByteString> trackNamespace;
+  MOQTByteString trackName;
+
+  folly::dynamic toDynamic() const;
+};
+
+class MOQTRequestOk : public MOQTBaseControlMessage {
+ public:
+  MOQTRequestOk() {
+    type = "request_ok";
+  }
+  folly::dynamic toDynamic() const override;
+  uint64_t numberOfParameters{0};
+  std::vector<MOQTParameter> parameters;
+  std::vector<MOQTProperty> trackProperties;
+};
+
+class MOQTRequestError : public MOQTBaseControlMessage {
+ public:
+  MOQTRequestError() {
+    type = "request_error";
+  }
+  folly::dynamic toDynamic() const override;
+  uint64_t errorCode{0};
+  uint64_t retryInterval{0};
+  std::optional<std::string> reasonPhrase;
+  std::optional<MOQTRedirect> redirect;
 };
 
 class MOQTSubscribe : public MOQTBaseControlMessage {
@@ -161,7 +192,7 @@ class MOQTSubscribe : public MOQTBaseControlMessage {
 class MOQTSubscribeUpdate : public MOQTBaseControlMessage {
  public:
   MOQTSubscribeUpdate() {
-    type = "subscribe_update";
+    type = "request_update";
   }
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
@@ -171,6 +202,16 @@ class MOQTSubscribeUpdate : public MOQTBaseControlMessage {
   uint8_t subscriberPriority{};
   uint8_t forward{};
   uint64_t numberOfParameters{};
+  std::vector<MOQTParameter> parameters;
+};
+
+class MOQTPublishStateNotify : public MOQTBaseControlMessage {
+ public:
+  MOQTPublishStateNotify() {
+    type = "publish_state_notify";
+  }
+  folly::dynamic toDynamic() const override;
+  uint64_t numberOfParameters{0};
   std::vector<MOQTParameter> parameters;
 };
 
@@ -206,6 +247,8 @@ class MOQTFetch : public MOQTBaseControlMessage {
   }
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
+  std::vector<MOQTByteString> trackNamespace;
+  MOQTByteString trackName;
   uint8_t subscriberPriority{};
   uint8_t groupOrder{};
   std::string fetchType;
@@ -288,6 +331,18 @@ class MOQTSubscribeNamespace : public MOQTBaseControlMessage {
   std::vector<MOQTParameter> parameters;
 };
 
+class MOQTSubscribeTracks : public MOQTBaseControlMessage {
+ public:
+  MOQTSubscribeTracks() {
+    type = "subscribe_tracks";
+  }
+  folly::dynamic toDynamic() const override;
+  uint64_t requestId{0};
+  std::vector<MOQTByteString> trackNamespacePrefix;
+  uint64_t numberOfParameters{0};
+  std::vector<MOQTParameter> parameters;
+};
+
 class MOQTUnsubscribeNamespace : public MOQTBaseControlMessage {
  public:
   MOQTUnsubscribeNamespace() {
@@ -311,6 +366,7 @@ class MOQTSubscribeOk : public MOQTBaseControlMessage {
   std::optional<MOQTLocation> largestLocation;
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> parameters;
+  std::vector<MOQTProperty> trackProperties;
 };
 
 class MOQTSubscribeError : public MOQTBaseControlMessage {
@@ -337,6 +393,7 @@ class MOQTFetchOk : public MOQTBaseControlMessage {
   MOQTLocation endLocation;
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> parameters;
+  std::vector<MOQTProperty> trackProperties;
 };
 
 class MOQTFetchError : public MOQTBaseControlMessage {
@@ -385,13 +442,41 @@ class MOQTRequestsBlocked : public MOQTBaseControlMessage {
 class MOQTPublishNamespace : public MOQTBaseControlMessage {
  public:
   MOQTPublishNamespace() {
-    type = "publishNamespace";
+    type = "publish_namespace";
   }
   folly::dynamic toDynamic() const override;
   uint64_t requestId{0};
   std::vector<MOQTByteString> trackNamespace;
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> parameters;
+};
+
+class MOQTNamespace : public MOQTBaseControlMessage {
+ public:
+  MOQTNamespace() {
+    type = "namespace";
+  }
+  folly::dynamic toDynamic() const override;
+  std::vector<MOQTByteString> trackNamespaceSuffix;
+};
+
+class MOQTNamespaceDone : public MOQTBaseControlMessage {
+ public:
+  MOQTNamespaceDone() {
+    type = "namespace_done";
+  }
+  folly::dynamic toDynamic() const override;
+  std::vector<MOQTByteString> trackNamespaceSuffix;
+};
+
+class MOQTPublishSkipped : public MOQTBaseControlMessage {
+ public:
+  MOQTPublishSkipped() {
+    type = "publish_skipped";
+  }
+  folly::dynamic toDynamic() const override;
+  std::vector<MOQTByteString> trackNamespaceSuffix;
+  MOQTByteString trackName;
 };
 
 class MOQTPublishNamespaceDone : public MOQTBaseControlMessage {
@@ -468,6 +553,7 @@ class MOQTPublish : public MOQTBaseControlMessage {
   uint8_t forward{};
   uint64_t numberOfParameters{};
   std::vector<MOQTParameter> parameters;
+  std::vector<MOQTProperty> trackProperties;
 };
 
 class MOQTPublishOk : public MOQTBaseControlMessage {

@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/mlog/MLogger.h"
+#include <iterator>
 #include <utility>
 #include "moxygen/MoQFramer.h"
 
@@ -295,8 +296,9 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
 
 void MLogger::logClientSetup(
     const Setup& setup,
-    uint64_t /*version*/,
+    uint64_t version,
     ControlMessageType controlType) {
+  negotiatedMoQVersion_ = version;
   // Add Params to params vector
   std::vector<MOQTSetupParameter> params =
       convertSetupParamsToMoQTSetupParams(setup.params);
@@ -310,8 +312,9 @@ void MLogger::logClientSetup(
 
 void MLogger::logServerSetup(
     const Setup& setup,
-    uint64_t /*version*/,
+    uint64_t version,
     ControlMessageType controlType) {
+  negotiatedMoQVersion_ = version;
   // Add Params to params vector
   std::vector<MOQTSetupParameter> params =
       convertSetupParamsToMoQTSetupParams(setup.params);
@@ -324,14 +327,9 @@ void MLogger::logServerSetup(
 }
 
 void MLogger::logGoaway(const Goaway& goaway, ControlMessageType controlType) {
-  uint64_t length = goaway.newSessionUri.length();
   auto baseMsg = std::make_unique<MOQTGoaway>();
-  baseMsg->length = length;
-  baseMsg->newSessionUri = folly::IOBuf::copyBuffer(goaway.newSessionUri);
+  baseMsg->newSessionUri.length = goaway.newSessionUri.length();
   baseMsg->timeout = goaway.timeout;
-  if (goaway.requestID.has_value()) {
-    baseMsg->requestId = goaway.requestID->value;
-  }
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
@@ -427,6 +425,68 @@ void MLogger::logSubscribeUpdate(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
 
+void MLogger::logRequestOk(
+    const RequestOk& req,
+    ControlMessageType controlType) {
+  auto baseMsg = std::make_unique<MOQTRequestOk>();
+  baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
+  for (const auto& parameter : req.requestSpecificParams) {
+    TrackRequestParameters extra(req.params.getFrameType());
+    if (negotiatedMoQVersion_.has_value()) {
+      extra.setMajorVersion(
+          getDraftMajorVersion(negotiatedMoQVersion_.value()));
+    }
+    if (extra.insertParam(parameter).hasValue()) {
+      auto converted = convertTrackParamsToMoQTParams(extra);
+      baseMsg->parameters.insert(
+          baseMsg->parameters.end(),
+          std::make_move_iterator(converted.begin()),
+          std::make_move_iterator(converted.end()));
+    } else {
+      baseMsg->parameters.emplace_back(
+          unknownValue(parameter.key, parameter.asString, parameter.asUint64));
+    }
+  }
+  baseMsg->numberOfParameters = baseMsg->parameters.size();
+  baseMsg->trackProperties = convertExtensionsToProperties(req.trackProperties);
+  logControlMessage(
+      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+}
+
+void MLogger::logRequestError(
+    const RequestError& req,
+    ControlMessageType controlType) {
+  auto baseMsg = std::make_unique<MOQTRequestError>();
+  baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
+  baseMsg->retryInterval = req.retryInterval.has_value()
+      ? static_cast<uint64_t>(req.retryInterval->count())
+      : 0;
+  if (!req.reasonPhrase.empty()) {
+    baseMsg->reasonPhrase = req.reasonPhrase;
+  }
+  if (req.redirect.has_value()) {
+    MOQTRedirect redirect;
+    redirect.connectUri.length = req.redirect->connectUri.length();
+    redirect.trackNamespace = convertTrackNamespaceToByteStringFormat(
+        req.redirect->fullTrackName.trackNamespace.trackNamespace);
+    redirect.trackName = convertTrackNameToByteStringFormat(
+        req.redirect->fullTrackName.trackName);
+    baseMsg->redirect = std::move(redirect);
+  }
+  logControlMessage(
+      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+}
+
+void MLogger::logPublishStateNotify(
+    const TrackRequestParameters& params,
+    ControlMessageType controlType) {
+  auto baseMsg = std::make_unique<MOQTPublishStateNotify>();
+  baseMsg->parameters = convertTrackParamsToMoQTParams(params);
+  baseMsg->numberOfParameters = baseMsg->parameters.size();
+  logControlMessage(
+      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+}
+
 void MLogger::logUnsubscribe(
     const Unsubscribe& req,
     ControlMessageType controlType) {
@@ -443,6 +503,10 @@ void MLogger::logFetch(
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTFetch>();
   baseMsg->requestId = req.requestID.value;
+  baseMsg->trackNamespace = convertTrackNamespaceToByteStringFormat(
+      req.fullTrackName.trackNamespace.trackNamespace, type);
+  baseMsg->trackName =
+      convertTrackNameToByteStringFormat(req.fullTrackName.trackName, type);
   baseMsg->subscriberPriority = req.priority;
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
 
@@ -516,28 +580,13 @@ void MLogger::logFetchCancel(
 void MLogger::logPublishNamespaceOk(
     const PublishNamespaceOk& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTPublishNamespaceOk>();
-  baseMsg->requestId = req.requestID.value;
-
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logRequestOk(req, controlType);
 }
 
 void MLogger::logPublishNamespaceError(
     const PublishNamespaceError& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTPublishNamespaceError>();
-  baseMsg->requestId = req.requestID.value;
-  baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
-
-  if (isHexstring(req.reasonPhrase)) {
-    baseMsg->reasonBytes = req.reasonPhrase;
-  } else {
-    baseMsg->reason = req.reasonPhrase;
-  }
-
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logRequestError(req, controlType);
 }
 
 void MLogger::logPublishNamespaceCancel(
@@ -605,6 +654,57 @@ void MLogger::logSubscribeNamespace(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
 }
 
+void MLogger::logSubscribeTracks(
+    const SubscribeTracks& req,
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
+  auto baseMsg = std::make_unique<MOQTSubscribeTracks>();
+  baseMsg->requestId = req.requestID.value;
+  baseMsg->trackNamespacePrefix = convertTrackNamespaceToByteStringFormat(
+      req.trackNamespacePrefix.trackNamespace, type);
+  baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
+  if (!req.includeProperties) {
+    baseMsg->parameters.emplace_back(namedValue("include_properties", 0));
+  }
+  baseMsg->numberOfParameters = baseMsg->parameters.size();
+  logControlMessage(
+      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+}
+
+void MLogger::logNamespace(
+    const Namespace& req,
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
+  auto baseMsg = std::make_unique<MOQTNamespace>();
+  baseMsg->trackNamespaceSuffix = convertTrackNamespaceToByteStringFormat(
+      req.trackNamespaceSuffix.trackNamespace, type);
+  logControlMessage(
+      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+}
+
+void MLogger::logNamespaceDone(
+    const NamespaceDone& req,
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
+  auto baseMsg = std::make_unique<MOQTNamespaceDone>();
+  baseMsg->trackNamespaceSuffix = convertTrackNamespaceToByteStringFormat(
+      req.trackNamespaceSuffix.trackNamespace, type);
+  logControlMessage(
+      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+}
+
+void MLogger::logPublishSkipped(
+    const PublishBlocked& req,
+    const MOQTByteStringType& type,
+    ControlMessageType controlType) {
+  auto baseMsg = std::make_unique<MOQTPublishSkipped>();
+  baseMsg->trackNamespaceSuffix = convertTrackNamespaceToByteStringFormat(
+      req.trackNamespaceSuffix.trackNamespace, type);
+  baseMsg->trackName = convertTrackNameToByteStringFormat(req.trackName, type);
+  logControlMessage(
+      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+}
+
 void MLogger::logUnsubscribeNamespace(
     const UnsubscribeNamespace& req,
     const MOQTByteStringType& /*type*/,
@@ -650,6 +750,7 @@ void MLogger::logSubscribeOk(
         namedValue("largest_object", std::move(largest)));
   }
   baseMsg->numberOfParameters = baseMsg->parameters.size();
+  baseMsg->trackProperties = convertExtensionsToProperties(req.extensions);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
@@ -658,19 +759,7 @@ void MLogger::logSubscribeOk(
 void MLogger::logSubscribeError(
     const SubscribeError& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTSubscribeError>();
-  baseMsg->requestId = req.requestID.value;
-  baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
-
-  if (isHexstring(req.reasonPhrase)) {
-    baseMsg->reasonBytes = req.reasonPhrase;
-  } else {
-    baseMsg->reason = req.reasonPhrase;
-  }
-  // retryAlias removed in unified RequestError - not available for logging
-
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logRequestError(req, controlType);
 }
 
 void MLogger::logFetchOk(const FetchOk& req, ControlMessageType controlType) {
@@ -682,6 +771,7 @@ void MLogger::logFetchOk(const FetchOk& req, ControlMessageType controlType) {
   baseMsg->endLocation.object = req.endLocation.object;
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
   baseMsg->numberOfParameters = baseMsg->parameters.size();
+  baseMsg->trackProperties = convertExtensionsToProperties(req.extensions);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
@@ -690,18 +780,7 @@ void MLogger::logFetchOk(const FetchOk& req, ControlMessageType controlType) {
 void MLogger::logFetchError(
     const FetchError& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTFetchError>();
-  baseMsg->requestId = req.requestID.value;
-  baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
-
-  if (isHexstring(req.reasonPhrase)) {
-    baseMsg->reasonBytes = req.reasonPhrase;
-  } else {
-    baseMsg->reason = req.reasonPhrase;
-  }
-
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logRequestError(req, controlType);
 }
 
 void MLogger::logPublishDone(
@@ -711,10 +790,7 @@ void MLogger::logPublishDone(
   baseMsg->requestId = req.requestID.value;
   baseMsg->statusCode = static_cast<uint64_t>(req.statusCode);
   baseMsg->streamCount = req.streamCount;
-
-  if (isHexstring(req.reasonPhrase)) {
-    baseMsg->reasonBytes = req.reasonPhrase;
-  } else {
+  if (!req.reasonPhrase.empty()) {
     baseMsg->reason = req.reasonPhrase;
   }
 
@@ -739,58 +815,14 @@ void MLogger::logTrackStatusOk(
     const TrackStatusOk& req,
     const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTTrackStatusOk>();
-  baseMsg->requestId = req.requestID.value;
-  if (req.trackAlias.value != 0) {
-    baseMsg->trackAlias = req.trackAlias.value;
-  }
-  baseMsg->expires = req.expires.count();
-  baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
-
-  if (req.largest.has_value()) {
-    baseMsg->contentExists = 1;
-    MOQTLocation loc;
-    loc.group = req.largest.value().group;
-    loc.object = req.largest.value().object;
-    baseMsg->largestLocation = loc;
-  } else {
-    baseMsg->contentExists = 0;
-  }
-
-  baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
-  if (req.expires.count() != 0) {
-    baseMsg->parameters.emplace_back(
-        namedValue("expires", static_cast<uint64_t>(req.expires.count())));
-  }
-  if (req.largest.has_value()) {
-    folly::dynamic largest = folly::dynamic::object;
-    largest["group"] = req.largest->group;
-    largest["object"] = req.largest->object;
-    baseMsg->parameters.emplace_back(
-        namedValue("largest_object", std::move(largest)));
-  }
-  baseMsg->numberOfParameters = baseMsg->parameters.size();
-
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logRequestOk(RequestOk::fromTrackStatusOk(req), controlType);
 }
 
 void MLogger::logTrackStatusError(
     const TrackStatusError& req,
     const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTTrackStatusError>();
-
-  baseMsg->requestId = req.requestID.value;
-  baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
-
-  if (isHexstring(req.reasonPhrase)) {
-    baseMsg->reasonBytes = req.reasonPhrase;
-  } else {
-    baseMsg->reason = req.reasonPhrase;
-  }
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logRequestError(req, controlType);
 }
 
 void MLogger::logMaxRequestId(
@@ -831,28 +863,13 @@ void MLogger::logPublishNamespace(
 void MLogger::logSubscribeNamespaceOk(
     const SubscribeNamespaceOk& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTSubscribeNamespaceOk>();
-  baseMsg->requestId = req.requestID.value;
-
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logRequestOk(req, controlType);
 }
 
 void MLogger::logSubscribeNamespaceError(
     const SubscribeNamespaceError& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTSubscribeNamespaceError>();
-  baseMsg->requestId = req.requestID.value;
-  baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
-
-  if (isHexstring(req.reasonPhrase)) {
-    baseMsg->reasonBytes = req.reasonPhrase;
-  } else {
-    baseMsg->reason = req.reasonPhrase;
-  }
-
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logRequestError(req, controlType);
 }
 
 void MLogger::logPublish(
@@ -887,6 +904,7 @@ void MLogger::logPublish(
         namedValue("largest_object", std::move(largest)));
   }
   baseMsg->numberOfParameters = baseMsg->parameters.size();
+  baseMsg->trackProperties = convertExtensionsToProperties(req.extensions);
 
   logControlMessage(
       controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
@@ -895,53 +913,16 @@ void MLogger::logPublish(
 void MLogger::logPublishOk(
     const PublishOk& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTPublishOk>();
-  baseMsg->requestId = req.requestID.value;
-  baseMsg->forward = req.forward ? 1 : 0;
-  baseMsg->subscriberPriority = req.subscriberPriority;
-  baseMsg->groupOrder = toLogGroupOrder(req.groupOrder);
-  auto legacyFilter = toSubscriptionFilter(req.filter);
-  baseMsg->filterType = static_cast<uint64_t>(legacyFilter.filterType);
-  if (legacyFilter.location.has_value()) {
-    MOQTLocation loc;
-    loc.group = legacyFilter.location->group;
-    loc.object = legacyFilter.location->object;
-    baseMsg->start = loc;
-  }
-  baseMsg->endGroup = legacyFilter.endGroup;
-  baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
-  if (req.subscriberPriority != kDefaultPriority) {
-    baseMsg->parameters.emplace_back(
-        namedValue("subscriber_priority", req.subscriberPriority));
-  }
-  if (req.groupOrder.has_value()) {
-    baseMsg->parameters.emplace_back(
-        namedValue("group_order", folly::to_underlying(*req.groupOrder)));
-  }
-  if (!req.forward) {
-    baseMsg->parameters.emplace_back(namedValue("forward", 0));
-  }
-  baseMsg->numberOfParameters = baseMsg->parameters.size();
-
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  const auto version = negotiatedMoQVersion_.value_or(kVersionDraftCurrent);
+  logRequestOk(
+      RequestOk::fromPublishOk(req, getDraftMajorVersion(version)),
+      controlType);
 }
 
 void MLogger::logPublishError(
     const PublishError& req,
     ControlMessageType controlType) {
-  auto baseMsg = std::make_unique<MOQTPublishError>();
-  baseMsg->requestId = req.requestID.value;
-  baseMsg->errorCode = static_cast<uint64_t>(req.errorCode);
-
-  if (isHexstring(req.reasonPhrase)) {
-    baseMsg->reasonBytes = req.reasonPhrase;
-  } else {
-    baseMsg->reason = req.reasonPhrase;
-  }
-
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logRequestError(req, controlType);
 }
 
 std::vector<MOQTSetupParameter> MLogger::convertSetupParamsToMoQTSetupParams(

@@ -608,6 +608,11 @@ TEST_F(FileMLoggerTest, LatestSetupAndFillParameterSchemas) {
 
   const auto subscribeEvent = parseSingleEvent(subscribePath);
   const auto& message = subscribeEvent["data"]["message"];
+  EXPECT_EQ(message["track_namespace"][0]["value"], "room");
+  EXPECT_EQ(message["track_name"]["value"], "audio");
+  EXPECT_EQ(message.count("subscriber_priority"), 0);
+  EXPECT_EQ(message.count("group_order"), 0);
+  EXPECT_EQ(message.count("filter_type"), 0);
   const auto& parameters = message["parameters"];
   EXPECT_EQ(message["number_of_parameters"], parameters.size());
   std::vector<std::string> names;
@@ -628,6 +633,65 @@ TEST_F(FileMLoggerTest, LatestSetupAndFillParameterSchemas) {
   EXPECT_NE(std::find(names.begin(), names.end(), "forward"), names.end());
   EXPECT_NE(
       std::find(names.begin(), names.end(), "include_properties"), names.end());
+}
+
+TEST_F(FileMLoggerTest, LatestResponseAndNamespaceControlMessages) {
+  const auto errorPath = (dir_ / "request_error.mlog").string();
+  FileMLogger errorLogger(VantagePoint::SERVER, errorPath);
+  RequestError error;
+  error.requestID = RequestID(17);
+  error.errorCode = RequestErrorCode::REDIRECT;
+  error.reasonPhrase = "moved";
+  error.retryInterval = std::chrono::milliseconds(18);
+  error.redirect = Redirect{
+      "https://new.example/moq",
+      FullTrackName{TrackNamespace({"replacement"}), "video"}};
+  errorLogger.logSubscribeError(error, ControlMessageType::PARSED);
+  errorLogger.outputLogs();
+
+  const auto errorEvent = parseSingleEvent(errorPath);
+  const auto& errorMessage = errorEvent["data"]["message"];
+  EXPECT_EQ(errorMessage["type"], "request_error");
+  EXPECT_EQ(errorMessage["error_code"], static_cast<uint64_t>(error.errorCode));
+  EXPECT_EQ(errorMessage["retry_interval"], 18);
+  EXPECT_EQ(errorMessage["reason_phrase"], "moved");
+  EXPECT_EQ(errorMessage.count("request_id"), 0);
+  EXPECT_EQ(errorMessage["redirect"]["connect_uri"]["length"], 23);
+  EXPECT_EQ(
+      errorMessage["redirect"]["track_namespace"][0]["value"], "replacement");
+
+  const auto okPath = (dir_ / "request_ok.mlog").string();
+  FileMLogger okLogger(VantagePoint::SERVER, okPath);
+  RequestOk ok;
+  ok.requestID = RequestID(19);
+  ok.trackProperties.insertMutableExtension(Extension(2, 20));
+  okLogger.logPublishNamespaceOk(ok, ControlMessageType::PARSED);
+  okLogger.outputLogs();
+
+  const auto okEvent = parseSingleEvent(okPath);
+  const auto& okMessage = okEvent["data"]["message"];
+  EXPECT_EQ(okMessage["type"], "request_ok");
+  EXPECT_EQ(okMessage["number_of_parameters"], 0);
+  EXPECT_EQ(okMessage.count("request_id"), 0);
+  EXPECT_EQ(okMessage["track_properties"][0]["type"], 2);
+  EXPECT_EQ(okMessage["track_properties"][0]["value"], 20);
+
+  MOQTSubscribeTracks subscribeTracks;
+  subscribeTracks.requestId = 21;
+  subscribeTracks.trackNamespacePrefix.emplace_back();
+  subscribeTracks.trackNamespacePrefix[0].type =
+      MOQTByteStringType::VALUE_BYTES;
+  subscribeTracks.trackNamespacePrefix[0].valueBytes =
+      folly::IOBuf::copyBuffer("ab", 2);
+  auto subscribeTracksJson = subscribeTracks.toDynamic();
+  EXPECT_EQ(subscribeTracksJson["type"], "subscribe_tracks");
+  EXPECT_EQ(
+      subscribeTracksJson["track_namespace_prefix"][0]["value_bytes"], "6162");
+
+  MOQTPublishSkipped skipped;
+  skipped.trackName.type = MOQTByteStringType::STRING_VALUE;
+  skipped.trackName.value = "late";
+  EXPECT_EQ(skipped.toDynamic()["type"], "publish_skipped");
 }
 
 } // namespace moxygen

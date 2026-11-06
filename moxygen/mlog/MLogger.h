@@ -86,6 +86,15 @@ class MLogger {
   void logSubscribeUpdate(
       const SubscribeUpdate& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
+  void logRequestOk(
+      const RequestOk& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logRequestError(
+      const RequestError& req,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logPublishStateNotify(
+      const TrackRequestParameters& params,
+      ControlMessageType controlType = ControlMessageType::CREATED);
   void logUnsubscribe(
       const Unsubscribe& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
@@ -112,6 +121,22 @@ class MLogger {
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeNamespace(
       const SubscribeNamespace& req,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logSubscribeTracks(
+      const SubscribeTracks& req,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logNamespace(
+      const Namespace& req,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logNamespaceDone(
+      const NamespaceDone& req,
+      const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
+      ControlMessageType controlType = ControlMessageType::CREATED);
+  void logPublishSkipped(
+      const PublishBlocked& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logUnsubscribeNamespace(

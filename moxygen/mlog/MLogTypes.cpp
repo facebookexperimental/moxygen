@@ -62,6 +62,56 @@ folly::dynamic MOQTLocation::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTRedirect::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["connect_uri"] = connectUri.toDynamic();
+  std::vector<folly::dynamic> trackNamespaceValues;
+  trackNamespaceValues.reserve(trackNamespace.size());
+  for (const auto& element : trackNamespace) {
+    trackNamespaceValues.push_back(element.toDynamic());
+  }
+  obj["track_namespace"] = folly::dynamic::array(trackNamespaceValues);
+  obj["track_name"] = trackName.toDynamic();
+  return obj;
+}
+
+folly::dynamic MOQTRequestOk::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["number_of_parameters"] = numberOfParameters;
+  if (!parameters.empty()) {
+    std::vector<folly::dynamic> values;
+    values.reserve(parameters.size());
+    for (const auto& parameter : parameters) {
+      values.push_back(parameterToDynamic(parameter));
+    }
+    obj["parameters"] = folly::dynamic::array(values);
+  }
+  if (!trackProperties.empty()) {
+    std::vector<folly::dynamic> values;
+    values.reserve(trackProperties.size());
+    for (const auto& property : trackProperties) {
+      values.push_back(property.toDynamic());
+    }
+    obj["track_properties"] = folly::dynamic::array(values);
+  }
+  return obj;
+}
+
+folly::dynamic MOQTRequestError::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["error_code"] = errorCode;
+  obj["retry_interval"] = retryInterval;
+  if (reasonPhrase.has_value()) {
+    obj["reason_phrase"] = reasonPhrase.value();
+  }
+  if (redirect.has_value()) {
+    obj["redirect"] = redirect->toDynamic();
+  }
+  return obj;
+}
+
 folly::dynamic MOQTSubscribe::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
@@ -70,17 +120,6 @@ folly::dynamic MOQTSubscribe::toDynamic() const {
   obj["track_namespace"] =
       folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
   obj["track_name"] = parseTrackName(trackName);
-  obj["subscriber_priority"] = subscriberPriority;
-  obj["group_order"] = groupOrder;
-  obj["forward"] = forward;
-  obj["filter_type"] = filterType;
-
-  if (startLocation.has_value()) {
-    obj["start_location"] = startLocation->toDynamic();
-  }
-  if (endGroup.has_value()) {
-    obj["end_group"] = endGroup.value();
-  }
   obj["number_of_parameters"] = numberOfParameters;
 
   if (!subscribeParameters.empty()) {
@@ -98,11 +137,6 @@ folly::dynamic MOQTSubscribeUpdate::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
   obj["request_id"] = requestId;
-  obj["subscription_request_id"] = subscriptionRequestId;
-  obj["start_location"] = startLocation.toDynamic();
-  obj["end_group"] = endGroup;
-  obj["subscriber_priority"] = subscriberPriority;
-  obj["forward"] = forward;
   obj["number_of_parameters"] = numberOfParameters;
 
   if (!parameters.empty()) {
@@ -112,6 +146,21 @@ folly::dynamic MOQTSubscribeUpdate::toDynamic() const {
       paramObjects.push_back(parameterToDynamic(param));
     }
     obj["parameters"] = folly::dynamic::array(paramObjects);
+  }
+  return obj;
+}
+
+folly::dynamic MOQTPublishStateNotify::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["number_of_parameters"] = numberOfParameters;
+  if (!parameters.empty()) {
+    std::vector<folly::dynamic> values;
+    values.reserve(parameters.size());
+    for (const auto& parameter : parameters) {
+      values.push_back(parameterToDynamic(parameter));
+    }
+    obj["parameters"] = folly::dynamic::array(values);
   }
   return obj;
 }
@@ -152,18 +201,10 @@ folly::dynamic MOQTFetch::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
   obj["request_id"] = requestId;
-  obj["subscriber_priority"] = subscriberPriority;
-  obj["group_order"] = groupOrder;
-  obj["fetch_type"] = fetchType;
-
-  if (standaloneFetch.has_value()) {
-    obj["standalone_fetch"] = standaloneFetch->toDynamic();
-  }
-
-  if (joiningFetch.has_value()) {
-    obj["joining_fetch"] = joiningFetch->toDynamic();
-  }
-
+  auto trackNamespaceValues = parseTrackNamespace(trackNamespace);
+  obj["track_namespace"] = folly::dynamic::array(
+      trackNamespaceValues.begin(), trackNamespaceValues.end());
+  obj["track_name"] = parseTrackName(trackName);
   obj["number_of_parameters"] = numberOfParameters;
   if (!parameters.empty()) {
     std::vector<folly::dynamic> paramObjects;
@@ -228,16 +269,6 @@ folly::dynamic MOQTTrackStatus::toDynamic() const {
   obj["track_namespace"] =
       folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
   obj["track_name"] = parseTrackName(trackName);
-  obj["subscriber_priority"] = subscriberPriority;
-  obj["group_order"] = groupOrder;
-  obj["forward"] = forward;
-  obj["filter_type"] = filterType;
-  if (startLocation.has_value()) {
-    obj["start_location"] = startLocation->toDynamic();
-  }
-  if (endGroup.has_value()) {
-    obj["end_group"] = endGroup.value();
-  }
   obj["number_of_parameters"] = numberOfParameters;
   if (!parameters.empty()) {
     std::vector<folly::dynamic> paramObjects;
@@ -269,6 +300,25 @@ folly::dynamic MOQTSubscribeNamespace::toDynamic() const {
   return obj;
 }
 
+folly::dynamic MOQTSubscribeTracks::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  obj["request_id"] = requestId;
+  auto prefix = parseTrackNamespace(trackNamespacePrefix);
+  obj["track_namespace_prefix"] =
+      folly::dynamic::array(prefix.begin(), prefix.end());
+  obj["number_of_parameters"] = numberOfParameters;
+  if (!parameters.empty()) {
+    std::vector<folly::dynamic> values;
+    values.reserve(parameters.size());
+    for (const auto& parameter : parameters) {
+      values.push_back(parameterToDynamic(parameter));
+    }
+    obj["parameters"] = folly::dynamic::array(values);
+  }
+  return obj;
+}
+
 folly::dynamic MOQTUnsubscribeNamespace::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
@@ -283,14 +333,7 @@ folly::dynamic MOQTUnsubscribeNamespace::toDynamic() const {
 folly::dynamic MOQTSubscribeOk::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  obj["request_id"] = requestId;
   obj["track_alias"] = trackAlias;
-  obj["expires"] = expires;
-  obj["group_order"] = groupOrder;
-  obj["content_exists"] = contentExists;
-  if (largestLocation.has_value()) {
-    obj["largest_location"] = largestLocation->toDynamic();
-  }
   obj["number_of_parameters"] = numberOfParameters;
   if (!parameters.empty()) {
     std::vector<folly::dynamic> paramObjects;
@@ -299,6 +342,14 @@ folly::dynamic MOQTSubscribeOk::toDynamic() const {
       paramObjects.push_back(parameterToDynamic(param));
     }
     obj["parameters"] = folly::dynamic::array(paramObjects);
+  }
+  if (!trackProperties.empty()) {
+    std::vector<folly::dynamic> values;
+    values.reserve(trackProperties.size());
+    for (const auto& property : trackProperties) {
+      values.push_back(property.toDynamic());
+    }
+    obj["track_properties"] = folly::dynamic::array(values);
   }
   return obj;
 }
@@ -320,8 +371,6 @@ folly::dynamic MOQTSubscribeError::toDynamic() const {
 folly::dynamic MOQTFetchOk::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  obj["request_id"] = requestId;
-  obj["group_order"] = groupOrder;
   obj["end_of_track"] = endOfTrack;
   obj["end_location"] = endLocation.toDynamic();
   obj["number_of_parameters"] = numberOfParameters;
@@ -333,6 +382,14 @@ folly::dynamic MOQTFetchOk::toDynamic() const {
       paramObjects.push_back(parameterToDynamic(param));
     }
     obj["parameters"] = folly::dynamic::array(paramObjects);
+  }
+  if (!trackProperties.empty()) {
+    std::vector<folly::dynamic> values;
+    values.reserve(trackProperties.size());
+    for (const auto& property : trackProperties) {
+      values.push_back(property.toDynamic());
+    }
+    obj["track_properties"] = folly::dynamic::array(values);
   }
   return obj;
 }
@@ -354,14 +411,10 @@ folly::dynamic MOQTFetchError::toDynamic() const {
 folly::dynamic MOQTPublishDone::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  obj["request_id"] = requestId;
   obj["status_code"] = statusCode;
   obj["stream_count"] = streamCount;
   if (reason.has_value()) {
-    obj["reason"] = reason.value();
-  }
-  if (reasonBytes.has_value()) {
-    obj["reason_bytes"] = reasonBytes.value();
+    obj["reason_phrase"] = reason.value();
   }
   return obj;
 }
@@ -396,6 +449,34 @@ folly::dynamic MOQTPublishNamespace::toDynamic() const {
     }
     obj["parameters"] = folly::dynamic::array(paramObjects);
   }
+  return obj;
+}
+
+folly::dynamic MOQTNamespace::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  auto suffix = parseTrackNamespace(trackNamespaceSuffix);
+  obj["track_namespace_suffix"] =
+      folly::dynamic::array(suffix.begin(), suffix.end());
+  return obj;
+}
+
+folly::dynamic MOQTNamespaceDone::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  auto suffix = parseTrackNamespace(trackNamespaceSuffix);
+  obj["track_namespace_suffix"] =
+      folly::dynamic::array(suffix.begin(), suffix.end());
+  return obj;
+}
+
+folly::dynamic MOQTPublishSkipped::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["type"] = type;
+  auto suffix = parseTrackNamespace(trackNamespaceSuffix);
+  obj["track_namespace_suffix"] =
+      folly::dynamic::array(suffix.begin(), suffix.end());
+  obj["track_name"] = parseTrackName(trackName);
   return obj;
 }
 
@@ -466,68 +547,44 @@ folly::dynamic MOQTSubscribeNamespaceError::toDynamic() const {
   return obj;
 }
 
-std::vector<std::string> MOQTBaseControlMessage::parseTrackNamespace(
+folly::dynamic MOQTByteString::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  if (type == MOQTByteStringType::STRING_VALUE) {
+    obj["value"] = value;
+  } else if (type == MOQTByteStringType::VALUE_BYTES && valueBytes) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    auto bytes = valueBytes->clone();
+    bytes->coalesce();
+    std::string encoded(bytes->length() * 2, '0');
+    for (size_t i = 0; i < bytes->length(); ++i) {
+      encoded[2 * i] = kHex[bytes->data()[i] >> 4];
+      encoded[2 * i + 1] = kHex[bytes->data()[i] & 0x0f];
+    }
+    obj["value_bytes"] = std::move(encoded);
+  }
+  return obj;
+}
+
+std::vector<folly::dynamic> MOQTBaseControlMessage::parseTrackNamespace(
     const std::vector<MOQTByteString>& trackNamespace) const {
-  std::vector<std::string> track;
-  if (trackNamespace.empty()) {
-    return track;
+  std::vector<folly::dynamic> track;
+  track.reserve(trackNamespace.size());
+  for (const auto& element : trackNamespace) {
+    track.emplace_back(element.toDynamic());
   }
-  // Check If TrackNamespace is string or value Bytes
-
-  switch (trackNamespace[0].type) {
-    case MOQTByteStringType::VALUE_BYTES: {
-      for (auto& t : trackNamespace) {
-        track.emplace_back(t.valueBytes->to<std::string>());
-      }
-      break;
-    }
-    case MOQTByteStringType::STRING_VALUE: {
-      for (auto& t : trackNamespace) {
-        track.emplace_back(t.value);
-      }
-      break;
-    }
-    default: {
-    }
-  }
-
   return track;
 }
 
-std::string MOQTBaseControlMessage::parseTrackName(
+folly::dynamic MOQTBaseControlMessage::parseTrackName(
     const MOQTByteString& trackName) const {
-  std::string name;
-  switch (trackName.type) {
-    case MOQTByteStringType::VALUE_BYTES: {
-      name = trackName.valueBytes->to<std::string>();
-      break;
-    }
-    case MOQTByteStringType::STRING_VALUE: {
-      name = trackName.value;
-      break;
-    }
-    default: {
-    }
-  }
-  return name;
+  return trackName.toDynamic();
 }
 
 folly::dynamic MOQTGoaway::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  if ((length).has_value()) {
-    obj["length"] = std::to_string(length.value());
-  }
-
-  if (newSessionUri && !newSessionUri->empty()) {
-    obj["new_session_uri"] = newSessionUri->to<std::string>();
-  } else {
-    obj["new_session_uri"] = "";
-  }
+  obj["new_session_uri"] = newSessionUri.toDynamic();
   obj["timeout"] = timeout;
-  if (requestId.has_value()) {
-    obj["request_id"] = *requestId;
-  }
 
   return obj;
 }
@@ -755,12 +812,6 @@ folly::dynamic MOQTPublish::toDynamic() const {
       folly::dynamic::array(trackNamespaceStr.begin(), trackNamespaceStr.end());
   obj["track_name"] = parseTrackName(trackName);
   obj["track_alias"] = trackAlias;
-  obj["group_order"] = groupOrder;
-  obj["content_exists"] = contentExists;
-  if (largest.has_value()) {
-    obj["largest"] = largest->toDynamic();
-  }
-  obj["forward"] = forward;
   obj["number_of_parameters"] = numberOfParameters;
   if (!parameters.empty()) {
     std::vector<folly::dynamic> paramObjects;
@@ -769,6 +820,14 @@ folly::dynamic MOQTPublish::toDynamic() const {
       paramObjects.push_back(parameterToDynamic(param));
     }
     obj["parameters"] = folly::dynamic::array(paramObjects);
+  }
+  if (!trackProperties.empty()) {
+    std::vector<folly::dynamic> values;
+    values.reserve(trackProperties.size());
+    for (const auto& property : trackProperties) {
+      values.push_back(property.toDynamic());
+    }
+    obj["track_properties"] = folly::dynamic::array(values);
   }
   return obj;
 }
