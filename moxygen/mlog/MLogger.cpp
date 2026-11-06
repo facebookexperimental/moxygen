@@ -5,9 +5,12 @@
  */
 
 #include "moxygen/mlog/MLogger.h"
+#include <array>
 #include <iterator>
+#include <limits>
 #include <utility>
 #include "moxygen/MoQFramer.h"
+#include "moxygen/MoQVarint.h"
 
 namespace moxygen {
 
@@ -95,6 +98,74 @@ folly::dynamic fillParametersValue(const FillParameters& fill) {
         "group_order", static_cast<uint64_t>(fill.groupOrder.value())));
   }
   return folly::dynamic::array(parameters);
+}
+std::optional<folly::dynamic> rangeFilter(const Parameter& parameter) {
+  static constexpr std::array<const char*, 5> kNames = {
+      "subgroup_filter",
+      "objectid_filter",
+      "priority_filter",
+      "object_property_filter",
+      "track_property_filter"};
+  XCHECK_GE(parameter.key, 0x25);
+  XCHECK_LE(parameter.key, 0x29);
+
+  folly::dynamic filter = folly::dynamic::object;
+  filter["name"] = kNames[parameter.key - 0x25];
+  if (parameter.asString.empty()) {
+    return filter;
+  }
+
+  auto data = folly::IOBuf::copyBuffer(parameter.asString);
+  folly::io::Cursor cursor(data.get());
+  uint64_t remaining = parameter.asString.size();
+  filter["set_id"] = cursor.readBE<uint8_t>();
+  --remaining;
+
+  auto readVarint = [&]() -> std::optional<uint64_t> {
+    auto decoded = decodeMoQVarint(cursor, remaining);
+    if (!decoded.has_value()) {
+      return std::nullopt;
+    }
+    remaining -= decoded->second;
+    return decoded->first;
+  };
+
+  const bool propertyFilter = parameter.key >= 0x28;
+  if (propertyFilter && remaining > 0) {
+    auto propertyType = readVarint();
+    if (!propertyType.has_value()) {
+      return std::nullopt;
+    }
+    filter["property_type"] = propertyType.value();
+  }
+
+  std::vector<folly::dynamic> ranges;
+  uint64_t previousEnd = 0;
+  while (remaining > 0) {
+    auto startDelta = readVarint();
+    if (!startDelta.has_value() ||
+        startDelta.value() >
+            std::numeric_limits<uint64_t>::max() - previousEnd) {
+      return std::nullopt;
+    }
+    const uint64_t start = previousEnd + startDelta.value();
+    folly::dynamic range = folly::dynamic::object("start", start);
+    if (remaining > 0) {
+      auto endDelta = readVarint();
+      if (!endDelta.has_value() ||
+          endDelta.value() > std::numeric_limits<uint64_t>::max() - start) {
+        return std::nullopt;
+      }
+      const uint64_t end = start + endDelta.value();
+      range["end"] = end;
+      previousEnd = end;
+    }
+    ranges.push_back(std::move(range));
+  }
+  if (!ranges.empty()) {
+    filter["ranges"] = folly::dynamic::array(ranges);
+  }
+  return filter;
 }
 } // namespace
 
@@ -1079,15 +1150,11 @@ std::vector<MOQTParameter> MLogger::convertTrackParamsToMoQTParams(
       case 0x27:
       case 0x28:
       case 0x29: {
-        static constexpr const char* kFilterNames[] = {
-            "subgroup_filter",
-            "objectid_filter",
-            "priority_filter",
-            "object_property_filter",
-            "track_property_filter"};
-        folly::dynamic filter = folly::dynamic::object;
-        filter["name"] = kFilterNames[param.key - 0x25];
-        moqParams.emplace_back(std::move(filter));
+        auto filter = rangeFilter(param);
+        moqParams.emplace_back(
+            filter.has_value()
+                ? std::move(filter.value())
+                : unknownValue(param.key, param.asString, param.asUint64));
         break;
       }
       default: {
@@ -1469,14 +1536,12 @@ void MLogger::logControlMessage(
     std::unique_ptr<MOQTBaseControlMessage> message) {
   switch (controlType) {
     case ControlMessageType::CREATED: {
-      MOQTControlMessageCreated req{
-          kFirstBidiStreamId, length, std::move(message)};
+      MOQTControlMessageCreated req{streamId, length, std::move(message)};
       addControlMessageCreatedLog(std::move(req));
       break;
     }
     case ControlMessageType::PARSED: {
-      MOQTControlMessageParsed req{
-          kFirstBidiStreamId, length, std::move(message)};
+      MOQTControlMessageParsed req{streamId, length, std::move(message)};
       addControlMessageParsedLog(std::move(req));
       break;
     }

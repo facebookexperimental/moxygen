@@ -635,6 +635,30 @@ TEST_F(FileMLoggerTest, LatestSetupAndFillParameterSchemas) {
       std::find(names.begin(), names.end(), "include_properties"), names.end());
 }
 
+TEST_F(FileMLoggerTest, LatestRangeFilterParameterSchema) {
+  const auto path = (dir_ / "range_filter.mlog").string();
+  FileMLogger logger(VantagePoint::CLIENT, path);
+  RequestOk ok;
+  ok.requestSpecificParams.emplace_back(
+      0x29,
+      std::string(
+          "\x07\x02\x03\x02\x05\x05",
+          6)); // set 7, property 2, ranges 3-5 and 10-15
+  logger.logRequestOk(ok);
+  logger.outputLogs();
+
+  const auto event = parseSingleEvent(path);
+  const auto& parameter = event["data"]["message"]["parameters"][0];
+  EXPECT_EQ(parameter["name"], "track_property_filter");
+  EXPECT_EQ(parameter["set_id"], 7);
+  EXPECT_EQ(parameter["property_type"], 2);
+  ASSERT_EQ(parameter["ranges"].size(), 2);
+  EXPECT_EQ(parameter["ranges"][0]["start"], 3);
+  EXPECT_EQ(parameter["ranges"][0]["end"], 5);
+  EXPECT_EQ(parameter["ranges"][1]["start"], 10);
+  EXPECT_EQ(parameter["ranges"][1]["end"], 15);
+}
+
 TEST_F(FileMLoggerTest, LatestResponseAndNamespaceControlMessages) {
   const auto errorPath = (dir_ / "request_error.mlog").string();
   FileMLogger errorLogger(VantagePoint::SERVER, errorPath);
