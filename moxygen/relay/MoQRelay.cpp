@@ -523,12 +523,12 @@ Subscriber::PublishResult MoQRelay::publish(
   rsub.handle = std::move(handle);
   rsub.isPublish = true;
 
-  uint64_t nSubscribers = 0;
+  uint64_t nForwardingSubscribers = 0;
   for (auto& [outSession, info] : sessions) {
     if (outSession != session &&
         (info.options == SubscribeNamespaceOptions::PUBLISH ||
          info.options == SubscribeNamespaceOptions::BOTH)) {
-      nSubscribers++;
+      nForwardingSubscribers += info.forward;
       auto exec = outSession->getExecutor();
       co_withExecutor(
           exec, publishToSession(outSession, forwarder, info.forward))
@@ -539,7 +539,7 @@ Subscriber::PublishResult MoQRelay::publish(
   // options is irrelevant for this tree).
   for (auto& [outSession, info] : tracksSessions) {
     if (outSession != session) {
-      nSubscribers++;
+      nForwardingSubscribers += info.forward;
       auto exec = outSession->getExecutor();
       co_withExecutor(
           exec,
@@ -564,7 +564,7 @@ Subscriber::PublishResult MoQRelay::publish(
 
   wakePendingRendezvousForTrack(pub.fullTrackName);
 
-  const bool shouldForward = nSubscribers > 0;
+  const bool shouldForward = nForwardingSubscribers > 0;
   PublishOk publishOk;
   publishOk.requestID = pub.requestID;
   if (majorVersion >= 22) {

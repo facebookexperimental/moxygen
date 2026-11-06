@@ -3378,6 +3378,33 @@ TEST_F(MoQRelayTest, OnPublishOkUpdatesForwardingCount) {
   EXPECT_EQ(cb->calls[0], 1u);
 }
 
+TEST_F(MoQRelayTest, PublishOkForwardFalseWhenNoSubscriberForwards) {
+  auto subSession = createMockSession();
+  setupPublishSucceeds(subSession);
+  doSubscribeNamespaceWithForward(
+      subSession, kTestNamespace, /*forward=*/false);
+
+  auto pubSession = createMockSession();
+  std::shared_ptr<TrackConsumer> pubConsumer;
+  withSessionContext(pubSession, [&]() {
+    PublishRequest pub;
+    pub.fullTrackName = kTestTrackName;
+    auto res = relay_->publish(std::move(pub), createMockSubscriptionHandle());
+    ASSERT_TRUE(res.hasValue());
+    pubConsumer = res->consumer;
+    auto publishOk =
+        folly::coro::blockingWait(std::move(res->reply), exec_.get());
+    ASSERT_TRUE(publishOk.hasValue());
+    EXPECT_FALSE(publishOk->forward);
+  });
+  exec_->drive();
+
+  pubConsumer->publishDone(
+      {RequestID(0), PublishDoneStatusCode::SESSION_CLOSED, 0, "cleanup"});
+  removeSession(subSession);
+  removeSession(pubSession);
+}
+
 // When a subscriber with forward=true joins a namespace whose track forwarder
 // is empty, the relay should fire exactly one REQUEST_UPDATE(forward=true) —
 // from forwardChanged(), not a redundant explicit doSubscribeUpdate.
