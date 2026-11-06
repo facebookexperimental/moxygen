@@ -14,30 +14,27 @@
 #include <folly/logging/xlog.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
-#include <proxygen/lib/http/webtransport/test/FakeSharedWebTransport.h>
 #include <cinttypes>
 #include <cstdio>
 #include <map>
 #include <random>
 #include <set>
 
-#include "moxygen/MoQRelaySession.h"
 #include "moxygen/MoQVersions.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
 #include "moxygen/proxy/MoQProxy.h"
 #include "moxygen/proxy/test/RecordingFetchConsumer.h"
 #include "moxygen/relay/MoQRelay.h"
 #include "moxygen/test/LiveViewerConsumer.h"
+#include "moxygen/test/MoQTestLinks.h"
 #include "moxygen/test/Mocks.h"
 
 namespace moxygen::test {
 namespace {
 
 using namespace std::chrono_literals;
-using proxygen::test::FakeSharedWebTransport;
 
 const FullTrackName kTrack{TrackNamespace{{"live"}}, "video"};
-constexpr uint64_t kMaxRequestID = 100;
 
 Payload payloadOf(size_t length) {
   return folly::IOBuf::copyBuffer(std::string(length, 'x'));
@@ -147,46 +144,13 @@ class FixedUpstreamProvider : public MoQUpstreamProvider {
   std::shared_ptr<MoQSession> session_;
 };
 
-class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t>,
-                                 public MoQSession::ServerSetupCallback {
- public:
-  folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
-      const moxygen::Setup&,
-      uint64_t,
-      std::shared_ptr<MoQSession>) override {
-    return folly::unit;
-  }
-
-  folly::Try<moxygen::Setup> onClientSetup(
-      moxygen::Setup,
-      const std::shared_ptr<MoQSession>&) override {
-    moxygen::Setup setup;
-    setup.params.insertParam(
-        SetupParameter{
-            folly::to_underlying(SetupKey::MAX_REQUEST_ID), kMaxRequestID});
-    if (!useBidiRequestStreams(GetParam())) {
-      setup.params.insertParam(
-          SetupParameter{
-              folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
-    }
-    return folly::Try<moxygen::Setup>(std::move(setup));
-  }
-
+class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t> {
  protected:
-  struct Link {
-    std::unique_ptr<FakeSharedWebTransport> clientWt;
-    std::unique_ptr<FakeSharedWebTransport> serverWt;
-    std::shared_ptr<MoQSession> client;
-    std::shared_ptr<MoQSession> server;
-  };
-
   void TearDown() override {
     if (proxy_) {
       proxy_->close();
     }
-    for (auto& link : links_) {
-      link->client->close(SessionCloseErrorCode::NO_ERROR);
-    }
+    links_.closeClients();
     // Detached coroutines may still hold keep-alives, so loop() would not
     // return.
     do {
@@ -199,51 +163,11 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t>,
     folly::coro::blockingWait(std::move(body), &eventBase_);
   }
 
-  folly::coro::Task<Link*> connect(
+  folly::coro::Task<MoQTestLink*> connect(
       std::shared_ptr<Publisher> serverPublisher,
       std::shared_ptr<Subscriber> serverSubscriber = nullptr) {
-    auto link = std::make_unique<Link>();
-    std::tie(link->clientWt, link->serverWt) =
-        FakeSharedWebTransport::makeSharedWebTransport();
-    link->client = std::make_shared<MoQRelaySession>(
-        folly::MaybeManagedPtr<proxygen::WebTransport>(link->clientWt.get()),
-        executor_);
-    link->serverWt->setPeerHandler(link->client.get());
-    link->server = std::make_shared<MoQRelaySession>(
-        folly::MaybeManagedPtr<proxygen::WebTransport>(link->serverWt.get()),
-        *this,
-        executor_);
-    link->clientWt->setPeerHandler(link->server.get());
-    if (getDraftMajorVersion(GetParam()) >= 15) {
-      auto alpn = getAlpnFromVersion(GetParam());
-      link->client->validateAndSetVersionFromAlpn(*alpn);
-      link->server->validateAndSetVersionFromAlpn(*alpn);
-    }
-    link->server->setPublishHandler(std::move(serverPublisher));
-    if (serverSubscriber) {
-      link->server->setSubscribeHandler(std::move(serverSubscriber));
-    }
-    link->client->start();
-    link->server->start();
-    if (useUniControlStreams(GetParam())) {
-      moxygen::Setup serverSetup;
-      serverSetup.params.insertParam(
-          SetupParameter{
-              folly::to_underlying(SetupKey::MAX_REQUEST_ID), kMaxRequestID});
-      link->server->sendSetup(std::move(serverSetup));
-    }
-    moxygen::Setup clientSetup;
-    clientSetup.params.insertParam(
-        SetupParameter{folly::to_underlying(SetupKey::PATH), "/foo"});
-    clientSetup.params.insertParam(
-        SetupParameter{
-            folly::to_underlying(SetupKey::MAX_REQUEST_ID), kMaxRequestID});
-    clientSetup.params.insertParam(
-        SetupParameter{
-            folly::to_underlying(SetupKey::MAX_AUTH_TOKEN_CACHE_SIZE), 16});
-    co_await link->client->setup(std::move(clientSetup));
-    links_.push_back(std::move(link));
-    co_return links_.back().get();
+    return links_.connect(
+        std::move(serverPublisher), std::move(serverSubscriber));
   }
 
   folly::coro::Task<void> startProxy(MoQProxyOptions options = {}) {
@@ -268,7 +192,7 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t>,
   }
 
   folly::SemiFuture<MoQSession::JoinResult> startJoin(
-      Link& viewer,
+      MoQTestLink& viewer,
       std::shared_ptr<TrackConsumer> live,
       std::shared_ptr<FetchConsumer> history,
       uint64_t joiningStart,
@@ -317,7 +241,7 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t>,
   }
 
   // Unblocks every FETCH stream the proxy is holding for this viewer.
-  static void makeWritable(Link& viewer) {
+  static void makeWritable(MoQTestLink& viewer) {
     for (auto& [_, handle] : viewer.serverWt->writeHandles) {
       if (handle->pendingWritableWaiters() > 0) {
         handle->setWritable(true);
@@ -329,11 +253,11 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t>,
   std::shared_ptr<MoQExecutor> executor_{
       std::make_shared<MoQFollyExecutorImpl>(&eventBase_)};
   std::shared_ptr<OriginPublisher> origin_{std::make_shared<OriginPublisher>()};
-  Link* upstreamLink_{nullptr};
+  MoQTestLink* upstreamLink_{nullptr};
   std::shared_ptr<MoQProxy> proxy_;
   // Outlives the sessions closed in TearDown, as a relay server's relay does.
   std::shared_ptr<MoQRelay> relay_;
-  std::vector<std::unique_ptr<Link>> links_;
+  MoQTestLinks links_{GetParam(), executor_};
   std::vector<std::shared_ptr<Publisher::SubscriptionHandle>> handles_;
 };
 
