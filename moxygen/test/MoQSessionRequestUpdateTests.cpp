@@ -562,6 +562,63 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateFilterSuccess) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A renewed viewer token in REQUEST_UPDATE reaches the publisher intact; it
+// used to be written as an empty value that failed to parse and closed the
+// session.
+CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateCarriesAuthToken) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle = nullptr;
+  std::shared_ptr<TrackConsumer> trackConsumer = nullptr;
+  expectPublishDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle = makeSubscribeOkResult(sub);
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  auto subscribeHandler = res.value();
+
+  SubscribeUpdate subscribeUpdate{
+      subscribeRequest.requestID,
+      subscribeRequest.requestID,
+      std::nullopt,
+      kDefaultPriority,
+      std::nullopt};
+  subscribeUpdate.params.insertParam(getAuthParam(
+      getServerSelectedVersion(), "fr3sh", 0, AuthToken::DontRegister));
+
+  folly::coro::Baton subscribeUpdateInvoked;
+  std::optional<std::string> receivedToken;
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
+      .WillOnce([&](const auto& actualUpdate) {
+        for (const auto& param : actualUpdate.params) {
+          if (param.key ==
+              folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN)) {
+            receivedToken = param.asAuthToken.tokenValue;
+          }
+        }
+        subscribeUpdateInvoked.post();
+      });
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillOnce(
+          testing::Return(
+              RequestOk{.requestID = subscribeUpdate.existingRequestID}));
+  auto updateResult = co_await subscribeHandler->requestUpdate(subscribeUpdate);
+  co_await subscribeUpdateInvoked;
+
+  EXPECT_TRUE(updateResult.hasValue());
+  EXPECT_EQ(receivedToken, std::optional<std::string>("fr3sh"));
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Each REQUEST_UPDATE takes a request ID of its own and must give it back,
 // or a subscriber that updates more often than its initial credit allows is
 // closed with TOO_MANY_REQUESTS.

@@ -8190,8 +8190,23 @@ bool MoQSession::requestUpdate(
     }
   }
 
+  // An AUTHORIZATION_TOKEN (a renewed viewer token) goes on the wire encoded,
+  // as on SUBSCRIBE and FETCH; written raw it is an empty value the peer
+  // cannot parse.
+  std::optional<RequestUpdate> encodedUpdate;
+  if (std::any_of(
+          reqUpdate.params.begin(),
+          reqUpdate.params.end(),
+          [](const Parameter& param) {
+            return param.key ==
+                folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
+          })) {
+    encodedUpdate = reqUpdate;
+    aliasifyAuthTokens(encodedUpdate->params);
+  }
   folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
-  auto res = moqFrameWriter_.writeRequestUpdate(buf, reqUpdate);
+  auto res = moqFrameWriter_.writeRequestUpdate(
+      buf, encodedUpdate ? *encodedUpdate : reqUpdate);
   if (!res) {
     XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
     return false;
