@@ -72,6 +72,11 @@ moxygen_add_library(moxygen_proxy_moq_upstream_goaways
     Folly::folly_function
 )
 
+moxygen_add_library(moxygen_proxy_moq_upstream_handoff_arbiter
+  SRCS
+    MoQUpstreamHandoffArbiter.cpp
+)
+
 moxygen_add_library(moxygen_proxy_moq_proxy_track
   SRCS
     MoQProxyTrack.cpp
