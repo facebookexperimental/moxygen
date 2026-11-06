@@ -19,7 +19,6 @@ install_ubuntu() {
         libunwind-dev \
         libgoogle-glog-dev \
         libgflags-dev \
-        libdouble-conversion-dev \
         libevent-dev \
         libsodium-dev \
         libzstd-dev \
@@ -38,7 +37,6 @@ install_fedora() {
         openssl-devel \
         glog-devel \
         gflags-devel \
-        double-conversion-devel \
         libevent-devel \
         libsodium-devel \
         libzstd-devel \
@@ -68,7 +66,6 @@ install_macos() {
         openssl@3 \
         glog \
         gflags \
-        double-conversion \
         libevent \
         libsodium \
         zstd \
