@@ -109,7 +109,7 @@ bool MoQAudioPublisher::setup(
 
   auto alpns = getMoqtProtocols(versions, true);
   folly::coro::blockingWait(co_withExecutor(
-                                evbThread_->getEventBase(),
+                                evbThread_->getEventBaseKeepAlive(),
                                 relayClient_->setup(
                                     /*publisher=*/shared_from_this(),
                                     /*subscriber=*/subscriber,

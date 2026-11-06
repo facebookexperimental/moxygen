@@ -801,7 +801,7 @@ class MoQIntegrationTest : public ::testing::TestWithParam<uint64_t> {
   void runTest(folly::coro::Task<void> testBody) {
     auto result = folly::coro::blockingWait(
         folly::coro::co_withExecutor(
-            clientEvbThread_.getEventBase(),
+            clientEvbThread_.getEventBaseKeepAlive(),
             folly::coro::co_invoke(
                 [body = std::move(
                      testBody)]() mutable -> folly::coro::Task<std::string> {
