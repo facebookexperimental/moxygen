@@ -221,7 +221,8 @@ class MoQCache {
     AbsoluteLocation progress;
     FetchWriteback* writeback{};
   };
-  using FetchesInProgressMap = std::map<AbsoluteLocation, FetchInProgressEntry>;
+  using FetchesInProgressMap =
+      std::multimap<AbsoluteLocation, FetchInProgressEntry>;
 
   // FETCH_OK's End Location is exclusive: one past the last object in the
   // response.

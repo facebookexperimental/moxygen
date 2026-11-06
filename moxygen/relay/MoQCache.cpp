@@ -957,16 +957,12 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
 
 MoQCache::FetchWriteback* MoQCache::CacheTrack::findFetchInProgress(
     AbsoluteLocation loc) {
-  if (fetchesInProgress.empty()) {
-    return nullptr;
-  }
-  auto it = fetchesInProgress.upper_bound(loc);
-  if (it == fetchesInProgress.begin()) {
-    return nullptr;
-  }
-  --it;
-  if (loc >= it->first && loc < it->second.end && loc >= it->second.progress) {
-    return it->second.writeback;
+  for (auto it = fetchesInProgress.upper_bound(loc);
+       it != fetchesInProgress.begin();) {
+    const auto& entry = (--it)->second;
+    if (loc < entry.end && loc >= entry.progress) {
+      return entry.writeback;
+    }
   }
   return nullptr;
 }
@@ -1008,17 +1004,27 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     inProgress_.post();
     if (fetchRangeIt_.isValid()) {
       auto current = *fetchRangeIt_;
-      fetchInProgressIt_->second.progress = current;
-      // Re-key the map entry when crossing a group boundary so the
-      // old key slot is available for new fetches of evicted groups.
-      if (current.group > fetchInProgressIt_->first.group) {
-        auto entry = fetchInProgressIt_->second;
-        eraseAndMakeGroupEvictable();
-        emplaceAndPinGroup(current, entry);
+      // A group-boundary crossing at the range end may already have retired
+      // the entry.
+      if (fetchInProgressIt_ != fetchRangeIt_.track->fetchesInProgress.end()) {
+        fetchInProgressIt_->second.progress = current;
+        // Re-key the entry when crossing a group boundary so the fetch pins
+        // the group it is writing.
+        if (current.group > fetchInProgressIt_->first.group) {
+          if (current < fetchRangeIt_.maxLocation) {
+            auto entry = fetchInProgressIt_->second;
+            eraseAndMakeGroupEvictable();
+            emplaceAndPinGroup(current, entry);
+          } else {
+            eraseAndMakeGroupEvictable();
+          }
+        }
       }
       inProgress_.reset();
     } else {
-      eraseAndMakeGroupEvictable();
+      if (fetchInProgressIt_ != fetchRangeIt_.track->fetchesInProgress.end()) {
+        eraseAndMakeGroupEvictable();
+      }
     }
   }
 
@@ -1291,10 +1297,8 @@ class MoQCache::FetchWriteback : public FetchConsumer {
   }
 
   void emplaceAndPinGroup(AbsoluteLocation loc, FetchInProgressEntry entry) {
-    auto [it, inserted] =
+    fetchInProgressIt_ =
         fetchRangeIt_.track->fetchesInProgress.emplace(loc, entry);
-    XCHECK(inserted);
-    fetchInProgressIt_ = it;
     // Eagerly create the group if it doesn't exist so we can pin it before
     // any object lands. Otherwise getOrCreateGroupWithEviction would put
     // it in the LRU and a concurrent eviction could free the group while

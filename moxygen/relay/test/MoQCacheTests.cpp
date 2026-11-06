@@ -2765,6 +2765,37 @@ CO_TEST_F(MoQCacheTest, TestFetchInProgressKeyAdvancesWithCachedData) {
   EXPECT_TRUE(res2.hasValue());
 }
 
+CO_TEST_F(MoQCacheTest, TestFetchInProgressReKeyCollidesWithConcurrentFetch) {
+  InSequence enforceOrder;
+  auto firstUpstream =
+      expectUpstreamFetch({1, 0}, {1, 2}, false, AbsoluteLocation{1, 1});
+  auto secondUpstream =
+      expectUpstreamFetch({0, 0}, {1, 2}, false, AbsoluteLocation{1, 1});
+  auto consumer2 = std::make_shared<NiceMock<moxygen::MockFetchConsumer>>();
+  ON_CALL(*consumer2, object(_, _, _, _, _, _, _))
+      .WillByDefault(Return(folly::unit));
+  ON_CALL(*consumer2, endOfGroup(_, _, _, _))
+      .WillByDefault(Return(folly::unit));
+  EXPECT_CALL(*consumer_, object(_, _, _, _, _, _, _))
+      .WillRepeatedly(Return(folly::unit));
+
+  auto [res1, res2] = co_await folly::coro::collectAll(
+      cache_.fetch(getFetch({1, 0}, {1, 2}), consumer_, upstream_),
+      cache_.fetch(getFetch({0, 0}, {1, 2}), consumer2, upstream_));
+  EXPECT_TRUE(res1.hasValue());
+  EXPECT_TRUE(res2.hasValue());
+  auto first = co_await std::move(firstUpstream);
+  auto second = co_await std::move(secondUpstream);
+
+  // Crossing into group 1 re-keys the second fetch's entry to {1, 0}, the
+  // slot the first fetch already holds.
+  EXPECT_TRUE(second->object(0, 0, 0, makeBuf(100)).hasValue());
+  EXPECT_TRUE(second->endOfGroup(0, 0, 1).hasValue());
+  EXPECT_TRUE(second->object(1, 0, 0, makeBuf(100)).hasValue());
+  EXPECT_TRUE(first->object(1, 0, 0, makeBuf(100)).hasValue());
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {1, 0}));
+}
+
 CO_TEST_F(MoQCacheTest, TestFetchWritebackHugeGroupRangeBoundedTime) {
   // Regression: the previous per-group FetchIntervalSet inserted one entry
   // per group covered by the upstream fetch. A 2^60-group range hung the
