@@ -401,7 +401,7 @@ TEST_F(MoQProxyTest, RecreatesTrackAfterLastSubscriberLeaves) {
   second.value()->unsubscribe();
 }
 
-TEST_F(MoQProxyTest, CloseStopsTracksAndRejectsNewSubscriptions) {
+TEST_F(MoQProxyTest, CloseEndsViewersWithGoingAwayAndRejectsNewSubscriptions) {
   auto upstreamHandle = makeUpstreamHandle(RequestID(100));
   auto downstreamConsumer = makeConsumer();
   EXPECT_CALL(*upstreamSession_, subscribe(_, _))
@@ -417,7 +417,10 @@ TEST_F(MoQProxyTest, CloseStopsTracksAndRejectsNewSubscriptions) {
   ASSERT_TRUE(result.hasValue());
 
   EXPECT_CALL(*upstreamHandle, unsubscribe());
-  EXPECT_CALL(*downstreamConsumer, publishDone(_));
+  EXPECT_CALL(
+      *downstreamConsumer,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::GOING_AWAY)));
   proxy_->close();
 
   auto rejected =

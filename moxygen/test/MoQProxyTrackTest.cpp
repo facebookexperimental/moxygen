@@ -499,6 +499,75 @@ TEST_F(MoQProxyTrackTest, DownstreamRequestUpdateIsNotSupported) {
   EXPECT_EQ(callback_->calls, 1);
 }
 
+TEST_F(MoQProxyTrackTest, DestroyingTheTrackEndsViewersWithGoingAway) {
+  auto consumer = makeConsumer();
+  auto upstreamHandle = makeUpstreamHandle();
+  auto downstreamHandle = subscribeThroughUpstream(upstreamHandle, consumer);
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(
+      *consumer,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::GOING_AWAY)));
+
+  track_.reset();
+}
+
+// A viewer still finishing a subgroup stays in the forwarder after
+// PUBLISH_DONE, so later shutdown steps must not end it again.
+class MoQProxyTrackViewerEndTest : public MoQProxyTrackTest {
+ protected:
+  // Subscribes a viewer and opens a subgroup to it.
+  void subscribeWithAnOpenSubgroup() {
+    consumer_ = makeConsumer();
+    ON_CALL(*consumer_, beginSubgroup(_, _, _, _))
+        .WillByDefault(Return(
+            folly::makeExpected<MoQPublishError>(
+                std::static_pointer_cast<SubgroupConsumer>(
+                    std::make_shared<NiceMock<MockSubgroupConsumer>>()))));
+    upstreamHandle_ = makeUpstreamHandle();
+    downstreamHandle_ = subscribeThroughUpstream(upstreamHandle_, consumer_);
+    ASSERT_NE(upstreamConsumer_, nullptr);
+    auto subgroup = upstreamConsumer_->beginSubgroup(11, 0, kDefaultPriority);
+    ASSERT_TRUE(subgroup.hasValue());
+    openSubgroup_ = subgroup.value();
+    EXPECT_CALL(*upstreamHandle_, unsubscribe()).Times(AtMost(1));
+  }
+
+  std::shared_ptr<NiceMock<MockTrackConsumer>> consumer_;
+  std::shared_ptr<NiceMock<MockSubscriptionHandle>> upstreamHandle_;
+  std::shared_ptr<Publisher::SubscriptionHandle> downstreamHandle_;
+  std::shared_ptr<SubgroupConsumer> openSubgroup_;
+};
+
+TEST_F(MoQProxyTrackViewerEndTest, ClosingThenDestroyingEndsViewersOnce) {
+  subscribeWithAnOpenSubgroup();
+  EXPECT_CALL(
+      *consumer_,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::GOING_AWAY)))
+      .Times(1);
+
+  track_->close();
+  track_.reset();
+}
+
+TEST_F(
+    MoQProxyTrackViewerEndTest,
+    ShutdownAfterTheUpstreamEndedEndsNoOneAgain) {
+  subscribeWithAnOpenSubgroup();
+  EXPECT_CALL(
+      *consumer_,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::TRACK_ENDED)))
+      .Times(1);
+  upstreamConsumer_->publishDone(
+      PublishDone{
+          RequestID(100), PublishDoneStatusCode::TRACK_ENDED, 0, "ended"});
+
+  track_->close();
+  track_.reset();
+}
+
 TEST_F(MoQProxyTrackTest, UpstreamGoawaysAreCountedWhileTheUpstreamServes) {
   auto upstreamHandle = makeUpstreamHandle();
   auto consumer = makeConsumer();
@@ -643,6 +712,8 @@ struct UpstreamEndCase {
   std::string name;
   PublishDoneStatusCode statusCode;
   bool lost;
+  // Defaults to statusCode.
+  std::optional<PublishDoneStatusCode> viewerStatusCode;
 };
 
 class MoQProxyTrackUpstreamEndTest
@@ -657,7 +728,9 @@ TEST_P(MoQProxyTrackUpstreamEndTest, ViewersGetTheUpstreamPublishDone) {
   ASSERT_NE(upstreamConsumer_, nullptr);
   EXPECT_CALL(
       *consumer,
-      publishDone(Field(&PublishDone::statusCode, upstreamEnd.statusCode)));
+      publishDone(Field(
+          &PublishDone::statusCode,
+          upstreamEnd.viewerStatusCode.value_or(upstreamEnd.statusCode))));
 
   upstreamConsumer_->publishDone(
       PublishDone{RequestID(100), upstreamEnd.statusCode, 0, "upstream done"});
@@ -673,7 +746,8 @@ INSTANTIATE_TEST_SUITE_P(
         UpstreamEndCase{
             "SessionClosed",
             PublishDoneStatusCode::SESSION_CLOSED,
-            true},
+            true,
+            PublishDoneStatusCode::GOING_AWAY},
         UpstreamEndCase{
             "TrackEnded",
             PublishDoneStatusCode::TRACK_ENDED,

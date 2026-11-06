@@ -198,6 +198,9 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   State state_{State::IDLE};
   bool upstreamSubscriptionPromiseResolved_{false};
   bool noSubscribersNotificationSent_{false};
+  // The forwarder already sent viewers PUBLISH_DONE. It keeps the ones still
+  // finishing a subgroup, and another publishDone would send it to them again.
+  bool viewersEnded_{false};
 };
 
 } // namespace moxygen

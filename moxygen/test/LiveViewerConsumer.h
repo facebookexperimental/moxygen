@@ -6,7 +6,9 @@
 
 #pragma once
 
+#include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "moxygen/MoQConsumers.h"
@@ -75,11 +77,13 @@ class LiveViewerConsumer : public TrackConsumer {
     return deliver({header.group, header.id});
   }
   folly::Expected<folly::Unit, MoQPublishError> publishDone(
-      PublishDone) override {
+      PublishDone pubDone) override {
+    done = std::move(pubDone);
     return folly::unit;
   }
 
   std::vector<AbsoluteLocation> received;
+  std::optional<PublishDone> done;
   std::set<AbsoluteLocation> stoppedObjects;
 
  private:

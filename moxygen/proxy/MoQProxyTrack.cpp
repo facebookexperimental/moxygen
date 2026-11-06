@@ -436,6 +436,12 @@ class MoQProxyTrack::Recorder final : public TrackConsumer {
         track->onUpstreamLost(pubDone);
       }
     }
+    // SESSION_CLOSED is MoQSession's local marker for a closed session.
+    // Forwarded, it would tell a moxygen viewer that its own session closed,
+    // and other peers don't know the code.
+    if (pubDone.statusCode == PublishDoneStatusCode::SESSION_CLOSED) {
+      pubDone.statusCode = PublishDoneStatusCode::GOING_AWAY;
+    }
     return forwarder_->publishDone(std::move(pubDone));
   }
 
@@ -527,11 +533,11 @@ MoQProxyTrack::~MoQProxyTrack() {
     handle->unsubscribe();
   }
   upstreamSession_.reset();
-  if (!forwarder_->empty()) {
+  if (!viewersEnded_ && !forwarder_->empty()) {
     forwarder_->publishDone(
         PublishDone{
             RequestID(0),
-            PublishDoneStatusCode::SESSION_CLOSED,
+            PublishDoneStatusCode::GOING_AWAY,
             0,
             "proxy track destroyed"});
   }
@@ -858,6 +864,7 @@ void MoQProxyTrack::onForwarderEmpty() {
 }
 
 void MoQProxyTrack::onUpstreamPublishDone() {
+  viewersEnded_ = true;
   // Publishing ended, but already received data can still serve a joining
   // FETCH, and a miss still needs this upstream for history.
   upstreamHandle_.reset();
@@ -924,12 +931,15 @@ void MoQProxyTrack::close() {
     notifyNoSubscribers();
     return;
   }
-  forwarder_->publishDone(
-      PublishDone{
-          RequestID(0),
-          PublishDoneStatusCode::SESSION_CLOSED,
-          0,
-          "proxy track closed"});
+  if (!viewersEnded_) {
+    viewersEnded_ = true;
+    forwarder_->publishDone(
+        PublishDone{
+            RequestID(0),
+            PublishDoneStatusCode::GOING_AWAY,
+            0,
+            "proxy track closed"});
+  }
 }
 
 void MoQProxyTrack::stopCaching() {

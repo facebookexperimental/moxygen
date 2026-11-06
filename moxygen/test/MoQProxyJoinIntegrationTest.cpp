@@ -827,6 +827,20 @@ TEST_P(ProxyJoinIntegrationTest, CancelledJoinStopsOnlyItsOwnReplay) {
   }));
 }
 
+// The viewer learns that the proxy went away, not the track, so it can
+// subscribe elsewhere.
+TEST_P(ProxyJoinIntegrationTest, ProxyCloseEndsViewersWithGoingAway) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await startProxy();
+    auto live = co_await warmViewer();
+
+    proxy_->close();
+
+    CO_ASSERT_TRUE(co_await waitUntil([&] { return live->done.has_value(); }));
+    EXPECT_EQ(live->done->statusCode, PublishDoneStatusCode::GOING_AWAY);
+  }));
+}
+
 // Draft 22 retires Joining FETCH.
 static std::vector<uint64_t> joiningFetchVersions() {
   std::vector<uint64_t> versions;
