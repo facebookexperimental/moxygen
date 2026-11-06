@@ -547,6 +547,90 @@ CO_TEST_P_X(MoQSessionTest, PublishDoneStreamCount) {
       getDraftMajorVersion(getServerSelectedVersion()) < 18);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+// A PUBLISH_DONE still waiting for its streams when the session closes keeps
+// its status: the publisher ended the track before the close.
+CO_TEST_P_X(MoQSessionTest, PublishDoneWaitingForStreamsKeepsItsStatusOnClose) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> pub;
+  RequestID subRequestID{0};
+  expectSubscribe([&](auto sub, auto p) -> TaskSubscribeResult {
+    pub = p;
+    subRequestID = sub.requestID;
+    co_return makeSubscribeOkResult(sub);
+  });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (!pub) {
+    ADD_FAILURE() << "the subscribe never reached the server";
+    co_return;
+  }
+
+  // The subgroup's stream never reaches the client.
+  serverWt_->setDeferNewStreamData(true);
+  auto sgp = pub->beginSubgroup(0, 0, 0);
+  EXPECT_TRUE(sgp.hasValue());
+  EXPECT_TRUE(sgp.value()->object(0, moxygen::test::makeBuf(10)).hasValue());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onPublishDone(_));
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onPublishDone(_));
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionEnd());
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce([&](const PublishDone& done) {
+        EXPECT_EQ(done.statusCode, PublishDoneStatusCode::TRACK_ENDED);
+        publishDone_.post();
+        return folly::unit;
+      });
+  EXPECT_TRUE(
+      pub->publishDone(getTrackEndedPublishDone(subRequestID)).hasValue());
+  co_await rescheduleN(2);
+  EXPECT_FALSE(publishDone_.ready());
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await publishDone_;
+}
+// So does one whose Stream Count is the largest 64-bit value: from draft 17 on
+// the varint carries all 64 bits, so a peer can send it.
+CO_TEST_P_X(
+    MoQSessionTest,
+    PublishDoneWithTheLargestStreamCountKeepsItsStatusOnClose) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> pub;
+  RequestID subRequestID{0};
+  expectSubscribe([&](auto sub, auto p) -> TaskSubscribeResult {
+    pub = p;
+    subRequestID = sub.requestID;
+    co_return makeSubscribeOkResult(sub);
+  });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  if (!pub) {
+    ADD_FAILURE() << "the subscribe never reached the server";
+    co_return;
+  }
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onPublishDone(_));
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscriptionEnd());
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce([&](const PublishDone& done) {
+        EXPECT_EQ(done.statusCode, PublishDoneStatusCode::TRACK_ENDED);
+        publishDone_.post();
+        return folly::unit;
+      });
+  static_cast<MoQControlCodec::ControlCallback&>(*clientSession_)
+      .onPublishDone(
+          PublishDone{
+              subRequestID,
+              PublishDoneStatusCode::TRACK_ENDED,
+              std::numeric_limits<uint64_t>::max(),
+              "track ended"});
+  co_await rescheduleN(2);
+  EXPECT_FALSE(publishDone_.ready());
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await publishDone_;
+}
 CO_TEST_P_X(MoQSessionTest, PublishDoneFromSubscribe) {
   co_await setupMoQSession();
   expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {

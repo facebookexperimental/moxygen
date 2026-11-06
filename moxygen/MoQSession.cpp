@@ -2681,6 +2681,10 @@ class MoQSession::SubscribeTrackReceiveState
     if (!publish_ && !subscribePromise_.isFulfilled()) {
       subErr.requestID = requestID_;
       subscribePromise_.setValue(folly::makeUnexpected(std::move(subErr)));
+    } else if (pendingPublishDone_ && !pendingPublishDoneSynthesized_) {
+      // The publisher ended the subscription before the close; its status
+      // stands, though some of its streams never arrived.
+      deliverPublishDoneAndRemove();
     } else if (callback_) {
       // Clear pending to avoid false duplicate detection - we're already
       // cleaning up this subscription
@@ -2689,7 +2693,8 @@ class MoQSession::SubscribeTrackReceiveState
           {requestID_,
            PublishDoneStatusCode::SESSION_CLOSED,
            0, // forces immediately invoking the callback
-           "closed locally"});
+           "closed locally"},
+          /*synthesized=*/true);
     } // else already unsubscribed or delivered done
   }
 
@@ -2706,7 +2711,9 @@ class MoQSession::SubscribeTrackReceiveState
     countStream();
   }
 
-  void processPublishDone(PublishDone pubDone) {
+  // synthesized: the subscriber made it up instead of receiving it, so a
+  // close replaces it with SESSION_CLOSED.
+  void processPublishDone(PublishDone pubDone, bool synthesized) {
     XLOG(DBG1) << __func__ << " trackReceiveState=" << this;
     if (!callback_) {
       XLOG(DBG0)
@@ -2725,6 +2732,7 @@ class MoQSession::SubscribeTrackReceiveState
     }
 
     pendingPublishDone_ = std::move(pubDone);
+    pendingPublishDoneSynthesized_ = synthesized;
     if (pendingPublishDone_->streamCount > streamCount_) {
       // Still waiting for streams - schedule timeout
       XLOG(DBG0) << "Waiting for streams in flight, have=" << streamCount_
@@ -2816,6 +2824,7 @@ class MoQSession::SubscribeTrackReceiveState
   std::shared_ptr<TrackConsumer> callback_;
   folly::coro::Promise<SubscribeResult> subscribePromise_;
   std::optional<PublishDone> pendingPublishDone_;
+  bool pendingPublishDoneSynthesized_{false};
   uint64_t streamCount_{0};
   uint64_t currentStreamId_{0};
   std::optional<GroupOrder> requestedGroupOrder_;
@@ -6278,6 +6287,10 @@ folly::coro::Task<void> MoQSession::handlePublish(
 }
 
 void MoQSession::onPublishDone(PublishDone publishDone) {
+  handlePublishDone(std::move(publishDone), /*synthesized=*/false);
+}
+
+void MoQSession::handlePublishDone(PublishDone publishDone, bool synthesized) {
   XLOG(DBG1) << "PublishDone id=" << publishDone.requestID
              << " code=" << folly::to_underlying(publishDone.statusCode)
              << " reason=" << publishDone.reasonPhrase;
@@ -6308,7 +6321,7 @@ void MoQSession::onPublishDone(PublishDone publishDone) {
       control->disarmOnPeerTermination();
       control->writeFin();
     }
-    state->processPublishDone(std::move(publishDone));
+    state->processPublishDone(std::move(publishDone), synthesized);
     // Note: State removal is handled by deliverPublishDoneAndRemove called
     // from processPublishDone (when streams already arrived), onSubgroup
     // (when stream count reached), or timeout callback (when timeout expires)
@@ -7714,7 +7727,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
       reqID,
       /*minBidiDraftVersion=*/18,
       /*senderCallback=*/nullptr,
-      // streamCount=max so in-flight subgroups flush; timeout delivers done.
+      // In-flight subgroups flush until the timeout delivers it; a close
+      // delivers SESSION_CLOSED instead.
       [this](RequestID id, std::optional<ResetStreamErrorCode> resetError) {
         if (!reqIdToTrackAlias_.contains(id)) {
           // No SUBSCRIBE_OK yet, so there is no subscription to end. The
@@ -7728,7 +7742,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
             : PublishDoneStatusCode::SUBSCRIPTION_ENDED;
         pd.streamCount = std::numeric_limits<uint64_t>::max();
         pd.reasonPhrase = "peer closed stream before reply";
-        onPublishDone(std::move(pd));
+        handlePublishDone(std::move(pd), /*synthesized=*/true);
       });
   if (sendResult.hasError()) {
     SubscribeError subscribeError = {

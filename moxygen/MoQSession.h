@@ -1137,6 +1137,8 @@ class MoQSession : public Subscriber,
   void onSubscribeNamespace(SubscribeNamespace subscribeNamespace) override;
   void onUnsubscribeNamespace(
       UnsubscribeNamespace unsubscribeNamespace) override;
+  // synthesized: the subscriber made it up instead of receiving it.
+  void handlePublishDone(PublishDone publishDone, bool synthesized);
   void removeSubscriptionState(TrackAlias alias, RequestID id);
   void endUnopenedFill(RequestID id);
   void checkForCloseOnDrain();

@@ -1677,6 +1677,33 @@ CO_TEST_P_X(
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A request stream reset just before a close is usually the close itself, so
+// the PUBLISH_DONE the subscriber made up for it becomes SESSION_CLOSED.
+CO_TEST_P_X(
+    Draft18RequestStreamGoawayTest,
+    ResetJustBeforeACloseEndsWithSessionClosed) {
+  auto subscription = co_await openClientSubscription();
+  if (!subscription) {
+    co_return;
+  }
+
+  folly::coro::Baton publishDoneReceived;
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce([&](const PublishDone& done) {
+        EXPECT_EQ(done.statusCode, PublishDoneStatusCode::SESSION_CLOSED);
+        publishDoneReceived.post();
+        return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+      });
+
+  serverWt_->writeHandles.at(0)->resetStream(
+      folly::to_underlying(ResetStreamErrorCode::CANCELLED));
+  co_await rescheduleN(4);
+  EXPECT_FALSE(publishDoneReceived.ready());
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await publishDoneReceived;
+}
+
 // FETCH variant: on timeout the publisher resets both the request (bidi) stream
 // and the FETCH data stream with GOING_AWAY. Post-FETCH_OK the subscriber's
 // bidi peer-termination is disarmed (the data streams own completion), so the
