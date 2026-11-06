@@ -9,16 +9,28 @@
 
 #include <folly/logging/xlog.h>
 #include <folly/portability/GTest.h>
+#include <string>
+#ifndef FLV_TEST_RESOURCE_DIR
+#include <folly/testing/TestUtil.h>
+#endif
 
 using namespace moxygen::flv;
 using namespace moxygen::test;
 
+#ifndef FLV_TEST_RESOURCE_DIR
 namespace {
-const std::string kFlvOkTestFilePath = FLV_TEST_RESOURCE_DIR "/testOK1s.flv";
+constexpr auto kFlvOkTestResource =
+    "ti/experimental/moxygen/flv_parser/test/resources/testOK1s.flv";
 } // namespace
+#endif
 
 TEST(FlvReaderTest, ReadOk) {
-  std::string flvTestFilePath = kFlvOkTestFilePath;
+#ifdef FLV_TEST_RESOURCE_DIR
+  const std::string flvTestFilePath = FLV_TEST_RESOURCE_DIR "/testOK1s.flv";
+#else
+  const auto flvTestFilePath =
+      folly::test::find_resource(kFlvOkTestResource).string();
+#endif
   XLOG(INFO) << "Reading file: " << flvTestFilePath;
   FlvReader flvr(flvTestFilePath);
   uint32_t numDetectedAscHeader = 0;
