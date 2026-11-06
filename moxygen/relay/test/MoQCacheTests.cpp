@@ -3628,6 +3628,35 @@ CO_TEST_F(MoQCacheTest, TestGroupNotEvictedDuringActiveWrite) {
   co_return;
 }
 
+CO_TEST_F(MoQCacheTest, TestGroupPinnedUntilLastSubgroupCloses) {
+  cache_.setMaxCachedGroupsPerTrack(2);
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+
+  auto sub0 = writeback->beginSubgroup(0, 0, 0).value();
+  auto sub1 = writeback->beginSubgroup(0, 1, 0).value();
+  EXPECT_TRUE(sub0->object(0, makeBuf(100), {}, false).hasValue());
+  EXPECT_TRUE(sub1->object(1, makeBuf(100), {}, false).hasValue());
+
+  // Closing one subgroup must not unpin a group the other is still writing.
+  sub0.reset();
+  writeback->datagram(ObjectHeader(1, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+
+  // Once the last subgroup closes, group 0 re-enters the LRU as the newest
+  // entry and ages out normally.
+  sub1.reset();
+  writeback->datagram(ObjectHeader(4, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(5, 0, 0, 0, 100), makeBuf(100));
+  EXPECT_TRUE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+  writeback->datagram(ObjectHeader(6, 0, 0, 0, 100), makeBuf(100));
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {0, 0}));
+
+  writeback.reset();
+  co_return;
+}
+
 CO_TEST_F(MoQCacheTest, TestGroupNotEvictedDuringActiveFetch) {
   // Verify that a group being actively fetched into cannot be evicted
   // when a concurrent subscribe writeback adds enough groups to trigger

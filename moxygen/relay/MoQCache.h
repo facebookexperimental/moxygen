@@ -197,6 +197,9 @@ class MoQCache {
     size_t totalBytes{0};
     // LRU iterator - present if group is evictable (not in active fetch)
     folly::Optional<std::list<uint64_t>::iterator> lruIter_;
+    // Writebacks and fetches writing this group. Subgroups of one group are
+    // written concurrently, so the group is evictable only at zero.
+    size_t pinCount{0};
 
     folly::Expected<folly::Unit, MoQPublishError> cacheObject(
         CacheTrack& track,
@@ -393,6 +396,10 @@ class MoQCache {
   // Group LRU management helpers
   void addGroupToLRU(uint64_t groupID, CacheGroup& group, CacheTrack& track);
   void removeGroupFromLRU(CacheGroup& group, CacheTrack& track);
+  // Claim/release a group for writing. Pinned groups are held out of the LRU
+  // so eviction cannot free one under an open writeback or fetch.
+  void pinGroup(CacheGroup& group, CacheTrack& track);
+  void unpinGroup(uint64_t groupID, CacheGroup& group, CacheTrack& track);
 
   // Eviction methods
   bool evictOldestTrackIfNeeded();
