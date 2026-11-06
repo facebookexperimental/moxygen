@@ -708,7 +708,9 @@ std::shared_ptr<MoQProxyTrack> MoQProxy::getOrCreateTrack(
       fullTrackName,
       upstreamProviders_,
       MoQProxyTrack::CacheConfig{
-          .maxGroups = options_.maxGroupsPerTrack, .budget = budget_});
+          .maxGroups = options_.maxGroupsPerTrack, .budget = budget_},
+      MoQProxyTrack::UpstreamConfig{
+          .goaways = upstreamGoaways_, .switchStats = switchStats_});
   track->setCallback(shared_from_this());
   tracks_.emplace(fullTrackName, track);
   return track;

@@ -16,6 +16,7 @@
 
 #include "moxygen/Publisher.h"
 #include "moxygen/proxy/MoQGroupCache.h"
+#include "moxygen/proxy/MoQUpstreamGoaways.h"
 #include "moxygen/proxy/MoQUpstreamProvider.h"
 
 namespace moxygen {
@@ -28,6 +29,22 @@ struct MoQProxyTrackCacheConfig {
   // Newest group IDs kept, including the active group; 0 disables caching.
   size_t maxGroups{0};
   std::shared_ptr<MoQCacheBudget> budget;
+};
+
+// Counters for an upstream going away, summed over a proxy's tracks. Plain
+// counters: the tracks share the proxy's executor.
+struct MoQProxySwitchStats {
+  // Each session or request-stream GOAWAY, once per track it reaches: a session
+  // GOAWAY and a request-stream GOAWAY reaching one track count two.
+  uint64_t upstreamGoaways{0};
+};
+
+// Shared by the tracks of one proxy; a null member gets a per-track default.
+// Tracks that can share an upstream session must share goaways: a session's
+// GOAWAYs reach only the registry that watched it last.
+struct MoQProxyTrackUpstreamConfig {
+  std::shared_ptr<MoQUpstreamGoaways> goaways;
+  std::shared_ptr<MoQProxySwitchStats> switchStats;
 };
 
 class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
@@ -46,11 +63,13 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   };
 
   using CacheConfig = MoQProxyTrackCacheConfig;
+  using UpstreamConfig = MoQProxyTrackUpstreamConfig;
 
   static std::shared_ptr<MoQProxyTrack> create(
       FullTrackName fullTrackName,
       std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders,
-      CacheConfig cacheConfig = {});
+      CacheConfig cacheConfig = {},
+      UpstreamConfig upstreamConfig = {});
 
   ~MoQProxyTrack();
 
@@ -107,6 +126,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     std::shared_ptr<MoQSession> session;
     std::shared_ptr<Publisher::SubscriptionHandle> handle;
     std::shared_ptr<Recorder> recorder;
+    MoQUpstreamGoaways::Watch goawayWatch;
   };
 
   using UpstreamEstablishmentResult =
@@ -118,7 +138,8 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   MoQProxyTrack(
       FullTrackName fullTrackName,
       std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders,
-      CacheConfig cacheConfig);
+      CacheConfig cacheConfig,
+      UpstreamConfig upstreamConfig);
 
   folly::coro::Task<Publisher::SubscribeResult> handleFirstSubscription(
       SubscribeRequest subscribeRequest,
@@ -148,6 +169,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       std::optional<UpstreamEstablishmentFailure> failure);
   void onForwarderEmpty();
   void onUpstreamPublishDone();
+  void onUpstreamGoaway(const Goaway& goaway);
   void notifyNoSubscribers();
   void stopCaching();
 
@@ -157,8 +179,12 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   std::shared_ptr<MoQGroupCache> cache_;
   // Records the established upstream attempt into cache_.
   std::shared_ptr<Recorder> recorder_;
+  std::shared_ptr<MoQUpstreamGoaways> goaways_;
+  std::shared_ptr<MoQProxySwitchStats> switchStats_;
   std::shared_ptr<MoQSession> upstreamSession_;
   std::shared_ptr<Publisher::SubscriptionHandle> upstreamHandle_;
+  // Set while upstreamHandle_ is; reports session GOAWAYs.
+  MoQUpstreamGoaways::Watch upstreamGoawayWatch_;
   // The Largest in the upstream SUBSCRIBE_OK, which anchors the first
   // subscriber even if early data advanced the forwarder.
   std::optional<AbsoluteLocation> upstreamLargest_;

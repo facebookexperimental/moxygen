@@ -9,6 +9,7 @@
 #include <fmt/core.h>
 #include <folly/ScopeGuard.h>
 #include <folly/coro/Result.h>
+#include <folly/logging/xlog.h>
 #include <utility>
 
 #include "moxygen/MoQLocation.h"
@@ -327,8 +328,11 @@ class MoQProxyTrack::Recorder final : public TrackConsumer {
  public:
   Recorder(
       std::shared_ptr<MoQForwarder> forwarder,
-      std::weak_ptr<MoQGroupCache> cache)
-      : forwarder_(std::move(forwarder)), cache_(std::move(cache)) {}
+      std::weak_ptr<MoQGroupCache> cache,
+      std::weak_ptr<MoQProxyTrack> track)
+      : forwarder_(std::move(forwarder)),
+        cache_(std::move(cache)),
+        track_(std::move(track)) {}
 
   void disable() {
     disabled_ = true;
@@ -422,6 +426,16 @@ class MoQProxyTrack::Recorder final : public TrackConsumer {
     return forwarder_->publishDone(std::move(pubDone));
   }
 
+  // A request-stream GOAWAY for this subscription (draft 18+).
+  void goaway(Goaway goaway) override {
+    if (disabled_) {
+      return;
+    }
+    if (auto track = track_.lock()) {
+      track->onUpstreamGoaway(goaway);
+    }
+  }
+
  private:
   bool recordStandalone(
       const ObjectHeader& header,
@@ -445,6 +459,7 @@ class MoQProxyTrack::Recorder final : public TrackConsumer {
 
   std::shared_ptr<MoQForwarder> forwarder_;
   std::weak_ptr<MoQGroupCache> cache_;
+  std::weak_ptr<MoQProxyTrack> track_;
   bool disabled_{false};
   // Shared with this attempt's subgroups.
   std::shared_ptr<bool> active_{std::make_shared<bool>(true)};
@@ -453,11 +468,13 @@ class MoQProxyTrack::Recorder final : public TrackConsumer {
 std::shared_ptr<MoQProxyTrack> MoQProxyTrack::create(
     FullTrackName fullTrackName,
     std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders,
-    CacheConfig cacheConfig) {
+    CacheConfig cacheConfig,
+    UpstreamConfig upstreamConfig) {
   auto track = std::shared_ptr<MoQProxyTrack>(new MoQProxyTrack(
       std::move(fullTrackName),
       std::move(upstreamProviders),
-      std::move(cacheConfig)));
+      std::move(cacheConfig),
+      std::move(upstreamConfig)));
   track->forwarder_->setCallback(std::make_shared<ForwarderCallback>(track));
   return track;
 }
@@ -465,7 +482,8 @@ std::shared_ptr<MoQProxyTrack> MoQProxyTrack::create(
 MoQProxyTrack::MoQProxyTrack(
     FullTrackName fullTrackName,
     std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders,
-    CacheConfig cacheConfig)
+    CacheConfig cacheConfig,
+    UpstreamConfig upstreamConfig)
     : fullTrackName_(std::move(fullTrackName)),
       upstreamProviders_(std::move(upstreamProviders)),
       forwarder_(std::make_shared<MoQForwarder>(fullTrackName_)),
@@ -474,7 +492,14 @@ MoQProxyTrack::MoQProxyTrack(
               ? std::make_shared<MoQGroupCache>(
                     cacheConfig.maxGroups,
                     std::move(cacheConfig.budget))
-              : nullptr) {
+              : nullptr),
+      goaways_(
+          upstreamConfig.goaways ? std::move(upstreamConfig.goaways)
+                                 : std::make_shared<MoQUpstreamGoaways>()),
+      switchStats_(
+          upstreamConfig.switchStats
+              ? std::move(upstreamConfig.switchStats)
+              : std::make_shared<MoQProxySwitchStats>()) {
   XCHECK(!upstreamProviders_.empty())
       << "MoQProxyTrack requires upstream providers";
   for (const auto& provider : upstreamProviders_) {
@@ -660,6 +685,7 @@ MoQProxyTrack::establishUpstream(
     upstreamSession_ = std::move(establishedUpstream.session);
     upstreamHandle_ = std::move(establishedUpstream.handle);
     recorder_ = std::move(establishedUpstream.recorder);
+    upstreamGoawayWatch_ = std::move(establishedUpstream.goawayWatch);
     co_return std::nullopt;
   }
   co_return lastFailure;
@@ -703,6 +729,14 @@ MoQProxyTrack::establishWithProvider(
     co_return makeUpstreamFailure(
         subscribeRequest, "upstream and downstream sessions are the same");
   }
+  // Watched before subscribing, so a GOAWAY that arrives while the SUBSCRIBE
+  // is in flight still reaches the track.
+  auto goawayWatch = goaways_->watch(
+      *upstreamSession, [weakTrack = weak_from_this()](const Goaway& goaway) {
+        if (auto track = weakTrack.lock()) {
+          track->onUpstreamGoaway(goaway);
+        }
+      });
 
   auto upstreamRequest = subscribeRequest;
   upstreamRequest.priority = kDefaultPriority;
@@ -725,7 +759,8 @@ MoQProxyTrack::establishWithProvider(
 
   // One recorder per attempt, so a failed attempt's late callbacks can be
   // cut off without touching the next one.
-  auto recorder = std::make_shared<Recorder>(forwarder_, cache_);
+  auto recorder =
+      std::make_shared<Recorder>(forwarder_, cache_, weak_from_this());
   auto abandonAttempt = folly::makeGuard([this, recorder] {
     recorder->disable();
     if (cache_) {
@@ -772,6 +807,7 @@ MoQProxyTrack::establishWithProvider(
       .session = std::move(upstreamSession),
       .handle = std::move(upstreamHandle),
       .recorder = std::move(recorder),
+      .goawayWatch = std::move(goawayWatch),
   };
 }
 
@@ -803,6 +839,7 @@ void MoQProxyTrack::onForwarderEmpty() {
   if (auto handle = std::move(upstreamHandle_)) {
     handle->unsubscribe();
   }
+  upstreamGoawayWatch_.reset();
   upstreamSession_.reset();
   notifyNoSubscribers();
 }
@@ -811,6 +848,7 @@ void MoQProxyTrack::onUpstreamPublishDone() {
   // Publishing ended, but already received data can still serve a joining
   // FETCH, and a miss still needs this upstream for history.
   upstreamHandle_.reset();
+  upstreamGoawayWatch_.reset();
   if (state_ == State::CONNECTING) {
     completeUpstreamEstablishment(
         UpstreamEstablishmentFailure{
@@ -820,6 +858,16 @@ void MoQProxyTrack::onUpstreamPublishDone() {
   if (state_ != State::CLOSED) {
     state_ = State::DRAINING;
   }
+}
+
+// Only counted and logged for now: the upstream keeps serving until it ends.
+void MoQProxyTrack::onUpstreamGoaway(const Goaway& goaway) {
+  ++switchStats_->upstreamGoaways;
+  XLOG(DBG1) << "Upstream GOAWAY for " << fullTrackName_
+             << " timeout=" << goaway.timeout << "ms"
+             << (goaway.newSessionUri.empty()
+                     ? ""
+                     : ", ignoring newSessionUri=" + goaway.newSessionUri);
 }
 
 void MoQProxyTrack::notifyNoSubscribers() {
@@ -847,6 +895,7 @@ void MoQProxyTrack::close() {
   if (auto handle = std::move(upstreamHandle_)) {
     handle->unsubscribe();
   }
+  upstreamGoawayWatch_.reset();
   upstreamSession_.reset();
 
   if (forwarder_->empty()) {

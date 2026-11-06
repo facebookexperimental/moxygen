@@ -61,6 +61,17 @@ moxygen_add_library(moxygen_proxy_moq_join_replay
     Folly::folly_futures_core
 )
 
+moxygen_add_library(moxygen_proxy_moq_upstream_goaways
+  SRCS
+    MoQUpstreamGoaways.cpp
+  DEPS
+    moxygen_moq
+  EXPORTED_DEPS
+    moxygen_moq_types
+    Folly::folly_container_f14_hash
+    Folly::folly_function
+)
+
 moxygen_add_library(moxygen_proxy_moq_proxy_track
   SRCS
     MoQProxyTrack.cpp
@@ -68,11 +79,13 @@ moxygen_add_library(moxygen_proxy_moq_proxy_track
     moxygen_moq_location
     moxygen_relay_moq_forwarder
     Folly::folly_coro_result
+    Folly::folly_logging_logging
     Folly::folly_scope_guard
     fmt::fmt
   EXPORTED_DEPS
     moxygen_moq
     moxygen_proxy_moq_group_cache
+    moxygen_proxy_moq_upstream_goaways
     moxygen_proxy_moq_upstream_provider
     Folly::folly_coro_shared_promise
     Folly::folly_coro_task

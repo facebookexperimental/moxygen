@@ -89,6 +89,10 @@ class MoQProxy : public Publisher,
     return *joinStats_;
   }
 
+  const MoQProxySwitchStats& switchStats() const {
+    return *switchStats_;
+  }
+
   std::shared_ptr<MoQProxyTrack> findTrack(
       const FullTrackName& fullTrackName) const;
 
@@ -167,6 +171,11 @@ class MoQProxy : public Publisher,
   // Shared with detached replays, which can outlive the proxy.
   std::shared_ptr<MoQProxyJoinStats> joinStats_{
       std::make_shared<MoQProxyJoinStats>()};
+  std::shared_ptr<MoQProxySwitchStats> switchStats_{
+      std::make_shared<MoQProxySwitchStats>()};
+  // Shared by all tracks, which may share upstream sessions.
+  std::shared_ptr<MoQUpstreamGoaways> upstreamGoaways_{
+      std::make_shared<MoQUpstreamGoaways>()};
   // Cancels cache waits and local replays when the proxy closes.
   folly::CancellationSource shutdown_;
   folly::F14FastMap<

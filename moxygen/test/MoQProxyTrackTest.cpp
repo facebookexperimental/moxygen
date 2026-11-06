@@ -84,7 +84,11 @@ class MoQProxyTrackTest : public Test {
     ON_CALL(*upstreamSession_, getNegotiatedVersion())
         .WillByDefault(Return(kVersionDraftCurrent));
     provider_ = std::make_shared<TestUpstreamProvider>(upstreamSession_);
-    track_ = MoQProxyTrack::create(kTrackName, {provider_});
+    track_ = MoQProxyTrack::create(
+        kTrackName,
+        {provider_},
+        /*cacheConfig=*/{},
+        MoQProxyTrack::UpstreamConfig{.switchStats = switchStats_});
     callback_ = std::make_shared<TestTrackCallback>();
     track_->setCallback(callback_);
   }
@@ -108,6 +112,16 @@ class MoQProxyTrackTest : public Test {
     return consumer;
   }
 
+  std::shared_ptr<NiceMock<MockTrackConsumer>> makeConsumerWithSubgroups() {
+    auto consumer = makeConsumer();
+    ON_CALL(*consumer, beginSubgroup(_, _, _, _))
+        .WillByDefault(Return(
+            folly::makeExpected<MoQPublishError>(
+                std::static_pointer_cast<SubgroupConsumer>(
+                    std::make_shared<NiceMock<MockSubgroupConsumer>>()))));
+    return consumer;
+  }
+
   SubscribeRequest makeSubscribeRequest(RequestID requestID) {
     auto request = SubscribeRequest::make(kTrackName);
     request.requestID = requestID;
@@ -126,12 +140,42 @@ class MoQProxyTrackTest : public Test {
         std::move(subscribeOk));
   }
 
+  // Establishes the upstream for one subscriber; returns its downstream handle
+  // and saves the upstream consumer, which stands in for the upstream session.
+  std::shared_ptr<Publisher::SubscriptionHandle> subscribeThroughUpstream(
+      const std::shared_ptr<NiceMock<MockSubscriptionHandle>>& upstreamHandle,
+      const std::shared_ptr<TrackConsumer>& consumer) {
+    EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+        .WillOnce(Invoke(
+            [this, upstreamHandle](
+                SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+                -> folly::coro::Task<Publisher::SubscribeResult> {
+              upstreamConsumer_ = std::move(cb);
+              co_return Publisher::SubscribeResult(upstreamHandle);
+            }));
+    auto result = folly::coro::blockingWait(
+        track_->subscribe(
+            makeSubscribeRequest(RequestID(1)), consumer, makeDownstreamPeer()),
+        &eventBase_);
+    EXPECT_TRUE(result.hasValue());
+    return result.hasValue() ? result.value() : nullptr;
+  }
+
+  // Delivers a session GOAWAY as if parsed from the upstream peer.
+  void receiveSessionGoaway() {
+    static_cast<MoQControlCodec::ControlCallback&>(*upstreamSession_)
+        .onGoaway(Goaway{});
+  }
+
   folly::EventBase eventBase_;
   std::shared_ptr<MoQFollyExecutorImpl> executor_;
   std::shared_ptr<NiceMock<test::MockMoQSession>> upstreamSession_;
   std::shared_ptr<TestUpstreamProvider> provider_;
+  std::shared_ptr<MoQProxySwitchStats> switchStats_{
+      std::make_shared<MoQProxySwitchStats>()};
   std::shared_ptr<MoQProxyTrack> track_;
   std::shared_ptr<TestTrackCallback> callback_;
+  std::shared_ptr<TrackConsumer> upstreamConsumer_;
 };
 
 TEST_F(MoQProxyTrackTest, FirstSubscriberEstablishesUpstreamSubscription) {
@@ -452,6 +496,144 @@ TEST_F(MoQProxyTrackTest, DownstreamRequestUpdateIsNotSupported) {
   EXPECT_CALL(*upstreamHandle, unsubscribe());
   result.value()->unsubscribe();
   EXPECT_EQ(callback_->calls, 1);
+}
+
+TEST_F(MoQProxyTrackTest, UpstreamGoawaysAreCountedWhileTheUpstreamServes) {
+  auto upstreamHandle = makeUpstreamHandle();
+  auto consumer = makeConsumer();
+  auto downstreamHandle = subscribeThroughUpstream(upstreamHandle, consumer);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  EXPECT_CALL(*upstreamHandle, unsubscribe()).Times(0);
+
+  receiveSessionGoaway();
+  upstreamConsumer_->goaway(Goaway{});
+
+  EXPECT_EQ(switchStats_->upstreamGoaways, 2);
+  EXPECT_CALL(*consumer, datagram(_, _, _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_TRUE(upstreamConsumer_
+                  ->datagram(
+                      ObjectHeader(11, 0, 0, 0, uint64_t(1)),
+                      folly::IOBuf::copyBuffer("x"))
+                  .hasValue());
+  Mock::VerifyAndClearExpectations(upstreamHandle.get());
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  downstreamHandle->unsubscribe();
+}
+
+TEST_F(MoQProxyTrackTest, GoawayWhileTheUpstreamSubscribeIsInFlightIsCounted) {
+  auto upstreamHandle = makeUpstreamHandle();
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [this, upstreamHandle](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            upstreamConsumer_ = std::move(cb);
+            receiveSessionGoaway();
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+
+  auto result = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(1)),
+          makeConsumer(),
+          makeDownstreamPeer()),
+      &eventBase_);
+
+  ASSERT_TRUE(result.hasValue());
+  EXPECT_EQ(switchStats_->upstreamGoaways, 1);
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  result.value()->unsubscribe();
+}
+
+TEST_F(MoQProxyTrackTest, GoawaysAfterTheUpstreamIsReleasedAreIgnored) {
+  auto upstreamHandle = makeUpstreamHandle();
+  auto downstreamHandle =
+      subscribeThroughUpstream(upstreamHandle, makeConsumer());
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  downstreamHandle->unsubscribe();
+
+  receiveSessionGoaway();
+  upstreamConsumer_->goaway(Goaway{});
+
+  EXPECT_EQ(switchStats_->upstreamGoaways, 0);
+}
+
+// A viewer still finishing a subgroup keeps a closed track.
+TEST_F(MoQProxyTrackTest, GoawaysAfterCloseAreIgnored) {
+  auto consumer = makeConsumerWithSubgroups();
+  auto upstreamHandle = makeUpstreamHandle();
+  auto downstreamHandle = subscribeThroughUpstream(upstreamHandle, consumer);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  auto subgroup = upstreamConsumer_->beginSubgroup(11, 0, kDefaultPriority);
+  ASSERT_TRUE(subgroup.hasValue());
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  track_->close();
+  ASSERT_EQ(callback_->calls, 0);
+
+  receiveSessionGoaway();
+  upstreamConsumer_->goaway(Goaway{});
+
+  EXPECT_EQ(switchStats_->upstreamGoaways, 0);
+}
+
+// A viewer still finishing a subgroup keeps the track once its upstream ends.
+TEST_F(MoQProxyTrackTest, GoawaysAfterTheUpstreamEndsAreIgnored) {
+  auto consumer = makeConsumerWithSubgroups();
+  auto upstreamHandle = makeUpstreamHandle();
+  auto downstreamHandle = subscribeThroughUpstream(upstreamHandle, consumer);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  auto subgroup = upstreamConsumer_->beginSubgroup(11, 0, kDefaultPriority);
+  ASSERT_TRUE(subgroup.hasValue());
+  upstreamConsumer_->publishDone(
+      PublishDone{
+          RequestID(100), PublishDoneStatusCode::TRACK_ENDED, 0, "ended"});
+  ASSERT_EQ(callback_->calls, 0);
+
+  receiveSessionGoaway();
+
+  EXPECT_EQ(switchStats_->upstreamGoaways, 0);
+}
+
+TEST_F(MoQProxyTrackTest, GoawaysOnTheSessionOfAFailedAttemptAreIgnored) {
+  auto fallbackSession =
+      std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
+  track_ = MoQProxyTrack::create(
+      kTrackName,
+      {provider_, std::make_shared<TestUpstreamProvider>(fallbackSession)},
+      {},
+      MoQProxyTrack::UpstreamConfig{.switchStats = switchStats_});
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [](SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return folly::makeUnexpected(
+                SubscribeError{
+                    RequestID(100),
+                    SubscribeErrorCode::UNAUTHORIZED,
+                    "primary denied"});
+          }));
+  auto upstreamHandle = makeUpstreamHandle();
+  EXPECT_CALL(*fallbackSession, subscribe(_, _))
+      .WillOnce(Invoke(
+          [upstreamHandle](SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+  auto result = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(10)),
+          makeConsumer(),
+          makeDownstreamPeer()),
+      &eventBase_);
+  ASSERT_TRUE(result.hasValue());
+
+  receiveSessionGoaway();
+
+  EXPECT_EQ(switchStats_->upstreamGoaways, 0);
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  result.value()->unsubscribe();
 }
 
 }} // namespace moxygen
