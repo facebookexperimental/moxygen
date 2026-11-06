@@ -1164,12 +1164,15 @@ class MoQCache::FetchWriteback : public FetchConsumer {
     group.totalBytes += addedBytes;
     cache_.totalCachedBytes_ += addedBytes;
     cache_.evictForByteLimitIfNeeded();
-    if (finFetch) {
-      // Iterator still ON the just-completed object; step past it before
-      // tail-marking so the gap range doesn't overlap it. Use the iterator's
-      // order-aware end (DESC: lowest position; ASC: end_).
+    if (currentLength_ == 0 || finFetch) {
+      // A cursor left on a completed object makes the next object's
+      // markNonExistentTo() record this one as a gap.
       fetchRangeIt_.next();
-      markNonExistentTo(fetchRangeIt_.end());
+      if (finFetch) {
+        // Use the iterator's order-aware end (DESC: lowest position; ASC:
+        // end_).
+        markNonExistentTo(fetchRangeIt_.end());
+      }
       updateInProgress();
     }
     return consumer_->objectPayload(std::move(payload), finFetch && proxyFin_);

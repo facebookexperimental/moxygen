@@ -1684,6 +1684,37 @@ CO_TEST_F(MoQCacheTest, TestUpstreamFetchUsingBeginObjectAndObjectPayload) {
   EXPECT_EQ(res.value()->fetchOk().endLocation, (AbsoluteLocation{0, 0}));
 }
 
+CO_TEST_F(MoQCacheTest, TestSplitObjectNotMarkedNonexistentByNextObject) {
+  expectUpstreamFetch({0, 0}, {0, 2}, 0, AbsoluteLocation{0, 1})
+      .via(co_await folly::coro::co_current_executor)
+      .thenTry([this](const auto&) {
+        upstreamFetchConsumer_->beginObject(0, 0, 0, 100, makeBuf(50));
+        upstreamFetchConsumer_->objectPayload(makeBuf(50), false);
+        upstreamFetchConsumer_->object(
+            0, 0, 1, makeBuf(100), noExtensions(), true);
+      });
+  EXPECT_CALL(*consumer_, beginObject(0, 0, 0, 100, _, _))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer_, objectPayload(_, false))
+      .WillOnce(Return(ObjectPublishStatus::DONE));
+  EXPECT_CALL(*consumer_, object(0, _, 1, _, _, true, _))
+      .WillOnce(Return(folly::unit))
+      .RetiresOnSaturation();
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 2}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  // Replayed from cache, the split object must come back as itself.
+  EXPECT_CALL(*consumer_, object(0, _, 0, _, _, false, _))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*consumer_, object(0, _, 1, _, _, true, _))
+      .WillOnce(Return(folly::unit));
+  auto res2 = co_await cache_.fetch(
+      getFetch({0, 0}, {0, 2}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res2.hasValue());
+}
+
 CO_TEST_F(MoQCacheTest, TestObjectPayloadMarksRemainingAsNonexistent) {
   // Fetch for [0,0] - [0,2] exclusive (objects 0 and 1)
   // Upstream returns only object 0 via beginObject + objectPayload with
