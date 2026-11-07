@@ -489,12 +489,13 @@ TEST_P(
     relay_ = std::make_shared<MoQRelay>();
     folly::coro::Baton releaseSubscribe;
     origin_->gate = &releaseSubscribe;
-    auto* originLink = co_await connect(relay_, relay_);
+    auto originHandler = MoQRelay::makeSessionHandler(relay_);
+    auto* originLink = co_await connect(originHandler, originHandler);
     originLink->client->setPublishHandler(origin_);
     auto announced = co_await originLink->client->publishNamespace(
         PublishNamespace{RequestID(0), kTrack.trackNamespace}, nullptr);
     CO_ASSERT_TRUE(announced.hasValue());
-    auto* viewer = co_await connect(relay_);
+    auto* viewer = co_await connect(MoQRelay::makeSessionHandler(relay_));
     auto history = std::make_shared<RecordingFetchConsumer>();
 
     auto join =

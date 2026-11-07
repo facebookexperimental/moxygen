@@ -121,7 +121,7 @@ class MoQRelayTest : public ::testing::Test {
     sub.filter = LocationFilter::nextObject();
     std::shared_ptr<SubscriptionHandle> handle{nullptr};
     withSessionContext(session, [&]() {
-      auto task = relay_->subscribe(std::move(sub), consumer);
+      auto task = relay_->subscribe(session, std::move(sub), consumer);
       auto res = folly::coro::blockingWait(std::move(task), exec_.get());
       if (expectedError.has_value()) {
         // Expect an error and, if present, verify the error code matches
@@ -248,7 +248,7 @@ class MoQRelayTest : public ::testing::Test {
     PublishNamespace pubNs;
     pubNs.trackNamespace = ns;
     return withSessionContext(session, [&]() {
-      auto task = relay_->publishNamespace(std::move(pubNs), nullptr);
+      auto task = relay_->publishNamespace(session, std::move(pubNs), nullptr);
       auto res = folly::coro::blockingWait(std::move(task), exec_.get());
       EXPECT_TRUE(res.hasValue());
       if (res.hasValue()) {
@@ -273,8 +273,8 @@ class MoQRelayTest : public ::testing::Test {
     PublishRequest pub;
     pub.fullTrackName = trackName;
     return withSessionContext(session, [&]() {
-      auto res =
-          relay_->publish(std::move(pub), createMockSubscriptionHandle());
+      auto res = relay_->publish(
+          session, std::move(pub), createMockSubscriptionHandle());
       EXPECT_TRUE(res.hasValue());
       if (res.hasValue()) {
         if (addToState) {
@@ -298,7 +298,8 @@ class MoQRelayTest : public ::testing::Test {
     SubscribeNamespace subNs;
     subNs.trackNamespacePrefix = nsPrefix;
     return withSessionContext(session, [&]() {
-      auto task = relay_->subscribeNamespace(std::move(subNs), nullptr);
+      auto task =
+          relay_->subscribeNamespace(session, std::move(subNs), nullptr);
       auto res = folly::coro::blockingWait(std::move(task), exec_.get());
       EXPECT_TRUE(res.hasValue());
       if (res.hasValue()) {
@@ -343,7 +344,7 @@ class MoQRelayTest : public ::testing::Test {
     return withSessionContext(session, [&]() -> std::shared_ptr<TrackConsumer> {
       PublishRequest pub;
       pub.fullTrackName = trackName;
-      auto res = relay_->publish(std::move(pub), std::move(handle));
+      auto res = relay_->publish(session, std::move(pub), std::move(handle));
       EXPECT_TRUE(res.hasValue());
       if (!res.hasValue()) {
         return nullptr;
@@ -364,7 +365,8 @@ class MoQRelayTest : public ::testing::Test {
     subNs.trackNamespacePrefix = nsPrefix;
     subNs.forward = forward;
     return withSessionContext(session, [&]() {
-      auto task = relay_->subscribeNamespace(std::move(subNs), nullptr);
+      auto task =
+          relay_->subscribeNamespace(session, std::move(subNs), nullptr);
       auto res = folly::coro::blockingWait(std::move(task), exec_.get());
       EXPECT_TRUE(res.hasValue());
       if (!res.hasValue()) {
@@ -439,7 +441,7 @@ class MoQRelayTest : public ::testing::Test {
     auto consumer = createMockConsumer();
     withSessionContext(subscriber, [&]() {
       auto res = folly::coro::blockingWait(
-          relay_->subscribe(std::move(sub), consumer), exec_.get());
+          relay_->subscribe(subscriber, std::move(sub), consumer), exec_.get());
       ASSERT_TRUE(res.hasValue()) << "SUBSCRIBE " << ftn << " failed";
       getOrCreateMockState(subscriber)->subscribeHandles.push_back(*res);
     });
@@ -849,42 +851,31 @@ TEST_F(MoQRelayTest, DoublePublishNamespaceDone) {
   removeSession(publisher2);
 }
 
-// Test: Ownership check in publishNamespaceDone prevents non-owner from
-// clearing state When a session calls publishNamespaceDone but is not the owner
-// of the namespace, the publishNamespaceDone should be ignored and the real
-// owner should remain.
+// A publisher that has been replaced still holds the handle it was given. Its
+// PUBLISH_NAMESPACE_DONE must not cancel the publisher that took over, because
+// the handle names the peer it was issued to rather than whoever is current.
 TEST_F(MoQRelayTest, StalePublishNamespaceDoneDoesNotAffectNewOwner) {
   auto publisher1 = createMockSession();
   auto publisher2 = createMockSession();
 
-  // Publisher1 publishNamespaces test/A/B
   TrackNamespace nsAB{{"test", "A", "B"}};
   auto handle1 = doPublishNamespace(publisher1, nsAB, /*addToState=*/false);
 
-  // Publisher2 publishNamespaces a child namespace test/A/B/C
-  TrackNamespace nsABC{{"test", "A", "B", "C"}};
-  doPublishNamespace(publisher2, nsABC);
+  // Publisher2 takes the namespace over; publisher1's handle is now stale.
+  auto handle2 = doPublishNamespace(publisher2, nsAB, /*addToState=*/false);
 
-  // Publisher2 tries to publishNamespaceDone Publisher1's namespace test/A/B
-  // using Publisher1's handle but with Publisher2's session context - should be
-  // ignored because publisher2 is not the owner of test/A/B
-  withSessionContext(publisher2, [&]() { handle1->publishNamespaceDone(); });
+  handle1->publishNamespaceDone();
 
-  // Verify publisher1 is STILL the owner by checking
-  // findPublishNamespaceSessions returns publisher1 for the namespace. If the
-  // ownership check didn't work, sourceSession would be null and
-  // findPublishNamespaceSessions would return empty.
   auto sessions = relay_->findPublishNamespaceSessions(nsAB);
   EXPECT_EQ(sessions.size(), 1)
-      << "Ownership check failed: findPublishNamespaceSessions returned wrong count";
+      << "Stale handle cancelled the new owner's registration";
   if (!sessions.empty()) {
-    EXPECT_EQ(sessions[0], publisher1)
-        << "Ownership check failed: wrong session returned";
+    EXPECT_EQ(sessions[0], publisher2) << "Wrong session returned";
   }
 
-  // Publisher1 should still be able to properly publishNamespaceDone its own
-  // namespace
-  withSessionContext(publisher1, [&]() { handle1->publishNamespaceDone(); });
+  // The current owner's handle still works.
+  handle2->publishNamespaceDone();
+  EXPECT_TRUE(relay_->findPublishNamespaceSessions(nsAB).empty());
 
   // Clean up - should not crash
   removeSession(publisher1);
@@ -938,7 +929,7 @@ TEST_F(MoQRelayTest, EmptyNamespacePublishNamespaceDone) {
   PublishNamespace pubNs;
   pubNs.trackNamespace = emptyNs;
   withSessionContext(publisher, [&]() {
-    auto task = relay_->publishNamespace(std::move(pubNs), nullptr);
+    auto task = relay_->publishNamespace(publisher, std::move(pubNs), nullptr);
     auto res = folly::coro::blockingWait(std::move(task), exec_.get());
     // Don't assert on success/failure, just verify no crash
     if (res.hasValue()) {
@@ -1183,7 +1174,8 @@ class MoQRelayPublisherReconnectTest : public MoQRelayTest {
               publisherSession2_));
       PublishNamespace pubNs;
       pubNs.trackNamespace = kTestNamespace;
-      auto nsRes = co_await relay_->publishNamespace(std::move(pubNs), nullptr);
+      auto nsRes = co_await relay_->publishNamespace(
+          publisherSession2_, std::move(pubNs), nullptr);
       EXPECT_TRUE(nsRes.hasValue());
       if (nsRes.hasValue()) {
         getOrCreateMockState(publisherSession2_)
@@ -1191,8 +1183,8 @@ class MoQRelayPublisherReconnectTest : public MoQRelayTest {
       }
       PublishRequest pub;
       pub.fullTrackName = kTestTrackName;
-      auto res =
-          relay_->publish(std::move(pub), createMockSubscriptionHandle());
+      auto res = relay_->publish(
+          publisherSession2_, std::move(pub), createMockSubscriptionHandle());
       EXPECT_TRUE(res.hasValue());
       if (res.hasValue()) {
         pub2Consumer_ = res->consumer;
@@ -1207,7 +1199,9 @@ class MoQRelayPublisherReconnectTest : public MoQRelayTest {
       sub.requestID = RequestID(1);
       sub.filter = LocationFilter::nextObject();
       return folly::coro::blockingWait(
-          relay_->subscribe(std::move(sub), createMockConsumer()), exec_.get());
+          relay_->subscribe(
+              subscriberSession_, std::move(sub), createMockConsumer()),
+          exec_.get());
     });
   }
 
@@ -1297,7 +1291,8 @@ class MoQRelayRendezvousTest : public MoQRelayTest {
             .hasValue());
     return withSessionContext(session, [&]() {
       return co_withExecutor(
-                 exec_.get(), relay_->subscribe(std::move(sub), consumer))
+                 exec_.get(),
+                 relay_->subscribe(session, std::move(sub), consumer))
           .start();
     });
   }
@@ -1405,7 +1400,7 @@ TEST_F(MoQRelayTest, SubscribeEmptyNamespaceRejectedPreV18) {
 
   withSessionContext(session, [&]() {
     auto res = folly::coro::blockingWait(
-        relay_->subscribe(std::move(sub), consumer), exec_.get());
+        relay_->subscribe(session, std::move(sub), consumer), exec_.get());
     ASSERT_FALSE(res.hasValue());
     EXPECT_EQ(res.error().errorCode, SubscribeErrorCode::DOES_NOT_EXIST);
     EXPECT_EQ(res.error().reasonPhrase, "namespace required");
@@ -1427,7 +1422,7 @@ TEST_F(MoQRelayTest, SubscribeEmptyNamespaceAcceptedV18) {
 
   withSessionContext(session, [&]() {
     auto res = folly::coro::blockingWait(
-        relay_->subscribe(std::move(sub), consumer), exec_.get());
+        relay_->subscribe(session, std::move(sub), consumer), exec_.get());
     ASSERT_FALSE(res.hasValue());
     EXPECT_EQ(res.error().reasonPhrase, "no such namespace or track");
   });
@@ -1448,7 +1443,7 @@ TEST_F(MoQRelayTest, FetchEmptyNamespaceRejectedPreV18) {
   withSessionContext(session, [&]() {
     auto res = folly::coro::blockingWait(
         relay_->fetch(
-            std::move(fetch), std::shared_ptr<FetchConsumer>(nullptr)),
+            session, std::move(fetch), std::shared_ptr<FetchConsumer>(nullptr)),
         exec_.get());
     ASSERT_FALSE(res.hasValue());
     EXPECT_EQ(res.error().errorCode, FetchErrorCode::DOES_NOT_EXIST);
@@ -1470,7 +1465,7 @@ TEST_F(MoQRelayTest, FetchEmptyNamespaceAcceptedV18) {
   withSessionContext(session, [&]() {
     auto res = folly::coro::blockingWait(
         relay_->fetch(
-            std::move(fetch), std::shared_ptr<FetchConsumer>(nullptr)),
+            session, std::move(fetch), std::shared_ptr<FetchConsumer>(nullptr)),
         exec_.get());
     ASSERT_FALSE(res.hasValue());
     EXPECT_EQ(res.error().reasonPhrase, "no upstream for fetch");
@@ -1507,7 +1502,7 @@ TEST_F(MoQRelayTest, FetchPrefersExactTrackOverNamespace) {
   auto consumer = std::make_shared<NiceMock<MockFetchConsumer>>();
   withSessionContext(fetchSession, [&]() {
     auto res = folly::coro::blockingWait(
-        relay_->fetch(std::move(fetch), consumer), exec_.get());
+        relay_->fetch(fetchSession, std::move(fetch), consumer), exec_.get());
     EXPECT_TRUE(res.hasValue());
   });
 
@@ -1528,7 +1523,7 @@ TEST_F(MoQRelayTest, TrackStatusEmptyNamespaceRejectedPreV18) {
 
   withSessionContext(session, [&]() {
     auto res = folly::coro::blockingWait(
-        relay_->trackStatus(trackStatus), exec_.get());
+        relay_->trackStatus(session, trackStatus), exec_.get());
     ASSERT_FALSE(res.hasValue());
     EXPECT_EQ(res.error().errorCode, TrackStatusErrorCode::DOES_NOT_EXIST);
     EXPECT_EQ(res.error().reasonPhrase, "namespace required");
@@ -1548,7 +1543,7 @@ TEST_F(MoQRelayTest, TrackStatusEmptyNamespaceAcceptedV18) {
 
   withSessionContext(session, [&]() {
     auto res = folly::coro::blockingWait(
-        relay_->trackStatus(trackStatus), exec_.get());
+        relay_->trackStatus(session, trackStatus), exec_.get());
     ASSERT_FALSE(res.hasValue());
     EXPECT_EQ(res.error().reasonPhrase, "no such namespace or track");
   });
@@ -1570,7 +1565,8 @@ TEST_F(MoQRelayTest, PublishEmptyNamespaceRejectedPreV18) {
   pub.fullTrackName = FullTrackName{TrackNamespace{{}}, "track1"};
 
   withSessionContext(session, [&]() {
-    auto res = relay_->publish(std::move(pub), createMockSubscriptionHandle());
+    auto res = relay_->publish(
+        session, std::move(pub), createMockSubscriptionHandle());
     ASSERT_FALSE(res.hasValue());
     EXPECT_EQ(res.error().errorCode, PublishErrorCode::INTERNAL_ERROR);
     EXPECT_EQ(res.error().reasonPhrase, "namespace required");
@@ -1633,7 +1629,8 @@ TEST_F(MoQRelayTest, PublishExtensionsForwardedToSubscribers) {
   pub.extensions.insertMutableExtension(Extension{0xBEEF'0000, 42});
 
   withSessionContext(publisherSession, [&]() {
-    auto res = relay_->publish(std::move(pub), createMockSubscriptionHandle());
+    auto res = relay_->publish(
+        publisherSession, std::move(pub), createMockSubscriptionHandle());
     EXPECT_TRUE(res.hasValue());
     if (res.hasValue()) {
       getOrCreateMockState(publisherSession)
@@ -1667,7 +1664,8 @@ TEST_F(MoQRelayTest, RelayPublishPropagatesDynamicGroupsToSubscribers) {
   setPublisherDynamicGroups(pub, true);
 
   withSessionContext(publisherSession, [&]() {
-    auto res = relay_->publish(std::move(pub), createMockSubscriptionHandle());
+    auto res = relay_->publish(
+        publisherSession, std::move(pub), createMockSubscriptionHandle());
     ASSERT_TRUE(res.hasValue());
     getOrCreateMockState(publisherSession)
         ->publishConsumers.push_back(res->consumer);
@@ -1721,7 +1719,8 @@ TEST_F(MoQRelayTest, PublishExtensionsForwardedToLateJoiners) {
   pub.extensions.insertMutableExtension(Extension{0xCAFE'0000, 99});
 
   withSessionContext(publisherSession, [&]() {
-    auto res = relay_->publish(std::move(pub), createMockSubscriptionHandle());
+    auto res = relay_->publish(
+        publisherSession, std::move(pub), createMockSubscriptionHandle());
     EXPECT_TRUE(res.hasValue());
     if (res.hasValue()) {
       getOrCreateMockState(publisherSession)
@@ -1808,7 +1807,8 @@ TEST_F(MoQRelayTest, PastRangeSubscriptionAcceptedAtDraft22) {
   auto consumer2 = createMockConsumer();
   withSessionContext(subscriber2, [&]() {
     auto res = folly::coro::blockingWait(
-        relay_->subscribe(pastRangeSubscribe(RequestID(2)), consumer2),
+        relay_->subscribe(
+            subscriber2, pastRangeSubscribe(RequestID(2)), consumer2),
         exec_.get());
     ASSERT_TRUE(res.hasValue());
     getOrCreateMockState(subscriber2)->subscribeHandles.push_back(*res);
@@ -1849,7 +1849,8 @@ TEST_F(MoQRelayTest, PastRangeSubscriptionRefusedBeforeDraft22) {
   auto consumer2 = createMockConsumer();
   withSessionContext(subscriber2, [&]() {
     auto res = folly::coro::blockingWait(
-        relay_->subscribe(pastRangeSubscribe(RequestID(2)), consumer2),
+        relay_->subscribe(
+            subscriber2, pastRangeSubscribe(RequestID(2)), consumer2),
         exec_.get());
     ASSERT_FALSE(res.hasValue());
     EXPECT_EQ(res.error().errorCode, SubscribeErrorCode::INVALID_RANGE);
@@ -1952,7 +1953,8 @@ TEST_F(MoQRelayTest, RelaySubscribePreservesFirstSubscriberRequest) {
   std::shared_ptr<SubscriptionHandle> handle{nullptr};
   withSessionContext(subscriberSession, [&]() {
     auto res = folly::coro::blockingWait(
-        relay_->subscribe(std::move(sub), consumer), exec_.get());
+        relay_->subscribe(subscriberSession, std::move(sub), consumer),
+        exec_.get());
     ASSERT_TRUE(res.hasValue());
     handle = *res;
   });
@@ -2007,7 +2009,8 @@ TEST_F(MoQRelayTest, ForwarderRequestUpdateServesFill) {
   std::shared_ptr<SubscriptionHandle> handle;
   withSessionContext(subscriberSession, [&]() {
     auto res = folly::coro::blockingWait(
-        relay_->subscribe(std::move(sub), consumer), exec_.get());
+        relay_->subscribe(subscriberSession, std::move(sub), consumer),
+        exec_.get());
     ASSERT_TRUE(res.hasValue());
     handle = std::move(res.value());
   });
@@ -2152,7 +2155,8 @@ TEST_F(MoQRelayTest, ExactNamespaceSubscriberReceivesNamespace) {
   subNs.trackNamespacePrefix = kTestNamespace;
   withSessionContext(subscriber, [&]() {
     auto res = folly::coro::blockingWait(
-        relay_->subscribeNamespace(std::move(subNs), nsHandle), exec_.get());
+        relay_->subscribeNamespace(subscriber, std::move(subNs), nsHandle),
+        exec_.get());
     ASSERT_TRUE(res.hasValue());
     getOrCreateMockState(subscriber)->subscribeNamespaceHandles.push_back(*res);
   });
@@ -2177,7 +2181,7 @@ TEST_F(MoQRelayTest, TrackStatusNonExistentTrack) {
   trackStatus.requestID = RequestID(1);
 
   withSessionContext(clientSession, [&]() {
-    auto task = relay_->trackStatus(trackStatus);
+    auto task = relay_->trackStatus(clientSession, trackStatus);
     auto res = folly::coro::blockingWait(std::move(task), exec_.get());
 
     // Should return error indicating track not found
@@ -2205,7 +2209,7 @@ TEST_F(MoQRelayTest, TrackStatusSuccessfulForward) {
   trackStatus.requestID = RequestID(2);
 
   withSessionContext(clientSession, [&]() {
-    auto task = relay_->trackStatus(trackStatus);
+    auto task = relay_->trackStatus(clientSession, trackStatus);
     auto res = folly::coro::blockingWait(std::move(task), exec_.get());
 
     // Answered from the local forwarder, which has no objects yet.
@@ -2249,7 +2253,7 @@ TEST_F(MoQRelayTest, TrackStatusViaPrefixMatching) {
   trackStatus.fullTrackName = kTestTrackName;
 
   withSessionContext(requester, [&]() {
-    auto task = relay_->trackStatus(trackStatus);
+    auto task = relay_->trackStatus(requester, trackStatus);
     auto result = folly::coro::blockingWait(std::move(task), exec_.get());
 
     // Should successfully forward via prefix matching and return the result
@@ -2397,7 +2401,7 @@ TEST_F(MoQRelayTest, RelaySubscribeLateJoinerNGRForwardedUpstream) {
 
   std::shared_ptr<SubscriptionHandle> handle2{nullptr};
   withSessionContext(subscriber2, [&]() {
-    auto task = relay_->subscribe(std::move(sub2), consumer2);
+    auto task = relay_->subscribe(subscriber2, std::move(sub2), consumer2);
     auto res = folly::coro::blockingWait(std::move(task), exec_.get());
     ASSERT_TRUE(res.hasValue());
     handle2 = *res;
@@ -2599,7 +2603,7 @@ TEST_F(MoQRelayTest, Draft22PublishPausesWithHandleUpdate) {
       });
   EXPECT_CALL(*handle, requestUpdateResult).WillOnce(Return(RequestOk{}));
   auto result = withSessionContext(publisherSession, [&] {
-    return relay_->publish(std::move(publish), handle);
+    return relay_->publish(publisherSession, std::move(publish), handle);
   });
   ASSERT_TRUE(result.hasValue());
   exec_->drive();
@@ -2628,7 +2632,7 @@ TEST_F(MoQRelayTest, Draft22PublishForwardUpdateLogsException) {
   EXPECT_CALL(*handle, requestUpdateResult())
       .WillOnce(Throw(std::runtime_error("forward update failure")));
   auto result = withSessionContext(publisherSession, [&] {
-    return relay_->publish(std::move(publish), handle);
+    return relay_->publish(publisherSession, std::move(publish), handle);
   });
   ASSERT_TRUE(result.hasValue());
 
@@ -2974,7 +2978,7 @@ TEST_F(MoQRelayTest, FetchAfterPublisherTermination) {
       AbsoluteLocation{1, 0});
   auto fetchConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
   withSessionContext(fetchSession, [&]() {
-    auto task = relay_->fetch(std::move(fetch), fetchConsumer);
+    auto task = relay_->fetch(fetchSession, std::move(fetch), fetchConsumer);
     auto res = folly::coro::blockingWait(std::move(task), exec_.get());
     // Should return an error, not crash
     EXPECT_FALSE(res.hasValue());
@@ -3389,7 +3393,8 @@ TEST_F(MoQRelayTest, PublishOkForwardFalseWhenNoSubscriberForwards) {
   withSessionContext(pubSession, [&]() {
     PublishRequest pub;
     pub.fullTrackName = kTestTrackName;
-    auto res = relay_->publish(std::move(pub), createMockSubscriptionHandle());
+    auto res = relay_->publish(
+        pubSession, std::move(pub), createMockSubscriptionHandle());
     ASSERT_TRUE(res.hasValue());
     pubConsumer = res->consumer;
     auto publishOk =
@@ -3487,7 +3492,8 @@ TEST_F(MoQRelayTest, SubscribeSecondForwardingSubscriberSingleRequestUpdate) {
     sub.forward = false;
     withSessionContext(s1, [&]() {
       auto res = folly::coro::blockingWait(
-          relay_->subscribe(std::move(sub), createMockConsumer()), exec_.get());
+          relay_->subscribe(s1, std::move(sub), createMockConsumer()),
+          exec_.get());
       EXPECT_TRUE(res.hasValue());
       if (res.hasValue()) {
         getOrCreateMockState(s1)->subscribeHandles.push_back(*res);
@@ -3516,7 +3522,8 @@ TEST_F(MoQRelayTest, SubscribeSecondForwardingSubscriberSingleRequestUpdate) {
     sub.forward = true;
     withSessionContext(s2, [&]() {
       auto res = folly::coro::blockingWait(
-          relay_->subscribe(std::move(sub), createMockConsumer()), exec_.get());
+          relay_->subscribe(s2, std::move(sub), createMockConsumer()),
+          exec_.get());
       EXPECT_TRUE(res.hasValue());
       if (res.hasValue()) {
         getOrCreateMockState(s2)->subscribeHandles.push_back(*res);
@@ -3645,7 +3652,7 @@ class MoQRelayTracksTest : public MoQRelayTest {
     subTracks.trackNamespacePrefix = nsPrefix;
     return withSessionContext(session, [&]() {
       auto task = relay_->subscribeTracks(
-          std::move(subTracks), std::move(publishBlockedHandle));
+          session, std::move(subTracks), std::move(publishBlockedHandle));
       return folly::coro::blockingWait(std::move(task), exec_.get());
     });
   }
@@ -3770,8 +3777,8 @@ TEST_F(MoQRelayTracksTest, SubscribeTracksOmitsUnrequestedTrackProperties) {
   publish.extensions.insertMutableExtension(
       Extension{kPublisherPriorityExtensionType, 100});
   withSessionContext(publisher, [&]() {
-    auto result =
-        relay_->publish(std::move(publish), createMockSubscriptionHandle());
+    auto result = relay_->publish(
+        publisher, std::move(publish), createMockSubscriptionHandle());
     EXPECT_TRUE(result.hasValue());
     if (result.hasValue()) {
       getOrCreateMockState(publisher)->publishConsumers.push_back(
@@ -3816,8 +3823,8 @@ TEST_F(MoQRelayTracksTest, SubscribeTracksDoesNotOmitPropertiesBeforeDraft22) {
   publish.extensions.insertMutableExtension(
       Extension{kPublisherPriorityExtensionType, 100});
   withSessionContext(publisher, [&]() {
-    auto result =
-        relay_->publish(std::move(publish), createMockSubscriptionHandle());
+    auto result = relay_->publish(
+        publisher, std::move(publish), createMockSubscriptionHandle());
     EXPECT_TRUE(result.hasValue());
     if (result.hasValue()) {
       getOrCreateMockState(publisher)->publishConsumers.push_back(
@@ -4295,7 +4302,8 @@ TEST_F(MoQRelayTracksTest, OverlappingSubscribeNamespaceRejected) {
     subNs.trackNamespacePrefix = prefix;
     return withSessionContext(session, [&]() {
       return folly::coro::blockingWait(
-          relay_->subscribeNamespace(std::move(subNs), nullptr), exec_.get());
+          relay_->subscribeNamespace(session, std::move(subNs), nullptr),
+          exec_.get());
     });
   };
 

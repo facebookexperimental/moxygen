@@ -113,7 +113,7 @@ std::shared_ptr<MoQRelay::NamespaceNode> MoQRelay::findInTree(
     auto it = nodePtr->children.find(name);
     if (it == nodePtr->children.end()) {
       if (createMissingNodes) {
-        auto node = std::make_shared<NamespaceNode>(*this, nodePtr.get());
+        auto node = std::make_shared<NamespaceNode>(nodePtr.get());
         nodePtr->children.emplace(name, node);
         // Don't increment yet - only when content is actually added
         nodePtr = std::move(node);
@@ -168,6 +168,7 @@ bool MoQRelay::hasOverlappingSubscription(
 
 folly::coro::Task<Subscriber::PublishNamespaceResult>
 MoQRelay::publishNamespace(
+    std::shared_ptr<MoQSession> session,
     PublishNamespace pubNs,
     std::shared_ptr<Subscriber::PublishNamespaceCallback> callback) {
   XLOG(DBG1) << __func__ << " ns=" << pubNs.trackNamespace;
@@ -217,8 +218,6 @@ MoQRelay::publishNamespace(
   }
 
   // TODO: store auth for forwarding on future SubscribeNamespace?
-  auto session = MoQSession::getRequestSession();
-
   // Include sessions that subscribed exactly this namespace as well.
   // findNamespaceNode(..., &sessions) collects subscribers attached to prefixes
   // along the path, but does not include this node's own sessions.
@@ -229,8 +228,6 @@ MoQRelay::publishNamespace(
   bool wasEmpty = !nodePtr->hasLocalSessions();
   nodePtr->sourceSession = session;
   nodePtr->publishNamespaceCallback = std::move(callback);
-  nodePtr->trackNamespace_ = pubNs.trackNamespace;
-  nodePtr->setPublishNamespaceOk({pubNs.requestID});
 
   // If this is the first content added to this node, notify parent
   if (wasEmpty && nodePtr->parent_) {
@@ -253,7 +250,16 @@ MoQRelay::publishNamespace(
   }
 
   wakePendingRendezvousUnderNamespace(pubNs.trackNamespace);
-  co_return nodePtr;
+  // The node is shared by every peer under this namespace, so hand back a
+  // handle that remembers which peer it belongs to.
+  co_return std::make_shared<PeerNamespaceHandle>(
+      shared_from_this(),
+      pubNs.trackNamespace,
+      session->sessionId(),
+      PublishNamespaceOk{
+          .requestID = pubNs.requestID,
+          .requestSpecificParams = {},
+          .trackProperties = {}});
 }
 
 // NamespaceNode ref count management methods for pruning
@@ -324,7 +330,7 @@ void MoQRelay::NamespaceNode::tryPruneChild(const std::string& childKey) {
 
 void MoQRelay::publishNamespaceDone(
     const TrackNamespace& trackNamespace,
-    NamespaceNode*) {
+    SessionId publisherId) {
   XLOG(DBG1) << __func__ << " ns=" << trackNamespace;
   // Node would be useful if there were back links
   auto nodePtr = findNamespaceNode(trackNamespace);
@@ -337,11 +343,10 @@ void MoQRelay::publishNamespaceDone(
   // Track if node had local content before modification
   bool hadLocalContent = nodePtr->hasLocalSessions();
 
-  auto session = MoQSession::getRequestSession();
-
   // Only allow publishNamespaceDone if there is an owner and the caller is that
   // owner
-  if (nodePtr->sourceSession == nullptr || nodePtr->sourceSession != session) {
+  if (nodePtr->sourceSession == nullptr ||
+      nodePtr->sourceSession->sessionId() != publisherId) {
     XLOG(DBG1) << "Ignoring publishNamespaceDone for ns=" << trackNamespace
                << " (no owner or non-owner session)";
     return;
@@ -361,7 +366,7 @@ void MoQRelay::publishNamespaceDone(
     sessions.emplace_back(sessionPtr, info);
   }
   for (auto& [outSession, info] : sessions) {
-    if (outSession != session &&
+    if (outSession->sessionId() != publisherId &&
         (info.options == SubscribeNamespaceOptions::NAMESPACE ||
          info.options == SubscribeNamespaceOptions::BOTH)) {
       // Send NAMESPACE_DONE on the bidi stream.
@@ -421,6 +426,7 @@ void MoQRelay::onPublishDoneImpl(const FullTrackName& ftn) {
 }
 
 Subscriber::PublishResult MoQRelay::publish(
+    std::shared_ptr<MoQSession> session,
     PublishRequest pub,
     std::shared_ptr<Publisher::SubscriptionHandle> handle) {
   XLOG(DBG1) << __func__ << " ftn=" << pub.fullTrackName;
@@ -431,7 +437,8 @@ Subscriber::PublishResult MoQRelay::publish(
             pub.requestID, PublishErrorCode::UNINTERESTED, "bad namespace"});
   }
 
-  if (pub.fullTrackName.trackNamespace.empty() && !emptyNamespaceAllowed()) {
+  if (pub.fullTrackName.trackNamespace.empty() &&
+      !emptyNamespaceAllowed(session->getNegotiatedVersion().value_or(0))) {
     return folly::makeUnexpected(PublishError(
         {pub.requestID,
          PublishErrorCode::INTERNAL_ERROR,
@@ -469,7 +476,6 @@ Subscriber::PublishResult MoQRelay::publish(
     }
   }
 
-  auto session = MoQSession::getRequestSession();
   const auto majorVersion =
       getDraftMajorVersion(*session->getNegotiatedVersion());
   bool wasEmpty = !nodePtr->hasLocalSessions();
@@ -586,7 +592,7 @@ Subscriber::PublishResult MoQRelay::publish(
         LocationFilter::range(kLocationMin, {kLocationMax.group, 0});
   }
 
-  return PublishConsumerAndReplyTask{
+  return Subscriber::PublishConsumerAndReplyTask{
       filter, // Return filter, not forwarder directly
       folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
           std::move(publishOk)),
@@ -754,11 +760,10 @@ std::shared_ptr<TrackConsumer> MoQRelay::getSubscribeWriteback(
 
 folly::coro::Task<Publisher::SubscribeNamespaceResult>
 MoQRelay::subscribeNamespace(
+    std::shared_ptr<MoQSession> session,
     SubscribeNamespace subNs,
-    std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) {
+    std::shared_ptr<Publisher::NamespacePublishHandle> namespacePublishHandle) {
   XLOG(DBG1) << __func__ << " nsp=" << subNs.trackNamespacePrefix;
-
-  auto session = MoQSession::getRequestSession();
 
   // Per-session overlap restriction: the prefix must not share a common prefix
   // with another active SUBSCRIBE_NAMESPACE in the same session.
@@ -980,14 +985,13 @@ class MoQRelay::TracksSubscription : public Publisher::SubscribeTracksHandle {
 };
 
 folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
+    std::shared_ptr<MoQSession> session,
     SubscribeTracks subTracks,
-    std::shared_ptr<PublishBlockedHandle> publishBlockedHandle) {
+    std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle) {
   XLOG(DBG1) << __func__ << " nsp=" << subTracks.trackNamespacePrefix;
 
-  auto session = MoQSession::getRequestSession();
-  auto maybeNegotiatedVersion = session->getNegotiatedVersion();
-  XCHECK(maybeNegotiatedVersion.has_value());
-  if (getDraftMajorVersion(*maybeNegotiatedVersion) < 18) {
+  const auto negotiatedVersion = session->getNegotiatedVersion().value_or(0);
+  if (getDraftMajorVersion(negotiatedVersion) < 18) {
     co_return folly::makeUnexpected(
         SubscribeTracksError{
             subTracks.requestID,
@@ -1019,7 +1023,7 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
           std::move(publishBlockedHandle),
           subTracks.trackNamespacePrefix,
           subTracks.includeProperties,
-          makeSubscribeTracksSettings(subTracks, *maybeNegotiatedVersion)});
+          makeSubscribeTracksSettings(subTracks, negotiatedVersion)});
   if (wasEmpty && tracksNode->parent_) {
     tracksNode->parent_->incrementActiveChildren();
   }
@@ -1437,26 +1441,19 @@ MoQRelay::PublishState MoQRelay::findPublishState(const FullTrackName& ftn) {
   return state;
 }
 
-bool MoQRelay::emptyNamespaceAllowed() {
-  auto session = MoQSession::getRequestSession();
-  auto negotiatedVersion = session->getNegotiatedVersion();
-  XCHECK(negotiatedVersion.has_value());
-  return getDraftMajorVersion(*negotiatedVersion) >= 18;
+bool MoQRelay::emptyNamespaceAllowed(uint64_t version) {
+  return getDraftMajorVersion(version) >= 18;
 }
 
 folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
+    std::shared_ptr<MoQSession> session,
     SubscribeRequest subReq,
     std::shared_ptr<TrackConsumer> consumer) {
-  auto session = MoQSession::getRequestSession();
-  if (!session) {
-    co_return folly::makeUnexpected(SubscribeError(
-        {subReq.requestID,
-         SubscribeErrorCode::INTERNAL_ERROR,
-         "session is gone"}));
-  }
+  const auto version = session->getNegotiatedVersion().value_or(0);
 
   // check auth / get trackNamespace
-  if (subReq.fullTrackName.trackNamespace.empty() && !emptyNamespaceAllowed()) {
+  if (subReq.fullTrackName.trackNamespace.empty() &&
+      !emptyNamespaceAllowed(version)) {
     // message error?
     co_return folly::makeUnexpected(SubscribeError(
         {subReq.requestID,
@@ -1482,10 +1479,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
 
   // If we've reached this point, it means that the track isn't being PUBLISHed,
   // and there is no namespace being published that contains the track.
-  auto downstreamVersion = session->getNegotiatedVersion();
-  const bool rendezvousEligible = downstreamVersion.has_value() &&
-      getDraftMajorVersion(*downstreamVersion) >= 18;
-  if (!rendezvousEligible) {
+  if (getDraftMajorVersion(version) < 18) {
     co_return folly::makeUnexpected(SubscribeError(
         {subReq.requestID,
          SubscribeErrorCode::DOES_NOT_EXIST,
@@ -1875,13 +1869,13 @@ MoQRelay::subscribeToFirstRelaySubscription(
 }
 
 folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
+    std::shared_ptr<MoQSession> session,
     Fetch fetch,
     std::shared_ptr<FetchConsumer> consumer) {
-  auto session = MoQSession::getRequestSession();
-
   // check auth
   // get trackNamespace
-  if (fetch.fullTrackName.trackNamespace.empty() && !emptyNamespaceAllowed()) {
+  if (fetch.fullTrackName.trackNamespace.empty() &&
+      !emptyNamespaceAllowed(session->getNegotiatedVersion().value_or(0))) {
     co_return folly::makeUnexpected(FetchError(
         {fetch.requestID,
          FetchErrorCode::DOES_NOT_EXIST,
@@ -1974,11 +1968,12 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
 }
 
 folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
+    std::shared_ptr<MoQSession> session,
     TrackStatus trackStatus) {
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName;
 
   if (trackStatus.fullTrackName.trackNamespace.empty() &&
-      !emptyNamespaceAllowed()) {
+      !emptyNamespaceAllowed(session->getNegotiatedVersion().value_or(0))) {
     co_return folly::makeUnexpected(TrackStatusError(
         {trackStatus.requestID,
          TrackStatusErrorCode::DOES_NOT_EXIST,
@@ -2115,7 +2110,81 @@ void MoQRelay::fillRequested(
     MoQForwarder* /*forwarder*/,
     std::shared_ptr<TrackConsumer> consumer,
     Fetch fetch) {
-  serveFillFromFetch(shared_from_this(), std::move(consumer), std::move(fetch));
+  serveFillFromFetch(
+      [self = shared_from_this(), session = MoQSession::getRequestSession()](
+          Fetch fetch, std::shared_ptr<FetchConsumer> fill) {
+        return self->fetch(session, std::move(fetch), std::move(fill));
+      },
+      std::move(consumer),
+      std::move(fetch));
+}
+
+// A session calls its handler only while it is alive.
+folly::coro::Task<Publisher::SubscribeResult>
+MoQRelay::SessionHandler::subscribe(
+    SubscribeRequest subReq,
+    std::shared_ptr<TrackConsumer> consumer) {
+  auto session = getSession();
+  XCHECK(session);
+  return relay_->subscribe(
+      std::move(session), std::move(subReq), std::move(consumer));
+}
+
+folly::coro::Task<Publisher::FetchResult> MoQRelay::SessionHandler::fetch(
+    Fetch fetch,
+    std::shared_ptr<FetchConsumer> consumer) {
+  auto session = getSession();
+  XCHECK(session);
+  return relay_->fetch(
+      std::move(session), std::move(fetch), std::move(consumer));
+}
+
+folly::coro::Task<Publisher::SubscribeNamespaceResult>
+MoQRelay::SessionHandler::subscribeNamespace(
+    SubscribeNamespace subAnn,
+    std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) {
+  auto session = getSession();
+  XCHECK(session);
+  return relay_->subscribeNamespace(
+      std::move(session), std::move(subAnn), std::move(namespacePublishHandle));
+}
+
+folly::coro::Task<Publisher::SubscribeTracksResult>
+MoQRelay::SessionHandler::subscribeTracks(
+    SubscribeTracks subTracks,
+    std::shared_ptr<PublishBlockedHandle> publishBlockedHandle) {
+  auto session = getSession();
+  XCHECK(session);
+  return relay_->subscribeTracks(
+      std::move(session),
+      std::move(subTracks),
+      std::move(publishBlockedHandle));
+}
+
+folly::coro::Task<Publisher::TrackStatusResult>
+MoQRelay::SessionHandler::trackStatus(TrackStatus req) {
+  auto session = getSession();
+  XCHECK(session);
+  return relay_->trackStatus(std::move(session), std::move(req));
+}
+
+folly::coro::Task<Subscriber::PublishNamespaceResult>
+MoQRelay::SessionHandler::publishNamespace(
+    PublishNamespace ann,
+    std::shared_ptr<Subscriber::PublishNamespaceCallback> callback) {
+  auto session = getSession();
+  XCHECK(session);
+  return relay_->publishNamespace(
+      std::move(session), std::move(ann), std::move(callback));
+}
+
+Subscriber::PublishResult MoQRelay::SessionHandler::publish(
+    PublishRequest pubReq,
+    std::shared_ptr<Publisher::SubscriptionHandle> handle) {
+  auto session = getSession();
+  XCHECK(session);
+  return relay_->publish(
+      std::move(session), std::move(pubReq), std::move(handle));
 }
 
 } // namespace moxygen

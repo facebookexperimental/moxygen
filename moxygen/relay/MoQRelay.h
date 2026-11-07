@@ -17,11 +17,18 @@
 
 namespace moxygen {
 
-class MoQRelay : public Publisher,
-                 public Subscriber,
-                 public std::enable_shared_from_this<MoQRelay>,
+// One relay serves every peer. It is not a Publisher/Subscriber itself: the
+// role verbs need to know which peer is calling, so a per-session
+// MoQRelay::SessionHandler is registered on each session and passes it in.
+class MoQRelay : public std::enable_shared_from_this<MoQRelay>,
                  public MoQForwarder::Callback {
  public:
+  using SubscribeResult = Publisher::SubscribeResult;
+  using FetchResult = Publisher::FetchResult;
+  using SubscribeNamespaceResult = Publisher::SubscribeNamespaceResult;
+  using SubscribeTracksResult = Publisher::SubscribeTracksResult;
+  using PublishResult = Subscriber::PublishResult;
+
   explicit MoQRelay(
       size_t maxCachedTracks = kDefaultMaxCachedTracks,
       size_t maxCachedGroupsPerTrack = kDefaultMaxCachedGroupsPerTrack) {
@@ -36,36 +43,126 @@ class MoQRelay : public Publisher,
   }
 
   folly::coro::Task<SubscribeResult> subscribe(
+      std::shared_ptr<MoQSession> session,
       SubscribeRequest subReq,
-      std::shared_ptr<TrackConsumer> consumer) override;
+      std::shared_ptr<TrackConsumer> consumer);
 
   folly::coro::Task<FetchResult> fetch(
+      std::shared_ptr<MoQSession> session,
       Fetch fetch,
-      std::shared_ptr<FetchConsumer> consumer) override;
+      std::shared_ptr<FetchConsumer> consumer);
 
   folly::coro::Task<SubscribeNamespaceResult> subscribeNamespace(
+      std::shared_ptr<MoQSession> session,
       SubscribeNamespace subNs,
-      std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) override;
+      std::shared_ptr<Publisher::NamespacePublishHandle>
+          namespacePublishHandle);
 
   folly::coro::Task<SubscribeTracksResult> subscribeTracks(
+      std::shared_ptr<MoQSession> session,
       SubscribeTracks subTracks,
-      std::shared_ptr<PublishBlockedHandle> publishBlockedHandle =
-          nullptr) override;
+      std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle);
 
   folly::coro::Task<Subscriber::PublishNamespaceResult> publishNamespace(
+      std::shared_ptr<MoQSession> session,
       PublishNamespace pubNs,
-      std::shared_ptr<Subscriber::PublishNamespaceCallback>) override;
+      std::shared_ptr<Subscriber::PublishNamespaceCallback> callback);
 
   PublishResult publish(
+      std::shared_ptr<MoQSession> session,
       PublishRequest pubReq,
-      std::shared_ptr<Publisher::SubscriptionHandle> handle = nullptr) override;
-
-  void goaway(Goaway goaway) override {
-    XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
-  }
+      std::shared_ptr<Publisher::SubscriptionHandle> handle);
 
   folly::coro::Task<Publisher::TrackStatusResult> trackStatus(
-      TrackStatus req) override;
+      std::shared_ptr<MoQSession> session,
+      TrackStatus req);
+
+  // The per-session handler registered on a session, which supplies the peer
+  // to each relay verb. Register the same instance for both roles.
+  class SessionHandler : public Publisher,
+                         public Subscriber,
+                         public SessionScoped {
+   public:
+    explicit SessionHandler(std::shared_ptr<MoQRelay> relay)
+        : relay_(std::move(relay)) {}
+
+    folly::coro::Task<Publisher::SubscribeResult> subscribe(
+        SubscribeRequest subReq,
+        std::shared_ptr<TrackConsumer> consumer) override;
+
+    folly::coro::Task<Publisher::FetchResult> fetch(
+        Fetch fetch,
+        std::shared_ptr<FetchConsumer> consumer) override;
+
+    folly::coro::Task<Publisher::SubscribeNamespaceResult> subscribeNamespace(
+        SubscribeNamespace subAnn,
+        std::shared_ptr<NamespacePublishHandle> namespacePublishHandle)
+        override;
+
+    folly::coro::Task<Publisher::SubscribeTracksResult> subscribeTracks(
+        SubscribeTracks subTracks,
+        std::shared_ptr<PublishBlockedHandle> publishBlockedHandle =
+            nullptr) override;
+
+    folly::coro::Task<Publisher::TrackStatusResult> trackStatus(
+        TrackStatus req) override;
+
+    folly::coro::Task<Subscriber::PublishNamespaceResult> publishNamespace(
+        PublishNamespace ann,
+        std::shared_ptr<Subscriber::PublishNamespaceCallback> callback)
+        override;
+
+    Subscriber::PublishResult publish(
+        PublishRequest pubReq,
+        std::shared_ptr<Publisher::SubscriptionHandle> handle =
+            nullptr) override;
+
+    void goaway(Goaway goaway) override {
+      XLOG(INFO) << "Processing goaway uri=" << goaway.newSessionUri;
+    }
+
+   private:
+    std::shared_ptr<MoQRelay> relay_;
+  };
+
+  static std::shared_ptr<SessionHandler> makeSessionHandler(
+      std::shared_ptr<MoQRelay> relay) {
+    return std::make_shared<SessionHandler>(std::move(relay));
+  }
+
+  // The PUBLISH_NAMESPACE handle handed back to an announcing peer. One per
+  // peer: NamespaceNode is shared, so it cannot tell who is calling, and a
+  // peer that has since been replaced must not cancel its successor.
+  class PeerNamespaceHandle : public Subscriber::PublishNamespaceHandle {
+   public:
+    PeerNamespaceHandle(
+        std::shared_ptr<MoQRelay> relay,
+        TrackNamespace trackNamespace,
+        SessionId sessionId,
+        PublishNamespaceOk ok)
+        : Subscriber::PublishNamespaceHandle(std::move(ok)),
+          relay_(std::move(relay)),
+          trackNamespace_(std::move(trackNamespace)),
+          sessionId_(sessionId) {}
+
+    void publishNamespaceDone() override {
+      relay_->publishNamespaceDone(trackNamespace_, sessionId_);
+    }
+
+    folly::coro::Task<RequestUpdateResult> requestUpdate(
+        RequestUpdate reqUpdate) override {
+      co_return folly::makeUnexpected(
+          RequestError{
+              reqUpdate.requestID,
+              RequestErrorCode::NOT_SUPPORTED,
+              "REQUEST_UPDATE not supported for relay PUBLISH_NAMESPACE"});
+    }
+
+   private:
+    std::shared_ptr<MoQRelay> relay_;
+    TrackNamespace trackNamespace_;
+    SessionId sessionId_;
+  };
 
   std::shared_ptr<MoQSession> findPublishNamespaceSession(
       const TrackNamespace& ns);
@@ -103,24 +200,12 @@ class MoQRelay : public Publisher,
 
   void onPublishDoneImpl(const FullTrackName& ftn);
 
-  static bool emptyNamespaceAllowed();
+  static bool emptyNamespaceAllowed(uint64_t version);
 
-  struct NamespaceNode : public Subscriber::PublishNamespaceHandle {
-    explicit NamespaceNode(MoQRelay& relay, NamespaceNode* parent = nullptr)
-        : relay_(relay), parent_(parent) {}
-
-    void publishNamespaceDone() override {
-      relay_.publishNamespaceDone(trackNamespace_, this);
-    }
-
-    folly::coro::Task<RequestUpdateResult> requestUpdate(
-        RequestUpdate reqUpdate) override {
-      co_return folly::makeUnexpected(
-          RequestError{
-              reqUpdate.requestID,
-              RequestErrorCode::NOT_SUPPORTED,
-              "REQUEST_UPDATE not supported for relay PUBLISH_NAMESPACE"});
-    }
+  // A node in the namespace tree. Shared by every peer under that namespace,
+  // so it is not the handle any of them holds -- see PeerNamespaceHandle.
+  struct NamespaceNode {
+    explicit NamespaceNode(NamespaceNode* parent = nullptr) : parent_(parent) {}
 
     // Helper to check if THIS node (excluding children) has content
     bool hasLocalSessions() const {
@@ -133,9 +218,6 @@ class MoQRelay : public Publisher,
       return hasLocalSessions() || activeChildCount_ > 0;
     }
 
-    using Subscriber::PublishNamespaceHandle::setPublishNamespaceOk;
-
-    TrackNamespace trackNamespace_;
     folly::F14FastMap<std::string, std::shared_ptr<NamespaceNode>> children;
 
     // Maps a track name to a the session performing the PUBLISH
@@ -163,9 +245,8 @@ class MoQRelay : public Publisher,
         sessions;
     // The session that PUBLISH_NAMESPACEd this node
     std::shared_ptr<MoQSession> sourceSession;
-    std::shared_ptr<PublishNamespaceCallback> publishNamespaceCallback;
-
-    MoQRelay& relay_;
+    std::shared_ptr<Subscriber::PublishNamespaceCallback>
+        publishNamespaceCallback;
 
     // Pruning support: parent pointer and active child count
     NamespaceNode* parent_{nullptr}; // back link (raw pointer, parent owns us)
@@ -181,8 +262,8 @@ class MoQRelay : public Publisher,
   // We maintain two separate prefix trees, one for SUBSCRIBE_NAMESPACE,
   // and one for SUBSCRIBE_TRACKS. In the SUBSCRIBE_TRACKS tree, only
   // `children` and `sessions` are populated.
-  NamespaceNode publishNamespaceRoot_{*this};
-  NamespaceNode tracksSubscriberRoot_{*this};
+  NamespaceNode publishNamespaceRoot_;
+  NamespaceNode tracksSubscriberRoot_;
   std::shared_ptr<NamespaceNode> findNamespaceNode(
       const TrackNamespace& ns,
       bool createMissingNodes = false,
@@ -359,7 +440,7 @@ class MoQRelay : public Publisher,
 
   void publishNamespaceDone(
       const TrackNamespace& trackNamespace,
-      NamespaceNode* node);
+      SessionId publisherId);
 
   struct PendingRendezvous {
     SubscribeRequest subReq;

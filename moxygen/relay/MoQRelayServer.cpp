@@ -61,8 +61,9 @@ class RelayServerImpl : public ServerBase {
         relay_(std::move(relay)) {}
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
-    clientSession->setPublishHandler(relay_);
-    clientSession->setSubscribeHandler(relay_);
+    auto handler = MoQRelay::makeSessionHandler(relay_);
+    clientSession->setPublishHandler(handler);
+    clientSession->setSubscribeHandler(handler);
   }
 
  protected:
