@@ -1068,12 +1068,8 @@ class MoQSession : public Subscriber,
       std::shared_ptr<FetchPublisherImpl> fetchPublisher,
       std::shared_ptr<ReplyContext> replyContext,
       std::shared_ptr<JoiningDependency> dependency);
-  // Checks the subscription a joining FETCH references:
-  // - established: returns null, and the FETCH proceeds now;
-  // - pending, or an unseen draft 18 ID: returns a dependency the FETCH waits
-  //   on;
-  // - otherwise: returns an error, after answering the FETCH with FETCH_ERROR
-  //   or closing the session.
+  // Defers an unseen draft 18 ID, rejects an invalid ID, or returns null so an
+  // active joining FETCH can proceed.
   folly::Expected<std::shared_ptr<JoiningDependency>, folly::Unit>
   prepareJoiningFetch(
       Fetch& fetch,
@@ -1085,12 +1081,9 @@ class MoQSession : public Subscriber,
   deferJoiningFetch(
       RequestID fetchID,
       RequestID joiningID,
-      bool unseen,
       ReplyContext& replyContext);
   void removeJoiningDependency(
       const std::shared_ptr<JoiningDependency>& dependency);
-  // The referenced SUBSCRIBE arrived: stop waiting on the unseen-ID timer.
-  void bindJoiningDependencies(RequestID subscriptionID);
   void resolveJoiningDependencies(
       RequestID subscriptionID,
       const JoiningDependencyResult& result);

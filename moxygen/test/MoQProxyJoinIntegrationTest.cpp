@@ -505,12 +505,11 @@ TEST_P(
     auto res = co_await std::move(join);
 
     EXPECT_TRUE(res.subscribeResult.hasValue());
-    // The relay's cache can answer the joining FETCH before its own upstream
-    // FETCH reaches the origin.
+    // The relay forwards the unresolved joining FETCH while subscribing.
     CO_ASSERT_TRUE(
         co_await waitUntil([&] { return !origin_->fetches.empty(); }));
     EXPECT_EQ(origin_->fetches.size(), 1);
-    EXPECT_NE(std::get_if<StandaloneFetch>(&origin_->fetches[0].args), nullptr);
+    EXPECT_NE(std::get_if<JoiningFetch>(&origin_->fetches[0].args), nullptr);
   }));
 }
 

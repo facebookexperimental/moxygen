@@ -5405,9 +5405,6 @@ void MoQSession::onSubscribeImpl(
     trackPublisher->setLogger(logger_);
   }
 
-  pubTracks_.emplace(requestID, trackPublisher);
-  bindJoiningDependencies(requestID);
-
   // Check for duplicate subscription: if there's already a pending outgoing
   // PUBLISH for the same track, reject the SUBSCRIBE
   if (pendingPublishTracks_.count(subscribeRequest.fullTrackName)) {
@@ -5421,14 +5418,18 @@ void MoQSession::onSubscribeImpl(
     return;
   }
 
+  pubTracks_.emplace(requestID, trackPublisher);
+
   // TODO: there should be a timeout for the application to call
   // subscribeOK/Error
+  auto fullTrackName = trackPublisher->fullTrackName();
   spawnInboundHandler(
       requestID,
       handleSubscribe(
           std::move(subscribeRequest),
           std::move(trackPublisher),
           std::move(replyContext)));
+  resolveJoiningDependencies(requestID, fullTrackName);
 }
 
 folly::coro::Task<void> MoQSession::handleSubscribe(
@@ -5439,7 +5440,6 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto requestID = sub.requestID;
-  auto fullTrackName = sub.fullTrackName;
   if (sub.fill) {
     trackPublisher->expectFill(requestID, *sub.fill);
   }
@@ -5501,9 +5501,6 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
     // TODO: verify TrackAlias is unique
     sendSubscribeOk(subOk, *replyContext);
     trackPublisher->setSubscriptionHandle(std::move(subHandle));
-    // The subscription handle and its Joining Location are installed, so a
-    // dependent joining FETCH can be dispatched.
-    resolveJoiningDependencies(requestID, fullTrackName);
   }
 }
 
@@ -6423,8 +6420,7 @@ MoQSession::prepareJoiningFetch(
                 << " sess=" << this;
       return reject("Unknown joining requestID");
     }
-    return deferJoiningFetch(
-        fetch.requestID, joiningID, /*unseen=*/true, replyContext);
+    return deferJoiningFetch(fetch.requestID, joiningID, replyContext);
   }
   auto trackPublisher =
       std::dynamic_pointer_cast<TrackPublisherImpl>(joinIt->second);
@@ -6439,18 +6435,13 @@ MoQSession::prepareJoiningFetch(
     return folly::makeUnexpected(folly::unit);
   }
   fetch.fullTrackName = trackPublisher->fullTrackName();
-  if (trackPublisher->state() == PublisherImpl::State::ESTABLISHED) {
-    return nullptr;
-  }
-  return deferJoiningFetch(
-      fetch.requestID, joiningID, /*unseen=*/false, replyContext);
+  return nullptr;
 }
 
 folly::Expected<std::shared_ptr<MoQSession::JoiningDependency>, folly::Unit>
 MoQSession::deferJoiningFetch(
     RequestID fetchID,
     RequestID joiningID,
-    bool unseen,
     ReplyContext& replyContext) {
   if (numJoiningDependencies_ >= moqSettings_.maxDeferredJoiningFetches) {
     fetchError(
@@ -6463,12 +6454,10 @@ MoQSession::deferJoiningFetch(
     return folly::makeUnexpected(folly::unit);
   }
   auto dependency = std::make_shared<JoiningDependency>(joiningID, fetchID);
-  if (unseen) {
-    dependency->unseenTimer = std::make_unique<JoiningDependencyTimeout>(
-        weak_from_this(), dependency);
-    exec_->scheduleTimeout(
-        dependency->unseenTimer.get(), moqSettings_.joiningDependencyTimeout);
-  }
+  dependency->unseenTimer =
+      std::make_unique<JoiningDependencyTimeout>(weak_from_this(), dependency);
+  exec_->scheduleTimeout(
+      dependency->unseenTimer.get(), moqSettings_.joiningDependencyTimeout);
   joiningDependencies_[joiningID].push_back(dependency);
   numJoiningDependencies_++;
   return dependency;
@@ -6490,16 +6479,6 @@ void MoQSession::removeJoiningDependency(
   numJoiningDependencies_--;
   if (dependencies.empty()) {
     joiningDependencies_.erase(it);
-  }
-}
-
-void MoQSession::bindJoiningDependencies(RequestID subscriptionID) {
-  auto it = joiningDependencies_.find(subscriptionID);
-  if (it == joiningDependencies_.end()) {
-    return;
-  }
-  for (auto& dependency : it->second) {
-    dependency->unseenTimer.reset();
   }
 }
 

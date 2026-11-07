@@ -107,6 +107,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   const std::shared_ptr<MoQGroupCache>& groupCache() const {
     return cache_;
   }
+  folly::coro::Task<folly::Unit> awaitUpstreamSubscription();
   // Still set after the upstream ends publishing, for historical fallback.
   const std::shared_ptr<MoQSession>& upstreamSession() const {
     return upstream_.session;

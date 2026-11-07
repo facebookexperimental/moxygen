@@ -676,6 +676,11 @@ Publisher::SubscribeResult MoQProxyTrack::addSubscriber(
   return std::make_shared<DownstreamSubscriptionHandle>(std::move(subscriber));
 }
 
+folly::coro::Task<folly::Unit> MoQProxyTrack::awaitUpstreamSubscription() {
+  auto self = shared_from_this();
+  co_return co_await upstreamSubscriptionReadyPromise_.getFuture();
+}
+
 folly::coro::Task<MoQProxyTrack::UpstreamEstablishmentResult>
 MoQProxyTrack::establishUpstream(
     SubscribeRequest subscribeRequest,

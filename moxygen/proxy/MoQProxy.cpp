@@ -428,6 +428,27 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::joiningFetch(
   auto range =
       track->resolveJoiningFetch(downstream.sessionId, requestID, joining);
   if (range.hasError()) {
+    // If we haven't received SUBSCRIBE_OK, then we cannot resolve the range.
+    auto waitToken = folly::cancellation_token_merge(
+        co_await folly::coro::co_current_cancellation_token,
+        shutdown_.getToken());
+    auto ready = co_await folly::coro::co_awaitTry(
+        folly::coro::co_withCancellation(
+            waitToken, track->awaitUpstreamSubscription()));
+    if (waitToken.isCancellationRequested()) {
+      co_return folly::makeUnexpected(fetchFailure(
+          requestID, FetchErrorCode::CANCELLED, "fetch cancelled"));
+    }
+    if (ready.hasException()) {
+      co_return folly::makeUnexpected(fetchFailure(
+          requestID,
+          FetchErrorCode::INTERNAL_ERROR,
+          ready.exception().what().toStdString()));
+    }
+    range =
+        track->resolveJoiningFetch(downstream.sessionId, requestID, joining);
+  }
+  if (range.hasError()) {
     co_return folly::makeUnexpected(std::move(range.error()));
   }
   const auto groupOrder = fetch.groupOrder;
