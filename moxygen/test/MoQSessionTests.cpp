@@ -1668,7 +1668,7 @@ CO_TEST_P_X(
                 return folly::unit;
               }));
 
-  serverWt_->writeHandles.at(0)->resetStream(0x4);
+  clientWt_->readHandles.at(0)->deliverPeerReset(0x4);
   co_await publishDoneReceived;
 
   EXPECT_EQ(received.statusCode, PublishDoneStatusCode::GOING_AWAY);

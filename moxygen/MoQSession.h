@@ -717,7 +717,8 @@ class MoQSession : public Subscriber,
         : session_(other.session_),
           handle_(std::exchange(other.handle_, nullptr)),
           id_(other.id_),
-          cancelToken_(std::move(other.cancelToken_)) {
+          cancelToken_(std::move(other.cancelToken_)),
+          stopSendingCode_(other.stopSendingCode_) {
       other.cancelCallback_.reset();
     }
 
@@ -727,7 +728,12 @@ class MoQSession : public Subscriber,
     ReadHandleRef& operator=(const ReadHandleRef&) = delete;
 
     ~ReadHandleRef() {
-      stopSending(0);
+      stopSending(stopSendingCode_);
+    }
+
+    // The code the destructor sends if the read side is still open.
+    void setStopSendingCode(uint32_t code) {
+      stopSendingCode_ = code;
     }
 
     uint64_t id() const {
@@ -771,6 +777,7 @@ class MoQSession : public Subscriber,
     uint64_t id_{0};
     folly::CancellationToken cancelToken_;
     std::optional<folly::CancellationCallback> cancelCallback_;
+    uint32_t stopSendingCode_{0};
   };
 
   void onNewUniStream(

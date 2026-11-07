@@ -99,8 +99,8 @@ class BidiStreamControl {
   }
 
   // Local cancel: RST our write half, cancel the read source (the read
-  // loop's exit guard STOP_SENDINGs the read half), and clear the
-  // peer-termination callback.
+  // loop STOP_SENDINGs the read half), and clear the peer-termination
+  // callback.
   void cancel(ResetStreamErrorCode code);
 
   // FIN the write half and release its bookkeeping. Does not touch the
