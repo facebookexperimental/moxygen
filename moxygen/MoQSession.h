@@ -738,9 +738,39 @@ class MoQSession : public Subscriber,
       return cancelToken_;
     }
 
+    // Not const: the first check arms the cancel callback.
+    explicit operator bool() {
+      return liveHandle() != nullptr;
+    }
+
+    // Requires a live handle. A FIN or an error frees the handle before exec
+    // resumes the reader, so handle_ is cleared inline at completion.
+    folly::Future<proxygen::WebTransport::StreamData> read(
+        folly::Executor* exec) {
+      return liveHandle()
+          ->readStreamData()
+          .toUnsafeFuture()
+          .thenTryInline(
+              [this](folly::Try<proxygen::WebTransport::StreamData>&& data) {
+                onReadComplete(data);
+                return std::move(data);
+              })
+          .via(exec);
+    }
+
+    void stopSending(uint32_t error) {
+      if (auto* handle = liveHandle()) {
+        handle_ = nullptr;
+        XLOG(DBG1) << "Sending STOP_SENDING id=" << id_ << " code=" << error
+                   << " sess=" << session_;
+        handle->stopSending(error);
+      }
+    }
+
+   private:
     // Arms on first use; the callback ctor fires inline if cancellation
     // already happened, so this also catches a stream that died before it.
-    proxygen::WebTransport::StreamReadHandle* get() {
+    proxygen::WebTransport::StreamReadHandle* liveHandle() {
       if (handle_ && !cancelCallback_) {
         cancelCallback_.emplace(cancelToken_, [this] { handle_ = nullptr; });
       }
@@ -756,16 +786,6 @@ class MoQSession : public Subscriber,
       }
     }
 
-    void stopSending(uint32_t error) {
-      if (auto* handle = get()) {
-        handle_ = nullptr;
-        XLOG(DBG1) << "Sending STOP_SENDING id=" << id_ << " code=" << error
-                   << " sess=" << session_;
-        handle->stopSending(error);
-      }
-    }
-
-   private:
     void* session_{nullptr}; // opaque, only streamed as "sess="
     proxygen::WebTransport::StreamReadHandle* handle_{nullptr};
     uint64_t id_{0};

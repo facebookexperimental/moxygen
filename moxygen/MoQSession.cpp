@@ -4236,13 +4236,11 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   bool exceptionalExit = false;
   std::optional<ResetStreamErrorCode> peerTerminationError;
   auto token = co_await folly::coro::co_current_cancellation_token;
-  while (auto* handle = readHandle.get()) {
+  while (readHandle) {
     if (token.isCancellationRequested()) {
       break;
     }
-    auto streamData =
-        co_await co_awaitTry(handle->readStreamData().via(exec_.get()));
-    readHandle.onReadComplete(streamData);
+    auto streamData = co_await co_awaitTry(readHandle.read(exec_.get()));
     if (streamData.hasException()) {
       XLOG(DBG4) << folly::exceptionStr(streamData.exception())
                  << " id=" << streamId << " sess=" << this;
@@ -5198,14 +5196,12 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
     // from the stream.  While the codec holds buffered ingress from a BLOCKED
     // parse, skip the read so the next onIngress drains it instead.
     if (!codecBlocked && !streamData.data && !streamData.fin) {
-      auto* handle = readHandle.get();
-      if (!handle) {
+      if (!readHandle) {
         break;
       }
       auto streamDataTry = co_await co_awaitTry(
           folly::coro::co_withCancellation(
-              token, handle->readStreamData().via(exec_.get())));
-      readHandle.onReadComplete(streamDataTry);
+              token, readHandle.read(exec_.get())));
       if (streamDataTry.hasException()) {
         XLOG(ERR) << folly::exceptionStr(streamDataTry.exception())
                   << " id=" << id << " sess=" << this;
@@ -8649,12 +8645,10 @@ folly::coro::Task<void> MoQSession::handlePreSetupUniStream(
   folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
   bool fin = false;
 
-  while (auto* handle = readHandle.get()) {
+  while (readHandle) {
     auto streamData = co_await co_awaitTry(
         folly::coro::co_withCancellation(
-            cancellationSource_.getToken(),
-            handle->readStreamData().via(exec_.get())));
-    readHandle.onReadComplete(streamData);
+            cancellationSource_.getToken(), readHandle.read(exec_.get())));
     if (!streamData.hasValue()) {
       break;
     }
@@ -8851,11 +8845,9 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
   folly::IOBufQueue readBuf{folly::IOBufQueue::cacheChainLength()};
   bool fin = false;
 
-  while (auto* handle = readHandle.get()) {
+  while (readHandle) {
     auto streamData = co_await co_awaitTry(
-        folly::coro::co_withCancellation(
-            token, handle->readStreamData().via(exec_.get())));
-    readHandle.onReadComplete(streamData);
+        folly::coro::co_withCancellation(token, readHandle.read(exec_.get())));
     if (!streamData.hasValue()) {
       break;
     }
