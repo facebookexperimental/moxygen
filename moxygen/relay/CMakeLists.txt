@@ -27,6 +27,7 @@ moxygen_add_library(moxygen_relay_moq_cache
     Folly::folly_coro_baton
     Folly::folly_coro_task
     Folly::folly_logging_logging
+    Folly::folly_scope_guard
 )
 
 moxygen_add_library(moxygen_relay_moq_relay

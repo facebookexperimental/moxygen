@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/ScopeGuard.h>
 #include <folly/logging/xlog.h>
 #include <moxygen/relay/MoQCache.h>
 
@@ -1601,12 +1602,20 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetchImpl(
       continue;
     }
 
-    // For hits, pin the group so evictOldestGroupsIfNeeded (triggered
-    // by FetchWriteback's cacheImpl during the await below) can't free
-    // the CacheEntry* we're about to publish. Skip for gap boundaries:
-    // no object to keep alive, and the gap's group may not exist, so
-    // groups[current.group] would auto-insert a null entry.
-    auto pin = cachedObject ? track->groups[current.group] : nullptr;
+    // Pin a hit's group out of the LRU until this iteration ends. The upstream
+    // fetch awaited below inserts groups, which can evict others, and the
+    // iterator skips the rest of a group that is no longer cached. A gap's
+    // group may not exist, and groups[current.group] would insert a null one.
+    std::shared_ptr<CacheGroup> pin;
+    if (cachedObject) {
+      pin = track->groups[current.group];
+      pinGroup(*pin, *track);
+    }
+    auto unpin = folly::makeGuard([this, &pin, &track, current] {
+      if (pin) {
+        unpinGroup(current.group, *pin, *track);
+      }
+    });
     // Boundary (hit or gap): flush any accumulated upstream miss range
     // so the upstream fetch doesn't span the boundary. A well-formed
     // upstream cannot transition this position from exists -> not-exists

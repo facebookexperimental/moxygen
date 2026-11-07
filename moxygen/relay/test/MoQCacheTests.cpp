@@ -3948,6 +3948,34 @@ CO_TEST_F(MoQCacheTest, TestGroupNotEvictedAfterCrossingGroupBoundary) {
   writeback.reset();
 }
 
+CO_TEST_F(MoQCacheTest, TestCachedGroupNotEvictedWhileFetchServesIt) {
+  // Groups 0 and 1 come from upstream before cached group 2 is served.
+  // Creating group 1 forces an eviction while group 2 is the oldest in the
+  // LRU, and group 2 must stay cached until the fetch has served it.
+  cache_.setMaxCachedGroupsPerTrack(3);
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(ObjectHeader(2, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(2, 0, 1, 0, 100), makeBuf(100));
+  writeback->datagram(
+      ObjectHeader(2, 0, 2, 0, ObjectStatus::END_OF_GROUP), nullptr);
+  writeback->datagram(ObjectHeader(10, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(3, 0, 0, 0, 100), makeBuf(100));
+  writeback->datagram(ObjectHeader(3, 0, 1, 0, 100), makeBuf(100));
+  writeback.reset();
+
+  // An end object of 0 means all of group 1.
+  expectUpstreamFetch({0, 0}, {1, 0}, false, AbsoluteLocation{2, 0});
+  expectFetchObjects({0, 0}, {3, 2}, false, 2, 1, 1, true);
+  auto res = co_await cache_.fetch(
+      getFetch({0, 0}, {3, 2}), trackingConsumer_, upstream_);
+  EXPECT_TRUE(res.hasValue());
+  co_await folly::coro::co_reschedule_on_current_executor;
+  serveCacheRangeFromUpstream({0, 0}, {2, 0}, 2, 1, 1, true);
+  co_await folly::coro::co_reschedule_on_current_executor;
+
+  EXPECT_FALSE(cache_.hasCachedObject(kTestTrackName, {10, 0}));
+}
+
 CO_TEST_F(MoQCacheTest, TestEvictTrackWithSmallCache) {
   // Test basic eviction with a very small cache
   cache_.setMaxCachedTracks(1); // Max 1 track
