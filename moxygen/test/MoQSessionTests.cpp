@@ -2542,10 +2542,23 @@ namespace {
 class SetupTimeoutServer : public MoQServerBase {
  public:
   SetupTimeoutServer() : MoQServerBase("/test") {}
-  void onNewSession(std::shared_ptr<MoQSession> /*session*/) override {}
+  void onNewSession(std::shared_ptr<MoQSession> session) override {
+    ++newSessions;
+    if (closeOnNewSession) {
+      session->close(SessionCloseErrorCode::NO_ERROR);
+    }
+  }
+  void terminateClientSession(
+      std::shared_ptr<MoQSession> /*session*/) override {
+    ++terminatedSessions;
+  }
   void start(const folly::SocketAddress& /*addr*/) override {}
   void stop() override {}
   using MoQServerBase::handleClientSession;
+
+  bool closeOnNewSession{false};
+  size_t newSessions{0};
+  size_t terminatedSessions{0};
 };
 } // namespace
 
@@ -2620,6 +2633,27 @@ CO_TEST_P_X(MoQSessionTest, ControlStreamFailureWaitsForTheSetupTimeout) {
   auto setup = co_await folly::coro::co_awaitTry(
       clientSession_->setup(getClientSetup(initialMaxRequestID_)));
   EXPECT_TRUE(setup.hasException<folly::FutureTimeout>());
+}
+
+CO_TEST_P_X(MoQUniControlTest, ClosedServerSessionIsNotStarted) {
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+
+  auto server = std::make_shared<SetupTimeoutServer>();
+  co_await server->handleClientSession(serverSession_);
+
+  EXPECT_EQ(server->newSessions, 0);
+  EXPECT_EQ(server->terminatedSessions, 0);
+  EXPECT_TRUE(serverWt_->writeHandles.empty());
+}
+
+CO_TEST_P_X(MoQUniControlTest, SessionClosedByApplicationIsTerminated) {
+  auto server = std::make_shared<SetupTimeoutServer>();
+  server->closeOnNewSession = true;
+  co_await server->handleClientSession(serverSession_);
+
+  EXPECT_EQ(server->newSessions, 1);
+  EXPECT_EQ(server->terminatedSessions, 1);
+  EXPECT_TRUE(serverWt_->writeHandles.empty());
 }
 
 CO_TEST_P_X(MoQUniControlTest, UniControlSetupStreamFinBeforeSetup) {

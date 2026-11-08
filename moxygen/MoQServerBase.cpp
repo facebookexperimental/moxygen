@@ -35,15 +35,22 @@ std::shared_ptr<MoQSession> MoQServerBase::createSession(
 
 folly::coro::Task<void> MoQServerBase::handleClientSession(
     std::shared_ptr<MoQSession> clientSession) {
-  onNewSession(clientSession);
-  clientSession->start();
-
   // Keep the server alive through the co_await so the terminateClientSession
   // virtual dispatch is safe even if the caller's shared_ptr has been dropped.
   // A server that is not owned by a shared_ptr yields null instead of throwing
   // bad_weak_ptr: it cannot be kept alive, but it must not take the session
   // down with it either.
   auto self = weak_from_this().lock();
+  if (clientSession->isClosed()) {
+    co_return;
+  }
+  onNewSession(clientSession);
+  if (clientSession->isClosed()) {
+    terminateClientSession(std::move(clientSession));
+    co_return;
+  }
+
+  clientSession->start();
 
   // In uni control mode, the server proactively sends SERVER_SETUP
   auto version = clientSession->getNegotiatedVersion();
