@@ -94,25 +94,27 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       std::shared_ptr<TrackConsumer> consumer,
       DownstreamPeer downstream);
 
-  // The range a joining FETCH covers: from its start through the saved
-  // Joining Location of its subscription, as an exclusive end.
-  struct JoiningRange {
-    AbsoluteLocation start;
-    AbsoluteLocation end;
-  };
+  using JoiningRange = MoQGroupCache::Range;
 
-  struct SharedJoiningFetchState {
+  struct SharedFetchState {
     folly::coro::SharedPromise<folly::Unit> accepted;
     folly::coro::SharedPromise<folly::Unit> finished;
     std::optional<JoiningRange> range;
     std::optional<FetchError> error;
   };
 
-  std::shared_ptr<SharedJoiningFetchState> joiningFetch() const {
+  std::shared_ptr<SharedFetchState> joiningFetch() const {
     return joiningFetchStatus_;
   }
   void saveJoiningFetchForUpstream(Fetch upstreamFetch);
   void trySendJoiningFetchToCurrentUpstream();
+
+  // Returns ranges neither cached nor being retrieved by an existing FETCH.
+  std::vector<JoiningRange> missingHistoryRanges(JoiningRange range) const;
+
+  std::vector<std::shared_ptr<SharedFetchState>> existingFetchesForRange(
+      JoiningRange range) const;
+
   folly::Expected<JoiningRange, FetchError> resolveJoiningFetch(
       SessionId sessionId,
       RequestID fetchRequestID,
@@ -240,7 +242,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   std::optional<AbsoluteLocation> upstreamLargest_;
   std::vector<std::weak_ptr<DownstreamSubscriptionHandle>> pendingSubscribers_;
   std::optional<Fetch> joiningFetchRequest_;
-  std::shared_ptr<SharedJoiningFetchState> joiningFetchStatus_;
+  std::shared_ptr<SharedFetchState> joiningFetchStatus_;
   std::optional<UpstreamJoiningFetchAttempt> joiningFetchAttempt_;
   uint64_t upstreamAttempt_{0};
   std::weak_ptr<Callback> callback_;

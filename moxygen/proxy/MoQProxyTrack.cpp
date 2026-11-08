@@ -746,7 +746,7 @@ void MoQProxyTrack::trySendJoiningFetchToCurrentUpstream() {
     return;
   }
   if (!joiningFetchStatus_) {
-    joiningFetchStatus_ = std::make_shared<SharedJoiningFetchState>();
+    joiningFetchStatus_ = std::make_shared<SharedFetchState>();
   }
 
   joiningFetchAttempt_.emplace(UpstreamJoiningFetchAttempt{});
@@ -916,6 +916,47 @@ void MoQProxyTrack::failJoiningFetch(FetchError error) {
   if (!joiningFetchStatus_->finished.isFulfilled()) {
     joiningFetchStatus_->finished.setValue(folly::unit);
   }
+}
+
+std::vector<MoQProxyTrack::JoiningRange> MoQProxyTrack::missingHistoryRanges(
+    JoiningRange range) const {
+  auto missing = cache_ ? cache_->missingRanges(range.start, range.end)
+                        : std::vector<JoiningRange>{range};
+  auto subtract = [&missing](const JoiningRange& covered) {
+    std::vector<JoiningRange> next;
+    for (const auto& gap : missing) {
+      if (covered.end <= gap.start || gap.end <= covered.start) {
+        next.push_back(gap);
+        continue;
+      }
+      if (gap.start < covered.start) {
+        next.push_back({gap.start, covered.start});
+      }
+      if (covered.end < gap.end) {
+        next.push_back({covered.end, gap.end});
+      }
+    }
+    missing = std::move(next);
+  };
+
+  for (const auto& fetch : existingFetchesForRange(range)) {
+    subtract(*fetch->range);
+  }
+  return missing;
+}
+
+std::vector<std::shared_ptr<MoQProxyTrack::SharedFetchState>>
+MoQProxyTrack::existingFetchesForRange(JoiningRange range) const {
+  std::vector<std::shared_ptr<SharedFetchState>> fetches;
+  auto add = [&](const std::shared_ptr<SharedFetchState>& status) {
+    if (status && status->range && !status->error &&
+        status->range->start < range.end && range.start < status->range->end &&
+        !status->finished.isFulfilled()) {
+      fetches.push_back(status);
+    }
+  };
+  add(joiningFetchStatus_);
+  return fetches;
 }
 
 folly::coro::Task<MoQProxyTrack::UpstreamEstablishmentResult>
