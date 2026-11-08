@@ -23,6 +23,7 @@
 namespace moxygen {
 
 class MoQForwarder;
+class MoQFetchCacheWriter;
 class MoQSession;
 class TrackConsumer;
 
@@ -99,6 +100,18 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     AbsoluteLocation start;
     AbsoluteLocation end;
   };
+
+  struct SharedJoiningFetchState {
+    folly::coro::SharedPromise<folly::Unit> accepted;
+    folly::coro::SharedPromise<folly::Unit> finished;
+    std::optional<JoiningRange> range;
+    std::optional<FetchError> error;
+  };
+
+  std::shared_ptr<SharedJoiningFetchState> joiningFetch() const {
+    return joiningFetchStatus_;
+  }
+  void saveJoiningFetchForUpstream(Fetch upstreamFetch);
   folly::Expected<JoiningRange, FetchError> resolveJoiningFetch(
       SessionId sessionId,
       RequestID fetchRequestID,
@@ -127,6 +140,15 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   class Recorder;
   class SubgroupRecorder;
   class DownstreamSubscriptionHandle;
+
+  struct UpstreamJoiningFetchAttempt {
+    uint64_t id{0};
+    std::optional<FetchError> error;
+    std::shared_ptr<MoQFetchCacheWriter> writer;
+    std::shared_ptr<Publisher::FetchHandle> handle;
+    bool subscriptionAccepted{false};
+    bool finished{false};
+  };
 
   // One upstream subscription and what serves it.
   struct UpstreamAttempt {
@@ -190,6 +212,13 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   void onUpstreamLost(const PublishDone& publishDone);
   void notifyNoSubscribers();
   void stopCaching();
+  void joiningFetchAccepted(
+      uint64_t attempt,
+      std::shared_ptr<Publisher::FetchHandle> handle);
+  void joiningFetchFailed(uint64_t attempt, FetchError error);
+  void joiningFetchFinished(uint64_t attempt);
+  void resolveJoiningFetchAttempt(uint64_t attempt);
+  void failJoiningFetch(FetchError error);
   void setLargestObjectForPendingSubscribers();
 
   FullTrackName fullTrackName_;
@@ -207,6 +236,9 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   // subscriber even if early data advanced the forwarder.
   std::optional<AbsoluteLocation> upstreamLargest_;
   std::vector<std::weak_ptr<DownstreamSubscriptionHandle>> pendingSubscribers_;
+  std::optional<Fetch> joiningFetchRequest_;
+  std::shared_ptr<SharedJoiningFetchState> joiningFetchStatus_;
+  std::optional<UpstreamJoiningFetchAttempt> joiningFetchAttempt_;
   std::weak_ptr<Callback> callback_;
   folly::coro::SharedPromise<folly::Unit> upstreamSubscriptionReadyPromise_;
   std::optional<UpstreamEstablishmentFailure> upstreamSubscriptionFailure_;

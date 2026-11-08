@@ -14,6 +14,7 @@
 
 #include "moxygen/MoQLocation.h"
 #include "moxygen/MoQSession.h"
+#include "moxygen/proxy/MoQFetchCacheWriter.h"
 #include "moxygen/relay/MoQForwarder.h"
 
 namespace moxygen {
@@ -32,6 +33,36 @@ folly::Unexpected<SubscribeError> makeUpstreamFailure(
     std::string reasonPhrase) {
   return makeUpstreamFailure(
       request, SubscribeErrorCode::INTERNAL_ERROR, std::move(reasonPhrase));
+}
+
+folly::Expected<MoQProxyTrack::JoiningRange, FetchError>
+resolveJoiningFetchRange(
+    const JoiningFetch& joining,
+    const std::optional<AbsoluteLocation>& largest,
+    AbsoluteLocation end) {
+  if (!largest) {
+    return folly::makeUnexpected(
+        FetchError{
+            RequestID(0),
+            FetchErrorCode::INVALID_RANGE,
+            "upstream subscription has no Joining Location"});
+  }
+  auto start = AbsoluteLocation{0, 0};
+  if (joining.fetchType == FetchType::ABSOLUTE_JOINING) {
+    start.group = joining.joiningStart;
+  } else if (joining.joiningStart <= largest->group) {
+    start.group = largest->group - joining.joiningStart;
+  }
+  auto expectedEnd = largest->next();
+  if (start <= *largest && expectedEnd && !(end < start) &&
+      !(*expectedEnd < end)) {
+    return MoQProxyTrack::JoiningRange{start, end};
+  }
+  return folly::makeUnexpected(
+      FetchError{
+          RequestID(0),
+          FetchErrorCode::INVALID_RANGE,
+          "invalid upstream joining FETCH range"});
 }
 
 // Another upstream may still serve the track. A session that closes for any
@@ -696,6 +727,96 @@ folly::coro::Task<folly::Unit> MoQProxyTrack::awaitUpstreamSubscription() {
   co_return co_await upstreamSubscriptionReadyPromise_.getFuture();
 }
 
+void MoQProxyTrack::saveJoiningFetchForUpstream(Fetch upstreamFetch) {
+  if (!cache_ || joiningFetchRequest_) {
+    return;
+  }
+  // The next commit sends the actual upstream request.
+  joiningFetchRequest_ = std::move(upstreamFetch);
+}
+
+void MoQProxyTrack::joiningFetchAccepted(
+    uint64_t attempt,
+    std::shared_ptr<Publisher::FetchHandle> handle) {
+  if (!joiningFetchAttempt_ || joiningFetchAttempt_->id != attempt) {
+    handle->fetchCancel();
+    return;
+  }
+  joiningFetchAttempt_->handle = std::move(handle);
+  resolveJoiningFetchAttempt(attempt);
+}
+
+void MoQProxyTrack::joiningFetchFailed(uint64_t attempt, FetchError error) {
+  if (!joiningFetchAttempt_ || joiningFetchAttempt_->id != attempt) {
+    return;
+  }
+  joiningFetchAttempt_->error = std::move(error);
+  joiningFetchAttempt_->finished = true;
+  resolveJoiningFetchAttempt(attempt);
+}
+
+void MoQProxyTrack::joiningFetchFinished(uint64_t attempt) {
+  if (!joiningFetchAttempt_ || joiningFetchAttempt_->id != attempt) {
+    return;
+  }
+  joiningFetchAttempt_->finished = true;
+  resolveJoiningFetchAttempt(attempt);
+}
+
+void MoQProxyTrack::resolveJoiningFetchAttempt(uint64_t attempt) {
+  if (!joiningFetchStatus_ || !joiningFetchAttempt_ ||
+      joiningFetchAttempt_->id != attempt ||
+      !joiningFetchAttempt_->subscriptionAccepted) {
+    return;
+  }
+  auto& status = *joiningFetchStatus_;
+  auto& operation = *joiningFetchAttempt_;
+  if (!status.accepted.isFulfilled()) {
+    if (operation.error) {
+      status.error = operation.error;
+    } else if (operation.handle) {
+      auto range = resolveJoiningFetchRange(
+          std::get<moxygen::JoiningFetch>(joiningFetchRequest_->args),
+          upstreamLargest_,
+          operation.handle->fetchOk().endLocation);
+      if (range.hasValue()) {
+        status.range = std::move(range.value());
+      } else {
+        status.error = std::move(range.error());
+      }
+    } else {
+      return;
+    }
+    status.accepted.setValue(folly::unit);
+    if (status.range) {
+      operation.writer->setRange(status.range->start, status.range->end);
+    }
+    if (status.error && operation.handle) {
+      operation.handle->fetchCancel();
+      operation.handle.reset();
+      operation.finished = true;
+    }
+  }
+  if (status.finished.isFulfilled() || !operation.finished) {
+    return;
+  }
+  status.finished.setValue(folly::unit);
+  operation.handle.reset();
+}
+
+void MoQProxyTrack::failJoiningFetch(FetchError error) {
+  if (!joiningFetchStatus_) {
+    return;
+  }
+  if (!joiningFetchStatus_->accepted.isFulfilled()) {
+    joiningFetchStatus_->error = std::move(error);
+    joiningFetchStatus_->accepted.setValue(folly::unit);
+  }
+  if (!joiningFetchStatus_->finished.isFulfilled()) {
+    joiningFetchStatus_->finished.setValue(folly::unit);
+  }
+}
+
 folly::coro::Task<MoQProxyTrack::UpstreamEstablishmentResult>
 MoQProxyTrack::establishUpstream(
     SubscribeRequest subscribeRequest,
@@ -784,7 +905,6 @@ MoQProxyTrack::establishWithProvider(
           track->onUpstreamGoaway(goaway);
         }
       });
-
   auto upstreamRequest = subscribeRequest;
   upstreamRequest.priority = kDefaultPriority;
   upstreamRequest.groupOrder.reset();
