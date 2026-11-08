@@ -2947,6 +2947,8 @@ TEST(MoQFramerTestUtils, GetVersionFromAlpn) {
   EXPECT_EQ(*draft16Meta, 0xff000010);
 
   EXPECT_EQ(getVersionFromAlpn("moqt-18"), kVersionDraft18);
+  EXPECT_EQ(getVersionFromAlpn("moqt-18-meta-00"), kVersionDraft18);
+  EXPECT_EQ(getVersionFromAlpn("moqt-22"), kVersionDraft22);
   EXPECT_FALSE(getVersionFromAlpn("moqt-17").has_value());
 
   auto invalidAlpn1 = getVersionFromAlpn("h3");
@@ -2975,6 +2977,9 @@ TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
   auto stdAlpnDraft16 = getAlpnFromVersion(kVersionDraft16, true);
   ASSERT_TRUE(stdAlpnDraft16.has_value());
   EXPECT_EQ(*stdAlpnDraft16, "moqt-16");
+  EXPECT_EQ(getAlpnFromVersion(kVersionDraft18, true), "moqt-18");
+  EXPECT_EQ(getAlpnFromVersion(kVersionDraft22, true), "moqt-22");
+  EXPECT_EQ(getAlpnFromVersion(kVersionDraft22), kAlpnMoqtDraft22Latest);
 
   // An unsupported draft has no ALPN under either name.
   EXPECT_FALSE(getAlpnFromVersion(kVersionDraft17).has_value());
@@ -2983,17 +2988,17 @@ TEST(MoQFramerTestUtils, GetAlpnFromVersion) {
 
 TEST(MoQFramerTestUtils, GetMoqtProtocols) {
   // Empty = all supported versions. Draft 22 trails the others because it is
-  // still partial, and never claims the standard ALPN for the same reason.
+  // still partial.
   auto all = getMoqtProtocols("", true);
   EXPECT_EQ(all.size(), 3);
   EXPECT_EQ(all[0], "moqt-18");
   EXPECT_EQ(all[1], "moqt-16");
-  EXPECT_EQ(all[2], kAlpnMoqtDraft22Latest);
+  EXPECT_EQ(all[2], "moqt-22");
 
   auto meta22 = getMoqtProtocols("22");
   EXPECT_EQ(meta22.size(), 1);
   EXPECT_EQ(meta22[0], kAlpnMoqtDraft22Latest);
-  EXPECT_EQ(getMoqtProtocols("22", true), meta22);
+  EXPECT_EQ(getMoqtProtocols("22", true), std::vector<std::string>{"moqt-22"});
   EXPECT_THROW(getMoqtProtocols("20"), std::invalid_argument);
 
   // Single version
@@ -3024,8 +3029,7 @@ TEST(MoQFramerTestUtils, GetDefaultMoqtProtocols) {
           std::string(kAlpnMoqtDraft22Latest)}));
   EXPECT_EQ(
       getDefaultMoqtProtocols(true, /*useStandard=*/true),
-      (std::vector<std::string>{
-          "moqt-18", "moqt-16", std::string(kAlpnMoqtDraft22Latest)}));
+      (std::vector<std::string>{"moqt-18", "moqt-16", "moqt-22"}));
 }
 
 // Test class for immutable extensions feature

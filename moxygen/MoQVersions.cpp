@@ -66,13 +66,11 @@ std::optional<std::string> getAlpnFromVersion(
     return std::nullopt;
   }
   uint64_t draftNum = getDraftMajorVersion(version);
-  // Only part of draft 22 is implemented, so it never claims the standard
-  // ALPN, whatever the caller asked for.
-  if (draftNum == 22) {
-    return std::string(kAlpnMoqtDraft22Latest);
-  }
   if (useStandard) {
     return "moqt-" + folly::to<std::string>(draftNum);
+  }
+  if (draftNum == 22) {
+    return std::string(kAlpnMoqtDraft22Latest);
   }
   if (draftNum == 18) {
     return std::string(kAlpnMoqtDraft18Latest);

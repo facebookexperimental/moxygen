@@ -30,8 +30,8 @@ constexpr std::string_view kAlpnMoqtDraft16Meta00 = "moqt-16-meta-00";
 constexpr std::string_view kAlpnMoqtDraft16Latest = kAlpnMoqtDraft16Meta00;
 
 // ALPN constants for draft 18 (uni control streams)
-constexpr std::string_view kAlpnMoqtDraft18 = "moqt-18";
-constexpr std::string_view kAlpnMoqtDraft18Latest = kAlpnMoqtDraft18;
+constexpr std::string_view kAlpnMoqtDraft18Meta00 = "moqt-18-meta-00";
+constexpr std::string_view kAlpnMoqtDraft18Latest = kAlpnMoqtDraft18Meta00;
 
 // Meta-scoped draft 22 ALPNs, since only part of the draft is implemented.
 // Each wire-breaking step adds a revision and moves kAlpnMoqtDraft22Latest.
