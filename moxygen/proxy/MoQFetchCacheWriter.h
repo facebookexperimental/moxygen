@@ -34,6 +34,8 @@ class MoQFetchCacheWriter final : public StreamingObjectReceiver {
   // Supplies the actual response range once FETCH_OK arrives. Returns false
   // if earlier response data was outside the accepted range.
   bool setRange(AbsoluteLocation start, AbsoluteLocation end);
+  void abort();
+  void invalidate();
 
   folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
       uint64_t groupID,

@@ -66,6 +66,21 @@ class MoQFetchCacheWriter::CacheSink final
     return !disabled_;
   }
 
+  void abort() {
+    pending_.reset();
+    cacheable_ = false;
+    completionDisabled_ = true;
+    disabled_ = true;
+    clean_ = false;
+    finished_ = true;
+    notifyFinished();
+  }
+
+  void invalidateRange() {
+    invalidate();
+    abort();
+  }
+
   folly::
       Expected<std::shared_ptr<StreamingObjectPayloadConsumer>, MoQPublishError>
       onObjectBegin(StreamingObjectContext context) override {
@@ -381,7 +396,7 @@ class MoQFetchCacheWriter::CacheSink final
 
   void notifyFinished() {
     if (onFinished_ && finished_ && (!clean_ || rangeKnown_)) {
-      std::move(onFinished_)(clean_ && cacheable_);
+      std::exchange(onFinished_, nullptr)(clean_ && cacheable_);
     }
   }
 
@@ -446,6 +461,14 @@ bool MoQFetchCacheWriter::setRange(
     AbsoluteLocation start,
     AbsoluteLocation end) {
   return sink_->setRange(start, end);
+}
+
+void MoQFetchCacheWriter::abort() {
+  sink_->abort();
+}
+
+void MoQFetchCacheWriter::invalidate() {
+  sink_->invalidateRange();
 }
 
 folly::Expected<folly::Unit, MoQPublishError> MoQFetchCacheWriter::endOfGroup(

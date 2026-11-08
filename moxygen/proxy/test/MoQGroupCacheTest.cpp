@@ -150,6 +150,46 @@ TEST(MoQGroupCacheTest, CompletesGroupFromFetchAndSubscription) {
   EXPECT_FALSE(cacheable.has_value());
 }
 
+TEST(MoQGroupCacheTest, FailedFetchKeepsCompletedGroups) {
+  auto cache = std::make_shared<MoQGroupCache>(4, makeBudget());
+  bool cacheable = true;
+  auto writer = fetchWriter(cache, {10, 0}, {12, 0}, cacheable);
+  ASSERT_TRUE(writer->object(10, 0, 0, bytes(1), noExtensions(), false, false)
+                  .hasValue());
+  ASSERT_TRUE(
+      writer->beginObject(11, 0, 0, 2, bytes(1), noExtensions()).hasValue());
+  ASSERT_TRUE(cache->openSubgroup(20, 0, true));
+
+  writer->abort();
+
+  EXPECT_FALSE(cacheable);
+  EXPECT_EQ(wholeGroups(*cache, 10, 10), Coverage::Ready);
+  EXPECT_NE(wholeGroups(*cache, 11, 11), Coverage::Ready);
+  EXPECT_EQ(
+      cache->subgroupObject(
+          20, 0, 0, ObjectStatus::NORMAL, bytes(1), noExtensions()),
+      Result::Recorded);
+  EXPECT_EQ(cache->endSubgroup(20, 0, true), Result::Recorded);
+  EXPECT_EQ(wholeGroups(*cache, 20, 20), Coverage::Ready);
+}
+
+TEST(MoQGroupCacheTest, AbortAfterCleanFetchRejectsLateRange) {
+  auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
+  std::optional<bool> cacheable;
+  auto writer = std::make_shared<MoQFetchCacheWriter>(
+      cache, [&](bool result) { cacheable = result; });
+  ASSERT_TRUE(writer->object(7, 0, 0, bytes(1), noExtensions(), true, false)
+                  .hasValue());
+  ASSERT_FALSE(cacheable.has_value());
+
+  writer->abort();
+
+  ASSERT_TRUE(cacheable.has_value());
+  EXPECT_FALSE(*cacheable);
+  EXPECT_FALSE(writer->setRange({7, 0}, {8, 0}));
+  EXPECT_EQ(wholeGroups(*cache, 7, 7), Coverage::Miss);
+}
+
 TEST(MoQGroupCacheTest, ValidatesDataThatPrecedesFetchOk) {
   auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
   std::optional<bool> cacheable;

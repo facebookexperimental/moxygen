@@ -826,6 +826,7 @@ void MoQProxyTrack::joiningFetchFailed(uint64_t attempt, FetchError error) {
   }
   joiningFetchAttempt_->error = std::move(error);
   joiningFetchAttempt_->finished = true;
+  joiningFetchAttempt_->writer->invalidate();
   resolveJoiningFetchAttempt(attempt);
 }
 
@@ -862,12 +863,19 @@ void MoQProxyTrack::resolveJoiningFetchAttempt(uint64_t attempt) {
       return;
     }
     status.accepted.setValue(folly::unit);
-    if (status.range) {
-      operation.writer->setRange(status.range->start, status.range->end);
+    if (status.range &&
+        !operation.writer->setRange(status.range->start, status.range->end)) {
+      status.range.reset();
+      status.error = FetchError{
+          RequestID(0),
+          FetchErrorCode::INVALID_RANGE,
+          "upstream FETCH data was outside its accepted range"};
     }
-    if (status.error && operation.handle) {
-      operation.handle->fetchCancel();
-      operation.handle.reset();
+    if (status.error) {
+      if (auto handle = std::exchange(operation.handle, nullptr)) {
+        handle->fetchCancel();
+      }
+      operation.writer->invalidate();
       operation.finished = true;
     }
   }
@@ -883,15 +891,23 @@ void MoQProxyTrack::cancelJoiningFetchAttempt(uint64_t attempt) {
     return;
   }
   joiningFetchAttempt_->cancellation.requestCancellation();
-  if (joiningFetchAttempt_->handle) {
-    joiningFetchAttempt_->handle->fetchCancel();
+  if (auto handle = std::exchange(joiningFetchAttempt_->handle, nullptr)) {
+    handle->fetchCancel();
   }
+  joiningFetchAttempt_->writer->abort();
   joiningFetchAttempt_.reset();
 }
 
 void MoQProxyTrack::failJoiningFetch(FetchError error) {
   if (!joiningFetchStatus_) {
     return;
+  }
+  if (joiningFetchAttempt_) {
+    joiningFetchAttempt_->cancellation.requestCancellation();
+    if (auto handle = std::exchange(joiningFetchAttempt_->handle, nullptr)) {
+      handle->fetchCancel();
+    }
+    joiningFetchAttempt_->writer->abort();
   }
   if (!joiningFetchStatus_->accepted.isFulfilled()) {
     joiningFetchStatus_->error = std::move(error);
