@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/proxy/MoQGroupCache.h"
+#include "moxygen/proxy/MoQFetchCacheWriter.h"
 
 #include <folly/portability/GTest.h>
 
@@ -72,7 +73,207 @@ Extensions withExtension(uint64_t type, uint64_t value) {
   return extensions;
 }
 
+std::shared_ptr<MoQFetchCacheWriter> fetchWriter(
+    const std::shared_ptr<MoQGroupCache>& cache,
+    AbsoluteLocation start,
+    AbsoluteLocation end,
+    bool& cacheable) {
+  auto writer = std::make_shared<MoQFetchCacheWriter>(
+      cache, start, end, [&](bool result) { cacheable = result; });
+  writer->setRange(start, end);
+  return writer;
+}
+
 } // namespace
+
+TEST(MoQGroupCacheTest, WritesCompleteAndFragmentedFetchObjects) {
+  auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
+  bool cacheable = false;
+  auto writer = fetchWriter(cache, {7, 0}, {7, 3}, cacheable);
+
+  EXPECT_TRUE(writer->object(7, 0, 0, bytes(3), noExtensions(), false, false)
+                  .hasValue());
+  EXPECT_TRUE(
+      writer->beginObject(7, 0, 1, 5, bytes(2), noExtensions()).hasValue());
+  auto status = writer->objectPayload(bytes(3), false);
+  ASSERT_TRUE(status.hasValue());
+  EXPECT_EQ(status.value(), ObjectPublishStatus::DONE);
+  EXPECT_TRUE(writer->endOfFetch().hasValue());
+
+  EXPECT_TRUE(cacheable);
+  EXPECT_EQ(cache->inspect({7, 0}, {7, 3}), Coverage::Ready);
+  auto plan = cache->snapshot({7, 0}, {7, 3}, GroupOrder::OldestFirst);
+  ASSERT_TRUE(plan.has_value());
+  EXPECT_EQ(locations(*plan), (std::vector<AbsoluteLocation>{{7, 0}, {7, 1}}));
+}
+
+TEST(MoQGroupCacheTest, CompletesFetchedGapsAcrossGroups) {
+  auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
+  bool cacheable = false;
+  auto writer = std::make_shared<MoQFetchCacheWriter>(
+      cache, [&](bool result) { cacheable = result; });
+
+  EXPECT_TRUE(writer->object(10, 0, 0, bytes(1), noExtensions(), false, false)
+                  .hasValue());
+  EXPECT_TRUE(writer->endOfGroup(10, 0, 2, false).hasValue());
+  EXPECT_EQ(wholeGroups(*cache, 10, 10), Coverage::Ready);
+  EXPECT_FALSE(cacheable);
+  EXPECT_TRUE(writer->endOfTrackAndGroup(12, 0, 0).hasValue());
+
+  EXPECT_TRUE(writer->setRange({10, 0}, {12, 1}));
+  EXPECT_TRUE(cacheable);
+  EXPECT_EQ(cache->inspect({10, 0}, {12, 1}), Coverage::Ready);
+}
+
+TEST(MoQGroupCacheTest, CompletesGroupFromFetchAndSubscription) {
+  auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
+  ASSERT_TRUE(cache->openSubgroup(11, 1, true));
+
+  std::optional<bool> cacheable;
+  auto writer = std::make_shared<MoQFetchCacheWriter>(
+      cache, [&](bool result) { cacheable = result; });
+  ASSERT_TRUE(writer->object(11, 0, 0, bytes(1), noExtensions(), false, false)
+                  .hasValue());
+  EXPECT_EQ(wholeGroups(*cache, 11, 11), Coverage::AwaitIngress);
+
+  ASSERT_EQ(
+      cache->subgroupObject(
+          11, 1, 1, ObjectStatus::NORMAL, bytes(1), noExtensions()),
+      Result::Recorded);
+  ASSERT_EQ(cache->endSubgroup(11, 1, true), Result::Recorded);
+
+  EXPECT_EQ(wholeGroups(*cache, 11, 11), Coverage::Ready);
+  auto plan = cache->snapshot({11, 0}, {12, 0}, GroupOrder::OldestFirst);
+  ASSERT_TRUE(plan.has_value());
+  EXPECT_EQ(
+      locations(*plan), (std::vector<AbsoluteLocation>{{11, 0}, {11, 1}}));
+  EXPECT_FALSE(cacheable.has_value());
+}
+
+TEST(MoQGroupCacheTest, ValidatesDataThatPrecedesFetchOk) {
+  auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
+  std::optional<bool> cacheable;
+  auto writer = std::make_shared<MoQFetchCacheWriter>(
+      cache, [&](bool result) { cacheable = result; });
+
+  EXPECT_TRUE(writer->object(7, 0, 0, bytes(1), noExtensions(), true, false)
+                  .hasValue());
+  EXPECT_FALSE(cacheable.has_value());
+  EXPECT_TRUE(writer->setRange({7, 0}, {7, 1}));
+
+  ASSERT_TRUE(cacheable.has_value());
+  EXPECT_TRUE(*cacheable);
+}
+
+TEST(MoQGroupCacheTest, RejectsEarlyDataOutsideFetchOkRange) {
+  auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
+  std::optional<bool> cacheable;
+  auto writer = std::make_shared<MoQFetchCacheWriter>(
+      cache, [&](bool result) { cacheable = result; });
+
+  ASSERT_TRUE(writer->object(7, 0, 0, bytes(1), noExtensions(), true, false)
+                  .hasValue());
+  EXPECT_FALSE(writer->setRange({8, 0}, {8, 1}));
+
+  ASSERT_TRUE(cacheable.has_value());
+  EXPECT_FALSE(*cacheable);
+  EXPECT_EQ(cache->inspect({7, 0}, {7, 1}), Coverage::Miss);
+}
+
+TEST(MoQGroupCacheTest, RejectsDataOutsideRequestedBoundsBeforeFetchOk) {
+  auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
+  std::optional<bool> cacheable;
+  auto writer = std::make_shared<MoQFetchCacheWriter>(
+      cache, AbsoluteLocation{8, 0}, AbsoluteLocation{9, 0}, [&](bool result) {
+        cacheable = result;
+      });
+
+  EXPECT_TRUE(writer->object(7, 0, 0, bytes(1), noExtensions(), false, false)
+                  .hasValue());
+  EXPECT_TRUE(writer->object(8, 0, 0, bytes(1), noExtensions(), true, false)
+                  .hasValue());
+  EXPECT_FALSE(writer->setRange({8, 0}, {9, 0}));
+
+  EXPECT_EQ(cache->residentGroups(), 0);
+  ASSERT_TRUE(cacheable.has_value());
+  EXPECT_FALSE(*cacheable);
+}
+
+TEST(MoQGroupCacheTest, FetchCacheConflictIsPropagated) {
+  auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
+  ASSERT_EQ(
+      cache->standaloneObject(ObjectHeader(7, 0, 0), bytes(1), false),
+      Result::Recorded);
+  bool cacheable = true;
+  auto writer = fetchWriter(cache, {7, 0}, {7, 1}, cacheable);
+
+  auto result = writer->object(7, 0, 0, bytes(2), noExtensions(), true, false);
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().code, MoQPublishError::MALFORMED_TRACK);
+  EXPECT_FALSE(cacheable);
+}
+
+TEST(MoQGroupCacheTest, OverlappingFetchUsesCachedObject) {
+  auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
+  ASSERT_EQ(
+      cache->standaloneObject(ObjectHeader(7, 0, 0), bytes(1), false),
+      Result::Recorded);
+  bool cacheable = true;
+  auto writer = fetchWriter(cache, {7, 0}, {7, 1}, cacheable);
+
+  ASSERT_TRUE(writer->object(7, 0, 0, bytes(1), noExtensions(), true, false)
+                  .hasValue());
+
+  EXPECT_TRUE(cacheable);
+  EXPECT_EQ(cache->inspect({7, 0}, {7, 1}), Coverage::Ready);
+}
+
+TEST(MoQGroupCacheTest, CompleteFetchNeedsTheWholeRangeResident) {
+  auto cache = std::make_shared<MoQGroupCache>(1, makeBudget());
+  bool cacheable = false;
+  auto writer = fetchWriter(cache, {7, 0}, {9, 0}, cacheable);
+  ASSERT_TRUE(writer->object(7, 0, 0, bytes(1), noExtensions(), false, false)
+                  .hasValue());
+  ASSERT_TRUE(writer->object(8, 0, 0, bytes(1), noExtensions(), true, false)
+                  .hasValue());
+
+  ASSERT_TRUE(cacheable);
+  EXPECT_EQ(cache->completeFetch({7, 0}, {9, 0}), Result::NotCached);
+}
+
+TEST(MoQGroupCacheTest, EmptyFetchRangeIsComplete) {
+  MoQGroupCache cache(1, makeBudget());
+
+  EXPECT_EQ(cache.completeFetch({7, 0}, {7, 0}), Result::Recorded);
+}
+
+TEST(MoQGroupCacheTest, IncompleteFetchedObjectIsNotReplayable) {
+  auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
+  bool cacheable = true;
+  auto writer = fetchWriter(cache, {7, 0}, {7, 1}, cacheable);
+
+  EXPECT_TRUE(
+      writer->beginObject(7, 0, 0, 5, bytes(2), noExtensions()).hasValue());
+  EXPECT_TRUE(writer->endOfFetch().hasError());
+
+  EXPECT_FALSE(cacheable);
+  EXPECT_NE(cache->inspect({7, 0}, {7, 1}), Coverage::Ready);
+}
+
+TEST(MoQGroupCacheTest, FetchedObjectsDoNotCompleteLiveSubgroups) {
+  auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
+  ASSERT_TRUE(cache->openSubgroup(7, 0, /*containsLastInGroup=*/true));
+  bool cacheable = false;
+  auto writer = fetchWriter(cache, {7, 0}, {7, 1}, cacheable);
+
+  EXPECT_TRUE(writer->object(7, 0, 0, bytes(1), noExtensions(), true, false)
+                  .hasValue());
+  EXPECT_EQ(cache->endSubgroup(7, 0, /*cleanFin=*/true), Result::Recorded);
+
+  EXPECT_TRUE(cacheable);
+  EXPECT_EQ(cache->inspect({7, 0}, {8, 0}), Coverage::Miss);
+}
 
 // --- Retention ---
 

@@ -86,7 +86,9 @@ class MoQCachedGroup {
   MoQCacheResult setEnd(uint64_t endExclusive);
   void insertObject(
       uint64_t objectID,
-      std::shared_ptr<const MoQCachedObject> object);
+      std::shared_ptr<const MoQCachedObject> object,
+      bool updateSubgroupProgress = true);
+  MoQCacheResult completeFetch(uint64_t start, std::optional<uint64_t> end);
 
   // --- Joining FETCH ---
 

@@ -160,14 +160,35 @@ MoQCacheResult MoQCachedGroup::setEnd(uint64_t endExclusive) {
 
 void MoQCachedGroup::insertObject(
     uint64_t objectID,
-    std::shared_ptr<const MoQCachedObject> object) {
+    std::shared_ptr<const MoQCachedObject> object,
+    bool updateSubgroupProgress) {
   const bool datagram = object->datagram;
   const auto subgroup = object->subgroup;
   objects_.emplace(objectID, std::move(object));
   if (auto it = subgroups_.find(subgroup);
-      !datagram && it != subgroups_.end()) {
+      updateSubgroupProgress && !datagram && it != subgroups_.end()) {
     it->second.lastObjectID = objectID;
   }
+}
+
+MoQCacheResult MoQCachedGroup::completeFetch(
+    uint64_t start,
+    std::optional<uint64_t> end) {
+  auto position = start;
+  for (auto it = objects_.lower_bound(start);
+       it != objects_.end() && (!end || it->first < *end);
+       ++it) {
+    if (position < it->first &&
+        addObjectGap({position, it->first}) == MoQCacheResult::Malformed) {
+      return MoQCacheResult::Malformed;
+    }
+    position = it->first + 1;
+  }
+  if (!end) {
+    return setEnd(position);
+  }
+  return position < *end ? addObjectGap({position, *end})
+                         : MoQCacheResult::Recorded;
 }
 
 MoQCacheCoverage MoQCachedGroup::coverage(

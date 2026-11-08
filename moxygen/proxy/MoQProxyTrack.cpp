@@ -156,13 +156,13 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
         (finSubgroup && !recordEnd(/*cleanFin=*/true))) {
       return malformed();
     }
-    return leg()->object(
+    return leg_->object(
         objectID, std::move(payload), std::move(extensions), finSubgroup);
   }
 
   void checkpoint() override {
     if (!abandoned()) {
-      leg()->checkpoint();
+      leg_->checkpoint();
     }
   }
 
@@ -180,7 +180,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
         })) {
       return malformed();
     }
-    return leg()->beginObject(
+    return leg_->beginObject(
         objectID, length, std::move(initialPayload), std::move(extensions));
   }
 
@@ -198,7 +198,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     }
     // The forwarder tracks the declared length, so its IN_PROGRESS/DONE is
     // correct even when only the cache is consuming.
-    return leg()->objectPayload(std::move(payload), finSubgroup);
+    return leg_->objectPayload(std::move(payload), finSubgroup);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
@@ -209,7 +209,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     if (!recordStatus(endOfGroupObjectID, ObjectStatus::END_OF_GROUP)) {
       return malformed();
     }
-    return leg()->endOfGroup(endOfGroupObjectID);
+    return leg_->endOfGroup(endOfGroupObjectID);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
@@ -220,7 +220,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     if (!recordStatus(endOfTrackObjectID, ObjectStatus::END_OF_TRACK)) {
       return malformed();
     }
-    return leg()->endOfTrackAndGroup(endOfTrackObjectID);
+    return leg_->endOfTrackAndGroup(endOfTrackObjectID);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfSubgroup() override {
@@ -230,7 +230,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     if (!recordEnd(/*cleanFin=*/true)) {
       return malformed();
     }
-    return leg()->endOfSubgroup();
+    return leg_->endOfSubgroup();
   }
 
   void reset(ResetStreamErrorCode error) override {
@@ -238,7 +238,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
       return;
     }
     recordEnd(/*cleanFin=*/false);
-    leg()->reset(error);
+    leg_->reset(error);
   }
 
  private:
@@ -258,10 +258,6 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
   static folly::Unexpected<MoQPublishError> abandonedError() {
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::CANCELLED, "upstream attempt was abandoned"));
-  }
-
-  SubgroupConsumer* leg() {
-    return leg_.get();
   }
 
   // Returns false only for malformed input. Once this group stops being
@@ -310,7 +306,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
   }
 
   folly::Unexpected<MoQPublishError> malformed() {
-    leg()->reset(ResetStreamErrorCode::MALFORMED_TRACK);
+    leg_->reset(ResetStreamErrorCode::MALFORMED_TRACK);
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::MALFORMED_TRACK, "malformed subgroup data"));
   }

@@ -196,6 +196,110 @@ MoQGroupCache::Result MoQGroupCache::standaloneObject(
       std::move(*charge));
 }
 
+folly::Expected<std::optional<MoQCacheCharge>, MoQGroupCache::Result>
+MoQGroupCache::reserveFetchObject(const ObjectHeader& header) {
+  if (!header.length) {
+    return folly::makeUnexpected(Result::Malformed);
+  }
+  if (!admitGroup(header.group)) {
+    return std::optional<MoQCacheCharge>{};
+  }
+  auto result = groups_.at(header.group)
+                    .validateObject(header.id, header.status, *header.length);
+  if (result == Result::Malformed) {
+    return folly::makeUnexpected(failMalformed(header.group));
+  }
+  return result == Result::Recorded
+      ? reserveForGroup(
+            header.group, objectChargeBytes(*header.length, header.extensions))
+      : std::optional<MoQCacheCharge>{};
+}
+
+MoQGroupCache::Result MoQGroupCache::storeFetchObject(
+    ObjectHeader header,
+    Payload payload,
+    bool datagram,
+    MoQCacheCharge charge) {
+  if (!header.length || payloadBytes(payload) != *header.length) {
+    return failMalformed(header.group);
+  }
+  return store(
+      ObjectToStore{
+          .group = header.group,
+          .subgroup = header.subgroup,
+          .objectID = header.id,
+          .status = header.status,
+          .payload = std::move(payload),
+          .payloadLength = *header.length,
+          .extensions = std::move(header.extensions),
+          .datagram = datagram,
+          .updateSubgroupProgress = false},
+      std::move(charge));
+}
+
+MoQGroupCache::Result MoQGroupCache::completeFetch(
+    AbsoluteLocation start,
+    AbsoluteLocation end) {
+  if (shutdown_ || maxGroups_ == 0 || end < start) {
+    return Result::NotCached;
+  }
+  if (start == end) {
+    return Result::Recorded;
+  }
+  auto result = Result::Recorded;
+  auto completeGroup = [&](uint64_t group,
+                           uint64_t first,
+                           std::optional<uint64_t> limit) {
+    if (nonexistentGroups_.endContaining(group)) {
+      return;
+    }
+    if (!admitGroup(group)) {
+      result = Result::NotCached;
+      return;
+    }
+    auto groupResult = cachingGroup(group)->completeFetch(first, limit);
+    if (groupResult == Result::Malformed) {
+      result = failMalformed(group);
+    } else if (groupResult == Result::NotCached && result == Result::Recorded) {
+      result = groupResult;
+    }
+  };
+
+  if (start.group == end.group) {
+    completeGroup(start.group, start.object, end.object);
+    notifyWaiters();
+    return result == Result::Recorded && inspect(start, end) != Coverage::Ready
+        ? Result::NotCached
+        : result;
+  }
+
+  auto group = start.group;
+  if (start.object != 0) {
+    completeGroup(group++, start.object, std::nullopt);
+  }
+  for (auto it = groups_.lower_bound(group);
+       it != groups_.end() && it->first < end.group;
+       ++it) {
+    if (group < it->first &&
+        markGroupsNonexistent({group, it->first}) != Result::Recorded) {
+      result = Result::Malformed;
+    }
+    completeGroup(it->first, 0, std::nullopt);
+    group = it->first + 1;
+  }
+  if (group < end.group &&
+      markGroupsNonexistent({group, end.group}) != Result::Recorded) {
+    result = Result::Malformed;
+  }
+  if (end.object != 0) {
+    completeGroup(end.group, 0, end.object);
+  }
+  notifyWaiters();
+  return result == Result::Recorded && inspect(start, end) != Coverage::Ready
+      ? Result::NotCached
+      : result;
+}
+
 bool MoQGroupCache::isCaching(uint64_t group) const {
   auto it = groups_.find(group);
   return it != groups_.end() && !it->second.cachingDisabled();
@@ -424,7 +528,8 @@ MoQGroupCache::Result MoQGroupCache::store(
   cached->payloadLength = object.payloadLength;
   cached->datagram = object.datagram;
   cached->charge = std::move(charge);
-  group->insertObject(object.objectID, std::move(cached));
+  group->insertObject(
+      object.objectID, std::move(cached), object.updateSubgroupProgress);
   notifyWaiters();
   return Result::Recorded;
 }

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <folly/Expected.h>
 #include <folly/Function.h>
 #include <map>
 #include <memory>
@@ -20,7 +21,7 @@
 
 namespace moxygen {
 
-// The newest groups of one live track, fed only by its upstream subscription.
+// The newest groups of one live track, fed by its associated upstream requests.
 // A joining FETCH is served from it only when every requested location is
 // proven: a complete object, or authoritative evidence that it does not
 // exist.
@@ -69,6 +70,15 @@ class MoQGroupCache {
       const Payload& payload,
       bool datagram);
 
+  folly::Expected<std::optional<MoQCacheCharge>, Result> reserveFetchObject(
+      const ObjectHeader& header);
+  Result storeFetchObject(
+      ObjectHeader header,
+      Payload payload,
+      bool datagram,
+      MoQCacheCharge charge);
+  Result completeFetch(AbsoluteLocation start, AbsoluteLocation end);
+
   bool isCaching(uint64_t group) const;
 
   // Drops everything; later groups can be cached again.
@@ -112,6 +122,7 @@ class MoQGroupCache {
     uint64_t payloadLength;
     Extensions extensions;
     bool datagram;
+    bool updateSubgroupProgress{true};
   };
 
   bool admitGroup(uint64_t group);
