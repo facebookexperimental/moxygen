@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Invoke.h>
 #include <folly/futures/ManualTimekeeper.h>
@@ -1000,6 +1001,52 @@ class MoQProxyJoiningTest : public MoQProxyTest {
   std::vector<std::shared_ptr<Publisher::SubscriptionHandle>> viewerHandles_;
   std::shared_ptr<TrackConsumer> upstreamConsumer_;
 };
+
+TEST_F(MoQProxyJoiningTest, PendingSubscribersShareJoiningLocation) {
+  folly::coro::Baton release;
+  auto upstreamHandle = makeUpstreamHandleAt(100, AbsoluteLocation{40, 2});
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(
+          [&](SubscribeRequest, std::shared_ptr<TrackConsumer> consumer)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            upstreamConsumer_ = std::move(consumer);
+            co_await release;
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          });
+  auto start = [&](RequestID id,
+                   const std::shared_ptr<test::LiveViewerConsumer>& consumer) {
+    auto request = makeSubscribeRequest(id);
+    request.filter = LocationFilter::nextObject();
+    return withSessionContext(makeDownstreamSession(), [&] {
+      return folly::coro::co_withExecutor(
+                 executor_.get(), proxy_->subscribe(request, consumer))
+          .start();
+    });
+  };
+  auto firstConsumer = std::make_shared<test::LiveViewerConsumer>();
+  auto secondConsumer = std::make_shared<test::LiveViewerConsumer>();
+
+  auto first = start(RequestID(1), firstConsumer);
+  drive();
+  auto second = start(RequestID(3), secondConsumer);
+  drive();
+  ASSERT_TRUE(upstreamConsumer_);
+  publishGroup(42, 1);
+  EXPECT_EQ(
+      secondConsumer->received,
+      std::vector<AbsoluteLocation>({AbsoluteLocation{42, 0}}));
+
+  release.post();
+  drive();
+  auto firstResult = std::move(first).get();
+  auto secondResult = std::move(second).get();
+  ASSERT_TRUE(firstResult.hasValue());
+  ASSERT_TRUE(secondResult.hasValue());
+  EXPECT_EQ(
+      firstResult.value()->subscribeOk().largest, AbsoluteLocation(40, 2));
+  EXPECT_EQ(
+      secondResult.value()->subscribeOk().largest, AbsoluteLocation(40, 2));
+}
 
 std::vector<std::string> expectedReplay(
     std::vector<std::string> objects,

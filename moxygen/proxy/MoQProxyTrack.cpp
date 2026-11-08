@@ -71,23 +71,19 @@ class MoQProxyTrack::DownstreamSubscriptionHandle final
             "request updates are not supported"});
   }
 
-  // Called after upstream SUBSCRIBE_OK for the first subscriber: its saved
-  // Joining Location and its live filter both come from the upstream Largest,
-  // even if early data already advanced the forwarder.
-  void anchorTo(
-      const SubscribeRequest& request,
-      std::optional<AbsoluteLocation> largest) {
+  // Saves the upstream SUBSCRIBE_OK's Largest Object for a pending subscriber.
+  void setLargestObject(std::optional<AbsoluteLocation> largest) {
     if (!subscriber_) {
       return;
     }
     if (largest) {
       subscriber_->updateLargest(*largest);
     }
-    subscriber_->range = toSubscribeRange(request, largest);
+    subscriber_->range = toSubscribeRange(subscriber_->filter, largest);
   }
 
-  // Called before returning downstream to copy the updated SUBSCRIBE_OK.
-  void refreshSubscribeOk() {
+  // Copies the finalized subscriber state into the returned SUBSCRIBE_OK.
+  void finalizeSubscribeOk() {
     if (subscriber_) {
       setSubscribeOk(subscriber_->subscribeOk());
     }
@@ -570,7 +566,33 @@ folly::coro::Task<Publisher::SubscribeResult> MoQProxyTrack::subscribe(
   }
 
   if (state_ == State::CONNECTING) {
+    const bool rangePending = !forwarder_->largest();
+    auto subscriber =
+        addSubscriber(subscribeRequest, std::move(consumer), downstream);
+    if (subscriber.hasError()) {
+      co_return subscriber;
+    }
+    auto downstreamHandle =
+        std::static_pointer_cast<DownstreamSubscriptionHandle>(
+            subscriber.value());
+    if (rangePending) {
+      pendingSubscribers_.push_back(downstreamHandle);
+    }
     co_await upstreamSubscriptionReadyPromise_.getFuture();
+    if (upstreamSubscriptionFailure_) {
+      co_return folly::makeUnexpected(makeSubscribeError(
+          subscribeRequest.requestID, *upstreamSubscriptionFailure_));
+    }
+    if (state_ != State::READY) {
+      co_return folly::makeUnexpected(
+          SubscribeError{
+              subscribeRequest.requestID,
+              SubscribeErrorCode::DOES_NOT_EXIST,
+              "upstream subscription is no longer available"});
+    }
+    // Copy the finalized subscriber state into the downstream response.
+    downstreamHandle->finalizeSubscribeOk();
+    co_return subscriber;
   }
 
   if (upstreamSubscriptionFailure_) {
@@ -611,6 +633,9 @@ MoQProxyTrack::handleFirstSubscription(
   }
 
   auto subscriber = subscriberResult.value();
+  auto downstreamHandle =
+      std::static_pointer_cast<DownstreamSubscriptionHandle>(subscriber);
+  pendingSubscribers_.push_back(downstreamHandle);
   auto upstream = co_await establishUpstream(
       subscribeRequest, downstream, establishing_.getToken());
   if (upstream.hasError()) {
@@ -631,13 +656,7 @@ MoQProxyTrack::handleFirstSubscription(
     co_return folly::makeUnexpected(std::move(returnedFailure));
   }
   adoptFirstUpstream(std::move(upstream.value()));
-  auto downstreamHandle =
-      std::dynamic_pointer_cast<DownstreamSubscriptionHandle>(subscriber);
-  XCHECK(downstreamHandle);
-  downstreamHandle->anchorTo(subscribeRequest, upstreamLargest_);
-  downstreamHandle->refreshSubscribeOk();
-  state_ = State::READY;
-  completeUpstreamEstablishment(std::nullopt);
+  downstreamHandle->finalizeSubscribeOk();
   co_return subscriber;
 }
 
@@ -717,6 +736,9 @@ void MoQProxyTrack::adoptFirstUpstream(UpstreamAttempt attempt) {
   }
   forwarder_->setExtensions(subscribeOk.extensions);
   upstream_ = std::move(attempt);
+  setLargestObjectForPendingSubscribers();
+  state_ = State::READY;
+  completeUpstreamEstablishment(std::nullopt);
 }
 
 folly::coro::Task<MoQProxyTrack::UpstreamEstablishmentResult>
@@ -840,6 +862,15 @@ MoQProxyTrack::establishWithProvider(
   };
 }
 
+void MoQProxyTrack::setLargestObjectForPendingSubscribers() {
+  for (auto& pending : pendingSubscribers_) {
+    if (auto handle = pending.lock()) {
+      handle->setLargestObject(upstreamLargest_);
+    }
+  }
+  pendingSubscribers_.clear();
+}
+
 SubscribeError MoQProxyTrack::makeSubscribeError(
     RequestID requestID,
     const UpstreamEstablishmentFailure& failure) const {
@@ -850,6 +881,9 @@ void MoQProxyTrack::completeUpstreamEstablishment(
     std::optional<UpstreamEstablishmentFailure> failure) {
   if (upstreamSubscriptionPromiseResolved_) {
     return;
+  }
+  if (failure) {
+    pendingSubscribers_.clear();
   }
   upstreamSubscriptionPromiseResolved_ = true;
   upstreamSubscriptionFailure_ = std::move(failure);

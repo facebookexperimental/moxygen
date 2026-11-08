@@ -126,6 +126,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
 
   class Recorder;
   class SubgroupRecorder;
+  class DownstreamSubscriptionHandle;
 
   // One upstream subscription and what serves it.
   struct UpstreamAttempt {
@@ -140,7 +141,6 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   using UpstreamEstablishmentResult =
       folly::Expected<UpstreamAttempt, SubscribeError>;
 
-  class DownstreamSubscriptionHandle;
   class ForwarderCallback;
 
   MoQProxyTrack(
@@ -190,6 +190,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   void onUpstreamLost(const PublishDone& publishDone);
   void notifyNoSubscribers();
   void stopCaching();
+  void setLargestObjectForPendingSubscribers();
 
   FullTrackName fullTrackName_;
   std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders_;
@@ -205,6 +206,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   // The Largest in the upstream SUBSCRIBE_OK, which anchors the first
   // subscriber even if early data advanced the forwarder.
   std::optional<AbsoluteLocation> upstreamLargest_;
+  std::vector<std::weak_ptr<DownstreamSubscriptionHandle>> pendingSubscribers_;
   std::weak_ptr<Callback> callback_;
   folly::coro::SharedPromise<folly::Unit> upstreamSubscriptionReadyPromise_;
   std::optional<UpstreamEstablishmentFailure> upstreamSubscriptionFailure_;
