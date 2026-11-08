@@ -28,6 +28,9 @@ class MoQUpstreamProvider {
  public:
   virtual ~MoQUpstreamProvider();
 
+  // A proxy watches a returned session's GOAWAYs through the session's
+  // subscribe handler, so leave that unset. Proxies that can get the same
+  // session must share one MoQUpstreamGoaways.
   virtual folly::coro::Task<MoQUpstreamSessionResult> getSession(
       const FullTrackName& fullTrackName,
       const TrackRequestParameters& params,

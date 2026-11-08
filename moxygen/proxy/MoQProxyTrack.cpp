@@ -1212,7 +1212,7 @@ MoQProxyTrack::establishWithProvider(
   }
   // Watched before subscribing, so a GOAWAY that arrives while the SUBSCRIBE
   // is in flight still reaches the track.
-  auto goawayWatch = goaways_->watch(
+  establishingGoawayWatch_ = goaways_->watch(
       *upstreamSession, [weakTrack = weak_from_this()](const Goaway& goaway) {
         if (auto track = weakTrack.lock()) {
           track->onUpstreamGoaway(goaway);
@@ -1246,6 +1246,7 @@ MoQProxyTrack::establishWithProvider(
       std::make_shared<Recorder>(forwarder_, cache_, weak_from_this());
   auto abandonAttempt = folly::makeGuard([this, recorder, attempt] {
     cancelJoiningFetchAttempt(attempt);
+    establishingGoawayWatch_.reset();
     recorder->disable();
     if (upstreamAttempt_ == attempt) {
       upstream_.session.reset();
@@ -1307,7 +1308,7 @@ MoQProxyTrack::establishWithProvider(
       .session = std::move(upstreamSession),
       .handle = std::move(upstreamHandle),
       .recorder = std::move(recorder),
-      .goawayWatch = std::move(goawayWatch),
+      .goawayWatch = std::move(establishingGoawayWatch_),
   };
 }
 
@@ -1350,7 +1351,7 @@ void MoQProxyTrack::onForwarderEmpty() {
             "proxy track became empty while establishing the upstream"});
   }
   state_ = State::CLOSED;
-  establishing_.requestCancellation();
+  cancelEstablishment();
   stopCaching();
   if (auto handle = std::move(upstream_.handle)) {
     handle->unsubscribe();
@@ -1358,6 +1359,11 @@ void MoQProxyTrack::onForwarderEmpty() {
   upstream_.goawayWatch.reset();
   upstream_.session.reset();
   notifyNoSubscribers();
+}
+
+void MoQProxyTrack::cancelEstablishment() {
+  establishing_.requestCancellation();
+  establishingGoawayWatch_.reset();
 }
 
 void MoQProxyTrack::onUpstreamPublishDone() {
@@ -1369,7 +1375,7 @@ void MoQProxyTrack::onUpstreamPublishDone() {
   if (state_ == State::CONNECTING) {
     // The upstream ended the attempt before the track resumed with its
     // SUBSCRIBE_OK.
-    establishing_.requestCancellation();
+    cancelEstablishment();
     completeUpstreamEstablishment(
         UpstreamEstablishmentFailure{
             SubscribeErrorCode::DOES_NOT_EXIST,
@@ -1419,7 +1425,7 @@ void MoQProxyTrack::close() {
             SubscribeErrorCode::GOING_AWAY, "proxy track closed"});
   }
   state_ = State::DRAINING;
-  establishing_.requestCancellation();
+  cancelEstablishment();
   stopCaching();
   if (auto handle = std::move(upstream_.handle)) {
     handle->unsubscribe();

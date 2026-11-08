@@ -222,6 +222,8 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
 
   void completeUpstreamEstablishment(
       std::optional<UpstreamEstablishmentFailure> failure);
+  // Stops waiting for the attempt being established, and for its GOAWAYs.
+  void cancelEstablishment();
   void onForwarderEmpty();
   void onUpstreamPublishDone();
   void onUpstreamGoaway(const Goaway& goaway);
@@ -254,6 +256,9 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   std::shared_ptr<MoQUpstreamGoaways> goaways_;
   std::shared_ptr<MoQProxySwitchStats> switchStats_;
   UpstreamAttempt upstream_;
+  // The GOAWAY watch of the upstream attempt being established, which the
+  // track stops when it stops waiting for that attempt.
+  MoQUpstreamGoaways::Watch establishingGoawayWatch_;
   // Cancels establishing upstream_ once the track stops waiting for it. A
   // cancelled source stays cancelled, so each later establishment needs a
   // fresh one.
