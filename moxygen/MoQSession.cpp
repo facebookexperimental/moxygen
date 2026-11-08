@@ -4760,11 +4760,13 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     beginOptions.includeExtensions = options.hasExtensions;
     auto res = callback->beginSubgroup(
         group, subgroup, effectivePriority, beginOptions);
-    if (res.hasValue()) {
-      subgroupCallback_ = *res;
-    } else {
+    if (res.hasError()) {
+      // The publisher counted the stream when it opened it.
+      subscribeState_->setCurrentStreamId(currentStreamId_);
+      subscribeState_->onSubgroup();
       return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
+    subgroupCallback_ = *res;
     if (logger_) {
       logger_->logSubgroupHeaderParsed(
           currentStreamId_, alias, group, subgroup, effectivePriority, options);

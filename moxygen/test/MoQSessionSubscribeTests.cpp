@@ -1386,8 +1386,13 @@ CO_TEST_P_X(MoQSessionTest, CloseWhileHandleSubscribePending) {
 // Verify that if the beginSubgroup callback returns an error, the stream
 // counter is still balanced: opened once (when alias resolves) and closed once
 // (when the loop exits on ERROR_TERMINATE).
+// A refused subgroup still counts toward the PUBLISH_DONE's Stream Count, so
+// the PUBLISH_DONE doesn't wait for a stream that already arrived.
 CO_TEST_P_X(MoQSessionTest, BeginSubgroupCallbackError) {
   co_await setupMoQSession();
+  auto settings = clientSession_->getMoqSettings();
+  settings.publishDoneStreamCountTimeout = std::chrono::minutes(1);
+  clientSession_->setMoqSettings(settings);
   std::shared_ptr<TrackConsumer> trackConsumer;
   folly::coro::Baton streamSent;
 
@@ -1426,7 +1431,10 @@ CO_TEST_P_X(MoQSessionTest, BeginSubgroupCallbackError) {
   expectPublishDone();
   trackConsumer->publishDone(
       getTrackEndedPublishDone(subscribeRequest.requestID));
-  co_await publishDone_;
+  for (int i = 0; i < 500 && !publishDone_.ready(); ++i) {
+    co_await folly::coro::sleep(std::chrono::milliseconds(10));
+  }
+  EXPECT_TRUE(publishDone_.ready());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
