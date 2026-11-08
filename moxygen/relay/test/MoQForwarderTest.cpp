@@ -2469,30 +2469,6 @@ TEST_F(MoQForwarderTest, LastSubscriberRemovedDuringObjectStreamIteration) {
   EXPECT_EQ(forwarder, nullptr);
 }
 
-// The deprecated session overloads are kept for out-of-tree callers during the
-// transition. They must reach the same subscriber as the SessionId ones.
-TEST_F(MoQForwarderTest, DeprecatedSessionOverloadsResolveToTheSameSubscriber) {
-  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
-  auto session = createMockSession();
-
-  SubscribeRequest sub;
-  sub.fullTrackName = kFwdTestTrackName;
-  sub.requestID = RequestID(1);
-  sub.filter = LocationFilter::relativeStart(1);
-  auto viaSession =
-      forwarder->addSubscriber(session, sub, createMockConsumer());
-  ASSERT_NE(viaSession, nullptr);
-  EXPECT_EQ(viaSession->sessionId, session->sessionId());
-
-  // The SessionId overload finds the entry the session overload added.
-  auto viaId =
-      forwarder->addSubscriber(session->sessionId(), sub, createMockConsumer());
-  EXPECT_EQ(viaId.get(), viaSession.get());
-
-  forwarder->removeSubscriber(session, std::nullopt, "test");
-  EXPECT_TRUE(forwarder->empty());
-}
-
 namespace {
 
 std::shared_ptr<MockSubgroupConsumer> acceptingSubgroupConsumer() {
@@ -2832,7 +2808,7 @@ TEST_F(MoQForwarderTest, FillDoesNotWidenTheSubscriptionRange) {
   EXPECT_EQ(subscriber->range.start, (AbsoluteLocation{50, 1}));
   EXPECT_EQ(subscriber->range.end.group, 60);
 
-  forwarder->removeSubscriber(session, std::nullopt, "test");
+  forwarder->removeSubscriber(session->sessionId(), std::nullopt, "test");
 }
 
 // Pausing is subscription state and a fill is not, so an update carrying both
@@ -2855,7 +2831,7 @@ TEST_F(MoQForwarderTest, RequestUpdateWithFillStillAppliesForwardState) {
   ASSERT_TRUE(res.hasValue());
   EXPECT_FALSE(subscriber->checkShouldForward());
 
-  forwarder->removeSubscriber(session, std::nullopt, "test");
+  forwarder->removeSubscriber(session->sessionId(), std::nullopt, "test");
 }
 
 } // namespace moxygen::test

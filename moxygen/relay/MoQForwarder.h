@@ -233,49 +233,6 @@ class MoQForwarder : public TrackConsumer {
       std::optional<PublishDone> pubDone,
       const std::string& callsite);
 
-  // Deprecated: the forwarder only needs to tell subscribers apart, so it
-  // takes a SessionId now and never holds the session. These overloads exist
-  // so out-of-tree callers keep compiling; pass session->sessionId() instead.
-  // Unlike the old signatures, session must be non-null.
-  std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
-      const std::shared_ptr<MoQSession>& session,
-      const SubscribeRequest& subReq,
-      std::shared_ptr<TrackConsumer> consumer) {
-    return addSubscriber(session->sessionId(), subReq, std::move(consumer));
-  }
-
-  std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
-      const std::shared_ptr<MoQSession>& session,
-      bool forward) {
-    return addSubscriber(session->sessionId(), forward);
-  }
-
-  std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
-      const std::shared_ptr<MoQSession>& session,
-      const PublishRequest& pub) {
-    return addSubscriber(session->sessionId(), pub.forward);
-  }
-
-  folly::Expected<SubscribeRange, FetchError> resolveJoiningFetch(
-      const std::shared_ptr<MoQSession>& session,
-      const JoiningFetch& joining) const {
-    return resolveJoiningFetch(session->sessionId(), joining);
-  }
-
-  void drainSubscriber(
-      const std::shared_ptr<MoQSession>& session,
-      PublishDone pubDone,
-      const std::string& callsite) {
-    drainSubscriber(session->sessionId(), std::move(pubDone), callsite);
-  }
-
-  void removeSubscriber(
-      const std::shared_ptr<MoQSession>& session,
-      std::optional<PublishDone> pubDone,
-      const std::string& callsite) {
-    removeSubscriber(session->sessionId(), std::move(pubDone), callsite);
-  }
-
   template <typename Fn>
   folly::Expected<folly::Unit, MoQPublishError> forEachSubscriber(Fn&& fn);
 

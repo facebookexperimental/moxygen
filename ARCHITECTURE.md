@@ -223,7 +223,7 @@ For scenarios requiring direct QUIC transport without HTTP/3:
 - Handles subscription lifecycle (subscribe, unsubscribe, subscribeDone)
 
 **Subscription Management:**
-- Tracks each subscriber's session, request ID, range, and consumer
+- Tracks each subscriber's session ID, request ID, range, and consumer
 - Filters objects based on each subscriber's range and forward preference
 - Handles per-subscriber backpressure and errors
 - Gracefully drains subscribers when upstream completes
@@ -236,12 +236,13 @@ For scenarios requiring direct QUIC transport without HTTP/3:
 
 **Use Outside Relay:**
 
-`MoQForwarder` can be used by publishers to multicast data:
+`MoQForwarder` can be used by publishers to multicast data. Subscribers are
+keyed by `SessionId`, which callers obtain from `MoQSession::sessionId()`:
 ```cpp
 auto forwarder = std::make_shared<MoQForwarder>(trackName);
 // Add subscribers as they arrive
-forwarder->addSubscriber(session1, subscribeReq1, consumer1);
-forwarder->addSubscriber(session2, subscribeReq2, consumer2);
+forwarder->addSubscriber(session1->sessionId(), subscribeReq1, consumer1);
+forwarder->addSubscriber(session2->sessionId(), subscribeReq2, consumer2);
 
 // Publish data once, forwarded to all
 forwarder->beginSubgroup(groupId, subgroupId, priority);
