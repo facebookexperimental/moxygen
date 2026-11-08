@@ -10,6 +10,7 @@
 #include <folly/ScopeGuard.h>
 #include <folly/coro/Result.h>
 #include <folly/logging/xlog.h>
+#include <algorithm>
 #include <utility>
 
 #include "moxygen/MoQLocation.h"
@@ -956,7 +957,163 @@ MoQProxyTrack::existingFetchesForRange(JoiningRange range) const {
     }
   };
   add(joiningFetchStatus_);
+  for (const auto& fetch : standaloneFetches_) {
+    add(fetch->status);
+  }
   return fetches;
+}
+
+std::shared_ptr<MoQProxyTrack::SharedFetchState>
+MoQProxyTrack::startStandaloneFetch(Fetch fetch, JoiningRange range) {
+  auto operation = std::make_shared<StandaloneFetchAttempt>();
+  operation->status = std::make_shared<SharedFetchState>();
+  operation->status->range = range;
+  auto fail = [&](FetchError error) {
+    operation->status->error = std::move(error);
+    operation->status->accepted.setValue(folly::unit);
+    operation->status->finished.setValue(folly::unit);
+  };
+  if (state_ != State::READY || !upstream_.session) {
+    fail(
+        FetchError{
+            RequestID(0),
+            FetchErrorCode::INTERNAL_ERROR,
+            "upstream unavailable"});
+    return operation->status;
+  }
+  standaloneFetches_.push_back(operation);
+
+  fetch.requestID = RequestID(0);
+  fetch.fullTrackName = fullTrackName_;
+  auto end = range.end.object == 0 ? AbsoluteLocation{range.end.group - 1, 0}
+                                   : range.end;
+  fetch.args = moxygen::StandaloneFetch(range.start, end);
+  auto upstream = upstream_.session;
+  operation->writer = std::make_shared<MoQFetchCacheWriter>(
+      cache_,
+      range.start,
+      range.end,
+      [weak = weak_from_this(),
+       weakOperation =
+           std::weak_ptr<StandaloneFetchAttempt>(operation)](bool cacheable) {
+        if (auto self = weak.lock()) {
+          if (auto operation = weakOperation.lock()) {
+            self->standaloneFetchFinished(operation, cacheable);
+          }
+        }
+      },
+      fetch.groupOrder);
+  auto executor = upstream->getExecutor();
+  folly::coro::co_withExecutor(
+      std::move(executor),
+      folly::coro::co_withCancellation(
+          operation->cancellation.getToken(),
+          folly::coro::co_invoke(
+              [self = shared_from_this(),
+               upstream = std::move(upstream),
+               operation,
+               fetch = std::move(fetch)]() mutable -> folly::coro::Task<void> {
+                auto result = co_await folly::coro::co_awaitTry(
+                    upstream->fetch(std::move(fetch), operation->writer));
+                if (result.hasException()) {
+                  operation->status->error = FetchError{
+                      RequestID(0),
+                      FetchErrorCode::INTERNAL_ERROR,
+                      result.exception().what().toStdString()};
+                } else if (result->hasError()) {
+                  operation->status->error = std::move(result->error());
+                } else if (result->value()) {
+                  self->standaloneFetchAccepted(
+                      operation, std::move(result->value()));
+                  co_return;
+                } else {
+                  operation->status->error = FetchError{
+                      RequestID(0),
+                      FetchErrorCode::INTERNAL_ERROR,
+                      "upstream returned a null FETCH handle"};
+                }
+                operation->writer->invalidate();
+                self->standaloneFetchAccepted(operation, nullptr);
+              })))
+      .start();
+  return operation->status;
+}
+
+void MoQProxyTrack::standaloneFetchAccepted(
+    const std::shared_ptr<StandaloneFetchAttempt>& fetch,
+    std::shared_ptr<Publisher::FetchHandle> handle) {
+  if (std::find(standaloneFetches_.begin(), standaloneFetches_.end(), fetch) ==
+      standaloneFetches_.end()) {
+    if (handle) {
+      handle->fetchCancel();
+    }
+    return;
+  }
+  if (handle) {
+    auto end = handle->fetchOk().endLocation;
+    if (!(fetch->status->range->start < end) ||
+        fetch->status->range->end < end) {
+      fetch->status->error = FetchError{
+          RequestID(0), FetchErrorCode::INVALID_RANGE, "invalid FETCH range"};
+      handle->fetchCancel();
+      fetch->writer->invalidate();
+    } else {
+      fetch->status->range->end = end;
+      if (fetch->writer->setRange(
+              fetch->status->range->start, fetch->status->range->end)) {
+        fetch->handle = std::move(handle);
+      } else {
+        fetch->status->error = FetchError{
+            RequestID(0),
+            FetchErrorCode::INVALID_RANGE,
+            "upstream FETCH data was outside its accepted range"};
+        handle->fetchCancel();
+        fetch->writer->invalidate();
+      }
+    }
+  }
+  fetch->status->accepted.setValue(folly::unit);
+  resolveStandaloneFetch(fetch);
+}
+
+void MoQProxyTrack::standaloneFetchFinished(
+    const std::shared_ptr<StandaloneFetchAttempt>& fetch,
+    bool cacheable) {
+  fetch->finished = true;
+  if (!cacheable && !fetch->status->error) {
+    fetch->status->error = FetchError{
+        RequestID(0), FetchErrorCode::INTERNAL_ERROR, "history was not cached"};
+  }
+  resolveStandaloneFetch(fetch);
+}
+
+void MoQProxyTrack::resolveStandaloneFetch(
+    const std::shared_ptr<StandaloneFetchAttempt>& fetch) {
+  if (!fetch->finished || !fetch->status->accepted.isFulfilled() ||
+      fetch->status->finished.isFulfilled()) {
+    return;
+  }
+  fetch->status->finished.setValue(folly::unit);
+  fetch->handle.reset();
+  std::erase(standaloneFetches_, fetch);
+}
+
+void MoQProxyTrack::cancelStandaloneFetches(const FetchError& error) {
+  auto fetches = std::move(standaloneFetches_);
+  for (auto& fetch : fetches) {
+    fetch->cancellation.requestCancellation();
+    if (auto handle = std::exchange(fetch->handle, nullptr)) {
+      handle->fetchCancel();
+    }
+    fetch->writer->abort();
+    if (!fetch->status->accepted.isFulfilled()) {
+      fetch->status->error = error;
+      fetch->status->accepted.setValue(folly::unit);
+    }
+    if (!fetch->status->finished.isFulfilled()) {
+      fetch->status->finished.setValue(folly::unit);
+    }
+  }
 }
 
 folly::coro::Task<MoQProxyTrack::UpstreamEstablishmentResult>
@@ -1286,11 +1443,12 @@ void MoQProxyTrack::close() {
 }
 
 void MoQProxyTrack::stopCaching() {
+  auto closed = FetchError{
+      RequestID(0), FetchErrorCode::INTERNAL_ERROR, "proxy track closed"};
   joiningFetchRequest_.reset();
   cancelJoiningFetchAttempt(upstreamAttempt_);
-  failJoiningFetch(
-      FetchError{
-          RequestID(0), FetchErrorCode::INTERNAL_ERROR, "proxy track closed"});
+  failJoiningFetch(closed);
+  cancelStandaloneFetches(closed);
   if (auto recorder = std::move(upstream_.recorder)) {
     recorder->disable();
   }

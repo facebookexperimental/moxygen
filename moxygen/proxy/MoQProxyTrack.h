@@ -115,6 +115,10 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   std::vector<std::shared_ptr<SharedFetchState>> existingFetchesForRange(
       JoiningRange range) const;
 
+  std::shared_ptr<SharedFetchState> startStandaloneFetch(
+      Fetch fetch,
+      JoiningRange range);
+
   folly::Expected<JoiningRange, FetchError> resolveJoiningFetch(
       SessionId sessionId,
       RequestID fetchRequestID,
@@ -151,6 +155,14 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     std::shared_ptr<MoQFetchCacheWriter> writer;
     std::shared_ptr<Publisher::FetchHandle> handle;
     bool subscriptionAccepted{false};
+    bool finished{false};
+  };
+
+  struct StandaloneFetchAttempt {
+    std::shared_ptr<SharedFetchState> status;
+    folly::CancellationSource cancellation;
+    std::shared_ptr<MoQFetchCacheWriter> writer;
+    std::shared_ptr<Publisher::FetchHandle> handle;
     bool finished{false};
   };
 
@@ -224,6 +236,15 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   void resolveJoiningFetchAttempt(uint64_t attempt);
   void cancelJoiningFetchAttempt(uint64_t attempt);
   void failJoiningFetch(FetchError error);
+  void standaloneFetchAccepted(
+      const std::shared_ptr<StandaloneFetchAttempt>& fetch,
+      std::shared_ptr<Publisher::FetchHandle> handle);
+  void standaloneFetchFinished(
+      const std::shared_ptr<StandaloneFetchAttempt>& fetch,
+      bool cacheable);
+  void resolveStandaloneFetch(
+      const std::shared_ptr<StandaloneFetchAttempt>& fetch);
+  void cancelStandaloneFetches(const FetchError& error);
   void setLargestObjectForPendingSubscribers();
 
   FullTrackName fullTrackName_;
@@ -245,6 +266,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   std::shared_ptr<SharedFetchState> joiningFetchStatus_;
   std::optional<UpstreamJoiningFetchAttempt> joiningFetchAttempt_;
   uint64_t upstreamAttempt_{0};
+  std::vector<std::shared_ptr<StandaloneFetchAttempt>> standaloneFetches_;
   std::weak_ptr<Callback> callback_;
   folly::coro::SharedPromise<folly::Unit> upstreamSubscriptionReadyPromise_;
   std::optional<UpstreamEstablishmentFailure> upstreamSubscriptionFailure_;
