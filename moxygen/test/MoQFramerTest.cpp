@@ -400,6 +400,17 @@ TEST_P(MoQFramerTest, ResetStreamErrorCodesUseNegotiatedVersion) {
   }
 }
 
+TEST_P(MoQFramerTest, WebTransportResetCodes) {
+  EXPECT_EQ(
+      fromWireResetStreamErrorCode(
+          proxygen::WebTransport::kSessionGone, GetParam()),
+      ResetStreamErrorCode::SESSION_CLOSED);
+  EXPECT_EQ(
+      fromWireResetStreamErrorCode(
+          proxygen::WebTransport::kInternalError, GetParam()),
+      ResetStreamErrorCode::INTERNAL_ERROR);
+}
+
 TEST_P(MoQFramerTest, PublishDoneStatusCodesUseNegotiatedVersion) {
   struct TestCase {
     PublishDoneStatusCode statusCode;

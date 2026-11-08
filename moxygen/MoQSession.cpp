@@ -55,6 +55,18 @@ uint32_t subgroupPriorityBits(uint32_t subgroupID) {
   return static_cast<uint32_t>(subgroupID) & kSubgroupMask;
 }
 
+// WebTransport ends a stream with its internal error when the stream fails,
+// and every stream of a connection that failed, which ends the session too.
+ResetStreamErrorCode streamResetCode(
+    uint32_t wtError,
+    uint64_t negotiatedVersion,
+    bool sessionClosed) {
+  if (wtError == proxygen::WebTransport::kInternalError && sessionClosed) {
+    return ResetStreamErrorCode::SESSION_CLOSED;
+  }
+  return fromWireResetStreamErrorCode(wtError, negotiatedVersion);
+}
+
 struct StreamPriority {
   uint8_t urgency;
   uint32_t order;
@@ -5213,7 +5225,7 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
                 .tryGetExceptionObject<proxygen::WebTransport::Exception>();
         if (wtEx) {
           errorCode =
-              fromWireResetStreamErrorCode(wtEx->error, *negotiatedVersion_);
+              streamResetCode(wtEx->error, *negotiatedVersion_, closed_);
         }
         if (!dcb.reset(errorCode)) {
           XLOG(ERR) << __func__ << " terminating for unknown "

@@ -167,6 +167,14 @@ uint32_t toWireResetStreamErrorCode(
 ResetStreamErrorCode fromWireResetStreamErrorCode(
     uint32_t errorCode,
     uint64_t negotiatedVersion) {
+  // WebTransport's own codes: it ends the streams of a session that ended
+  // with WT_SESSION_GONE, and a stream that failed with its internal error.
+  if (errorCode == proxygen::WebTransport::kSessionGone) {
+    return ResetStreamErrorCode::SESSION_CLOSED;
+  }
+  if (errorCode == proxygen::WebTransport::kInternalError) {
+    return ResetStreamErrorCode::INTERNAL_ERROR;
+  }
   if (getDraftMajorVersion(negotiatedVersion) >= 18) {
     return static_cast<ResetStreamErrorCode>(errorCode);
   }

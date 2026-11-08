@@ -1630,6 +1630,114 @@ CO_TEST_P_X(MoQSessionTest, OpenSubgroupResetDuringSessionCleanup) {
   co_await resetBaton;
 }
 
+// The count unidirectional streams the server opened last, oldest first.
+std::vector<std::shared_ptr<proxygen::test::FakeStreamHandle>> newestUniStreams(
+    proxygen::test::FakeSharedWebTransport& serverWt,
+    size_t count) {
+  std::vector<std::shared_ptr<proxygen::test::FakeStreamHandle>> streams;
+  for (auto it = serverWt.writeHandles.rbegin();
+       it != serverWt.writeHandles.rend() && streams.size() < count;
+       ++it) {
+    if ((it->first & 0x3) == 0x3) {
+      streams.insert(streams.begin(), it->second);
+    }
+  }
+  return streams;
+}
+
+// WebTransport's own reset codes: WT_SESSION_GONE for the streams of a session
+// that ended, its internal error for a stream that failed.
+CO_TEST_P_X(MoQSessionTest, SubgroupResetsWithWebTransportCodes) {
+  co_await setupMoQSession();
+
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    eventBase_.add([pub] {
+      for (uint64_t group : {0, 1}) {
+        auto sgp = pub->beginSubgroup(group, 0, 0).value();
+        sgp->object(0, moxygen::test::makeBuf(10));
+      }
+    });
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  folly::coro::Baton objectsReceived;
+  folly::coro::Baton resetsReceived;
+  int objects = 0;
+  int resets = 0;
+  for (auto [group, code] :
+       {std::pair{0, ResetStreamErrorCode::SESSION_CLOSED},
+        std::pair{1, ResetStreamErrorCode::INTERNAL_ERROR}}) {
+    auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+    EXPECT_CALL(*subscribeCallback_, beginSubgroup(group, 0, 0, _))
+        .WillOnce(testing::Return(sg));
+    EXPECT_CALL(*sg, object(0, _, _, false)).WillOnce([&](auto...) {
+      if (++objects == 2) {
+        objectsReceived.post();
+      }
+      return folly::unit;
+    });
+    EXPECT_CALL(*sg, reset(code)).WillOnce([&](auto) {
+      if (++resets == 2) {
+        resetsReceived.post();
+      }
+    });
+  }
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await objectsReceived;
+
+  auto streams = newestUniStreams(*serverWt_, 2);
+  CO_ASSERT_EQ(streams.size(), 2);
+  streams[0]->resetStream(proxygen::WebTransport::kSessionGone);
+  streams[1]->resetStream(proxygen::WebTransport::kInternalError);
+  co_await resetsReceived;
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A connection that fails ends every stream with WebTransport's internal error
+// as the session closes, which the subscriber reports as SESSION_CLOSED.
+CO_TEST_P_X(MoQSessionTest, SubgroupFailingAsItsSessionClosesIsSessionClosed) {
+  co_await setupMoQSession();
+
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    eventBase_.add([pub] {
+      auto sgp = pub->beginSubgroup(0, 0, 0).value();
+      sgp->object(0, moxygen::test::makeBuf(10));
+    });
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto sg = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  folly::coro::Baton objectReceived;
+  folly::coro::Baton resetReceived;
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(0, _, _, false)).WillOnce([&](auto...) {
+    objectReceived.post();
+    return folly::unit;
+  });
+  EXPECT_CALL(*sg, reset(ResetStreamErrorCode::SESSION_CLOSED))
+      .WillOnce([&](auto) { resetReceived.post(); });
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await objectReceived;
+
+  auto streams = newestUniStreams(*serverWt_, 1);
+  CO_ASSERT_EQ(streams.size(), 1);
+  streams[0]->resetStream(proxygen::WebTransport::kInternalError);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await resetReceived;
+}
+
 // When two objects arrive in the same ingress and the app calls
 // unsubscribe() from the first object's callback, the second object must
 // NOT be delivered. obj0 is sent normally to fire beginSubgroup; obj1+obj2
