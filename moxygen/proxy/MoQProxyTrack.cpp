@@ -731,8 +731,82 @@ void MoQProxyTrack::saveJoiningFetchForUpstream(Fetch upstreamFetch) {
   if (!cache_ || joiningFetchRequest_) {
     return;
   }
-  // The next commit sends the actual upstream request.
   joiningFetchRequest_ = std::move(upstreamFetch);
+}
+
+void MoQProxyTrack::trySendJoiningFetchToCurrentUpstream() {
+  if (!joiningFetchRequest_ || !upstream_.session ||
+      (joiningFetchStatus_ && joiningFetchStatus_->accepted.isFulfilled()) ||
+      (joiningFetchAttempt_ && joiningFetchAttempt_->id == upstreamAttempt_)) {
+    return;
+  }
+  auto version = upstream_.session->getNegotiatedVersion();
+  if (!version || getDraftMajorVersion(*version) < 18 ||
+      useFillFetch(*version)) {
+    return;
+  }
+  if (!joiningFetchStatus_) {
+    joiningFetchStatus_ = std::make_shared<SharedJoiningFetchState>();
+  }
+
+  joiningFetchAttempt_.emplace(UpstreamJoiningFetchAttempt{});
+  joiningFetchAttempt_->id = upstreamAttempt_;
+  auto attempt = upstreamAttempt_;
+  auto session = upstream_.session;
+  auto cancellation = joiningFetchAttempt_->cancellation.getToken();
+  auto fetch = *joiningFetchRequest_;
+  joiningFetchAttempt_->writer = std::make_shared<MoQFetchCacheWriter>(
+      cache_,
+      [weak = weak_from_this(), attempt](bool) {
+        if (auto self = weak.lock()) {
+          self->joiningFetchFinished(attempt);
+        }
+      },
+      fetch.groupOrder);
+  auto writer = joiningFetchAttempt_->writer;
+  auto executor = session->getExecutor();
+  auto fetchTask = [](std::shared_ptr<MoQProxyTrack> self,
+                      uint64_t attempt,
+                      std::shared_ptr<MoQSession> session,
+                      Fetch fetch,
+                      std::shared_ptr<MoQFetchCacheWriter> writer)
+      -> folly::coro::Task<void> {
+    auto result = co_await folly::coro::co_awaitTry(
+        session->fetch(std::move(fetch), std::move(writer)));
+    if (result.hasException()) {
+      self->joiningFetchFailed(
+          attempt,
+          FetchError{
+              RequestID(0),
+              FetchErrorCode::INTERNAL_ERROR,
+              result.exception().what().toStdString()});
+      co_return;
+    }
+    if (result->hasError()) {
+      auto error = std::move(result->error());
+      error.requestID = RequestID(0);
+      self->joiningFetchFailed(attempt, std::move(error));
+      co_return;
+    }
+    if (!result->value()) {
+      self->joiningFetchFailed(
+          attempt,
+          FetchError{
+              RequestID(0),
+              FetchErrorCode::INTERNAL_ERROR,
+              "upstream returned a null joining FETCH handle"});
+      co_return;
+    }
+    self->joiningFetchAccepted(attempt, std::move(result->value()));
+  }(shared_from_this(),
+      attempt,
+      std::move(session),
+      std::move(fetch),
+      std::move(writer));
+  folly::coro::co_withExecutor(
+      std::move(executor),
+      folly::coro::co_withCancellation(cancellation, std::move(fetchTask)))
+      .start();
 }
 
 void MoQProxyTrack::joiningFetchAccepted(
@@ -804,6 +878,17 @@ void MoQProxyTrack::resolveJoiningFetchAttempt(uint64_t attempt) {
   operation.handle.reset();
 }
 
+void MoQProxyTrack::cancelJoiningFetchAttempt(uint64_t attempt) {
+  if (!joiningFetchAttempt_ || joiningFetchAttempt_->id != attempt) {
+    return;
+  }
+  joiningFetchAttempt_->cancellation.requestCancellation();
+  if (joiningFetchAttempt_->handle) {
+    joiningFetchAttempt_->handle->fetchCancel();
+  }
+  joiningFetchAttempt_.reset();
+}
+
 void MoQProxyTrack::failJoiningFetch(FetchError error) {
   if (!joiningFetchStatus_) {
     return;
@@ -853,8 +938,21 @@ void MoQProxyTrack::adoptFirstUpstream(UpstreamAttempt attempt) {
   }
   forwarder_->setExtensions(subscribeOk.extensions);
   upstream_ = std::move(attempt);
+  const bool joiningUnavailable = joiningFetchRequest_ && !joiningFetchAttempt_;
   setLargestObjectForPendingSubscribers();
   state_ = State::READY;
+  if (joiningUnavailable) {
+    joiningFetchRequest_.reset();
+    failJoiningFetch(
+        FetchError{
+            RequestID(0),
+            FetchErrorCode::NOT_SUPPORTED,
+            "upstream does not support joining FETCH"});
+  } else if (
+      joiningFetchAttempt_ && joiningFetchAttempt_->id == upstreamAttempt_) {
+    joiningFetchAttempt_->subscriptionAccepted = true;
+    resolveJoiningFetchAttempt(upstreamAttempt_);
+  }
   completeUpstreamEstablishment(std::nullopt);
 }
 
@@ -905,6 +1003,9 @@ MoQProxyTrack::establishWithProvider(
           track->onUpstreamGoaway(goaway);
         }
       });
+  upstream_.session = upstreamSession;
+  const auto attempt = ++upstreamAttempt_;
+
   auto upstreamRequest = subscribeRequest;
   upstreamRequest.priority = kDefaultPriority;
   upstreamRequest.groupOrder.reset();
@@ -913,7 +1014,7 @@ MoQProxyTrack::establishWithProvider(
   upstreamRequest.fill.reset();
   upstreamRequest.forward = forwarder_->numForwardingSubscribers() > 0;
 
-  auto upstreamVersion = upstreamSession->getNegotiatedVersion();
+  auto upstreamVersion = upstream_.session->getNegotiatedVersion();
   if (getDraftMajorVersion(downstream.version) >= 18 ||
       (upstreamVersion && getDraftMajorVersion(*upstreamVersion) >= 18)) {
     // TrackRequestParamKey::RENDEZVOUS_TIMEOUT changes meaning across
@@ -928,14 +1029,31 @@ MoQProxyTrack::establishWithProvider(
   // cut off without touching the next one.
   auto recorder =
       std::make_shared<Recorder>(forwarder_, cache_, weak_from_this());
-  auto abandonAttempt = folly::makeGuard([this, recorder] {
+  auto abandonAttempt = folly::makeGuard([this, recorder, attempt] {
+    cancelJoiningFetchAttempt(attempt);
     recorder->disable();
+    if (upstreamAttempt_ == attempt) {
+      upstream_.session.reset();
+    }
     if (cache_) {
       cache_->clear();
     }
   });
-  auto subscribeResult = co_await folly::coro::co_awaitTry(
-      upstreamSession->subscribe(std::move(upstreamRequest), recorder));
+  auto subscribeTask =
+      upstream_.session->subscribe(std::move(upstreamRequest), recorder);
+  folly::Try<Publisher::SubscribeResult> subscribeResult;
+  if (joiningFetchRequest_) {
+    auto subscribeFuture =
+        folly::coro::co_withExecutor(
+            upstream_.session->getExecutor(), std::move(subscribeTask))
+            .start();
+    trySendJoiningFetchToCurrentUpstream();
+    subscribeResult =
+        co_await folly::coro::co_awaitTry(std::move(subscribeFuture));
+  } else {
+    subscribeResult =
+        co_await folly::coro::co_awaitTry(std::move(subscribeTask));
+  }
   if (cancelled.isCancellationRequested()) {
     if (subscribeResult.hasValue() && subscribeResult->hasValue()) {
       if (auto handle = std::move(subscribeResult->value())) {
@@ -999,6 +1117,9 @@ void MoQProxyTrack::completeUpstreamEstablishment(
     return;
   }
   if (failure) {
+    joiningFetchRequest_.reset();
+    failJoiningFetch(
+        FetchError{RequestID(0), failure->errorCode, failure->reasonPhrase});
     pendingSubscribers_.clear();
   }
   upstreamSubscriptionPromiseResolved_ = true;
@@ -1108,6 +1229,11 @@ void MoQProxyTrack::close() {
 }
 
 void MoQProxyTrack::stopCaching() {
+  joiningFetchRequest_.reset();
+  cancelJoiningFetchAttempt(upstreamAttempt_);
+  failJoiningFetch(
+      FetchError{
+          RequestID(0), FetchErrorCode::INTERNAL_ERROR, "proxy track closed"});
   if (auto recorder = std::move(upstream_.recorder)) {
     recorder->disable();
   }

@@ -112,6 +112,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     return joiningFetchStatus_;
   }
   void saveJoiningFetchForUpstream(Fetch upstreamFetch);
+  void trySendJoiningFetchToCurrentUpstream();
   folly::Expected<JoiningRange, FetchError> resolveJoiningFetch(
       SessionId sessionId,
       RequestID fetchRequestID,
@@ -143,6 +144,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
 
   struct UpstreamJoiningFetchAttempt {
     uint64_t id{0};
+    folly::CancellationSource cancellation;
     std::optional<FetchError> error;
     std::shared_ptr<MoQFetchCacheWriter> writer;
     std::shared_ptr<Publisher::FetchHandle> handle;
@@ -218,6 +220,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   void joiningFetchFailed(uint64_t attempt, FetchError error);
   void joiningFetchFinished(uint64_t attempt);
   void resolveJoiningFetchAttempt(uint64_t attempt);
+  void cancelJoiningFetchAttempt(uint64_t attempt);
   void failJoiningFetch(FetchError error);
   void setLargestObjectForPendingSubscribers();
 
@@ -239,6 +242,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   std::optional<Fetch> joiningFetchRequest_;
   std::shared_ptr<SharedJoiningFetchState> joiningFetchStatus_;
   std::optional<UpstreamJoiningFetchAttempt> joiningFetchAttempt_;
+  uint64_t upstreamAttempt_{0};
   std::weak_ptr<Callback> callback_;
   folly::coro::SharedPromise<folly::Unit> upstreamSubscriptionReadyPromise_;
   std::optional<UpstreamEstablishmentFailure> upstreamSubscriptionFailure_;
