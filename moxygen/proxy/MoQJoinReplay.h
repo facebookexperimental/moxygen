@@ -29,6 +29,8 @@ folly::coro::Task<MoQGroupCache::Coverage> awaitCacheCoverage(
     std::chrono::milliseconds maxWait,
     folly::Timekeeper* timekeeper = nullptr);
 
+folly::coro::Task<void> awaitCacheChange(std::shared_ptr<MoQGroupCache> cache);
+
 struct MoQReplayConfig {
   // Longest wait for the consumer to accept the next write before the replay
   // is reset. Each object is one write, so this must cover draining the

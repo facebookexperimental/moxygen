@@ -134,7 +134,7 @@ class MoQProxy : public Publisher,
       MoQReplayPlan plan,
       std::shared_ptr<FetchConsumer> consumer);
 
-  folly::coro::Task<FetchResult> upstreamJoiningFetch(
+  folly::coro::Task<FetchResult> forwardHistoryFetch(
       std::shared_ptr<MoQProxyTrack> track,
       Fetch fetch,
       MoQProxyTrack::JoiningRange range,

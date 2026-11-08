@@ -950,9 +950,10 @@ std::vector<std::shared_ptr<MoQProxyTrack::SharedFetchState>>
 MoQProxyTrack::existingFetchesForRange(JoiningRange range) const {
   std::vector<std::shared_ptr<SharedFetchState>> fetches;
   auto add = [&](const std::shared_ptr<SharedFetchState>& status) {
-    if (status && status->range && !status->error &&
-        status->range->start < range.end && range.start < status->range->end &&
-        !status->finished.isFulfilled()) {
+    if (status && !status->error && !status->finished.isFulfilled() &&
+        (!status->range ||
+         (status->range->start < range.end &&
+          range.start < status->range->end))) {
       fetches.push_back(status);
     }
   };
@@ -1457,12 +1458,12 @@ void MoQProxyTrack::stopCaching() {
   }
 }
 
-folly::Expected<MoQProxyTrack::JoiningRange, FetchError>
+folly::Expected<std::optional<MoQProxyTrack::JoiningRange>, FetchError>
 MoQProxyTrack::resolveJoiningFetch(
-    SessionId sessionId,
+    SessionId downstreamSessionId,
     RequestID fetchRequestID,
     const JoiningFetch& joining) const {
-  auto subscriber = forwarder_->findSubscriber(sessionId);
+  auto subscriber = forwarder_->findSubscriber(downstreamSessionId);
   if (!subscriber || !joining.joiningRequestID ||
       subscriber->requestID != *joining.joiningRequestID) {
     return folly::makeUnexpected(
@@ -1481,6 +1482,9 @@ MoQProxyTrack::resolveJoiningFetch(
   // The saved Joining Location; never the track's current Largest.
   const auto& joiningLocation = subscriber->subscribeOk().largest;
   if (!joiningLocation) {
+    if (!upstreamSubscriptionPromiseResolved_) {
+      return std::optional<JoiningRange>{};
+    }
     return folly::makeUnexpected(
         FetchError{
             fetchRequestID,
@@ -1512,7 +1516,7 @@ MoQProxyTrack::resolveJoiningFetch(
             FetchErrorCode::INVALID_RANGE,
             "Joining Location has no representable successor"});
   }
-  return JoiningRange{start, *end};
+  return std::optional<JoiningRange>{JoiningRange{start, *end}};
 }
 
 const Extensions& MoQProxyTrack::trackExtensions() const {

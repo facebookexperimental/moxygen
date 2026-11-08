@@ -151,6 +151,15 @@ folly::coro::Task<MoQGroupCache::Coverage> waitForCoverage(
 
 } // namespace
 
+folly::coro::Task<void> awaitCacheChange(std::shared_ptr<MoQGroupCache> cache) {
+  auto changed = std::make_shared<TimedBaton>();
+  const auto waiter = cache->addWaiter([changed] { changed->signal(); });
+  SCOPE_EXIT {
+    cache->removeWaiter(waiter);
+  };
+  co_await changed->wait();
+}
+
 folly::coro::Task<MoQGroupCache::Coverage> awaitCacheCoverage(
     std::shared_ptr<MoQGroupCache> cache,
     AbsoluteLocation start,

@@ -119,8 +119,8 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       Fetch fetch,
       JoiningRange range);
 
-  folly::Expected<JoiningRange, FetchError> resolveJoiningFetch(
-      SessionId sessionId,
+  folly::Expected<std::optional<JoiningRange>, FetchError> resolveJoiningFetch(
+      SessionId downstreamSessionId,
       RequestID fetchRequestID,
       const JoiningFetch& joining) const;
 

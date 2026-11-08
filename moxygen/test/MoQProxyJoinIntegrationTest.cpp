@@ -59,8 +59,16 @@ class OriginPublisher : public Publisher {
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest sub,
       std::shared_ptr<TrackConsumer> consumer) override {
+    subscriptionID = sub.requestID;
     if (gate) {
       co_await *gate;
+    }
+    if (rejectSubscribe) {
+      co_return folly::makeUnexpected(
+          SubscribeError{
+              sub.requestID,
+              SubscribeErrorCode::INTERNAL_ERROR,
+              "subscription rejected"});
     }
     consumer->setTrackAlias(TrackAlias(sub.requestID.value));
     track = std::move(consumer);
@@ -79,8 +87,27 @@ class OriginPublisher : public Publisher {
   folly::coro::Task<FetchResult> fetch(
       Fetch fetch,
       std::shared_ptr<FetchConsumer> consumer) override {
+    const auto fetchIndex = fetches.size();
     fetches.push_back(fetch);
-    const auto* range = std::get_if<StandaloneFetch>(&fetch.args);
+    if (fetchGate) {
+      co_await *fetchGate;
+    }
+    std::optional<StandaloneFetch> joinedRange;
+    auto [range, joining] = fetchType(fetch);
+    if (joining && largest && joining->joiningRequestID == subscriptionID) {
+      auto end = largest->next();
+      if (end) {
+        AbsoluteLocation start{
+            joining->fetchType == FetchType::RELATIVE_JOINING
+                ? (joining->joiningStart > largest->group
+                       ? 0
+                       : largest->group - joining->joiningStart)
+                : joining->joiningStart,
+            0};
+        joinedRange.emplace(start, *end);
+        range = &*joinedRange;
+      }
+    }
     if (!history || !range) {
       co_return folly::makeUnexpected(
           FetchError{
@@ -88,11 +115,15 @@ class OriginPublisher : public Publisher {
               FetchErrorCode::NOT_SUPPORTED,
               "no history at the origin"});
     }
-    // An end object of 0 selects all of the end group.
+    auto end = range->end;
+    if (!joining && end.object == 0) {
+      end.group++;
+    }
+    if (fetchIndex < fetchEndLimits.size()) {
+      end = std::min(end, fetchEndLimits[fetchIndex]);
+    }
     auto inRange = [&](const AbsoluteLocation& location) {
-      return !(location < range->start) &&
-          (range->end.object == 0 ? location.group <= range->end.group
-                                  : location < range->end);
+      return !(location < range->start) && location < end;
     };
     std::vector<std::pair<AbsoluteLocation, uint64_t>> served;
     for (const auto& [location, subgroup] : *history) {
@@ -117,31 +148,41 @@ class OriginPublisher : public Publisher {
         fetch.requestID,
         GroupOrder::OldestFirst,
         /*endOfTrack=*/0,
-        range->end});
+        end});
   }
 
   std::shared_ptr<TrackConsumer> track;
   GroupOrder groupOrder{GroupOrder::OldestFirst};
   std::optional<AbsoluteLocation> largest{AbsoluteLocation{40, 0}};
+  std::optional<RequestID> subscriptionID;
   std::vector<Fetch> fetches;
   folly::coro::Baton* gate{nullptr};
+  folly::coro::Baton* fetchGate{nullptr};
+  std::vector<AbsoluteLocation> fetchEndLimits;
   const std::map<AbsoluteLocation, uint64_t>* history{nullptr};
+  bool rejectSubscribe{false};
 };
 
 class FixedUpstreamProvider : public MoQUpstreamProvider {
  public:
-  explicit FixedUpstreamProvider(std::shared_ptr<MoQSession> session)
-      : session_(std::move(session)) {}
+  FixedUpstreamProvider(
+      std::shared_ptr<MoQSession> session,
+      folly::coro::Baton* gate = nullptr)
+      : session_(std::move(session)), gate_(gate) {}
 
   folly::coro::Task<MoQUpstreamSessionResult> getSession(
       const FullTrackName&,
       const TrackRequestParameters&,
       bool) override {
+    if (gate_) {
+      co_await *gate_;
+    }
     co_return session_;
   }
 
  private:
   std::shared_ptr<MoQSession> session_;
+  folly::coro::Baton* gate_{nullptr};
 };
 
 class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t> {
@@ -151,6 +192,7 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t> {
       proxy_->close();
     }
     links_.closeClients();
+    fallbackLinks_.closeClients();
     // Detached coroutines may still hold keep-alives, so loop() would not
     // return.
     do {
@@ -170,12 +212,15 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t> {
         std::move(serverPublisher), std::move(serverSubscriber));
   }
 
-  folly::coro::Task<void> startProxy(MoQProxyOptions options = {}) {
+  folly::coro::Task<void> startProxy(
+      MoQProxyOptions options = {},
+      folly::coro::Baton* upstreamGate = nullptr) {
     upstreamLink_ = co_await connect(origin_);
     // Generous, so the completion below always lands inside the wait.
     options.cacheCompletionWait = 5s;
     proxy_ = MoQProxy::create(
-        {std::make_shared<FixedUpstreamProvider>(upstreamLink_->client)},
+        {std::make_shared<FixedUpstreamProvider>(
+            upstreamLink_->client, upstreamGate)},
         options);
   }
 
@@ -196,7 +241,8 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t> {
       std::shared_ptr<TrackConsumer> live,
       std::shared_ptr<FetchConsumer> history,
       uint64_t joiningStart,
-      GroupOrder groupOrder = GroupOrder::OldestFirst) {
+      GroupOrder groupOrder = GroupOrder::OldestFirst,
+      FetchType fetchType = FetchType::ABSOLUTE_JOINING) {
     return folly::coro::co_withExecutor(
                &eventBase_,
                viewer.client->join(
@@ -207,7 +253,7 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t> {
                    groupOrder,
                    {},
                    std::move(history),
-                   FetchType::ABSOLUTE_JOINING))
+                   fetchType))
         .start();
   }
 
@@ -258,6 +304,7 @@ class ProxyJoinIntegrationTest : public testing::TestWithParam<uint64_t> {
   // Outlives the sessions closed in TearDown, as a relay server's relay does.
   std::shared_ptr<MoQRelay> relay_;
   MoQTestLinks links_{GetParam(), executor_};
+  MoQTestLinks fallbackLinks_{kVersionDraft22, executor_};
   std::vector<std::shared_ptr<Publisher::SubscriptionHandle>> handles_;
 };
 
@@ -325,10 +372,213 @@ std::vector<std::string> historyThrough432() {
 
 } // namespace
 
+TEST_P(ProxyJoinIntegrationTest, DownstreamJoinStartsSharedUpstreamJoin) {
+  if (!useBidiRequestStreams(GetParam())) {
+    GTEST_SKIP();
+  }
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    folly::coro::Baton releaseSession;
+    folly::coro::Baton releaseSubscribe;
+    origin_->gate = &releaseSubscribe;
+    const std::map<AbsoluteLocation, uint64_t> history{
+        {{39, 0}, 0}, {{40, 0}, 0}};
+    origin_->history = &history;
+    co_await startProxy(
+        MoQProxyOptions{.maxGroupsPerTrack = 4}, &releaseSession);
+    auto* subscriber = co_await connect(proxy_);
+    auto subscription =
+        folly::coro::co_withExecutor(
+            &eventBase_,
+            subscriber->client->subscribe(
+                liveSubscribe(), std::make_shared<LiveViewerConsumer>()))
+            .start();
+    co_await settle();
+    EXPECT_TRUE(origin_->fetches.empty());
+
+    auto* secondViewer = co_await connect(proxy_);
+    auto* thirdViewer = co_await connect(proxy_);
+    auto firstFetched = std::make_shared<RecordingFetchConsumer>();
+    auto secondFetched = std::make_shared<RecordingFetchConsumer>();
+
+    auto firstJoin = startJoin(
+        *secondViewer,
+        std::make_shared<LiveViewerConsumer>(),
+        firstFetched,
+        1,
+        GroupOrder::OldestFirst,
+        FetchType::RELATIVE_JOINING);
+    co_await settle();
+    EXPECT_TRUE(origin_->fetches.empty());
+    releaseSession.post();
+    CO_ASSERT_TRUE(co_await waitUntil([&] {
+      return origin_->subscriptionID.has_value();
+    }));
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return origin_->fetches.size() == 1; }));
+    auto secondJoin = startJoin(
+        *thirdViewer,
+        std::make_shared<LiveViewerConsumer>(),
+        secondFetched,
+        1,
+        GroupOrder::OldestFirst,
+        FetchType::RELATIVE_JOINING);
+    co_await settle();
+    const auto* upstreamFetch =
+        std::get_if<JoiningFetch>(&origin_->fetches[0].args);
+    CO_ASSERT_TRUE(upstreamFetch);
+    EXPECT_EQ(upstreamFetch->joiningRequestID, origin_->subscriptionID);
+
+    releaseSubscribe.post();
+    auto subscriptionResult = co_await std::move(subscription);
+    auto firstResult = co_await std::move(firstJoin);
+    auto secondResult = co_await std::move(secondJoin);
+    CO_ASSERT_TRUE(subscriptionResult.hasValue());
+    CO_ASSERT_TRUE(firstResult.subscribeResult.hasValue());
+    CO_ASSERT_TRUE(firstResult.fetchResult.hasValue());
+    CO_ASSERT_TRUE(secondResult.subscribeResult.hasValue());
+    CO_ASSERT_TRUE(secondResult.fetchResult.hasValue());
+    CO_ASSERT_EQ(origin_->fetches.size(), 1);
+    EXPECT_EQ(
+        firstResult.fetchResult.value()->fetchOk().endLocation,
+        secondResult.fetchResult.value()->fetchOk().endLocation);
+  }));
+}
+
+TEST_P(ProxyJoinIntegrationTest, SharedJoinFallsBackToExactFetch) {
+  if (GetParam() != kVersionDraft18) {
+    GTEST_SKIP();
+  }
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    folly::coro::Baton releasePrimarySubscribe;
+    folly::coro::Baton releasePrimaryFetch;
+    auto primary = std::make_shared<OriginPublisher>();
+    primary->gate = &releasePrimarySubscribe;
+    primary->fetchGate = &releasePrimaryFetch;
+    primary->rejectSubscribe = true;
+    const std::map<AbsoluteLocation, uint64_t> history{
+        {{39, 0}, 0}, {{40, 0}, 0}};
+    origin_->history = &history;
+
+    auto* primaryLink = co_await connect(primary);
+    auto* fallbackLink = co_await fallbackLinks_.connect(origin_);
+    proxy_ = MoQProxy::create(
+        {std::make_shared<FixedUpstreamProvider>(primaryLink->client),
+         std::make_shared<FixedUpstreamProvider>(fallbackLink->client)},
+        MoQProxyOptions{.maxGroupsPerTrack = 4, .cacheCompletionWait = 5s});
+    auto* viewer = co_await connect(proxy_);
+    auto join = startJoin(
+        *viewer,
+        std::make_shared<LiveViewerConsumer>(),
+        std::make_shared<RecordingFetchConsumer>(),
+        1,
+        GroupOrder::OldestFirst,
+        FetchType::RELATIVE_JOINING);
+
+    const bool fetchedPrimary =
+        co_await waitUntil([&] { return primary->fetches.size() == 1; });
+    releasePrimarySubscribe.post();
+    releasePrimaryFetch.post();
+    CO_ASSERT_TRUE(fetchedPrimary);
+    CO_ASSERT_TRUE(std::get_if<JoiningFetch>(&primary->fetches[0].args));
+    const bool fetchedFallback =
+        co_await waitUntil([&] { return origin_->fetches.size() == 1; });
+    CO_ASSERT_TRUE(fetchedFallback);
+    const auto* exact = std::get_if<StandaloneFetch>(&origin_->fetches[0].args);
+    CO_ASSERT_TRUE(exact);
+    EXPECT_EQ(exact->start, (AbsoluteLocation{39, 0}));
+    EXPECT_EQ(exact->end, (AbsoluteLocation{40, 1}));
+
+    auto result = co_await std::move(join);
+    EXPECT_TRUE(result.subscribeResult.hasValue());
+    EXPECT_TRUE(result.fetchResult.hasValue());
+  }));
+}
+
+TEST_P(ProxyJoinIntegrationTest, OverlappingJoinsFetchOnlyUncoveredHistory) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    const std::map<AbsoluteLocation, uint64_t> history{
+        {{38, 0}, 0}, {{39, 0}, 0}, {{40, 0}, 0}};
+    origin_->history = &history;
+    co_await startProxy(MoQProxyOptions{.maxGroupsPerTrack = 4});
+    co_await warmViewer();
+    publishGroup(40, 1);
+    folly::coro::Baton releaseFetches;
+    origin_->fetchGate = &releaseFetches;
+
+    auto* firstViewer = co_await connect(proxy_);
+    auto* secondViewer = co_await connect(proxy_);
+    auto firstJoin = startJoin(
+        *firstViewer,
+        std::make_shared<LiveViewerConsumer>(),
+        std::make_shared<RecordingFetchConsumer>(),
+        39);
+    co_await settle();
+    EXPECT_EQ(origin_->fetches.size(), 1);
+
+    auto secondJoin = startJoin(
+        *secondViewer,
+        std::make_shared<LiveViewerConsumer>(),
+        std::make_shared<RecordingFetchConsumer>(),
+        38);
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return origin_->fetches.size() == 2; }));
+    releaseFetches.post();
+    const auto* first = std::get_if<StandaloneFetch>(&origin_->fetches[0].args);
+    const auto* second =
+        std::get_if<StandaloneFetch>(&origin_->fetches[1].args);
+    CO_ASSERT_TRUE(first);
+    EXPECT_EQ(first->start, (AbsoluteLocation{39, 0}));
+    EXPECT_EQ(first->end, (AbsoluteLocation{39, 0}));
+    CO_ASSERT_TRUE(second);
+    EXPECT_EQ(second->start, (AbsoluteLocation{38, 0}));
+    EXPECT_EQ(second->end, (AbsoluteLocation{38, 0}));
+
+    EXPECT_TRUE((co_await std::move(firstJoin)).fetchResult.hasValue());
+    EXPECT_TRUE((co_await std::move(secondJoin)).fetchResult.hasValue());
+  }));
+}
+
+TEST_P(ProxyJoinIntegrationTest, ShortSharedFetchFetchesTheRemainingGap) {
+  if (!useBidiRequestStreams(GetParam())) {
+    GTEST_SKIP();
+  }
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    const std::map<AbsoluteLocation, uint64_t> history{
+        {{38, 0}, 0}, {{39, 0}, 0}, {{40, 0}, 0}};
+    origin_->history = &history;
+    origin_->fetchEndLimits = {{40, 0}};
+    folly::coro::Baton releaseSubscribe;
+    origin_->gate = &releaseSubscribe;
+    co_await startProxy(MoQProxyOptions{.maxGroupsPerTrack = 4});
+    auto* viewer = co_await connect(proxy_);
+    auto fetched = std::make_shared<RecordingFetchConsumer>();
+
+    auto join =
+        startJoin(*viewer, std::make_shared<LiveViewerConsumer>(), fetched, 38);
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return origin_->fetches.size() == 1; }));
+    EXPECT_NE(std::get_if<JoiningFetch>(&origin_->fetches[0].args), nullptr);
+
+    releaseSubscribe.post();
+    auto result = co_await std::move(join);
+
+    CO_ASSERT_TRUE(result.fetchResult.hasValue());
+    CO_ASSERT_EQ(origin_->fetches.size(), 2);
+    const auto* remainder =
+        std::get_if<StandaloneFetch>(&origin_->fetches[1].args);
+    CO_ASSERT_TRUE(remainder);
+    EXPECT_EQ(remainder->start, (AbsoluteLocation{40, 0}));
+    EXPECT_EQ(remainder->end, (AbsoluteLocation{40, 1}));
+    EXPECT_EQ(
+        historyLocations(fetched->log),
+        (std::vector<AbsoluteLocation>{{38, 0}, {39, 0}, {40, 0}}));
+  }));
+}
+
 // The principal scenario: groups 41 and 42 completed by the header flag and
 // a clean FIN, group 43 mid-object. Joiners whose Joining Location is that
 // object wait for it locally, receive complete history through it, and then
-// only later locations live. The origin is never asked for history.
+// only later locations live. No additional origin fetch is needed.
 TEST_P(ProxyJoinIntegrationTest, MidObjectJoinsAreServedFromTheProxyCache) {
   run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
     co_await startProxy();
