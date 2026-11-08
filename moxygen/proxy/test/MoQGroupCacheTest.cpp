@@ -173,6 +173,33 @@ TEST(MoQGroupCacheTest, FailedFetchKeepsCompletedGroups) {
   EXPECT_EQ(wholeGroups(*cache, 20, 20), Coverage::Ready);
 }
 
+TEST(MoQGroupCacheTest, FailedFetchPreservesConcurrentWriterData) {
+  auto cache = std::make_shared<MoQGroupCache>(4, makeBudget());
+  bool failedCacheable = true;
+  bool survivorCacheable = false;
+  auto failed = fetchWriter(cache, {20, 0}, {21, 0}, failedCacheable);
+  auto survivor = fetchWriter(cache, {10, 0}, {12, 0}, survivorCacheable);
+  ASSERT_TRUE(failed->object(20, 0, 0, bytes(1), noExtensions(), false, false)
+                  .hasValue());
+  ASSERT_TRUE(survivor->object(10, 0, 0, bytes(1), noExtensions(), false, false)
+                  .hasValue());
+
+  failed->invalidate();
+
+  EXPECT_FALSE(failedCacheable);
+  EXPECT_EQ(cache->inspect({20, 0}, {20, 1}), Coverage::Ready);
+  ASSERT_TRUE(survivor->object(10, 0, 1, bytes(1), noExtensions(), false, false)
+                  .hasValue());
+  ASSERT_TRUE(survivor->object(11, 0, 0, bytes(1), noExtensions(), true, false)
+                  .hasValue());
+  ASSERT_TRUE(survivorCacheable);
+  auto plan = cache->snapshot({10, 0}, {12, 0}, GroupOrder::OldestFirst);
+  ASSERT_TRUE(plan.has_value());
+  EXPECT_EQ(
+      locations(*plan),
+      (std::vector<AbsoluteLocation>{{10, 0}, {10, 1}, {11, 0}}));
+}
+
 TEST(MoQGroupCacheTest, AbortAfterCleanFetchRejectsLateRange) {
   auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
   std::optional<bool> cacheable;
@@ -205,7 +232,7 @@ TEST(MoQGroupCacheTest, ValidatesDataThatPrecedesFetchOk) {
   EXPECT_TRUE(*cacheable);
 }
 
-TEST(MoQGroupCacheTest, RejectsEarlyDataOutsideFetchOkRange) {
+TEST(MoQGroupCacheTest, RejectsFetchOkRangeThatExcludesEarlyData) {
   auto cache = std::make_shared<MoQGroupCache>(3, makeBudget());
   std::optional<bool> cacheable;
   auto writer = std::make_shared<MoQFetchCacheWriter>(
@@ -217,7 +244,7 @@ TEST(MoQGroupCacheTest, RejectsEarlyDataOutsideFetchOkRange) {
 
   ASSERT_TRUE(cacheable.has_value());
   EXPECT_FALSE(*cacheable);
-  EXPECT_EQ(cache->inspect({7, 0}, {7, 1}), Coverage::Miss);
+  EXPECT_EQ(cache->inspect({7, 0}, {7, 1}), Coverage::Ready);
 }
 
 TEST(MoQGroupCacheTest, RejectsDataOutsideRequestedBoundsBeforeFetchOk) {

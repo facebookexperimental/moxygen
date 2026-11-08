@@ -360,9 +360,6 @@ class MoQFetchCacheWriter::CacheSink final
       return;
     }
     pending_.reset();
-    if (auto cache = cache_.lock()) {
-      cache->clear();
-    }
   }
 
   void markCurrentGroupUncacheable() {
