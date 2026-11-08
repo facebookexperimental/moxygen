@@ -30,6 +30,13 @@ class MoQGroupCache {
   using Coverage = MoQCacheCoverage;
   using Result = MoQCacheResult;
 
+  struct Range {
+    AbsoluteLocation start;
+    AbsoluteLocation end;
+
+    bool operator==(const Range&) const = default;
+  };
+
   // maxGroups == 0 disables caching.
   MoQGroupCache(size_t maxGroups, std::shared_ptr<MoQCacheBudget> budget);
   ~MoQGroupCache();
@@ -89,6 +96,8 @@ class MoQGroupCache {
   // --- Joining FETCH ---
 
   Coverage inspect(AbsoluteLocation start, AbsoluteLocation end) const;
+  std::vector<Range> missingRanges(AbsoluteLocation start, AbsoluteLocation end)
+      const;
   // Only for a Ready range. Nullopt if the plan cannot be charged.
   std::optional<MoQReplayPlan> snapshot(
       AbsoluteLocation start,

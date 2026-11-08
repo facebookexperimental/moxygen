@@ -222,6 +222,70 @@ MoQCacheCoverage MoQCachedGroup::coverage(
   return anyOpen ? MoQCacheCoverage::AwaitIngress : MoQCacheCoverage::Miss;
 }
 
+std::vector<MoQIdRange> MoQCachedGroup::availableRanges(
+    uint64_t start,
+    std::optional<uint64_t> end) const {
+  if (cachingDisabled_) {
+    return {};
+  }
+  uint64_t limit = end.value_or(start);
+  if (!end) {
+    if (endExclusive_) {
+      limit = *endExclusive_;
+    } else {
+      if (!objects_.empty()) {
+        limit = std::max(limit, objects_.rbegin()->first + 1);
+      }
+      if (auto gapEnd = gaps_.lastEnd()) {
+        limit = std::max(limit, *gapEnd);
+      }
+    }
+  }
+
+  std::vector<MoQIdRange> ranges;
+  auto object = objects_.lower_bound(start);
+  std::optional<uint64_t> rangeStart;
+  auto position = start;
+  while (position < limit) {
+    std::optional<uint64_t> availableEnd;
+    if (object != objects_.end() && object->first == position) {
+      availableEnd = position + 1;
+      ++object;
+    } else if (auto gapEnd = gaps_.endContaining(position)) {
+      availableEnd = std::min(*gapEnd, limit);
+    } else if (mayStillArrive(position)) {
+      availableEnd = limit;
+      if (object != objects_.end()) {
+        availableEnd = std::min(*availableEnd, object->first);
+      }
+      if (auto gapStart = gaps_.nextStartAfter(position)) {
+        availableEnd = std::min(*availableEnd, *gapStart);
+      }
+    }
+    if (availableEnd) {
+      rangeStart = rangeStart.value_or(position);
+      position = *availableEnd;
+      continue;
+    }
+    if (rangeStart) {
+      ranges.push_back({*rangeStart, position});
+      rangeStart.reset();
+    }
+    auto next = limit;
+    if (object != objects_.end()) {
+      next = std::min(next, object->first);
+    }
+    if (auto gapStart = gaps_.nextStartAfter(position)) {
+      next = std::min(next, *gapStart);
+    }
+    position = next;
+  }
+  if (rangeStart) {
+    ranges.push_back({*rangeStart, limit});
+  }
+  return ranges;
+}
+
 void MoQCachedGroup::collect(
     uint64_t groupID,
     uint64_t first,

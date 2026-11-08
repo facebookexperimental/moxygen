@@ -362,6 +362,77 @@ MoQGroupCache::Coverage MoQGroupCache::inspect(
   return coverage;
 }
 
+std::vector<MoQGroupCache::Range> MoQGroupCache::missingRanges(
+    AbsoluteLocation start,
+    AbsoluteLocation end) const {
+  if (!(start < end)) {
+    return {};
+  }
+  std::vector<Range> missing{{start, end}};
+  auto subtract = [&missing](Range available) {
+    std::vector<Range> next;
+    for (const auto& gap : missing) {
+      if (available.end <= gap.start || gap.end <= available.start) {
+        next.push_back(gap);
+        continue;
+      }
+      if (gap.start < available.start) {
+        next.push_back({gap.start, available.start});
+      }
+      if (available.end < gap.end) {
+        next.push_back({available.end, gap.end});
+      }
+    }
+    missing = std::move(next);
+  };
+
+  auto group = start.group;
+  while (AbsoluteLocation{group, 0} < end) {
+    if (auto nonexistentEnd = nonexistentGroups_.endContaining(group)) {
+      subtract(Range{{group, 0}, {*nonexistentEnd, 0}});
+      group = *nonexistentEnd;
+      continue;
+    }
+    auto next = nonexistentGroups_.nextStartAfter(group);
+    if (!next || !(AbsoluteLocation{*next, 0} < end)) {
+      break;
+    }
+    group = *next;
+  }
+
+  for (auto it = groups_.lower_bound(start.group);
+       it != groups_.end() && AbsoluteLocation{it->first, 0} < end;
+       ++it) {
+    const auto groupID = it->first;
+    const auto first = groupID == start.group ? start.object : 0;
+    std::optional<uint64_t> limit;
+    AbsoluteLocation groupEnd;
+    if (groupID == end.group) {
+      limit = end.object;
+      groupEnd = end;
+    } else {
+      groupEnd = {groupID + 1, 0};
+    }
+    auto groupStart = AbsoluteLocation{groupID, first};
+    if (!(groupStart < groupEnd)) {
+      continue;
+    }
+    if (it->second.coverage(first, limit) != Coverage::Miss) {
+      subtract(Range{groupStart, groupEnd});
+      continue;
+    }
+    for (auto available : it->second.availableRanges(first, limit)) {
+      subtract(Range{{groupID, available.start}, {groupID, available.end}});
+    }
+    if (!limit) {
+      if (auto endExclusive = it->second.endExclusive()) {
+        subtract(Range{{groupID, *endExclusive}, {groupID + 1, 0}});
+      }
+    }
+  }
+  return missing;
+}
+
 std::optional<MoQReplayPlan> MoQGroupCache::snapshot(
     AbsoluteLocation start,
     AbsoluteLocation end,

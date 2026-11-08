@@ -784,6 +784,38 @@ TEST(MoQGroupCacheTest, LostDatagramIsAMiss) {
   EXPECT_EQ(cache.inspect({1, 0}, {1, 1}), Coverage::Ready);
 }
 
+TEST(MoQGroupCacheTest, MissingRangesExcludeCachedObjects) {
+  MoQGroupCache cache(3, makeBudget());
+  for (uint64_t objectID : {0, 2}) {
+    ASSERT_EQ(
+        cache.standaloneObject(
+            ObjectHeader(7, 0, objectID), bytes(1), /*datagram=*/true),
+        Result::Recorded);
+  }
+  recordGroup(cache, 9, 1);
+
+  EXPECT_EQ(
+      cache.missingRanges({7, 0}, {10, 0}),
+      (std::vector<MoQGroupCache::Range>{{{7, 1}, {7, 2}}, {{7, 3}, {9, 0}}}));
+}
+
+TEST(MoQGroupCacheTest, MissingRangesExcludeKnownGroupTail) {
+  MoQGroupCache cache(3, makeBudget());
+  ASSERT_TRUE(cache.openSubgroup(7, 0, false));
+  ASSERT_EQ(
+      cache.subgroupObject(
+          7, 0, 0, ObjectStatus::NORMAL, bytes(1), noExtensions()),
+      Result::Recorded);
+  ASSERT_EQ(
+      cache.subgroupObject(
+          7, 0, 2, ObjectStatus::END_OF_GROUP, nullptr, noExtensions()),
+      Result::Recorded);
+
+  EXPECT_EQ(
+      cache.missingRanges({7, 0}, {8, 0}),
+      (std::vector<MoQGroupCache::Range>{{{7, 1}, {7, 2}}}));
+}
+
 TEST(MoQGroupCacheTest, ConflictingDuplicateIsMalformed) {
   MoQGroupCache cache(3, makeBudget());
   ASSERT_TRUE(cache.openSubgroup(1, 0, false));
@@ -798,6 +830,9 @@ TEST(MoQGroupCacheTest, ConflictingDuplicateIsMalformed) {
 
   EXPECT_EQ(result, Result::Malformed);
   EXPECT_EQ(cache.inspect({1, 0}, {1, 1}), Coverage::Miss);
+  EXPECT_EQ(
+      cache.missingRanges({1, 0}, {1, 1}),
+      (std::vector<MoQGroupCache::Range>{{{1, 0}, {1, 1}}}));
 }
 
 TEST(MoQGroupCacheTest, PayloadBeyondDeclaredLengthIsMalformed) {

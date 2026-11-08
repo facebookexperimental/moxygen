@@ -89,12 +89,18 @@ class MoQCachedGroup {
       std::shared_ptr<const MoQCachedObject> object,
       bool updateSubgroupProgress = true);
   MoQCacheResult completeFetch(uint64_t start, std::optional<uint64_t> end);
+  std::optional<uint64_t> endExclusive() const {
+    return endExclusive_;
+  }
 
   // --- Joining FETCH ---
 
   // Whether objects [start, end) are proven; without an end, through the
   // group's last object.
   MoQCacheCoverage coverage(uint64_t start, std::optional<uint64_t> end) const;
+  std::vector<MoQIdRange> availableRanges(
+      uint64_t start,
+      std::optional<uint64_t> end) const;
   // Appends the objects from `first` up to the exclusive `end`.
   void collect(
       uint64_t groupID,
