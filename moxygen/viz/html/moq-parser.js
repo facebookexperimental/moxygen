@@ -1,4 +1,4 @@
-/*
+/**
  * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
@@ -49,27 +49,25 @@ class MoQParser {
     }
 
     /**
-     * Parse QLOG JSON data and extract MoQ events
-     * @param {Object} qlogData - Raw QLOG JSON data
+     * Parse MoQ log data in serialized NDJSON format.
+     * Each line is a JSON object: {vantagePoint, name, time, data}
+     * @param {string} input - NDJSON string (newline-separated JSON objects)
      * @returns {Object} Parsed timeline data
      */
-    parseQLog(qlogData) {
+    parseQLog(input) {
         try {
-            // Validate QLOG structure
-            if (!qlogData || !qlogData.traces || qlogData.traces.length === 0) {
-                throw new Error('Invalid QLOG format: No traces found');
+            // Parse NDJSON: split by newlines and parse each line
+            const rawEvents = this.parseNDJSON(input);
+
+            if (rawEvents.length === 0) {
+                throw new Error('No valid MoQ events found in input');
             }
 
-            const trace = qlogData.traces[0];
-            if (!trace.events || !Array.isArray(trace.events)) {
-                throw new Error('Invalid QLOG format: No events found in trace');
-            }
+            // Extract metadata from events
+            const metadata = this.extractMetadata(rawEvents);
 
-            // Extract metadata
-            const metadata = this.extractMetadata(trace);
-
-            // Process events
-            const events = this.processEvents(trace.events);
+            // Process events into normalized format
+            const events = this.processEvents(rawEvents);
 
             // Group events by tracks
             const tracks = this.groupEventsByTracks(events);
@@ -86,29 +84,59 @@ class MoQParser {
                 eventStats: this.calculateEventStats(events)
             };
         } catch (error) {
-            console.error('Error parsing QLOG:', error);
+            console.error('Error parsing MoQ log data:', error);
             throw error;
         }
     }
 
     /**
-     * Extract metadata from QLOG trace
-     * @param {Object} trace - QLOG trace object
+     * Parse NDJSON string into array of event objects
+     * @param {string} input - NDJSON string
+     * @returns {Array} Array of parsed event objects
+     */
+    parseNDJSON(input) {
+        if (typeof input !== 'string') {
+            throw new Error('Expected NDJSON string input');
+        }
+
+        const lines = input.split('\n').filter(line => line.trim().length > 0);
+        const events = [];
+
+        for (let i = 0; i < lines.length; i++) {
+            try {
+                const parsed = JSON.parse(lines[i]);
+                if (parsed && parsed.name && parsed.time !== undefined) {
+                    events.push(parsed);
+                }
+            } catch (e) {
+                console.warn(`Skipping malformed JSON at line ${i + 1}:`, e.message);
+            }
+        }
+
+        return events;
+    }
+
+    /**
+     * Extract metadata from parsed event objects
+     * @param {Array} events - Array of parsed NDJSON event objects
      * @returns {Object} Metadata object
      */
-    extractMetadata(trace) {
+    extractMetadata(events) {
+        // Determine vantage point from first event
+        const firstVantage = events.length > 0 ? events[0].vantagePoint : 'client';
+
         return {
-            title: trace.title || 'MoQ Transport Session',
-            description: trace.description || 'Media over QUIC data transfer visualization',
-            vantage_point: trace.vantage_point || { type: 'client' },
-            configuration: trace.configuration || {},
-            start_time: this.extractStartTime(trace.events)
+            title: 'MoQ Transport Session',
+            description: 'Media over QUIC data transfer visualization',
+            vantage_point: { type: firstVantage },
+            configuration: {},
+            start_time: this.extractStartTime(events)
         };
     }
 
     /**
      * Extract start time from events
-     * @param {Array} events - Array of QLOG events
+     * @param {Array} events - Array of parsed NDJSON event objects
      * @returns {number} Start time in milliseconds
      */
     extractStartTime(events) {
@@ -127,65 +155,152 @@ class MoQParser {
     }
 
     /**
-     * Parse event timestamp
-     * @param {Array} event - QLOG event array [time, category, name, data]
+     * Parse event timestamp from serialized MLog event.
+     * The "time" field is nanoseconds as a string.
+     * @param {Object} event - Parsed event object with "time" field
      * @returns {number} Timestamp in milliseconds
      */
     parseEventTime(event) {
-        if (!Array.isArray(event) || event.length < 1) return 0;
+        if (!event || event.time === undefined) return 0;
 
-        const timeValue = event[0];
+        const timeValue = event.time;
 
-        // Handle different time formats
-        if (typeof timeValue === 'number') {
-            // Assume microseconds if > 1e12, otherwise milliseconds
-            return timeValue > 1e12 ? timeValue / 1000 : timeValue;
-        } else if (typeof timeValue === 'string') {
-            return new Date(timeValue).getTime();
+        // time is nanoseconds as a string in MLog format
+        if (typeof timeValue === 'string') {
+            const ns = parseInt(timeValue, 10);
+            if (!isNaN(ns)) {
+                // Convert nanoseconds to milliseconds
+                return ns / 1000000;
+            }
+        } else if (typeof timeValue === 'number') {
+            // If already a number, treat as nanoseconds
+            return timeValue / 1000000;
         }
 
         return 0;
     }
 
     /**
-     * Process QLOG events and extract MoQ-specific data
-     * @param {Array} rawEvents - Raw QLOG events
+     * Process serialized MLog events and extract MoQ-specific data.
+     * Each rawEvent is an object: {vantagePoint, name, time, data}
+     *
+     * The "data" field structure depends on event type and matches the
+     * toDynamic() output from C++ MLogTypes (see MLogTypes.cpp).
+     *
+     * @param {Array} rawEvents - Array of parsed NDJSON event objects
      * @returns {Array} Processed MoQ events
      */
     processEvents(rawEvents) {
         const processedEvents = [];
 
+        // Build stream_id -> track_alias mapping from subgroup/fetch headers.
+        // Subgroup headers contain both stream_id and track_alias, but
+        // subgroup objects only contain streamId. We need the mapping to
+        // assign subgroup objects to the correct track.
+        const streamToTrackAlias = {};
+
+        // Reconstruct track names for track_alias values.
+        // Track-based events often only carry track_alias (or only streamId),
+        // so we bridge via control messages:
+        //   subscribe (request_id -> track_name/namespace)
+        //   subscribe_ok (track_alias -> request_id)
+        // Then: track_alias -> track_name.
+        const requestIdToTrackInfo = {};
+        const trackAliasToRequestId = {};
+
+        for (const rawEvent of rawEvents) {
+            const eventName = rawEvent.name;
+            const eventData = rawEvent.data;
+            if (!eventName || !eventData) continue;
+
+            if (eventName.includes('subgroup_header')) {
+                // SubgroupHeader toDynamic uses snake_case: stream_id, track_alias
+                const sid = eventData.stream_id;
+                const ta = eventData.track_alias;
+                if (sid !== undefined && ta !== undefined) {
+                    streamToTrackAlias[String(sid)] = ta;
+                }
+            }
+
+            if (eventName.includes('control_message') && eventData.message) {
+                const msg = eventData.message;
+
+                if (msg.type === 'subscribe' && msg.request_id !== undefined) {
+                    requestIdToTrackInfo[String(msg.request_id)] = {
+                        track_name: msg.track_name,
+                        track_namespace: msg.track_namespace,
+                    };
+                }
+
+                if (msg.type === 'subscribe_ok' && msg.track_alias !== undefined && msg.request_id !== undefined) {
+                    trackAliasToRequestId[String(msg.track_alias)] = String(msg.request_id);
+                }
+            }
+        }
+
+        this._streamToTrackAlias = streamToTrackAlias;
+
+        const trackAliasToDisplayName = {};
+        const trackAliasToFullName = {};
+        Object.keys(trackAliasToRequestId).forEach(trackAlias => {
+            const requestId = trackAliasToRequestId[trackAlias];
+            const info = requestIdToTrackInfo[requestId];
+            if (info && info.track_name) {
+                const ns = Array.isArray(info.track_namespace) ? info.track_namespace : [];
+                const trackName = String(info.track_name);
+                const fullName = ns.length > 0 ? ns.join('/') + '/' + trackName : trackName;
+                trackAliasToFullName[trackAlias] = fullName;
+                const MAX_DISPLAY_LEN = 50;
+                if (fullName.length <= MAX_DISPLAY_LEN || ns.length <= 4) {
+                    trackAliasToDisplayName[trackAlias] = fullName;
+                } else {
+                    // Truncate namespace elements in the middle, keeping
+                    // the first 2 and last 2 elements with "..." between.
+                    var keepStart = 2;
+                    var keepEnd = 2;
+                    var truncatedNs = ns.slice(0, keepStart).concat(['...']).concat(ns.slice(ns.length - keepEnd)).join('/');
+                    var truncated = truncatedNs + '/' + trackName;
+                    if (truncated.length > MAX_DISPLAY_LEN && ns.length > 2) {
+                        // Still too long; keep only first 1 and last 1
+                        truncatedNs = ns.slice(0, 1).concat(['...']).concat(ns.slice(ns.length - 1)).join('/');
+                        trackAliasToDisplayName[trackAlias] = truncatedNs + '/' + trackName;
+                    } else {
+                        trackAliasToDisplayName[trackAlias] = truncated;
+                    }
+                }
+            }
+        });
+        this._trackAliasToDisplayName = trackAliasToDisplayName;
+        this._trackAliasToFullName = trackAliasToFullName;
+
         for (let i = 0; i < rawEvents.length; i++) {
             const rawEvent = rawEvents[i];
 
-            if (!Array.isArray(rawEvent) || rawEvent.length < 3) {
-                console.warn(`Skipping malformed event at index ${i}:`, rawEvent);
-                continue;
-            }
+            const eventName = rawEvent.name;
+            const eventData = rawEvent.data || {};
+            const vantagePoint = rawEvent.vantagePoint || 'client';
 
-            const [time, category, eventName, eventData] = rawEvent;
-
-            // Only process MoQ events
-            if (!this.isMoQEvent(eventName)) {
+            // Only process MoQ events, skip stream_type_set events
+            if (!eventName || !this.isMoQEvent(eventName) || eventName === this.eventTypes.STREAM_TYPE_SET) {
                 continue;
             }
 
             const processedEvent = {
                 id: `event_${i}`,
-                originalIndex: i, // Track file order for secondary sorting
+                originalIndex: i,
                 timestamp: this.parseEventTime(rawEvent),
                 relative_time: 0, // Will be calculated later
-                category: category || 'transport',
+                category: 'transport',
                 name: eventName,
-                data: eventData || {},
-                vantage_point: this.determineVantagePoint(eventName, eventData),
+                data: eventData,
+                vantage_point: vantagePoint.toLowerCase(),
                 event_category: this.categorizeEvent(eventName, eventData),
-                track_id: this.extractTrackId(eventData),
-                group_id: this.extractGroupId(eventData),
-                subgroup_id: this.extractSubgroupId(eventData),
-                object_id: this.extractObjectId(eventData),
-                object_size: this.extractObjectSize(eventData),
-                control_message_type: this.extractControlMessageType(eventData),
+                track_id: this.extractTrackId(eventName, eventData),
+                group_id: this.extractGroupId(eventName, eventData),
+                subgroup_id: this.extractSubgroupId(eventName, eventData),
+                object_id: this.extractObjectId(eventName, eventData),
+                object_size: this.extractObjectSize(eventName, eventData),
+                control_message_type: this.extractControlMessageType(eventName, eventData),
                 raw_event: rawEvent
             };
 
@@ -218,45 +333,18 @@ class MoQParser {
     }
 
     /**
-     * Determine vantage point from event data
-     * @param {string} eventName - Event name
-     * @param {Object} eventData - Event data
-     * @returns {string} Vantage point (client or server)
-     */
-    determineVantagePoint(eventName, eventData) {
-        // Check if explicitly specified in data
-        if (eventData && eventData.vantage_point) {
-            return eventData.vantage_point.toLowerCase();
-        }
-
-        // Infer from event name patterns
-        if (eventName.includes('_created')) {
-            // Created events are typically from the sender's perspective
-            return this.vantagePoints.CLIENT;
-        } else if (eventName.includes('_parsed')) {
-            // Parsed events are typically from the receiver's perspective
-            return this.vantagePoints.SERVER;
-        }
-
-        return this.vantagePoints.CLIENT; // Default
-    }
-
-    /**
-     * Categorize event for visualization
-     * @param {string} eventName - Event name
-     * @param {Object} eventData - Event data to check message type
+     * Categorize event for visualization.
+     * Control messages go in control columns; everything else goes in track columns.
+     * @param {string} eventName - Event name (e.g. "moqt:control_message_created")
+     * @param {Object} eventData - Event data from toDynamic()
      * @returns {string} Event category
      */
     categorizeEvent(eventName, eventData) {
-        // Only real control messages (SETUP, SUBSCRIBE, PUBLISH_NAMESPACE, etc.) go in control columns
+        // All control messages go in the control column
         if (eventName.includes('control_message')) {
-            const msgType = eventData?.message_type || '';
-            if (msgType.match(/^(SETUP|SUBSCRIBE|PUBLISH_NAMESPACE|UNSUBSCRIBE|GOAWAY)/)) {
-                return this.eventCategories.CONTROL;
-            }
+            return this.eventCategories.CONTROL;
         }
 
-        // Everything else goes in track columns
         if (eventName.includes('object_datagram')) {
             return this.eventCategories.OBJECT;
         } else if (eventName.includes('subgroup')) {
@@ -267,95 +355,175 @@ class MoQParser {
             return this.eventCategories.STREAM;
         }
 
-        return 'track_data'; // Default to track data, not control
+        return 'track_data';
     }
 
     /**
-     * Extract track ID from event data
+     * Extract track ID from event data.
+     * Uses track_alias as the track identifier.
+     *
+     * Field locations by event type (from MLogTypes.cpp toDynamic()):
+     * - subgroup_header_created/parsed: data.track_alias (number)
+     * - object_datagram_created/parsed: data.track_alias (number)
+     * - subgroup_object_created/parsed: looked up via stream_id -> track_alias mapping
+     * - fetch_object_created/parsed: looked up via stream_id -> track_alias mapping
+     * - control_message: null (goes in control column)
+     * - stream_type_set: null
+     * - fetch_header: null
+     *
+     * @param {string} eventName - Event name
      * @param {Object} eventData - Event data
-     * @returns {string|null} Track ID
+     * @returns {string|null} Track ID (track_alias as string)
      */
-    extractTrackId(eventData) {
+    extractTrackId(eventName, eventData) {
         if (!eventData) return null;
 
-        return eventData.track_id ||
-               eventData.trackId ||
-               eventData.track_alias ||
-               eventData.track_name ||
-               null;
+        // Subgroup headers and object datagrams have track_alias directly
+        if (eventData.track_alias !== undefined) {
+            return String(eventData.track_alias);
+        }
+
+        // Subgroup objects and fetch objects: look up via stream_id mapping
+        if (eventName.includes('subgroup_object') || eventName.includes('fetch_object')) {
+            // These use camelCase "streamId" as a string
+            const streamId = eventData.streamId;
+            if (streamId !== undefined && this._streamToTrackAlias) {
+                const trackAlias = this._streamToTrackAlias[String(streamId)];
+                if (trackAlias !== undefined) {
+                    return String(trackAlias);
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
-     * Extract group ID from event data
+     * Extract group ID from event data.
+     *
+     * Field locations (from MLogTypes.cpp toDynamic()):
+     * - subgroup_header: data.group_id (number)
+     * - subgroup_object: data.groupId (string)
+     * - object_datagram: data.group_id (number)
+     * - fetch_object: data.groupId (string)
+     *
+     * @param {string} eventName - Event name
      * @param {Object} eventData - Event data
      * @returns {number|null} Group ID
      */
-    extractGroupId(eventData) {
+    extractGroupId(eventName, eventData) {
         if (!eventData) return null;
 
-        return eventData.group_id ||
-               eventData.groupId ||
-               eventData.group ||
-               null;
+        // snake_case number field (subgroup_header, object_datagram)
+        if (eventData.group_id !== undefined) {
+            return Number(eventData.group_id);
+        }
+        // camelCase string field (subgroup_object, fetch_object)
+        if (eventData.groupId !== undefined) {
+            return Number(eventData.groupId);
+        }
+
+        return null;
     }
 
     /**
-     * Extract subgroup ID from event data
+     * Extract subgroup ID from event data.
+     *
+     * Field locations (from MLogTypes.cpp toDynamic()):
+     * - subgroup_header: data.subgroup_id (number, optional)
+     * - subgroup_object: data.subgroupId (string, optional)
+     * - fetch_object: data.subgroupId (string)
+     *
+     * @param {string} eventName - Event name
      * @param {Object} eventData - Event data
      * @returns {number|null} Subgroup ID
      */
-    extractSubgroupId(eventData) {
+    extractSubgroupId(eventName, eventData) {
         if (!eventData) return null;
 
-        return eventData.subgroup_id ||
-               eventData.subgroupId ||
-               eventData.subgroup ||
-               null;
+        if (eventData.subgroup_id !== undefined) {
+            return Number(eventData.subgroup_id);
+        }
+        if (eventData.subgroupId !== undefined) {
+            return Number(eventData.subgroupId);
+        }
+
+        return null;
     }
 
     /**
-     * Extract object ID from event data
+     * Extract object ID from event data.
+     *
+     * Field locations (from MLogTypes.cpp toDynamic()):
+     * - subgroup_object: data.objectId (string)
+     * - object_datagram: data.object_id (number, optional)
+     * - fetch_object: data.objectId (string)
+     *
+     * @param {string} eventName - Event name
      * @param {Object} eventData - Event data
      * @returns {number|null} Object ID
      */
-    extractObjectId(eventData) {
+    extractObjectId(eventName, eventData) {
         if (!eventData) return null;
 
-        return eventData.object_id ||
-               eventData.objectId ||
-               eventData.object ||
-               null;
+        if (eventData.object_id !== undefined) {
+            return Number(eventData.object_id);
+        }
+        if (eventData.objectId !== undefined) {
+            return Number(eventData.objectId);
+        }
+
+        return null;
     }
 
     /**
-     * Extract object size from event data
+     * Extract object size from event data.
+     *
+     * Field locations (from MLogTypes.cpp toDynamic()):
+     * - subgroup_object: data.objectPayloadLength (string)
+     * - fetch_object: data.objectPayloadLength (string)
+     * - object_datagram: no explicit size field, but has object_payload
+     *
+     * @param {string} eventName - Event name
      * @param {Object} eventData - Event data
      * @returns {number} Object size in bytes
      */
-    extractObjectSize(eventData) {
+    extractObjectSize(eventName, eventData) {
         if (!eventData) return 0;
 
-        return eventData.object_size ||
-               eventData.objectSize ||
-               eventData.size ||
-               eventData.length ||
-               eventData.payload_length ||
-               0;
+        // subgroup_object and fetch_object use objectPayloadLength (string)
+        if (eventData.objectPayloadLength !== undefined) {
+            return Number(eventData.objectPayloadLength) || 0;
+        }
+
+        // object_datagram: estimate from payload string if present
+        if (eventData.object_payload) {
+            return eventData.object_payload.length;
+        }
+
+        return 0;
     }
 
     /**
-     * Extract control message type from event data
+     * Extract control message type from event data.
+     *
+     * For control messages, the data structure is:
+     *   { streamId: "0", message: { type: "subscribe_ok", ... } }
+     * The message type is at data.message.type
+     *
+     * @param {string} eventName - Event name
      * @param {Object} eventData - Event data
      * @returns {string|null} Control message type
      */
-    extractControlMessageType(eventData) {
+    extractControlMessageType(eventName, eventData) {
         if (!eventData) return null;
 
-        return eventData.message_type ||
-               eventData.messageType ||
-               eventData.type ||
-               eventData.control_type ||
-               null;
+        // Control messages: type is nested under message.type
+        if (eventData.message && eventData.message.type) {
+            return eventData.message.type;
+        }
+
+        return null;
     }
 
     /**
@@ -378,6 +546,7 @@ class MoQParser {
                 tracks[trackId] = {
                     id: trackId,
                     name: this.getTrackDisplayName(trackId),
+                    fullName: this.getTrackFullName(trackId),
                     className: this.getTrackClassName(trackId),
                     events: [],
                     client_events: [],
@@ -398,12 +567,17 @@ class MoQParser {
     }
 
     /**
-     * Get display name for track
+     * Get display name for track (may be truncated for long names)
      * @param {string} trackId - Track ID
      * @returns {string} Display name
      */
     getTrackDisplayName(trackId) {
         if (!trackId || typeof trackId !== 'string' || trackId === 'unknown') return 'Unknown';
+
+        // Prefer reconstructed track name when trackId is a track_alias.
+        if (this._trackAliasToDisplayName && this._trackAliasToDisplayName[trackId]) {
+            return this._trackAliasToDisplayName[trackId];
+        }
 
         // For comma-separated names like "alice,audio", return as-is
         if (trackId.includes(',')) {
@@ -412,6 +586,21 @@ class MoQParser {
 
         // Capitalize simple names
         return trackId.charAt(0).toUpperCase() + trackId.slice(1);
+    }
+
+    /**
+     * Get the full (untruncated) track name including namespace
+     * @param {string} trackId - Track ID
+     * @returns {string} Full track name
+     */
+    getTrackFullName(trackId) {
+        if (!trackId || typeof trackId !== 'string' || trackId === 'unknown') return 'Unknown';
+
+        if (this._trackAliasToFullName && this._trackAliasToFullName[trackId]) {
+            return this._trackAliasToFullName[trackId];
+        }
+
+        return this.getTrackDisplayName(trackId);
     }
 
     /**
@@ -476,256 +665,22 @@ class MoQParser {
     }
 
     /**
-     * Generate realistic Alice/Bob meeting MoQ QLOG data
-     * @returns {Object} Example QLOG data
+     * Generate example MoQ QLOG data from sample_serialized.qlog mLogs
+     * @returns {Array<string>} Array of NDJSON strings, one per serialized MoQ event
      */
     generateExampleData() {
-        const now = Date.now();
-        const events = [];
-        let currentTime = now;
-
-        // === PUBLISH_NAMESPACE PHASE ===
-        // Client publishes namespace=(meeting1, alice)
-        events.push([
-            currentTime,
-            'transport',
-            this.eventTypes.CONTROL_MESSAGE_CREATED,
-            {
-                vantage_point: 'client',
-                message_type: 'PUBLISH_NAMESPACE',
-                namespace: 'meeting1',
-                track_namespace: 'alice'
-            }
-        ]);
-        currentTime += 50;
-
-        events.push([
-            currentTime,
-            'transport',
-            this.eventTypes.CONTROL_MESSAGE_PARSED,
-            {
-                vantage_point: 'server',
-                message_type: 'PUBLISH_NAMESPACE_OK',
-                namespace: 'meeting1',
-                track_namespace: 'alice'
-            }
-        ]);
-        currentTime += 100;
-
-        // Server publishes namespace=(meeting1, bob)
-        events.push([
-            currentTime,
-            'transport',
-            this.eventTypes.CONTROL_MESSAGE_CREATED,
-            {
-                vantage_point: 'server',
-                message_type: 'PUBLISH_NAMESPACE',
-                namespace: 'meeting1',
-                track_namespace: 'bob'
-            }
-        ]);
-        currentTime += 50;
-
-        events.push([
-            currentTime,
-            'transport',
-            this.eventTypes.CONTROL_MESSAGE_PARSED,
-            {
-                vantage_point: 'client',
-                message_type: 'PUBLISH_NAMESPACE_OK',
-                namespace: 'meeting1',
-                track_namespace: 'bob'
-            }
-        ]);
-        currentTime += 200;
-
-        // === SUBSCRIPTION PHASE ===
-        // Client subscribes to bob,audio and bob,video
-        const clientSubscriptions = ['bob,audio', 'bob,video'];
-        clientSubscriptions.forEach(trackName => {
-            events.push([
-                currentTime,
-                'transport',
-                this.eventTypes.CONTROL_MESSAGE_CREATED,
-                {
-                    vantage_point: 'client',
-                    message_type: 'SUBSCRIBE',
-                    track_id: trackName,
-                    track_namespace: trackName
-                }
-            ]);
-            currentTime += 20;
-
-            events.push([
-                currentTime,
-                'transport',
-                this.eventTypes.CONTROL_MESSAGE_PARSED,
-                {
-                    vantage_point: 'server',
-                    message_type: 'SUBSCRIBE_OK',
-                    track_id: trackName,
-                    track_namespace: trackName
-                }
-            ]);
-            currentTime += 30;
-        });
-
-        // Server subscribes to alice,audio and alice,video
-        const serverSubscriptions = ['alice,audio', 'alice,video'];
-        serverSubscriptions.forEach(trackName => {
-            events.push([
-                currentTime,
-                'transport',
-                this.eventTypes.CONTROL_MESSAGE_CREATED,
-                {
-                    vantage_point: 'server',
-                    message_type: 'SUBSCRIBE',
-                    track_id: trackName,
-                    track_namespace: trackName
-                }
-            ]);
-            currentTime += 20;
-
-            events.push([
-                currentTime,
-                'transport',
-                this.eventTypes.CONTROL_MESSAGE_PARSED,
-                {
-                    vantage_point: 'client',
-                    message_type: 'SUBSCRIBE_OK',
-                    track_id: trackName,
-                    track_namespace: trackName
-                }
-            ]);
-            currentTime += 30;
-        });
-
-        currentTime += 500; // Pause before media starts
-
-        // === MEDIA STREAMING PHASE ===
-        const streamDuration = 10000; // 10 seconds of streaming
-        const endTime = currentTime + streamDuration;
-        let groupId = 0;
-
-        while (currentTime < endTime) {
-            const secondStart = currentTime;
-
-            // Video: New group every 1 second - Start with subgroup header, then objects
-            // Create subgroup headers first
-            events.push([
-                secondStart,
-                'transport',
-                this.eventTypes.SUBGROUP_HEADER_CREATED,
-                {
-                    vantage_point: 'client',
-                    track_id: 'alice,video',
-                    group_id: groupId,
-                    subgroup_id: 0,
-                    object_count: 30
-                }
-            ]);
-
-            events.push([
-                secondStart + 2,
-                'transport',
-                this.eventTypes.SUBGROUP_HEADER_CREATED,
-                {
-                    vantage_point: 'server',
-                    track_id: 'bob,video',
-                    group_id: groupId,
-                    subgroup_id: 0,
-                    object_count: 30
-                }
-            ]);
-
-            // Then create subgroup objects (30 objects, first large, rest small)
-            for (let objId = 0; objId < 30; objId++) {
-                const objectTime = secondStart + 10 + (objId * 33); // Start 10ms after header
-                const isFirstObject = objId === 0;
-                const objectSize = isFirstObject ? 40000 : Math.floor(Math.random() * 1000 + 1000); // 40KB vs 1-2KB
-
-                // Alice video (client sends)
-                events.push([
-                    objectTime,
-                    'transport',
-                    this.eventTypes.SUBGROUP_OBJECT_CREATED,
-                    {
-                        vantage_point: 'client',
-                        track_id: 'alice,video',
-                        group_id: groupId,
-                        subgroup_id: 0,
-                        object_id: objId,
-                        object_size: objectSize
-                    }
-                ]);
-
-                // Bob video (server sends)
-                events.push([
-                    objectTime + 5,
-                    'transport',
-                    this.eventTypes.SUBGROUP_OBJECT_CREATED,
-                    {
-                        vantage_point: 'server',
-                        track_id: 'bob,video',
-                        group_id: groupId,
-                        subgroup_id: 0,
-                        object_id: objId,
-                        object_size: objectSize
-                    }
-                ]);
-            }
-
-            // Audio: Datagrams every 20ms (aligned with video groups)
-            for (let audioFrame = 0; audioFrame < 50; audioFrame++) { // 50 frames per second
-                const audioTime = secondStart + (audioFrame * 20);
-                const audioSize = Math.floor(Math.random() * 200 + 200); // 200-400 bytes
-
-                // Alice audio (client sends)
-                events.push([
-                    audioTime,
-                    'transport',
-                    this.eventTypes.OBJECT_DATAGRAM_CREATED,
-                    {
-                        vantage_point: 'client',
-                        track_id: 'alice,audio',
-                        group_id: groupId,
-                        subgroup_id: 0,
-                        object_id: audioFrame,
-                        object_size: audioSize
-                    }
-                ]);
-
-                // Bob audio (server sends)
-                events.push([
-                    audioTime + 2,
-                    'transport',
-                    this.eventTypes.OBJECT_DATAGRAM_CREATED,
-                    {
-                        vantage_point: 'server',
-                        track_id: 'bob,audio',
-                        group_id: groupId,
-                        subgroup_id: 0,
-                        object_id: audioFrame,
-                        object_size: audioSize
-                    }
-                ]);
-            }
-
-            currentTime += 1000; // Next second
-            groupId++;
-        }
-
-        return {
-            qlog_format: "JSON-SEQ",
-            qlog_version: "0.3",
-            title: "MoQ Transport - Alice & Bob Meeting",
-            traces: [{
-                title: "Alice & Bob Video Call Session",
-                description: "Realistic MoQ Transport session with cross-subscribed audio/video tracks",
-                vantage_point: { type: "client" },
-                events: events
-            }]
-        };
+        // Return the mLogs from sample_serialized.qlog as an array of strings.
+        return [
+            '{"data":{"message":{"number_of_parameters":0,"content_exists":0,"group_order":1,"expires":0,"track_alias":0,"request_id":0,"type":"subscribe_ok"},"streamId":"0"},"time":"10933134","name":"moqt:control_message_created","vantagePoint":"server"}',
+            '{"data":{"message":{"setup_parameters":[{"value":100,"name":"max_request_id"},{"value":1024,"name":"max_auth_token_cache_size"}],"number_of_parameters":2,"selected_version":4278190094,"type":"server_setup"},"streamId":"0"},"time":"6316988","name":"moqt:control_message_created","vantagePoint":"server"}',
+            '{"time":"62056206","data":{"message":{"stream_count":1,"reason":"Testing","status_code":2,"request_id":0,"type":"publish_done"},"streamId":"0"},"name":"moqt:control_message_created","vantagePoint":"server"}',
+            '{"data":{"message":{"end_group":0,"number_of_parameters":0,"forward":0,"filter_type":1,"group_order":1,"subscriber_priority":128,"track_namespace":["moq-test-00","0","0","0","0","0","1","1024","100","50","1","1","0","-1","-1","0"],"track_name":"test","request_id":0,"type":"subscribe"},"streamId":"0"},"time":"10389062","name":"moqt:control_message_parsed","vantagePoint":"server"}',
+            '{"time":"6255364","data":{"message":{"number_of_parameters":2,"setup_parameters":[{"value":100,"name":"max_request_id"},{"value":1024,"name":"max_auth_token_cache_size"}],"supported_versions":[4278190094],"number_of_supported_versions":1,"type":"client_setup"},"streamId":"0"},"name":"moqt:control_message_parsed","vantagePoint":"server"}',
+            '{"data":{"streamType":"0","streamId":"4","owner":"1"},"time":"4667082","name":"moqt:stream_type_set","vantagePoint":"server"}',
+            '{"data":{"streamType":"1","streamId":"15","owner":"0"},"time":"11221510","name":"moqt:stream_type_set","vantagePoint":"server"}',
+            '{"data":{"extensions_present":true,"subgroup_id":0,"contains_end_of_group":false,"publisher_priority":128,"group_id":0,"track_alias":0,"stream_id":15},"time":"11231870","name":"moqt:subgroup_header_created","vantagePoint":"server"}',
+            '{"data":{"objectPayload":"tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt","subgroupId":"18446744073709551615","objectPayloadLength":"1024","objectId":"18446744073709551615","extensionHeadersLength":"0","groupId":"0","streamId":"15"},"time":"11303190","name":"moqt:subgroup_object_created","vantagePoint":"server"}'
+        ];
     }
 }
 
