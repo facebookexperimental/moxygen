@@ -101,7 +101,7 @@ quic::Optional<std::pair<uint64_t, size_t>> decodeMoQVarintSlow(
 
   // Fast path: the entire varint sits in the contiguous peek. Decode in
   // place from `bytes.data()` and skip the cursor once.
-  if (FOLLY_LIKELY(bytes.size() >= length)) {
+  if (bytes.size() >= length) [[likely]] {
     if (length == 9) {
       uint64_t v;
       std::memcpy(&v, bytes.data() + 1, sizeof(v));
