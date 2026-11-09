@@ -949,6 +949,150 @@ TEST_P(MoQProxyGracefulSwitchTest, TheTailTimerLetsGoOfAHubThatStalls) {
   }));
 }
 
+// Hub 1 takes over from hub 0, then goes away too, and the proxy moves the
+// track on to hub 2 the same way.
+TEST_P(MoQProxyGracefulSwitchTest, AHubThatTookOverCanGoAwayInTurn) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    auto viewer = co_await startWithHub0GoingAway(2, 2, /*hubCount=*/3);
+    hubs_[1]->publishGroup(kTrack, 2);
+    co_await settle();
+    hubs_[0]->publishGroup(kTrack, 2);
+    co_await waitForHandover();
+    for (uint64_t group = 2; group < 4; group++) {
+      hubs_[1]->publishGroup(kTrack, group);
+      hubs_[2]->publishGroup(kTrack, group);
+    }
+    co_await settle();
+
+    goAway(Goaway{.timeout = uint64_t(kGoawayTimeout.count())}, /*hub=*/1);
+    co_await waitForSubscribe(*hubs_[2], 1);
+    hubs_[2]->publishGroup(kTrack, 4);
+    co_await settle();
+    hubs_[1]->publishGroup(kTrack, 4);
+    co_await waitForHandover(kTrack, /*hub=*/1);
+    hubs_[2]->publishGroup(kTrack, 5);
+    co_await settle();
+
+    expectIntact(*viewer);
+    const std::map<uint64_t, uint64_t> hubOfGroup{
+        {0, 0}, {1, 0}, {2, 1}, {3, 1}, {4, 2}, {5, 2}};
+    EXPECT_EQ(viewer->hubOfGroup(), hubOfGroup);
+    const auto& stats = proxy_->switchStats();
+    EXPECT_EQ(stats.gracefulSwitches.started, 2);
+    EXPECT_EQ(stats.gracefulSwitches.completed, 2);
+    EXPECT_EQ(stats.upstreamsLost, 0);
+    EXPECT_EQ(stats.lostSwitches.started, 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// The viewer leaves once hub 1 delivered group 4, while hub 0 is partway
+// through group 2 and then stalls. The track lasts while a stream of hub 0's is
+// open; the tail timer ends it, and the proxy unsubscribes from both hubs.
+TEST_P(
+    MoQProxyGracefulSwitchTest,
+    TheViewerLeavingDuringASwitchUnsubscribesFromBothHubs) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await startWithHub0GoingAway(2, 4);
+    hubs_[1]->publishGroup(kTrack, 4);
+    hubs_[0]->publish(kTrack, 2, 2);
+    co_await settle();
+    EXPECT_EQ(hubs_[0]->subscriptions(kTrack), 1);
+    EXPECT_EQ(hubs_[1]->subscriptions(kTrack), 1);
+
+    for (auto& handle : std::exchange(viewerHandles_, {})) {
+      handle->unsubscribe();
+    }
+    co_await waitUntil([&] {
+      return hubs_[0]->subscriptions(kTrack) == 0 &&
+          hubs_[1]->subscriptions(kTrack) == 0;
+    });
+
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// A second viewer joins once hub 1 delivered group 4, while hub 0 still owes
+// groups 2 and 3. It starts after group 4, gets none of hub 0's late groups,
+// and the switch completes for both viewers.
+TEST_P(
+    MoQProxyGracefulSwitchTest,
+    AViewerJoiningDuringASwitchStartsAfterTheNewestGroup) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    auto viewer = co_await startWithHub0GoingAway(2, 4);
+    hubs_[1]->publishGroup(kTrack, 4);
+    hubs_[0]->publish(kTrack, 2, 2);
+    co_await settle();
+
+    auto joiner = co_await subscribeViewer();
+    hubs_[0]->publishGroup(kTrack, 2);
+    hubs_[0]->publishGroup(kTrack, 3);
+    hubs_[0]->publishGroup(kTrack, 4);
+    co_await waitForHandover();
+    hubs_[1]->publishGroup(kTrack, 5);
+    co_await settle();
+
+    expectHandedOver(*viewer, {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 1}, {5, 1}});
+    expectIntact(*joiner);
+    const std::map<uint64_t, uint64_t> joinerHubOfGroup{{5, 1}};
+    EXPECT_EQ(joiner->hubOfGroup(), joinerHubOfGroup);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Of two viewers, the first one's session closes once hub 1 delivered group 4,
+// while hub 0 still owes groups 2 and 3. The other gets them from hub 0, then
+// hub 1's.
+TEST_P(
+    MoQProxyGracefulSwitchTest,
+    AViewerSessionClosingDuringASwitchLeavesTheOtherIntact) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await startWithHub0GoingAway(2, 4);
+    auto staying = co_await subscribeViewer();
+    hubs_[1]->publishGroup(kTrack, 4);
+    hubs_[0]->publish(kTrack, 2, 2);
+    co_await settle();
+
+    viewerSessions_.front()->close(SessionCloseErrorCode::NO_ERROR);
+    viewerHandles_.erase(viewerHandles_.begin());
+    co_await settle();
+    hubs_[0]->publishGroup(kTrack, 2);
+    hubs_[0]->publishGroup(kTrack, 3);
+    hubs_[0]->publishGroup(kTrack, 4);
+    co_await waitForHandover();
+    hubs_[1]->publishGroup(kTrack, 5);
+    co_await settle();
+
+    expectHandedOver(*staying, {{2, 0}, {3, 0}, {4, 1}, {5, 1}});
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// The proxy closes once hub 1 delivered group 3, while hub 0 still owes group
+// 2: the viewer gets GOING_AWAY and the proxy unsubscribes from both hubs.
+TEST_P(
+    MoQProxyGracefulSwitchTest,
+    ClosingTheProxyDuringASwitchUnsubscribesFromBothHubs) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    auto viewer = co_await startWithHub0GoingAway(2, 2);
+    hubs_[1]->publishGroup(kTrack, 3);
+    co_await settle();
+    EXPECT_EQ(hubs_[0]->subscriptions(kTrack), 1);
+    viewer->expectedEnd = PublishDoneStatusCode::GOING_AWAY;
+
+    proxy_->close();
+    co_await waitUntil([&] { return viewer->done().has_value(); });
+
+    expectIntact(*viewer);
+    CO_ASSERT_TRUE(viewer->done().has_value());
+    EXPECT_EQ(viewer->done()->statusCode, PublishDoneStatusCode::GOING_AWAY);
+    EXPECT_EQ(hubs_[0]->subscriptions(kTrack), 0);
+    EXPECT_EQ(hubs_[1]->subscriptions(kTrack), 0);
+    EXPECT_EQ(proxy_->switchStats().gracefulSwitches.completed, 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     AllVersions,
     MoQProxyGracefulSwitchTest,
