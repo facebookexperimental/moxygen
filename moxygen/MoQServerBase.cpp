@@ -56,9 +56,6 @@ folly::coro::Task<void> MoQServerBase::handleClientSession(
   auto version = clientSession->getNegotiatedVersion();
   if (version && useUniControlStreams(*version)) {
     auto setup = makeServerSetup();
-    if (auto logger = clientSession->getLogger()) {
-      logger->logServerSetup(setup, *version);
-    }
     auto res = clientSession->sendSetup(std::move(setup));
     if (res.hasError()) {
       XLOG(ERR) << "Failed to send proactive SERVER_SETUP sess="
@@ -106,13 +103,6 @@ folly::Try<Setup> MoQServerBase::onClientSetup(
   }
 
   auto serverSetup = makeServerSetup();
-
-  // Log Server Setup
-  if (auto logger = session->getLogger()) {
-    logger->logServerSetup(
-        serverSetup, sessionVersion.value_or(kVersionDraft16));
-  }
-
   return folly::Try<Setup>(serverSetup);
 }
 

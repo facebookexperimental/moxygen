@@ -175,11 +175,6 @@ void MoQClientBase::completeSetupMoQSession(
   moqSession_->setLogger(logger_);
   moqSession_->start();
   ClientSetup clientSetup = getClientSetup(pathParam);
-  if (logger_) {
-    logger_->logClientSetup(
-        clientSetup,
-        moqSession_->getNegotiatedVersion().value_or(kVersionDraft16));
-  }
   moqSession_->sendSetup(clientSetup);
 }
 

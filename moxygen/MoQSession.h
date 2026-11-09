@@ -969,7 +969,8 @@ class MoQSession : public Subscriber,
       std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback =
           nullptr,
       folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
-          onPeerTermination = nullptr);
+          onPeerTermination = nullptr,
+      folly::Function<void()> logRequestCreated = nullptr);
 
   // For a request stream opened at either end: appTeardown (may be null) runs
   // first, then every request that can only be answered on the stream fails.

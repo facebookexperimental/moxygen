@@ -18,6 +18,7 @@ BidiStreamControl::BidiStreamControl(
     bool finIsCancellation,
     std::shared_ptr<EgressAckTracker> egressTracker)
     : writeHandle_(writeHandle),
+      streamId_(writeHandle ? writeHandle->getID() : 0),
       sessionShutdownToken_(std::move(sessionShutdownToken)),
       negotiatedVersion_(negotiatedVersion),
       finIsCancellation_(finIsCancellation),

@@ -149,8 +149,8 @@ void logRequestError(
     return;
   }
   switch (frameType) {
-    case FrameType::SUBSCRIBE_ERROR:
-      logger->logSubscribeError(error, msgType);
+    case FrameType::REQUEST_ERROR:
+      logger->logRequestError(error, msgType);
       break;
     case FrameType::PUBLISH_ERROR:
       logger->logPublishError(static_cast<const PublishError&>(error), msgType);
@@ -3905,6 +3905,13 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
     XLOG(ERR) << "writeSetup failed sess=" << this;
     return folly::makeUnexpected(res.error());
   }
+  if (logger_) {
+    if (isClient) {
+      logger_->logClientSetup(setup, setupSerializationVersion);
+    } else {
+      logger_->logServerSetup(setup, setupSerializationVersion);
+    }
+  }
   localSetupParams_ = setup.params;
   negotiateMessageParameters();
   initLocalMaxRequestID(maxRequestID);
@@ -4157,6 +4164,9 @@ void MoQSession::BidiRequestCallback::onConnectionError(ErrorCode error) {
 
 void MoQSession::BidiRequestCallback::onRequestUpdate(
     RequestUpdate requestUpdate) {
+  if (auto logger = session_->getLogger()) {
+    logger->setRequestStreamId(requestUpdate.requestID, control_->streamId());
+  }
   session_->onRequestUpdate(std::move(requestUpdate));
 }
 
@@ -4180,6 +4190,9 @@ bool MoQSession::BidiRequestCallback::handleFirstFrame(RequestID reqId) {
   }
   requestID_ = reqId;
   control_->setRequestID(reqId);
+  if (auto logger = session_->getLogger()) {
+    logger->setRequestStreamId(reqId, control_->streamId());
+  }
   // A config with no teardown of its own still needs the close to fail the
   // REQUEST_UPDATEs this end sends on the stream.
   session_->setOnPeerTermination(control_, std::move(onPeerTerminationFn_));
@@ -4253,6 +4266,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   // The session may be gone by the time exec_ starts this loop.
   co_await folly::coro::co_safe_point;
   const auto negotiatedVersion = negotiatedVersion_;
+  const auto logger = logger_;
   auto g = folly::makeGuard([func = __func__, this] {
     XLOG(DBG1) << "exit " << func << " sess=" << this;
   });
@@ -4343,6 +4357,11 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   // Otherwise ~ReadHandleRef sends 0.
   if (control) {
     readHandle.stopSending(control->readCancelCode());
+  }
+  if (control && control->requestID() && logger &&
+      (!bidiCallback || exceptionalExit || control->finIsCancellation() ||
+       token.isCancellationRequested())) {
+    logger->clearRequestStream(streamId);
   }
 }
 
@@ -4468,7 +4487,8 @@ MoQSession::SendRequestResult MoQSession::sendRequest(
     uint64_t minBidiDraftVersion,
     std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback,
     folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
-        onPeerTermination) {
+        onPeerTermination,
+    folly::Function<void()> logRequestCreated) {
   if (getDraftMajorVersion(*negotiatedVersion_) >= minBidiDraftVersion) {
     if (!wt_) {
       return folly::makeUnexpected(
@@ -4481,6 +4501,16 @@ MoQSession::SendRequestResult MoQSession::sendRequest(
       XLOG(ERR) << "Failed to create bidi stream sess=" << this;
       return folly::makeUnexpected(
           SendRequestError{bidiStream.error(), "Failed to create bidi stream"});
+    }
+    if (logger_) {
+      logger_->setRequestStreamId(requestID, bidiStream->writeHandle->getID());
+      logger_->logStreamTypeSet(
+          bidiStream->writeHandle->getID(),
+          MOQTStreamType::CONTROL,
+          Owner::LOCAL);
+    }
+    if (logRequestCreated) {
+      logRequestCreated();
     }
     bidiStream->writeHandle->setPriority(controlPriority());
     egressTracker_->write(
@@ -4515,6 +4545,9 @@ MoQSession::SendRequestResult MoQSession::sendRequest(
                 std::move(senderCallback))))
         .start();
     return control;
+  }
+  if (logRequestCreated) {
+    logRequestCreated();
   }
   controlWriteBuf_.append(writeBuf.move());
   controlWriteEvent_.signal();
@@ -7094,6 +7127,10 @@ void MoQSession::handleSubscribeUpdateOkFromRequestOk(
     return;
   }
 
+  if (logger_) {
+    logger_->logRequestOk(requestOk, ControlMessageType::PARSED);
+    logger_->clearRequestStreamId(requestOk.requestID);
+  }
   promise->setValue(requestOk);
 }
 
@@ -7691,11 +7728,6 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     std::shared_ptr<TrackConsumer> callback) {
   XLOG(DBG1) << __func__ << " sess=" << this;
 
-  // Log SubscribeRequest
-  if (logger_) {
-    logger_->logSubscribe(sub);
-  }
-
   auto subscribeStartTime = std::chrono::steady_clock::now();
   SCOPE_EXIT {
     auto duration = (std::chrono::steady_clock::now() - subscribeStartTime);
@@ -7767,6 +7799,11 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
         pd.streamCount = std::numeric_limits<uint64_t>::max();
         pd.reasonPhrase = "peer closed stream before reply";
         handlePublishDone(std::move(pd), /*synthesized=*/true);
+      },
+      [this, &sub] {
+        if (logger_) {
+          logger_->logSubscribe(sub);
+        }
       });
   if (sendResult.hasError()) {
     SubscribeError subscribeError = {
@@ -8059,6 +8096,12 @@ void MoQSession::requestUpdateOk(
     RequestID existingRequestID) {
   XLOG(DBG1) << __func__ << " reqID=" << requestOk.requestID
              << " existingReqID=" << existingRequestID << " sess=" << this;
+  const auto logger = logger_;
+  SCOPE_EXIT {
+    if (logger) {
+      logger->clearRequestStreamId(requestOk.requestID);
+    }
+  };
 
   auto* ctx = getRequestUpdateReplyContext(existingRequestID);
   if (!ctx) {
@@ -8072,6 +8115,9 @@ void MoQSession::requestUpdateOk(
     XLOG(ERR) << "writeRequestOk for REQUEST_UPDATE failed sess=" << this;
     return;
   }
+  if (logger) {
+    logger->logRequestOk(requestOk);
+  }
   ctx->flush();
 }
 
@@ -8081,6 +8127,12 @@ void MoQSession::requestUpdateError(
     bool terminateExisting) {
   XLOG(DBG1) << __func__ << " reqID=" << requestError.requestID
              << " existingReqID=" << existingRequestID << " sess=" << this;
+  const auto logger = logger_;
+  SCOPE_EXIT {
+    if (logger) {
+      logger->clearRequestStreamId(requestError.requestID);
+    }
+  };
 
   if (auto* ctx = getRequestUpdateReplyContext(existingRequestID)) {
     auto res = moqFrameWriter_.writeRequestError(
@@ -8088,6 +8140,9 @@ void MoQSession::requestUpdateError(
     if (!res) {
       XLOG(ERR) << "writeRequestError for REQUEST_UPDATE failed sess=" << this;
     } else {
+      if (logger) {
+        logger->logRequestError(requestError);
+      }
       ctx->flush();
     }
   } else {
@@ -8203,9 +8258,6 @@ void MoQSession::cleanupSubscribePublisherAfterGoawayReset(
 bool MoQSession::requestUpdate(
     const RequestUpdate& reqUpdate,
     const std::shared_ptr<BidiStreamControl>& control) {
-  if (logger_) {
-    logger_->logSubscribeUpdate(reqUpdate);
-  }
   XLOG(DBG1) << __func__ << " sess=" << this;
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onRequestUpdate);
 
@@ -8258,10 +8310,32 @@ bool MoQSession::requestUpdate(
                 << this;
       return false;
     }
+  }
+
+  if (logger_) {
+    if (control) {
+      logger_->setRequestStreamId(reqUpdate.requestID, control->streamId());
+    }
+    logger_->logSubscribeUpdate(reqUpdate);
+  }
+
+  if (control) {
+    auto* wh = control->writeHandle();
+    if (!wh || control->readLoopExited()) {
+      XLOG(ERR) << "Request stream closed, REQUEST_UPDATE not sent sess="
+                << this;
+      if (logger_) {
+        logger_->clearRequestStreamId(reqUpdate.requestID);
+      }
+      return false;
+    }
     auto writeRes = egressTracker_->write(*wh, buf.move(), /*fin=*/false);
     if (!writeRes) {
       XLOG(ERR) << "REQUEST_UPDATE write error=" << uint64_t(writeRes.error())
                 << " sess=" << this;
+      if (logger_) {
+        logger_->clearRequestStreamId(reqUpdate.requestID);
+      }
       return false;
     }
     // Draft 18+: response REQUEST_OK/ERROR has no wire requestID; record
@@ -8311,11 +8385,6 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
     Fetch fetch,
     std::shared_ptr<FetchConsumer> consumer) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-
-  // Log Fetch
-  if (logger_) {
-    logger_->logFetch(fetch);
-  }
 
   auto fetchStartTime = std::chrono::steady_clock::now();
   SCOPE_EXIT {
@@ -8403,6 +8472,11 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
         }
         fetchIt->second->fetchError(
             {id, FetchErrorCode::CANCELLED, "peer closed stream before reply"});
+      },
+      [this, &fetch] {
+        if (logger_) {
+          logger_->logFetch(fetch);
+        }
       });
   if (sendResult.hasError()) {
     FetchError fetchError = {
@@ -8925,6 +8999,10 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
         close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
         co_return;
       }
+      if (logger_) {
+        logger_->logStreamTypeSet(
+            readHandle.id(), MOQTStreamType::CONTROL, Owner::REMOTE);
+      }
       writeHandle->setPriority(controlPriority());
       auto control = std::make_shared<BidiStreamControl>(
           writeHandle,
@@ -9345,6 +9423,9 @@ void MoQSession::onRequestOk(RequestOk requestOk, FrameType frameType) {
     if (isLocallyIssuedRequestID(reqId)) {
       XLOG(DBG1) << "REQUEST_OK for cancelled reqID=" << reqId
                  << " sess=" << this;
+      if (logger_) {
+        logger_->clearRequestStreamId(reqId);
+      }
       return;
     }
     XLOG(ERR) << "No matching request for reqID=" << reqId << " sess=" << this;

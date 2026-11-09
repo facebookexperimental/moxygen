@@ -213,6 +213,10 @@ class MLogger {
       uint64_t streamId,
       MOQTStreamType type,
       std::optional<Owner> owner);
+  void setRequestStreamId(RequestID requestId, uint64_t streamId);
+  void clearRequestStreamId(RequestID requestId);
+  void clearRequestStream(RequestID requestId);
+  void clearRequestStream(uint64_t streamId);
   void logObjectDatagramCreated(
       TrackAlias trackAlias,
       const ObjectHeader& header,
@@ -322,6 +326,7 @@ class MLogger {
       uint64_t streamId,
       const std::optional<uint64_t>& length,
       std::unique_ptr<MOQTBaseControlMessage> message);
+  uint64_t requestStreamId(RequestID requestId) const;
   std::vector<MOQTProperty> convertExtensionsToProperties(
       const Extensions& extensions);
 
@@ -334,6 +339,7 @@ class MLogger {
 
   std::unordered_map<uint64_t, ObjectStreamState> createdObjectStreamState_;
   std::unordered_map<uint64_t, ObjectStreamState> parsedObjectStreamState_;
+  std::unordered_map<uint64_t, uint64_t> requestStreamIds_;
 };
 
 } // namespace moxygen

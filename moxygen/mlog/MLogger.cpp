@@ -492,7 +492,10 @@ void MLogger::logSubscribe(
   baseMsg->numberOfParameters = baseMsg->subscribeParameters.size();
 
   logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+      controlType,
+      requestStreamId(req.requestID),
+      std::nullopt,
+      std::move(baseMsg));
 }
 
 void MLogger::logSubscribeUpdate(
@@ -543,7 +546,10 @@ void MLogger::logSubscribeUpdate(
   baseMsg->numberOfParameters = baseMsg->parameters.size();
 
   logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+      controlType,
+      requestStreamId(req.requestID),
+      std::nullopt,
+      std::move(baseMsg));
 }
 
 void MLogger::logRequestOk(
@@ -571,7 +577,10 @@ void MLogger::logRequestOk(
   baseMsg->numberOfParameters = baseMsg->parameters.size();
   baseMsg->trackProperties = convertExtensionsToProperties(req.trackProperties);
   logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+      controlType,
+      requestStreamId(req.requestID),
+      std::nullopt,
+      std::move(baseMsg));
 }
 
 void MLogger::logRequestError(
@@ -595,7 +604,11 @@ void MLogger::logRequestError(
     baseMsg->redirect = std::move(redirect);
   }
   logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+      controlType,
+      requestStreamId(req.requestID),
+      std::nullopt,
+      std::move(baseMsg));
+  clearRequestStreamId(req.requestID);
 }
 
 void MLogger::logPublishStateNotify(
@@ -615,7 +628,10 @@ void MLogger::logUnsubscribe(
   baseMsg->subscribeId = req.requestID.value;
 
   logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+      controlType,
+      requestStreamId(req.requestID),
+      std::nullopt,
+      std::move(baseMsg));
 }
 
 void MLogger::logFetch(
@@ -685,7 +701,10 @@ void MLogger::logFetch(
   baseMsg->numberOfParameters = baseMsg->parameters.size();
 
   logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+      controlType,
+      requestStreamId(req.requestID),
+      std::nullopt,
+      std::move(baseMsg));
 }
 
 void MLogger::logFetchCancel(
@@ -695,7 +714,10 @@ void MLogger::logFetchCancel(
   baseMsg->requestId = req.requestID.value;
 
   logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+      controlType,
+      requestStreamId(req.requestID),
+      std::nullopt,
+      std::move(baseMsg));
 }
 
 void MLogger::logPublishNamespaceOk(
@@ -874,7 +896,10 @@ void MLogger::logSubscribeOk(
   baseMsg->trackProperties = convertExtensionsToProperties(req.extensions);
 
   logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+      controlType,
+      requestStreamId(req.requestID),
+      std::nullopt,
+      std::move(baseMsg));
 }
 
 void MLogger::logSubscribeError(
@@ -895,7 +920,10 @@ void MLogger::logFetchOk(const FetchOk& req, ControlMessageType controlType) {
   baseMsg->trackProperties = convertExtensionsToProperties(req.extensions);
 
   logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+      controlType,
+      requestStreamId(req.requestID),
+      std::nullopt,
+      std::move(baseMsg));
 }
 
 void MLogger::logFetchError(
@@ -916,7 +944,11 @@ void MLogger::logPublishDone(
   }
 
   logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+      controlType,
+      requestStreamId(req.requestID),
+      std::nullopt,
+      std::move(baseMsg));
+  clearRequestStream(req.requestID);
 }
 
 void MLogger::logPublishNamespaceDone(
@@ -937,6 +969,7 @@ void MLogger::logTrackStatusOk(
     const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
   logRequestOk(RequestOk::fromTrackStatusOk(req), controlType);
+  clearRequestStream(req.requestID);
 }
 
 void MLogger::logTrackStatusError(
@@ -1257,6 +1290,37 @@ void MLogger::logStreamTypeSet(
   baseMsg.streamType = type;
   baseMsg.owner = owner;
   addStreamTypeSetLog(std::move(baseMsg));
+}
+
+void MLogger::setRequestStreamId(RequestID requestId, uint64_t streamId) {
+  requestStreamIds_[requestId.value] = streamId;
+}
+
+void MLogger::clearRequestStreamId(RequestID requestId) {
+  requestStreamIds_.erase(requestId.value);
+}
+
+void MLogger::clearRequestStream(RequestID requestId) {
+  auto request = requestStreamIds_.find(requestId.value);
+  if (request == requestStreamIds_.end()) {
+    return;
+  }
+  clearRequestStream(request->second);
+}
+
+void MLogger::clearRequestStream(uint64_t streamId) {
+  for (auto it = requestStreamIds_.begin(); it != requestStreamIds_.end();) {
+    if (it->second == streamId) {
+      it = requestStreamIds_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+uint64_t MLogger::requestStreamId(RequestID requestId) const {
+  auto it = requestStreamIds_.find(requestId.value);
+  return it == requestStreamIds_.end() ? kFirstBidiStreamId : it->second;
 }
 
 void MLogger::logObjectDatagramCreated(

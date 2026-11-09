@@ -47,6 +47,10 @@ class BidiStreamControl {
     return writeHandle_;
   }
 
+  uint64_t streamId() const {
+    return streamId_;
+  }
+
   folly::CancellationToken getReadCancelToken() const {
     return readCancelSource_.getToken();
   }
@@ -147,6 +151,7 @@ class BidiStreamControl {
   void onLocalWriteClose();
 
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
+  uint64_t streamId_{0};
   folly::CancellationSource readCancelSource_;
   folly::CancellationSource peerCancelSource_;
   // Used to suppress firePeerTermination() during shutdown; cleanup() can't
