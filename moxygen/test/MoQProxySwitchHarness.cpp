@@ -7,6 +7,7 @@
 #include "moxygen/test/MoQProxySwitchHarness.h"
 
 #include <fmt/core.h>
+#include <folly/coro/Sleep.h>
 #include <algorithm>
 
 #include "moxygen/MoQVersions.h"
@@ -428,6 +429,13 @@ ScriptedUpstreamProvider::getSession(
     const FullTrackName&,
     const TrackRequestParameters&,
     bool hasFallbackProvider) {
+  if (std::exchange(holdNext_, false)) {
+    attempts_.push_back(Attempt{.hasFallbackProvider = hasFallbackProvider});
+    co_await folly::coro::co_awaitTry(
+        folly::coro::sleep(std::chrono::seconds(30)));
+    co_return folly::makeUnexpected(
+        MoQUpstreamProviderError{"held attempt ended"});
+  }
   auto& attempt = attempts_.emplace_back(
       Attempt{.hasFallbackProvider = hasFallbackProvider});
   if (failuresLeft_ > 0) {

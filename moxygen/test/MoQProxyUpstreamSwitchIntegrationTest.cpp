@@ -786,10 +786,12 @@ class MoQProxyGracefulSwitchTest : public MoQProxyUpstreamSwitchTest {
  protected:
   MoQProxyOptions proxyOptions() const override {
     auto options = MoQProxyUpstreamSwitchTest::proxyOptions();
-    options.upstreamSwitch.maxStartDelay = kMaxStartDelay;
+    options.upstreamSwitch.maxStartDelay = maxStartDelay_;
     options.upstreamSwitch.reorderGrace = kReorderGrace;
     return options;
   }
+
+  std::chrono::milliseconds maxStartDelay_{kMaxStartDelay};
 
   // Hub 0 publishes groups [0, hub0Groups) and the other hubs
   // [0, otherGroups), then hub 0 goes away, and the proxy subscribes to hub 1
@@ -1269,6 +1271,74 @@ TEST_P(
     EXPECT_EQ(hubs_[0]->subscriptions(kTrack), 0);
     EXPECT_EQ(hubs_[1]->subscriptions(kTrack), 0);
     EXPECT_EQ(proxy_->switchStats().gracefulSwitches.completed, 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// The proxy closes while the switch waits out its start delay, before it
+// subscribes to hub 1. The viewer gets GOING_AWAY, hub 1 gets no SUBSCRIBE,
+// and nothing keeps the track waiting out the rest of the delay.
+TEST_P(
+    MoQProxyGracefulSwitchTest,
+    ClosingTheProxyDuringTheStartDelayStopsTheSwitch) {
+  maxStartDelay_ = std::chrono::minutes(10);
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await start(/*hubCount=*/2);
+    auto viewer = co_await subscribeViewer();
+    hubs_[0]->publishGroup(kTrack, 0);
+    hubs_[1]->publishGroup(kTrack, 0);
+    co_await settle();
+    viewer->expectedEnd = PublishDoneStatusCode::GOING_AWAY;
+    std::weak_ptr<MoQProxyTrack> track = proxy_->findTrack(kTrack);
+
+    goAway(
+        Goaway{
+            .timeout = uint64_t(
+                std::chrono::milliseconds(std::chrono::hours(1)).count())});
+    co_await settle();
+    EXPECT_EQ(proxy_->switchStats().gracefulSwitches.started, 1);
+    proxy_->close();
+    co_await waitUntil([&] { return viewer->done().has_value(); });
+
+    expectIntact(*viewer);
+    CO_ASSERT_TRUE(viewer->done().has_value());
+    EXPECT_EQ(viewer->done()->statusCode, PublishDoneStatusCode::GOING_AWAY);
+    EXPECT_EQ(hubs_[0]->subscriptions(kTrack), 0);
+    EXPECT_THAT(hubs_[1]->subscribeFilters(kTrack), IsEmpty());
+    EXPECT_TRUE(track.expired());
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// The proxy closes while the provider is still connecting the replacement.
+// The viewer gets GOING_AWAY, the provider's attempt is cancelled, and nothing
+// keeps the track waiting for it.
+TEST_P(
+    MoQProxyGracefulSwitchTest,
+    ClosingTheProxyWhileTheReplacementConnectsStopsTheSwitch) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await start(/*hubCount=*/2);
+    auto viewer = co_await subscribeViewer();
+    hubs_[0]->publishGroup(kTrack, 0);
+    hubs_[1]->publishGroup(kTrack, 0);
+    co_await settle();
+    viewer->expectedEnd = PublishDoneStatusCode::GOING_AWAY;
+    std::weak_ptr<MoQProxyTrack> track = proxy_->findTrack(kTrack);
+    const auto attempts = hubProviders_[0]->attempts().size();
+    hubProviders_[0]->holdNextAttempt();
+
+    goAway(Goaway{.timeout = uint64_t(kGoawayTimeout.count())});
+    co_await waitUntil(
+        [&] { return hubProviders_[0]->attempts().size() > attempts; });
+    proxy_->close();
+    co_await waitUntil([&] { return viewer->done().has_value(); });
+
+    expectIntact(*viewer);
+    CO_ASSERT_TRUE(viewer->done().has_value());
+    EXPECT_EQ(viewer->done()->statusCode, PublishDoneStatusCode::GOING_AWAY);
+    EXPECT_EQ(hubs_[0]->subscriptions(kTrack), 0);
+    EXPECT_THAT(hubs_[1]->subscribeFilters(kTrack), IsEmpty());
+    EXPECT_TRUE(track.expired());
     co_await leaveAndExpectIdle();
   }));
 }

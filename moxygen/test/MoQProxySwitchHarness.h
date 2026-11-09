@@ -221,6 +221,11 @@ class ScriptedUpstreamProvider : public MoQUpstreamProvider {
   void handOutOnce() {
     handOutOnce_ = true;
   }
+  // The next attempt waits, as one still connecting does, until it is
+  // cancelled, or for 30 s, then fails.
+  void holdNextAttempt() {
+    holdNext_ = true;
+  }
 
   const std::vector<Attempt>& attempts() const {
     return attempts_;
@@ -242,6 +247,7 @@ class ScriptedUpstreamProvider : public MoQUpstreamProvider {
   std::vector<Upstream> upstreams_;
   size_t failuresLeft_{0};
   bool handOutOnce_{false};
+  bool holdNext_{false};
   std::vector<Attempt> attempts_;
 };
 
