@@ -201,6 +201,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
   // cachedLeg is null when the group is not cached; leg then only forwards.
   SubgroupRecorder(
       std::shared_ptr<const bool> attemptActive,
+      std::shared_ptr<uint64_t> attemptObjects,
       std::weak_ptr<Recorder> recorder,
       std::weak_ptr<MoQGroupCache> cache,
       uint64_t group,
@@ -208,6 +209,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
       std::shared_ptr<SubgroupConsumer> leg,
       std::shared_ptr<MoQForwarder::SubgroupForwarder> cachedLeg)
       : attemptActive_(std::move(attemptActive)),
+        attemptObjects_(std::move(attemptObjects)),
         recorder_(std::move(recorder)),
         cache_(std::move(cache)),
         group_(group),
@@ -229,6 +231,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     if (abandoned()) {
       return abandonedError();
     }
+    ++*attemptObjects_;
     if (!record([&](MoQGroupCache& cache) {
           return cache.subgroupObject(
               group_,
@@ -264,6 +267,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     if (abandoned()) {
       return abandonedError();
     }
+    ++*attemptObjects_;
     if (!record([&](MoQGroupCache& cache) {
           return cache.beginObject(
               group_, subgroup_, objectID, length, initialPayload, extensions);
@@ -281,6 +285,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     if (abandoned()) {
       return abandonedError();
     }
+    ++*attemptObjects_;
     if (!record([&](MoQGroupCache& cache) {
           return cache.objectPayload(group_, subgroup_, payload);
         }) ||
@@ -301,6 +306,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     if (abandoned()) {
       return abandonedError();
     }
+    ++*attemptObjects_;
     if (!recordStatus(endOfGroupObjectID, ObjectStatus::END_OF_GROUP)) {
       return malformed();
     }
@@ -315,6 +321,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     if (abandoned()) {
       return abandonedError();
     }
+    ++*attemptObjects_;
     if (!recordStatus(endOfTrackObjectID, ObjectStatus::END_OF_TRACK)) {
       return malformed();
     }
@@ -430,6 +437,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
   }
 
   std::shared_ptr<const bool> attemptActive_;
+  std::shared_ptr<uint64_t> attemptObjects_;
   std::weak_ptr<Recorder> recorder_;
   std::weak_ptr<MoQGroupCache> cache_;
   uint64_t group_;
@@ -494,6 +502,10 @@ class MoQProxyTrack::Recorder final
   // Some of its data reached the forwarder.
   bool forwarded() const {
     return forwarded_;
+  }
+
+  uint64_t objects() const {
+    return *objects_;
   }
 
   // As a replacement, some of its objects reached the forwarder.
@@ -657,10 +669,15 @@ class MoQProxyTrack::Recorder final
     if (!recordStandalone(header, payload, /*datagram=*/false)) {
       return folly::makeUnexpected(malformedError());
     }
+    ++*objects_;
     noteGroup(header.group);
     auto forwarded =
         forwarder_->objectStream(header, std::move(payload), lastInGroup);
     resume(header.group);
+    if (handover_) {
+      // It moved the track's Largest, which a quiet handoff goes by.
+      reportHandover();
+    }
     return forwarded;
   }
 
@@ -692,10 +709,15 @@ class MoQProxyTrack::Recorder final
     if (!recordStandalone(header, payload, /*datagram=*/true)) {
       return folly::makeUnexpected(malformedError());
     }
+    ++*objects_;
     noteGroup(header.group);
     auto forwarded =
         forwarder_->datagram(header, std::move(payload), lastInGroup);
     resume(header.group);
+    if (handover_) {
+      // It moved the track's Largest, which a quiet handoff goes by.
+      reportHandover();
+    }
     return forwarded;
   }
 
@@ -751,6 +773,7 @@ class MoQProxyTrack::Recorder final
       return keep(
           std::make_shared<SubgroupRecorder>(
               active_,
+              objects_,
               weak_from_this(),
               std::weak_ptr<MoQGroupCache>(),
               groupID,
@@ -769,6 +792,7 @@ class MoQProxyTrack::Recorder final
     return keep(
         std::make_shared<SubgroupRecorder>(
             active_,
+            objects_,
             weak_from_this(),
             cache_,
             groupID,
@@ -907,6 +931,9 @@ class MoQProxyTrack::Recorder final
   bool forwarded_{false};
   // Shared with this attempt's subgroups.
   std::shared_ptr<bool> active_{std::make_shared<bool>(true)};
+  // The objects, and parts of objects, it received; shared with its
+  // subgroups.
+  std::shared_ptr<uint64_t> objects_{std::make_shared<uint64_t>(0)};
   std::shared_ptr<MoQUpstreamHandoffArbiter> arbiter_;
   std::shared_ptr<MoQUpstreamHandoffArbiter> handover_;
   bool upstreamMarksFirstObject_{true};
@@ -1897,9 +1924,25 @@ folly::coro::Task<void> MoQProxyTrack::enforceSwitchDeadline(
   }
   if (graceful_) {
     onGracefulDeadline();
+  } else if (state_ == State::READY && hasNothingNewer(upstream_)) {
+    completeSwitch();
   } else {
     failSwitch();
   }
+}
+
+bool MoQProxyTrack::hasNothingNewer(const UpstreamAttempt& attempt) const {
+  const auto& arbiter = attempt.recorder->arbiter();
+  if (!attempt.handle || attempt.recorder->forwarded() ||
+      (arbiter && arbiter->replacementRefused())) {
+    return false;
+  }
+  if (forwarder_->numForwardingSubscribers() == 0) {
+    return true;
+  }
+  const auto& largest = attempt.handle->subscribeOk().largest;
+  const auto highest = highestForwardedGroup();
+  return largest ? highest == largest->group : !highest;
 }
 
 void MoQProxyTrack::adoptReplacement(UpstreamAttempt attempt) {
@@ -2071,14 +2114,18 @@ void MoQProxyTrack::onHandoverProgress(const Recorder& old) {
 
 // The track lets the old upstream go once it has stayed caught up with the
 // adopted replacement, which has forwarded an object, for the reorder grace,
-// or once the tail timer that object starts runs out.
+// or once the tail timer that object starts runs out. On a quiet track neither
+// sends anything, and old goes once that has lasted the reorder grace.
 void MoQProxyTrack::checkHandoff() {
-  if (!replacementReady()) {
-    return;
+  bool caughtUp = false;
+  if (replacementReady()) {
+    startTail();
+    caughtUp = graceful_->arbiter->oldCaughtUp();
+  } else {
+    caughtUp = quietHandoffReady();
   }
-  startTail();
   auto& grace = graceful_->grace;
-  if (!graceful_->arbiter->oldCaughtUp()) {
+  if (!caughtUp) {
     if (grace) {
       grace->requestCancellation();
       grace.reset();
@@ -2089,29 +2136,56 @@ void MoQProxyTrack::checkHandoff() {
     return;
   }
   grace.emplace();
-  runDetached(handOverAfterGrace(grace->getToken()));
+  runDetached(
+      handOverAfterGrace(upstream_.recorder->objects(), grace->getToken()));
 }
 
 bool MoQProxyTrack::replacementReady() const {
   return graceful_->replacement && graceful_->replacement->recorder->resumed();
 }
 
-folly::coro::Task<void> MoQProxyTrack::handOverAfterGrace(
-    folly::CancellationToken stopped) {
-  co_await folly::coro::co_awaitTry(
-      folly::coro::co_withCancellation(
-          stopped,
-          folly::coro::sleep(switchOptions_.reorderGrace, timekeeper_.get())));
-  if (stopped.isCancellationRequested()) {
-    co_return;
+bool MoQProxyTrack::quietHandoffReady() const {
+  // Refused replacement data leaves its group to old, which may still deliver
+  // the rest of it.
+  if (!graceful_->replacement || !hasNothingNewer(*graceful_->replacement) ||
+      !graceful_->arbiter->oldUnfinishedGroups().empty()) {
+    return false;
   }
-  // It has no group left open, so this resets none of the viewers' streams.
-  unsubscribe(std::exchange(upstream_, {}));
-  promoteReplacement();
+  // The replacement then sends exactly what follows what viewers have.
+  return graceful_->replacement->handle->subscribeOk().largest ==
+      forwarder_->largest();
 }
 
-// The old upstream is gone, so the replacement owns every group after it.
-void MoQProxyTrack::promoteReplacement() {
+// On a quiet track, an object from the old upstream starts the grace afresh,
+// since more of its group may follow.
+folly::coro::Task<void> MoQProxyTrack::handOverAfterGrace(
+    uint64_t seen,
+    folly::CancellationToken stopped) {
+  for (;;) {
+    co_await folly::coro::co_awaitTry(
+        folly::coro::co_withCancellation(
+            stopped,
+            folly::coro::sleep(
+                switchOptions_.reorderGrace, timekeeper_.get())));
+    if (stopped.isCancellationRequested()) {
+      co_return;
+    }
+    const auto objects = upstream_.recorder->objects();
+    if (replacementReady() || objects == seen) {
+      break;
+    }
+    seen = objects;
+  }
+  // It has no group left open, so this resets none of the viewers' streams.
+  // A quiet replacement goes on from the track's Largest, in its group.
+  const bool quiet = !replacementReady();
+  unsubscribe(std::exchange(upstream_, {}));
+  promoteReplacement(quiet ? highestForwardedGroup() : std::nullopt);
+}
+
+// The old upstream is gone, so the replacement owns every group after it, and
+// continuedGroup if given.
+void MoQProxyTrack::promoteReplacement(std::optional<uint64_t> continuedGroup) {
   auto graceful = std::move(*std::exchange(graceful_, std::nullopt));
   if (graceful.grace) {
     graceful.grace->requestCancellation();
@@ -2119,7 +2193,7 @@ void MoQProxyTrack::promoteReplacement() {
   if (graceful.tail) {
     graceful.tail->requestCancellation();
   }
-  graceful.arbiter->onOldEnded();
+  graceful.arbiter->onOldEnded(continuedGroup);
   upstream_ = std::move(*graceful.replacement);
   auto& counters = switchStats_->gracefulSwitches;
   ++counters.completed;
@@ -2357,6 +2431,10 @@ void MoQProxyTrack::onReplacementRefused(
   ++(datagram ? switchStats_->refusedDatagrams : switchStats_->refusedStreams);
   if (admitted == MoQUpstreamHandoffArbiter::Admit::RefuseWithGap) {
     ++switchStats_->midSubgroupGaps;
+  }
+  if (graceful_) {
+    // The track isn't quiet.
+    checkHandoff();
   }
 }
 

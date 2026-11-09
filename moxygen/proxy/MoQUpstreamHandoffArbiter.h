@@ -29,6 +29,9 @@ namespace moxygen {
 // forwarder. Once old has ended, the replacement owns every group after both
 // the highest group old opened and the highest group whose replacement data
 // was refused, which can no longer reach viewers whole from the replacement.
+// When old ends with nothing left to send and the replacement starts right
+// after the track's Largest, the replacement owns that group's rest too, and
+// its streams there that start mid-subgroup go on from what viewers have.
 //
 // Draft 18+ says on the wire when a stream starts mid-subgroup, so the
 // replacement is missing that subgroup's first objects; the arbiter refuses
@@ -105,7 +108,9 @@ class MoQUpstreamHandoffArbiter {
   // An accepted subgroup finished or was reset. Only old's matter, to tell
   // when it has caught up; the replacement's are ignored.
   void onSubgroupEnded(Source source, uint64_t group, uint64_t subgroup);
-  void onOldEnded();
+  // continuedGroup: the group of the track's Largest, when the replacement
+  // starts right after it.
+  void onOldEnded(std::optional<uint64_t> continuedGroup = std::nullopt);
 
   // The split as the replacement's first data froze it while old was still
   // running. Old ending hands the replacement more groups but leaves this as
@@ -116,6 +121,10 @@ class MoQUpstreamHandoffArbiter {
   // The highest group old has opened, counting what it was seeded with.
   const std::optional<uint64_t>& highestOldGroup() const {
     return highestOldGroup_;
+  }
+  // Some replacement data was refused for a group not yet the replacement's.
+  bool replacementRefused() const {
+    return replacementIncompleteGroup_.has_value();
   }
   // Old has reached the replacement's groups and finished every group it
   // opened before them. A late stream for one of those groups makes this false
@@ -164,6 +173,7 @@ class MoQUpstreamHandoffArbiter {
   // refused: a stream that started mid-subgroup, or data for a group old
   // owned.
   std::optional<uint64_t> replacementIncompleteGroup_;
+  std::optional<uint64_t> continuedGroup_;
   // Old can't take these back.
   std::vector<EndedReplacement> endedReplacements_;
   bool oldReachedReplacement_{false};

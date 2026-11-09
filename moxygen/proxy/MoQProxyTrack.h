@@ -129,18 +129,21 @@ struct MoQProxySwitchStats {
   uint64_t upstreamsLost{0};
   // Switches that started because the upstream was lost. One completes once a
   // replacement the track adopted has forwarded an object, since a stream
-  // header alone doesn't count, and fails when none has by the deadline, which
-  // ends viewers' subscriptions with GOING_AWAY. A replacement lost before the
-  // switch completes doesn't start another.
+  // header alone doesn't count, or at the deadline when the adopted one has
+  // sent nothing but has nothing newer than the track's last group, or no
+  // viewer forwards, as on a quiet track. It fails at the deadline otherwise,
+  // which ends viewers' subscriptions with GOING_AWAY. A replacement lost
+  // before the switch completes doesn't start another.
   MoQProxySwitchCounters lostSwitches;
   // Switches that started because the upstream sent a GOAWAY, while it went on
   // serving. One completes once the track lets go of that upstream, which has
-  // caught up with the replacement or ended, and fails when it has no adopted
-  // replacement once the deadline passed; the upstream then serves until it
-  // goes. One whose upstream is lost before an adopted replacement forwarded
-  // an object carries on as a lost switch, counted there. That one, and one
-  // stopped by the upstream ending the track or by the track closing, neither
-  // completes nor fails here.
+  // caught up with the replacement or ended, or which, like the replacement,
+  // has had nothing to send for the reorder grace, and fails when it has no
+  // adopted replacement once the deadline passed; the upstream then serves
+  // until it goes. One whose upstream is lost before an adopted replacement
+  // forwarded an object carries on as a lost switch, counted there. That one,
+  // and one stopped by the upstream ending the track or by the track closing,
+  // neither completes nor fails here.
   MoQProxySwitchCounters gracefulSwitches;
   // Completed graceful switches whose replacement delivered data before the
   // old upstream ended.
@@ -376,6 +379,11 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   void adoptReplacement(UpstreamAttempt attempt);
   void completeSwitch();
   void failSwitch();
+  // It has sent nothing, not even data its arbiter refused, and the viewers
+  // have nothing newer to wait for from it: its Largest is no later than the
+  // track's, or no viewer forwards. A quiet track, such as the catalog, may
+  // publish nothing for minutes.
+  bool hasNothingNewer(const UpstreamAttempt& attempt) const;
   std::shared_ptr<MoQUpstreamHandoffArbiter> arbiterAfterForwarded() const;
   static void unsubscribe(UpstreamAttempt attempt);
 
@@ -396,8 +404,14 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   void checkHandoff();
   // The adopted replacement has forwarded an object.
   bool replacementReady() const;
-  folly::coro::Task<void> handOverAfterGrace(folly::CancellationToken stopped);
-  void promoteReplacement();
+  // The held replacement has sent nothing, its Largest is the track's, and
+  // old has no group open: neither has anything to send.
+  bool quietHandoffReady() const;
+  folly::coro::Task<void> handOverAfterGrace(
+      uint64_t seen,
+      folly::CancellationToken stopped);
+  void promoteReplacement(
+      std::optional<uint64_t> continuedGroup = std::nullopt);
   void countHandoff(const MoQUpstreamHandoffArbiter& arbiter);
   void onGracefulDeadline();
   bool takeOverOldUpstreamLoss(Recorder& old);

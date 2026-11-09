@@ -324,6 +324,85 @@ TEST_F(MoQUpstreamHandoffArbiterTest, OldEndingBeforeTheSplitKeepsItsGroups) {
   EXPECT_FALSE(arbiter_.split().has_value());
 }
 
+// A replacement that starts right after the track's Largest, in group 12,
+// continues that group once old has ended with nothing left to send.
+TEST_F(MoQUpstreamHandoffArbiterTest, AReplacementCanContinueOldsLastGroup) {
+  oldOpens(12);
+  oldFinishes(12);
+  arbiter_.onOldEnded(/*continuedGroup=*/12);
+
+  EXPECT_EQ(replacementOpens(12, /*subgroup=*/1), kAccept);
+  EXPECT_EQ(replacementOpens(11), kRefuse);
+  EXPECT_EQ(replacementOpens(13), kAccept);
+}
+
+// Viewers have the first objects of group 12's subgroups, so a replacement
+// stream there that starts mid-subgroup goes on from them, even as the
+// replacement's first data. In a later group it's missing them.
+TEST_F(
+    MoQUpstreamHandoffArbiterTest,
+    AContinuedGroupTakesStreamsThatStartMidSubgroup) {
+  oldOpens(12);
+  oldFinishes(12);
+  arbiter_.onOldEnded(/*continuedGroup=*/12);
+
+  EXPECT_EQ(
+      arbiter_.onBeginSubgroup(
+          Source::Replacement, 12, 0, /*startsMidSubgroup=*/true),
+      kAccept);
+  EXPECT_EQ(
+      arbiter_.onBeginSubgroup(
+          Source::Replacement, 13, 0, /*startsMidSubgroup=*/true),
+      Admit::RefuseWithGap);
+  EXPECT_EQ(replacementOpens(13, /*subgroup=*/1), kAccept);
+}
+
+// Not when old opened a later group, or replacement data for that group was
+// refused.
+TEST_F(
+    MoQUpstreamHandoffArbiterTest,
+    AContinuedGroupMustBeOldsLastAndUnrefused) {
+  oldOpens(12);
+  oldOpens(13);
+  arbiter_.onOldEnded(/*continuedGroup=*/12);
+  EXPECT_EQ(
+      arbiter_.onBeginSubgroup(
+          Source::Replacement, 12, 0, /*startsMidSubgroup=*/true),
+      kRefuse);
+  EXPECT_EQ(replacementOpens(12, /*subgroup=*/1), kRefuse);
+  EXPECT_EQ(replacementOpens(13, /*subgroup=*/1), kRefuse);
+  EXPECT_EQ(replacementOpens(14), kAccept);
+
+  MoQUpstreamHandoffArbiter refused;
+  EXPECT_EQ(refused.onBeginSubgroup(Source::Old, 12, 0), kAccept);
+  EXPECT_EQ(
+      refused.onBeginSubgroup(
+          Source::Replacement, 12, 0, /*startsMidSubgroup=*/true),
+      kRefuse);
+  refused.onOldEnded(/*continuedGroup=*/12);
+  EXPECT_EQ(refused.onBeginSubgroup(Source::Replacement, 12, 1), kRefuse);
+  EXPECT_EQ(refused.onBeginSubgroup(Source::Replacement, 13, 0), kAccept);
+}
+
+// Refused replacement data shows, whether its stream started mid-subgroup or
+// its group was old's. Accepted data doesn't count.
+TEST_F(MoQUpstreamHandoffArbiterTest, ItTellsWhetherReplacementDataWasRefused) {
+  oldOpens(10);
+  EXPECT_FALSE(arbiter_.replacementRefused());
+  EXPECT_EQ(
+      arbiter_.onBeginSubgroup(
+          Source::Replacement, 10, 0, /*startsMidSubgroup=*/true),
+      kRefuse);
+  EXPECT_TRUE(arbiter_.replacementRefused());
+
+  MoQUpstreamHandoffArbiter oldsGroup;
+  EXPECT_EQ(oldsGroup.onBeginSubgroup(Source::Old, 10, 0), kAccept);
+  EXPECT_EQ(oldsGroup.onBeginSubgroup(Source::Replacement, 11, 0), kAccept);
+  EXPECT_FALSE(oldsGroup.replacementRefused());
+  EXPECT_EQ(oldsGroup.onBeginSubgroup(Source::Replacement, 10, 1), kRefuse);
+  EXPECT_TRUE(oldsGroup.replacementRefused());
+}
+
 // Once old ends it can't deliver the groups it never opened, so the
 // replacement takes those too, even below the split.
 TEST_F(MoQUpstreamHandoffArbiterTest, OldEndingHandsOverGroupsItNeverOpened) {

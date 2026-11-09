@@ -435,6 +435,34 @@ TEST_P(MoQProxyLostUpstreamTest, TheReplacementsTrackEndFollowsRefusedStreams) {
   }));
 }
 
+// On a quiet track hub 1 has published nothing newer than the group the viewer
+// has: past the switch deadline the proxy carries on with it, and the viewer
+// gets the next group it publishes.
+TEST_P(MoQProxyLostUpstreamTest, AQuietTrackKeepsItsViewerPastTheDeadline) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await start(/*hubCount=*/2);
+    auto viewer = co_await subscribeViewer();
+    hubs_[0]->publishGroup(kTrack, 0);
+    hubs_[1]->publishGroup(kTrack, 0);
+    co_await settle();
+
+    hubs_[0]->closeSessions();
+    co_await waitForSubscribe(*hubs_[1], 1);
+    co_await folly::coro::sleep(2 * kSwitchDeadline);
+    EXPECT_FALSE(viewer->done().has_value());
+    hubs_[1]->publishGroup(kTrack, 1);
+    co_await settle();
+
+    expectIntact(*viewer);
+    const std::map<uint64_t, uint64_t> hubOfGroup{{0, 0}, {1, 1}};
+    EXPECT_EQ(viewer->hubOfGroup(), hubOfGroup);
+    const auto& stats = proxy_->switchStats();
+    EXPECT_EQ(stats.lostSwitches.completed, 1);
+    EXPECT_EQ(stats.lostSwitches.failed, 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     AllVersions,
     MoQProxyLostUpstreamTest,
@@ -785,6 +813,25 @@ TEST_P(
 
     expectHandedOver(*viewer, {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 1}, {5, 1}});
     EXPECT_EQ(proxy_->switchStats().handoffs.ahead, 1);
+    EXPECT_EQ(refused(), 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// A quiet track: each hub published group 0 and nothing since, so neither has
+// anything to send. Once that has lasted the reorder grace the proxy lets hub 0
+// go, long before its GOAWAY times out, and hub 1 serves the next group.
+TEST_P(MoQProxyGracefulSwitchTest, AQuietTrackHandsOverAfterTheReorderGrace) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    auto viewer = co_await startWithHub0GoingAway(1, 1);
+    const auto subscribed = std::chrono::steady_clock::now();
+    co_await waitForHandover();
+    EXPECT_LT(
+        std::chrono::steady_clock::now() - subscribed, kGoawayTimeout / 2);
+    hubs_[1]->publishGroup(kTrack, 1);
+    co_await settle();
+
+    expectHandedOver(*viewer, {{0, 0}, {1, 1}});
     EXPECT_EQ(refused(), 0);
     co_await leaveAndExpectIdle();
   }));

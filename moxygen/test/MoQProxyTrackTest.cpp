@@ -158,12 +158,13 @@ class MoQProxyTrackTest : public Test {
     return request;
   }
 
-  std::shared_ptr<NiceMock<MockSubscriptionHandle>> makeUpstreamHandle() {
+  std::shared_ptr<NiceMock<MockSubscriptionHandle>> makeUpstreamHandle(
+      AbsoluteLocation largest = AbsoluteLocation{10, 2}) {
     SubscribeOk subscribeOk{
         .requestID = RequestID(100),
         .trackAlias = TrackAlias(9),
         .groupOrder = GroupOrder::OldestFirst,
-        .largest = AbsoluteLocation{10, 2}};
+        .largest = largest};
     return std::make_shared<NiceMock<MockSubscriptionHandle>>(
         std::move(subscribeOk));
   }
@@ -174,7 +175,8 @@ class MoQProxyTrackTest : public Test {
   std::shared_ptr<Publisher::SubscriptionHandle> subscribeThroughUpstream(
       const std::shared_ptr<NiceMock<MockSubscriptionHandle>>& upstreamHandle,
       const std::shared_ptr<TrackConsumer>& consumer,
-      std::function<void()> whileSubscribing = nullptr) {
+      std::function<void()> whileSubscribing = nullptr,
+      bool forward = true) {
     EXPECT_CALL(*upstreamSession_, subscribe(_, _))
         .WillOnce(Invoke(
             [this, upstreamHandle, whileSubscribing](
@@ -186,9 +188,10 @@ class MoQProxyTrackTest : public Test {
               }
               co_return Publisher::SubscribeResult(upstreamHandle);
             }));
+    auto request = makeSubscribeRequest(RequestID(1));
+    request.forward = forward;
     auto result = folly::coro::blockingWait(
-        track_->subscribe(
-            makeSubscribeRequest(RequestID(1)), consumer, makeDownstreamPeer()),
+        track_->subscribe(std::move(request), consumer, makeDownstreamPeer()),
         &eventBase_);
     EXPECT_TRUE(result.hasValue());
     return result.hasValue() ? result.value() : nullptr;
@@ -1404,6 +1407,165 @@ TEST_F(
       replacementConsumer_->beginSubgroup(13, 0, kDefaultPriority).hasError());
 }
 
+// A quiet track, such as the catalog: the replacement answered with the
+// track's Largest and has sent nothing by the deadline. It has nothing newer
+// to send, so the switch completes, and the viewer keeps its subscription.
+TEST_F(MoQProxyTrackSwitchTest, AQuietTracksReplacementCompletesTheSwitch) {
+  makeTrackOnManualTime({provider_, replacementProvider_});
+  auto consumer = makeRecordingConsumer();
+  auto downstreamHandle =
+      subscribeThroughUpstream(makeUpstreamHandle(), consumer);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  auto replacementHandle = makeUpstreamHandle();
+  expectReplacementSubscribe(replacementHandle);
+  EXPECT_CALL(*consumer, publishDone(_)).Times(0);
+  EXPECT_CALL(*replacementHandle, unsubscribe()).Times(0);
+  loseUpstream();
+  runPending();
+  ASSERT_EQ(track_->upstreamSession(), replacementSession_);
+
+  advanceTime(kDeadline);
+
+  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->lostSwitches.failed, 0);
+  EXPECT_TRUE(sendFirstObject(*replacementConsumer_, 11));
+  EXPECT_TRUE(viewerSubgroups_.contains(11));
+  Mock::VerifyAndClearExpectations(consumer.get());
+  Mock::VerifyAndClearExpectations(replacementHandle.get());
+}
+
+// The replacement answered with the track's Largest, but what it sent of group
+// 10 by the deadline, a stream header or an object stream, was refused: the
+// replacement of a lost upstream takes only the groups after the track's last.
+// It isn't quiet, so the switch fails, and the viewer goes away.
+class MoQProxyTrackRefusedQuietTest : public MoQProxyTrackSwitchTest,
+                                      public WithParamInterface<bool> {};
+
+TEST_P(MoQProxyTrackRefusedQuietTest, AReplacementWhoseDataWasRefusedFails) {
+  const bool objectStream = GetParam();
+  makeTrackOnManualTime({provider_, replacementProvider_});
+  auto consumer = makeRecordingConsumer();
+  auto downstreamHandle =
+      subscribeThroughUpstream(makeUpstreamHandle(), consumer);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  auto replacementHandle = makeUpstreamHandle();
+  expectReplacementSubscribe(replacementHandle);
+  loseUpstream();
+  runPending();
+  ASSERT_EQ(track_->upstreamSession(), replacementSession_);
+  if (objectStream) {
+    EXPECT_TRUE(replacementConsumer_
+                    ->objectStream(
+                        ObjectHeader(10, 0, 3, 0, uint64_t(1)),
+                        folly::IOBuf::copyBuffer("x"))
+                    .hasError());
+  } else {
+    EXPECT_TRUE(replacementConsumer_->beginSubgroup(10, 1, kDefaultPriority)
+                    .hasError());
+  }
+  EXPECT_CALL(*replacementHandle, unsubscribe());
+  EXPECT_CALL(
+      *consumer,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::GOING_AWAY)))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  advanceTime(kDeadline);
+
+  EXPECT_EQ(switchStats_->lostSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->lostSwitches.completed, 0);
+  Mock::VerifyAndClearExpectations(consumer.get());
+  Mock::VerifyAndClearExpectations(replacementHandle.get());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TheReplacementSentGroup10,
+    MoQProxyTrackRefusedQuietTest,
+    Values(false, true),
+    [](const TestParamInfo<bool>& info) {
+      return info.param ? "OnAnObjectStream" : "WithAStreamHeader";
+    });
+
+struct QuietLargestCase {
+  std::string name;
+  std::optional<AbsoluteLocation> largest;
+  bool completes;
+};
+
+class MoQProxyTrackQuietLargestTest
+    : public MoQProxyTrackSwitchTest,
+      public WithParamInterface<QuietLargestCase> {};
+
+// The track's Largest is in group 10. A replacement that sends nothing by the
+// deadline completes the switch only with its Largest in that group; behind
+// it, ahead of it or with none, the viewer goes away.
+TEST_P(MoQProxyTrackQuietLargestTest, OnlyTheTracksLargestGroupIsQuiet) {
+  makeTrackOnManualTime({provider_, replacementProvider_});
+  auto consumer = makeConsumer();
+  auto downstreamHandle =
+      subscribeThroughUpstream(makeUpstreamHandle(), consumer);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  expectReplacementSubscribe(
+      std::make_shared<NiceMock<MockSubscriptionHandle>>(SubscribeOk{
+          .requestID = RequestID(100),
+          .trackAlias = TrackAlias(9),
+          .groupOrder = GroupOrder::OldestFirst,
+          .largest = GetParam().largest}));
+  EXPECT_CALL(
+      *consumer,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::GOING_AWAY)))
+      .Times(GetParam().completes ? 0 : 1)
+      .WillRepeatedly(
+          Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  loseUpstream();
+  runPending();
+  ASSERT_EQ(track_->upstreamSession(), replacementSession_);
+
+  advanceTime(kDeadline);
+
+  EXPECT_EQ(switchStats_->lostSwitches.completed, GetParam().completes ? 1 : 0);
+  EXPECT_EQ(switchStats_->lostSwitches.failed, GetParam().completes ? 0 : 1);
+  Mock::VerifyAndClearExpectations(consumer.get());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    QuietLargest,
+    MoQProxyTrackQuietLargestTest,
+    Values(
+        QuietLargestCase{"SameGroup", AbsoluteLocation{10, 0}, true},
+        QuietLargestCase{"GroupBehind", AbsoluteLocation{9, 5}, false},
+        QuietLargestCase{"GroupAhead", AbsoluteLocation{11, 0}, false},
+        QuietLargestCase{"NoLargest", std::nullopt, false}),
+    [](const TestParamInfo<QuietLargestCase>& info) {
+      return info.param.name;
+    });
+
+// Its viewer subscribed with forward 0, so the replacement, subscribed the
+// same way, sends nothing though it has newer groups: the switch completes.
+TEST_F(MoQProxyTrackSwitchTest, ATrackNoViewerForwardsCompletesTheSwitch) {
+  makeTrackOnManualTime({provider_, replacementProvider_});
+  auto consumer = makeConsumer();
+  auto downstreamHandle = subscribeThroughUpstream(
+      makeUpstreamHandle(),
+      consumer,
+      /*whileSubscribing=*/nullptr,
+      /*forward=*/false);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  expectReplacementSubscribe(makeUpstreamHandle(AbsoluteLocation{12, 0}));
+  EXPECT_CALL(*consumer, publishDone(_)).Times(0);
+  loseUpstream();
+  runPending();
+  ASSERT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_FALSE(replacementRequest_->forward);
+
+  advanceTime(kDeadline);
+
+  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->lostSwitches.failed, 0);
+  Mock::VerifyAndClearExpectations(consumer.get());
+}
+
 TEST_F(MoQProxyTrackSwitchTest, ASwitchThatCompletedOutlivesItsDeadline) {
   makeTrackOnManualTime({provider_, replacementProvider_});
   auto consumer = makeRecordingConsumer();
@@ -1428,7 +1590,7 @@ TEST_F(MoQProxyTrackSwitchTest, ASwitchThatCompletedOutlivesItsDeadline) {
 
 // The replacement the track adopted goes away before it forwards anything:
 // the same switch goes on to a third upstream, against the deadline from the
-// first loss.
+// first loss. The third has groups the track doesn't, and sends none.
 TEST_F(
     MoQProxyTrackSwitchTest,
     AReplacementLostBeforeItForwardsKeepsTheSwitchAndItsDeadline) {
@@ -1445,7 +1607,8 @@ TEST_F(
           [this](SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
               -> folly::coro::Task<Publisher::SubscribeResult> {
             replacementConsumer_ = std::move(cb);
-            co_return Publisher::SubscribeResult(makeUpstreamHandle());
+            co_return Publisher::SubscribeResult(
+                makeUpstreamHandle(AbsoluteLocation{12, 0}));
           }));
   loseUpstream();
   advanceTime(std::chrono::milliseconds(200));
@@ -2711,15 +2874,16 @@ TEST_F(
   Mock::VerifyAndClearExpectations(consumer_.get());
 }
 
-// The deadline passed while the replacement waited, and it still forwards
-// nothing once the old upstream is lost: the lost switch it carries on as gets
-// a deadline of its own, then ends the viewer with GOING_AWAY.
+// The replacement has groups the track doesn't. The deadline passed while it
+// waited, and it still forwards nothing once the old upstream is lost: the
+// lost switch it carries on as gets a deadline of its own, then ends the
+// viewer with GOING_AWAY.
 TEST_F(
     MoQProxyTrackGracefulSwitchTest,
     ASilentReplacementFailsTheSwitchItCarriesOnAs) {
   EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
   subscribeWithGroup11Open();
-  expectReplacementSubscribe();
+  expectReplacementSubscribe(makeUpstreamHandle(AbsoluteLocation{13, 0}));
   receiveSessionGoaway();
   runPending();
   ASSERT_NE(replacementConsumer_, nullptr);
@@ -2738,6 +2902,314 @@ TEST_F(
   advanceTime(std::chrono::milliseconds(5));
 
   EXPECT_EQ(switchStats_->lostSwitches.failed, 1);
+}
+
+// A quiet track: old has nothing open, and the replacement answered with the
+// track's Largest and sends nothing. Once that has lasted the reorder grace,
+// old goes, before its GOAWAY's timeout, and the replacement serves the next
+// group.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AQuietTrackHandsOverAfterTheReorderGrace) {
+  EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
+  downstreamHandle_ = subscribeThroughUpstream(oldHandle_, consumer_);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  advanceTime(kReorderGrace - std::chrono::milliseconds(1));
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+  EXPECT_CALL(*oldHandle_, unsubscribe());
+
+  advanceTime(std::chrono::milliseconds(1));
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_FALSE(oldOpens(11));
+  EXPECT_TRUE(replacementOpens(11));
+  EXPECT_TRUE(viewerSubgroups_.contains(11));
+  Mock::VerifyAndClearExpectations(consumer_.get());
+}
+
+// Old may still have objects for a group it has open, so a quiet handover
+// waits until it finishes the group.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AQuietHandoverWaitsForOldToFinishItsGroup) {
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe(makeUpstreamHandle(AbsoluteLocation{11, 0}));
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  advanceTime(2 * kReorderGrace);
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+  EXPECT_CALL(*oldHandle_, unsubscribe());
+
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  advanceTime(kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+}
+
+// Old opening a group during the reorder grace has something to send, so it
+// stays.
+TEST_F(MoQProxyTrackGracefulSwitchTest, OldOpeningAGroupStopsAQuietHandover) {
+  downstreamHandle_ = subscribeThroughUpstream(oldHandle_, consumer_);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  advanceTime(kReorderGrace / 2);
+  ASSERT_TRUE(oldOpens(11));
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+
+  advanceTime(2 * kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+}
+
+// On object streams old leaves no group open, though more of group 10 may
+// follow. The replacement answered with 10/4, so old stays until it has sent
+// 10/3 and 10/4. A late object of group 9 then starts the reorder grace
+// afresh, so old goes only once it has sent nothing for that long.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    OldObjectsOnAQuietTrackRestartTheReorderGrace) {
+  downstreamHandle_ = subscribeThroughUpstream(oldHandle_, consumer_);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  EXPECT_CALL(*consumer_, objectStream(Field(&ObjectHeader::group, 10), _, _))
+      .Times(2)
+      .WillRepeatedly(
+          Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  expectReplacementSubscribe(makeUpstreamHandle(AbsoluteLocation{10, 4}));
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  ASSERT_TRUE(upstreamConsumer_->objectStream(
+      ObjectHeader(10, 0, 3, 0, uint64_t(1)), folly::IOBuf::copyBuffer("x")));
+  advanceTime(2 * kReorderGrace);
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  ASSERT_TRUE(upstreamConsumer_->objectStream(
+      ObjectHeader(10, 0, 4, 0, uint64_t(1)), folly::IOBuf::copyBuffer("x")));
+  advanceTime(kReorderGrace / 2);
+  ASSERT_TRUE(upstreamConsumer_->objectStream(
+      ObjectHeader(9, 0, 7, 0, uint64_t(1)), folly::IOBuf::copyBuffer("x")));
+  advanceTime(kReorderGrace + kReorderGrace / 2 - std::chrono::milliseconds(1));
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+  EXPECT_CALL(*oldHandle_, unsubscribe());
+
+  advanceTime(std::chrono::milliseconds(1));
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  Mock::VerifyAndClearExpectations(consumer_.get());
+}
+
+// Both upstreams are at 10/2 and quiet, and old goes. The publisher then adds
+// 10/3: the replacement, which subscribed from the object after 10/2, sends it,
+// and it reaches the viewer.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AQuietReplacementGoesOnWithTheGroupOfTheTracksLargest) {
+  downstreamHandle_ = subscribeThroughUpstream(oldHandle_, consumer_);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  advanceTime(kReorderGrace);
+  ASSERT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_CALL(
+      *consumer_,
+      objectStream(
+          AllOf(Field(&ObjectHeader::group, 10), Field(&ObjectHeader::id, 3)),
+          _,
+          _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  EXPECT_TRUE(replacementConsumer_
+                  ->objectStream(
+                      ObjectHeader(10, 0, 3, 0, uint64_t(1)),
+                      folly::IOBuf::copyBuffer("x"))
+                  .hasValue());
+
+  Mock::VerifyAndClearExpectations(consumer_.get());
+}
+
+// Both upstreams are at 10/2 and old goes. The replacement then goes on with
+// subgroup 10/0, on a stream that starts mid-subgroup (draft 18+ says so)
+// since viewers have its first objects, and its objects reach the viewer.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AQuietReplacementGoesOnWithASubgroupOfTheTracksLargestGroup) {
+  ON_CALL(*replacementSession_, getNegotiatedVersion())
+      .WillByDefault(Return(kVersionDraft18));
+  downstreamHandle_ = subscribeThroughUpstream(oldHandle_, consumer_);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  advanceTime(kReorderGrace);
+  ASSERT_EQ(track_->upstreamSession(), replacementSession_);
+
+  auto subgroup = replacementConsumer_->beginSubgroup(
+      10,
+      0,
+      kDefaultPriority,
+      TrackConsumer::BeginSubgroupOptions{.beginsWithFirstObject = false});
+
+  ASSERT_TRUE(subgroup.hasValue());
+  ASSERT_TRUE(viewerSubgroups_.contains(10));
+  EXPECT_CALL(*viewerSubgroups_[10], object(3, _, _, false));
+  EXPECT_CALL(*viewerSubgroups_[10], object(4, _, _, false));
+  EXPECT_TRUE(subgroup.value()
+                  ->object(3, folly::IOBuf::copyBuffer("x"), noExtensions())
+                  .hasValue());
+  EXPECT_TRUE(subgroup.value()
+                  ->object(4, folly::IOBuf::copyBuffer("y"), noExtensions())
+                  .hasValue());
+  Mock::VerifyAndClearExpectations(viewerSubgroups_[10].get());
+}
+
+// Old sent 10/3 after the replacement answered with 10/2, so the replacement's
+// own 10/3 would be its second copy for the viewer. Old stays, and keeps group
+// 10 once the replacement sends.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AQuietReplacementBehindTheTracksLargestLeavesItsGroupToOld) {
+  downstreamHandle_ = subscribeThroughUpstream(oldHandle_, consumer_);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  EXPECT_CALL(*consumer_, objectStream(Field(&ObjectHeader::group, 10), _, _))
+      .Times(2)
+      .WillRepeatedly(
+          Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  ASSERT_TRUE(upstreamConsumer_->objectStream(
+      ObjectHeader(10, 0, 3, 0, uint64_t(1)), folly::IOBuf::copyBuffer("x")));
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+
+  advanceTime(2 * kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  EXPECT_TRUE(replacementConsumer_
+                  ->objectStream(
+                      ObjectHeader(10, 0, 3, 0, uint64_t(1)),
+                      folly::IOBuf::copyBuffer("x"))
+                  .hasError());
+  EXPECT_TRUE(upstreamConsumer_
+                  ->objectStream(
+                      ObjectHeader(10, 0, 4, 0, uint64_t(1)),
+                      folly::IOBuf::copyBuffer("x"))
+                  .hasValue());
+  Mock::VerifyAndClearExpectations(consumer_.get());
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+}
+
+// Both upstreams are at 10/2 and quiet. During the reorder grace the
+// replacement sends 10/3, of the group old still owns: on an object stream, or
+// on a stream that starts mid-subgroup (draft 18+ says so). It's refused, and
+// the track isn't quiet, so old stays and its own 10/3 reaches the viewer.
+class MoQProxyTrackQuietRefusalTest : public MoQProxyTrackGracefulSwitchTest,
+                                      public WithParamInterface<bool> {};
+
+TEST_P(MoQProxyTrackQuietRefusalTest, ARefusedReplacementStreamKeepsOld) {
+  const bool midSubgroup = GetParam();
+  ON_CALL(*replacementSession_, getNegotiatedVersion())
+      .WillByDefault(Return(kVersionDraft18));
+  downstreamHandle_ = subscribeThroughUpstream(oldHandle_, consumer_);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  advanceTime(kReorderGrace / 2);
+  if (midSubgroup) {
+    EXPECT_TRUE(replacementConsumer_
+                    ->beginSubgroup(
+                        10,
+                        0,
+                        kDefaultPriority,
+                        TrackConsumer::BeginSubgroupOptions{
+                            .beginsWithFirstObject = false})
+                    .hasError());
+  } else {
+    EXPECT_TRUE(replacementConsumer_
+                    ->objectStream(
+                        ObjectHeader(10, 0, 3, 0, uint64_t(1)),
+                        folly::IOBuf::copyBuffer("x"))
+                    .hasError());
+  }
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+
+  advanceTime(2 * kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  EXPECT_CALL(
+      *consumer_,
+      objectStream(
+          AllOf(Field(&ObjectHeader::group, 10), Field(&ObjectHeader::id, 3)),
+          _,
+          _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_TRUE(upstreamConsumer_
+                  ->objectStream(
+                      ObjectHeader(10, 0, 3, 0, uint64_t(1)),
+                      folly::IOBuf::copyBuffer("x"))
+                  .hasValue());
+  Mock::VerifyAndClearExpectations(consumer_.get());
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TheReplacementSentOldsGroup,
+    MoQProxyTrackQuietRefusalTest,
+    Values(false, true),
+    [](const TestParamInfo<bool>& info) {
+      return info.param ? "OnAStreamStartingMidSubgroup" : "OnAnObjectStream";
+    });
+
+// A replacement behind the track's last group may not have it, so old stays
+// until it goes. The lost switch that then carries on fails at the deadline,
+// and the viewer goes away.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AQuietReplacementBehindFailsTheSwitchOnceOldGoes) {
+  subscribeWithGroup11Open();
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  advanceTime(2 * kReorderGrace);
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+
+  loseUpstream();
+  runPending();
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_CALL(
+      *consumer_,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::GOING_AWAY)))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  advanceTime(kDeadline);
+
+  EXPECT_EQ(switchStats_->lostSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->lostSwitches.failed, 1);
+  Mock::VerifyAndClearExpectations(consumer_.get());
 }
 
 // The replacement's stream header alone doesn't let the old upstream go.

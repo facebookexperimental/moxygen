@@ -40,6 +40,11 @@ MoQUpstreamHandoffArbiter::Admit MoQUpstreamHandoffArbiter::onBeginSubgroup(
     uint64_t subgroup,
     bool startsMidSubgroup) {
   if (source == Source::Replacement && startsMidSubgroup) {
+    // The replacement goes on from the track's Largest, so in the group it
+    // continues, viewers already have the subgroup's first objects.
+    if (group == continuedGroup_) {
+      return admit(source, group);
+    }
     if (ownership_ && ownership_->ownedByReplacement(group)) {
       return Admit::RefuseWithGap;
     }
@@ -98,8 +103,10 @@ void MoQUpstreamHandoffArbiter::onSubgroupEnded(
   }
 }
 
-void MoQUpstreamHandoffArbiter::onOldEnded() {
+void MoQUpstreamHandoffArbiter::onOldEnded(
+    std::optional<uint64_t> continuedGroup) {
   oldEnded_ = true;
+  continuedGroup_ = continuedGroup;
   if (ownership_) {
     ownership_ = splitAfterOldEnded();
   }
@@ -107,6 +114,12 @@ void MoQUpstreamHandoffArbiter::onOldEnded() {
 
 MoQUpstreamHandoffArbiter::Split MoQUpstreamHandoffArbiter::splitAfterOldEnded()
     const {
+  // The replacement continues that group unless old opened a later one, and
+  // still never takes a group whose replacement data was refused.
+  if (continuedGroup_ &&
+      highestOldGroup_.value_or(*continuedGroup_) <= *continuedGroup_) {
+    return Split{*continuedGroup_, replacementIncompleteGroup_};
+  }
   auto oldLastGroup = highestOldGroup_;
   if (replacementIncompleteGroup_) {
     oldLastGroup = std::max(
