@@ -13,7 +13,6 @@
 #include <folly/coro/Sleep.h>
 #include <folly/coro/WithCancellation.h>
 #include <folly/logging/xlog.h>
-#include <algorithm>
 #include <utility>
 
 #include "moxygen/MoQLocation.h"
@@ -311,8 +310,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
 
   void resume();
 
-  // Returns false only for malformed input. Once this group stops being
-  // cached, the leg loses cache interest and stops consuming for the cache.
+  // Cache consistency failures disable caching without interrupting delivery.
   template <typename Fn>
   bool record(Fn&& fn) {
     if (!caching_) {
@@ -326,7 +324,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     auto result = fn(*cache);
     if (result == MoQGroupCache::Result::Malformed) {
       stopCaching();
-      return false;
+      return true;
     }
     if (result == MoQGroupCache::Result::NotCached &&
         !cache->isCaching(group_)) {
@@ -618,9 +616,10 @@ class MoQProxyTrack::Recorder final
       const Payload& payload,
       bool datagram) {
     auto cache = cache_.lock();
-    return !cache ||
-        cache->standaloneObject(header, payload, datagram) !=
-        MoQGroupCache::Result::Malformed;
+    if (cache) {
+      (void)cache->standaloneObject(header, payload, datagram);
+    }
+    return true;
   }
 
   MoQPublishError endedError() const {
@@ -895,11 +894,18 @@ folly::coro::Task<folly::Unit> MoQProxyTrack::awaitUpstreamSubscription() {
   co_return co_await upstreamSubscriptionReadyPromise_.getFuture();
 }
 
-void MoQProxyTrack::saveJoiningFetchForUpstream(Fetch upstreamFetch) {
-  if (!cache_ || joiningFetchRequest_) {
-    return;
+std::shared_ptr<MoQProxyTrack::SharedFetchState>
+MoQProxyTrack::saveJoiningFetchForUpstream(
+    Fetch upstreamFetch,
+    std::shared_ptr<FetchConsumer> consumer) {
+  if (joiningFetchRequest_) {
+    return nullptr;
   }
   joiningFetchRequest_ = std::move(upstreamFetch);
+  joiningFetchConsumer_ = std::move(consumer);
+  joiningFetchExposed_ = false;
+  joiningFetchStatus_ = std::make_shared<SharedFetchState>();
+  return joiningFetchStatus_;
 }
 
 void MoQProxyTrack::trySendJoiningFetchToCurrentUpstream() {
@@ -909,14 +915,9 @@ void MoQProxyTrack::trySendJoiningFetchToCurrentUpstream() {
     return;
   }
   auto version = upstream_.session->getNegotiatedVersion();
-  if (!version || getDraftMajorVersion(*version) < 18 ||
-      useFillFetch(*version)) {
+  if (!version || useFillFetch(*version)) {
     return;
   }
-  if (!joiningFetchStatus_) {
-    joiningFetchStatus_ = std::make_shared<SharedFetchState>();
-  }
-
   joiningFetchAttempt_.emplace(UpstreamJoiningFetchAttempt{});
   joiningFetchAttempt_->id = upstreamAttempt_;
   auto attempt = upstreamAttempt_;
@@ -924,23 +925,35 @@ void MoQProxyTrack::trySendJoiningFetchToCurrentUpstream() {
   auto cancellation = joiningFetchAttempt_->cancellation.getToken();
   auto fetch = *joiningFetchRequest_;
   joiningFetchAttempt_->writer = std::make_shared<MoQFetchCacheWriter>(
-      cache_,
-      [weak = weak_from_this(), attempt](bool) {
+      cache_, [](bool) {}, fetch.groupOrder);
+  auto writer = joiningFetchAttempt_->writer;
+  auto consumer = std::make_shared<MoQFetchCacheTee>(
+      writer,
+      joiningFetchConsumer_,
+      [weak = weak_from_this(), attempt] {
         if (auto self = weak.lock()) {
           self->joiningFetchFinished(attempt);
         }
       },
-      fetch.groupOrder);
-  auto writer = joiningFetchAttempt_->writer;
+      [weak = weak_from_this(), attempt](bool exposesResponse) {
+        auto self = weak.lock();
+        if (!self || !self->joiningFetchAttempt_ ||
+            self->joiningFetchAttempt_->id != attempt ||
+            self->joiningFetchAttempt_->finished) {
+          return false;
+        }
+        self->joiningFetchExposed_ |= exposesResponse;
+        return true;
+      });
   auto executor = session->getExecutor();
-  auto fetchTask = [](std::shared_ptr<MoQProxyTrack> self,
-                      uint64_t attempt,
-                      std::shared_ptr<MoQSession> session,
-                      Fetch fetch,
-                      std::shared_ptr<MoQFetchCacheWriter> writer)
-      -> folly::coro::Task<void> {
+  auto fetchTask =
+      [](std::shared_ptr<MoQProxyTrack> self,
+         uint64_t attempt,
+         std::shared_ptr<MoQSession> session,
+         Fetch fetch,
+         std::shared_ptr<FetchConsumer> consumer) -> folly::coro::Task<void> {
     auto result = co_await folly::coro::co_awaitTry(
-        session->fetch(std::move(fetch), std::move(writer)));
+        session->fetch(std::move(fetch), std::move(consumer)));
     if (result.hasException()) {
       self->joiningFetchFailed(
           attempt,
@@ -967,14 +980,26 @@ void MoQProxyTrack::trySendJoiningFetchToCurrentUpstream() {
     }
     self->joiningFetchAccepted(attempt, std::move(result->value()));
   }(shared_from_this(),
-      attempt,
-      std::move(session),
-      std::move(fetch),
-      std::move(writer));
+                                                  attempt,
+                                                  std::move(session),
+                                                  std::move(fetch),
+                                                  std::move(consumer));
   folly::coro::co_withExecutor(
       std::move(executor),
       folly::coro::co_withCancellation(cancellation, std::move(fetchTask)))
       .start();
+}
+
+void MoQProxyTrack::cancelJoiningFetch(
+    const std::shared_ptr<SharedFetchState>& fetch) {
+  if (fetch != joiningFetchStatus_) {
+    return;
+  }
+  joiningFetchRequest_.reset();
+  cancelJoiningFetchAttempt(upstreamAttempt_);
+  joiningFetchConsumer_.reset();
+  failJoiningFetch(
+      FetchError{RequestID(0), FetchErrorCode::CANCELLED, "fetch cancelled"});
 }
 
 void MoQProxyTrack::joiningFetchAccepted(
@@ -1018,6 +1043,9 @@ void MoQProxyTrack::resolveJoiningFetchAttempt(uint64_t attempt) {
     if (operation.error) {
       status.error = operation.error;
     } else if (operation.handle) {
+      status.fetchOk = operation.handle->fetchOk();
+      status.fetchHandle = operation.handle;
+      status.session = upstream_.session;
       auto range = resolveJoiningFetchRange(
           std::get<moxygen::JoiningFetch>(joiningFetchRequest_->args),
           upstreamLargest_,
@@ -1031,13 +1059,8 @@ void MoQProxyTrack::resolveJoiningFetchAttempt(uint64_t attempt) {
       return;
     }
     status.accepted.setValue(folly::unit);
-    if (status.range &&
-        !operation.writer->setRange(status.range->start, status.range->end)) {
-      status.range.reset();
-      status.error = FetchError{
-          RequestID(0),
-          FetchErrorCode::INVALID_RANGE,
-          "upstream FETCH data was outside its accepted range"};
+    if (status.range) {
+      (void)operation.writer->setRange(status.range->start, status.range->end);
     }
     if (status.error) {
       if (auto handle = std::exchange(operation.handle, nullptr)) {
@@ -1052,12 +1075,14 @@ void MoQProxyTrack::resolveJoiningFetchAttempt(uint64_t attempt) {
   }
   status.finished.setValue(folly::unit);
   operation.handle.reset();
+  joiningFetchConsumer_.reset();
 }
 
 void MoQProxyTrack::cancelJoiningFetchAttempt(uint64_t attempt) {
   if (!joiningFetchAttempt_ || joiningFetchAttempt_->id != attempt) {
     return;
   }
+  joiningFetchAttempt_->finished = true;
   joiningFetchAttempt_->cancellation.requestCancellation();
   if (auto handle = std::exchange(joiningFetchAttempt_->handle, nullptr)) {
     handle->fetchCancel();
@@ -1083,204 +1108,6 @@ void MoQProxyTrack::failJoiningFetch(FetchError error) {
   }
   if (!joiningFetchStatus_->finished.isFulfilled()) {
     joiningFetchStatus_->finished.setValue(folly::unit);
-  }
-}
-
-std::vector<MoQProxyTrack::JoiningRange> MoQProxyTrack::missingHistoryRanges(
-    JoiningRange range) const {
-  auto missing = cache_ ? cache_->missingRanges(range.start, range.end)
-                        : std::vector<JoiningRange>{range};
-  auto subtract = [&missing](const JoiningRange& covered) {
-    std::vector<JoiningRange> next;
-    for (const auto& gap : missing) {
-      if (covered.end <= gap.start || gap.end <= covered.start) {
-        next.push_back(gap);
-        continue;
-      }
-      if (gap.start < covered.start) {
-        next.push_back({gap.start, covered.start});
-      }
-      if (covered.end < gap.end) {
-        next.push_back({covered.end, gap.end});
-      }
-    }
-    missing = std::move(next);
-  };
-
-  for (const auto& fetch : existingFetchesForRange(range)) {
-    subtract(*fetch->range);
-  }
-  return missing;
-}
-
-std::vector<std::shared_ptr<MoQProxyTrack::SharedFetchState>>
-MoQProxyTrack::existingFetchesForRange(JoiningRange range) const {
-  std::vector<std::shared_ptr<SharedFetchState>> fetches;
-  auto add = [&](const std::shared_ptr<SharedFetchState>& status) {
-    if (status && !status->error && !status->finished.isFulfilled() &&
-        (!status->range ||
-         (status->range->start < range.end &&
-          range.start < status->range->end))) {
-      fetches.push_back(status);
-    }
-  };
-  add(joiningFetchStatus_);
-  for (const auto& fetch : standaloneFetches_) {
-    add(fetch->status);
-  }
-  return fetches;
-}
-
-std::shared_ptr<MoQProxyTrack::SharedFetchState>
-MoQProxyTrack::startStandaloneFetch(Fetch fetch, JoiningRange range) {
-  auto operation = std::make_shared<StandaloneFetchAttempt>();
-  operation->status = std::make_shared<SharedFetchState>();
-  operation->status->range = range;
-  auto fail = [&](FetchError error) {
-    operation->status->error = std::move(error);
-    operation->status->accepted.setValue(folly::unit);
-    operation->status->finished.setValue(folly::unit);
-  };
-  if (state_ != State::READY || !upstream_.session) {
-    fail(
-        FetchError{
-            RequestID(0),
-            FetchErrorCode::INTERNAL_ERROR,
-            "upstream unavailable"});
-    return operation->status;
-  }
-  standaloneFetches_.push_back(operation);
-
-  fetch.requestID = RequestID(0);
-  fetch.fullTrackName = fullTrackName_;
-  auto end = range.end.object == 0 ? AbsoluteLocation{range.end.group - 1, 0}
-                                   : range.end;
-  fetch.args = moxygen::StandaloneFetch(range.start, end);
-  auto upstream = upstream_.session;
-  operation->writer = std::make_shared<MoQFetchCacheWriter>(
-      cache_,
-      range.start,
-      range.end,
-      [weak = weak_from_this(),
-       weakOperation =
-           std::weak_ptr<StandaloneFetchAttempt>(operation)](bool cacheable) {
-        if (auto self = weak.lock()) {
-          if (auto operation = weakOperation.lock()) {
-            self->standaloneFetchFinished(operation, cacheable);
-          }
-        }
-      },
-      fetch.groupOrder);
-  auto executor = upstream->getExecutor();
-  folly::coro::co_withExecutor(
-      std::move(executor),
-      folly::coro::co_withCancellation(
-          operation->cancellation.getToken(),
-          folly::coro::co_invoke(
-              [self = shared_from_this(),
-               upstream = std::move(upstream),
-               operation,
-               fetch = std::move(fetch)]() mutable -> folly::coro::Task<void> {
-                auto result = co_await folly::coro::co_awaitTry(
-                    upstream->fetch(std::move(fetch), operation->writer));
-                if (result.hasException()) {
-                  operation->status->error = FetchError{
-                      RequestID(0),
-                      FetchErrorCode::INTERNAL_ERROR,
-                      result.exception().what().toStdString()};
-                } else if (result->hasError()) {
-                  operation->status->error = std::move(result->error());
-                } else if (result->value()) {
-                  self->standaloneFetchAccepted(
-                      operation, std::move(result->value()));
-                  co_return;
-                } else {
-                  operation->status->error = FetchError{
-                      RequestID(0),
-                      FetchErrorCode::INTERNAL_ERROR,
-                      "upstream returned a null FETCH handle"};
-                }
-                operation->writer->invalidate();
-                self->standaloneFetchAccepted(operation, nullptr);
-              })))
-      .start();
-  return operation->status;
-}
-
-void MoQProxyTrack::standaloneFetchAccepted(
-    const std::shared_ptr<StandaloneFetchAttempt>& fetch,
-    std::shared_ptr<Publisher::FetchHandle> handle) {
-  if (std::find(standaloneFetches_.begin(), standaloneFetches_.end(), fetch) ==
-      standaloneFetches_.end()) {
-    if (handle) {
-      handle->fetchCancel();
-    }
-    return;
-  }
-  if (handle) {
-    auto end = handle->fetchOk().endLocation;
-    if (!(fetch->status->range->start < end) ||
-        fetch->status->range->end < end) {
-      fetch->status->error = FetchError{
-          RequestID(0), FetchErrorCode::INVALID_RANGE, "invalid FETCH range"};
-      handle->fetchCancel();
-      fetch->writer->invalidate();
-    } else {
-      fetch->status->range->end = end;
-      if (fetch->writer->setRange(
-              fetch->status->range->start, fetch->status->range->end)) {
-        fetch->handle = std::move(handle);
-      } else {
-        fetch->status->error = FetchError{
-            RequestID(0),
-            FetchErrorCode::INVALID_RANGE,
-            "upstream FETCH data was outside its accepted range"};
-        handle->fetchCancel();
-        fetch->writer->invalidate();
-      }
-    }
-  }
-  fetch->status->accepted.setValue(folly::unit);
-  resolveStandaloneFetch(fetch);
-}
-
-void MoQProxyTrack::standaloneFetchFinished(
-    const std::shared_ptr<StandaloneFetchAttempt>& fetch,
-    bool cacheable) {
-  fetch->finished = true;
-  if (!cacheable && !fetch->status->error) {
-    fetch->status->error = FetchError{
-        RequestID(0), FetchErrorCode::INTERNAL_ERROR, "history was not cached"};
-  }
-  resolveStandaloneFetch(fetch);
-}
-
-void MoQProxyTrack::resolveStandaloneFetch(
-    const std::shared_ptr<StandaloneFetchAttempt>& fetch) {
-  if (!fetch->finished || !fetch->status->accepted.isFulfilled() ||
-      fetch->status->finished.isFulfilled()) {
-    return;
-  }
-  fetch->status->finished.setValue(folly::unit);
-  fetch->handle.reset();
-  std::erase(standaloneFetches_, fetch);
-}
-
-void MoQProxyTrack::cancelStandaloneFetches(const FetchError& error) {
-  auto fetches = std::move(standaloneFetches_);
-  for (auto& fetch : fetches) {
-    fetch->cancellation.requestCancellation();
-    if (auto handle = std::exchange(fetch->handle, nullptr)) {
-      handle->fetchCancel();
-    }
-    fetch->writer->abort();
-    if (!fetch->status->accepted.isFulfilled()) {
-      fetch->status->error = error;
-      fetch->status->accepted.setValue(folly::unit);
-    }
-    if (!fetch->status->finished.isFulfilled()) {
-      fetch->status->finished.setValue(folly::unit);
-    }
   }
 }
 
@@ -1312,7 +1139,8 @@ MoQProxyTrack::establishUpstream(
           SubscribeErrorCode::GOING_AWAY,
           "upstream went away while establishing the subscription");
     }
-    if (result.hasValue() || cancelled.isCancellationRequested()) {
+    if (result.hasValue() || cancelled.isCancellationRequested() ||
+        (joiningFetchExposed_ && state_ == State::CONNECTING)) {
       co_return result;
     }
     lastFailure = std::move(result.error());
@@ -1867,9 +1695,12 @@ void MoQProxyTrack::stopCaching() {
   auto closed = FetchError{
       RequestID(0), FetchErrorCode::INTERNAL_ERROR, "proxy track closed"};
   joiningFetchRequest_.reset();
+  if (auto consumer = std::exchange(joiningFetchConsumer_, nullptr)) {
+    consumer->reset(ResetStreamErrorCode::CANCELLED);
+  }
+  joiningFetchExposed_ = false;
   cancelJoiningFetchAttempt(upstreamAttempt_);
   failJoiningFetch(closed);
-  cancelStandaloneFetches(closed);
   if (auto recorder = std::move(upstream_.recorder)) {
     recorder->disable();
   }
@@ -1937,6 +1768,10 @@ MoQProxyTrack::resolveJoiningFetch(
             "Joining Location has no representable successor"});
   }
   return std::optional<JoiningRange>{JoiningRange{start, *end}};
+}
+
+bool MoQProxyTrack::hasEstablishedUpstream() const {
+  return state_ == State::READY && upstream_.handle;
 }
 
 const Extensions& MoQProxyTrack::trackExtensions() const {

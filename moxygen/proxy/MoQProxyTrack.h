@@ -33,6 +33,7 @@ namespace moxygen {
 class MoQForwarder;
 class MoQFetchCacheWriter;
 class MoQSession;
+class FetchConsumer;
 class TrackConsumer;
 
 struct MoQProxyTrackCacheConfig {
@@ -167,23 +168,16 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     folly::coro::SharedPromise<folly::Unit> finished;
     std::optional<JoiningRange> range;
     std::optional<FetchError> error;
+    std::optional<FetchOk> fetchOk;
+    std::weak_ptr<Publisher::FetchHandle> fetchHandle;
+    std::weak_ptr<MoQSession> session;
   };
 
-  std::shared_ptr<SharedFetchState> joiningFetch() const {
-    return joiningFetchStatus_;
-  }
-  void saveJoiningFetchForUpstream(Fetch upstreamFetch);
+  std::shared_ptr<SharedFetchState> saveJoiningFetchForUpstream(
+      Fetch upstreamFetch,
+      std::shared_ptr<FetchConsumer> consumer);
   void trySendJoiningFetchToCurrentUpstream();
-
-  // Returns ranges neither cached nor being retrieved by an existing FETCH.
-  std::vector<JoiningRange> missingHistoryRanges(JoiningRange range) const;
-
-  std::vector<std::shared_ptr<SharedFetchState>> existingFetchesForRange(
-      JoiningRange range) const;
-
-  std::shared_ptr<SharedFetchState> startStandaloneFetch(
-      Fetch fetch,
-      JoiningRange range);
+  void cancelJoiningFetch(const std::shared_ptr<SharedFetchState>& fetch);
 
   folly::Expected<std::optional<JoiningRange>, FetchError> resolveJoiningFetch(
       SessionId downstreamSessionId,
@@ -198,6 +192,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   const std::shared_ptr<MoQSession>& upstreamSession() const {
     return upstream_.session;
   }
+  bool hasEstablishedUpstream() const;
   const Extensions& trackExtensions() const;
 
   void close();
@@ -223,14 +218,6 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     std::shared_ptr<MoQFetchCacheWriter> writer;
     std::shared_ptr<Publisher::FetchHandle> handle;
     bool subscriptionAccepted{false};
-    bool finished{false};
-  };
-
-  struct StandaloneFetchAttempt {
-    std::shared_ptr<SharedFetchState> status;
-    folly::CancellationSource cancellation;
-    std::shared_ptr<MoQFetchCacheWriter> writer;
-    std::shared_ptr<Publisher::FetchHandle> handle;
     bool finished{false};
   };
 
@@ -332,15 +319,6 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   void resolveJoiningFetchAttempt(uint64_t attempt);
   void cancelJoiningFetchAttempt(uint64_t attempt);
   void failJoiningFetch(FetchError error);
-  void standaloneFetchAccepted(
-      const std::shared_ptr<StandaloneFetchAttempt>& fetch,
-      std::shared_ptr<Publisher::FetchHandle> handle);
-  void standaloneFetchFinished(
-      const std::shared_ptr<StandaloneFetchAttempt>& fetch,
-      bool cacheable);
-  void resolveStandaloneFetch(
-      const std::shared_ptr<StandaloneFetchAttempt>& fetch);
-  void cancelStandaloneFetches(const FetchError& error);
   void setLargestObjectForPendingSubscribers();
 
   FullTrackName fullTrackName_;
@@ -365,10 +343,11 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   std::optional<AbsoluteLocation> upstreamLargest_;
   std::vector<std::weak_ptr<DownstreamSubscriptionHandle>> pendingSubscribers_;
   std::optional<Fetch> joiningFetchRequest_;
+  std::shared_ptr<FetchConsumer> joiningFetchConsumer_;
+  bool joiningFetchExposed_{false};
   std::shared_ptr<SharedFetchState> joiningFetchStatus_;
   std::optional<UpstreamJoiningFetchAttempt> joiningFetchAttempt_;
   uint64_t upstreamAttempt_{0};
-  std::vector<std::shared_ptr<StandaloneFetchAttempt>> standaloneFetches_;
   // The first subscription's request and peer, which replacements reuse.
   std::optional<SubscribeRequest> upstreamRequest_;
   DownstreamPeer upstreamPeer_;

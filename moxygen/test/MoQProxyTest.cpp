@@ -956,15 +956,6 @@ class MoQProxyJoiningTest : public MoQProxyTest {
   void expectUncacheableHistory(Fetch& upstreamRequest) {
     EXPECT_CALL(*upstreamSession_, fetch(_, _))
         .WillOnce(
-            [](Fetch request, std::shared_ptr<FetchConsumer>)
-                -> folly::coro::Task<Publisher::FetchResult> {
-              co_return folly::makeUnexpected(
-                  FetchError{
-                      request.requestID,
-                      FetchErrorCode::INTERNAL_ERROR,
-                      "history could not be cached"});
-            })
-        .WillOnce(
             [this, &upstreamRequest](
                 Fetch request, std::shared_ptr<FetchConsumer>)
                 -> folly::coro::Task<Publisher::FetchResult> {
