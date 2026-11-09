@@ -14,24 +14,26 @@ class MoQTimeline {
     constructor() {
         this.parser = new MoQParser();
         this.currentData = null;
+        this.currentInput = null;
         this.zoomLevel = 1.0;
         this.panOffset = 0;
         this.isDragging = false;
         this.dragStart = { x: 0, y: 0 };
-        this.trackColors = {};
+        this.trackColors = Object.create(null);
         this.filters = {
             control: true,
             objects: true,
             subgroups: true,
-            fetch: true
+            fetch: true,
+            transport: true
         };
         this.viewOptions = {
             showObjectIds: true,
             showSizes: true
         };
         this.trackVisibility = {
-            client: {}, // trackId: boolean (checked/unchecked)
-            server: {}  // trackId: boolean (checked/unchecked)
+            client: Object.create(null),
+            server: Object.create(null)
         };
 
         this.initializeUI();
@@ -47,7 +49,7 @@ class MoQTimeline {
         $('#event-columns').empty();
         $('#time-labels').empty();
 
-        this.updateStatus('Ready to load MoQ QLOG data');
+        this.updateStatus('Ready to load MLog or QLOG data');
     }
 
     /**
@@ -57,6 +59,11 @@ class MoQTimeline {
         // File upload
         $('#qlog-file-input').on('change', (e) => {
             this.handleFileUpload(e.target.files[0]);
+        });
+
+        $('#mlog-time-units').on('change', (e) => {
+            this.parser.mlogTimeUnits = e.target.value;
+            if (this.currentInput !== null) this.loadQLogData(this.currentInput);
         });
 
         // Load example data
@@ -82,6 +89,11 @@ class MoQTimeline {
 
         $('#filter-fetch').on('change', (e) => {
             this.filters.fetch = e.target.checked;
+            this.applyFilters();
+        });
+
+        $('#filter-transport').on('change', (e) => {
+            this.filters.transport = e.target.checked;
             this.applyFilters();
         });
 
@@ -168,18 +180,16 @@ class MoQTimeline {
 
     /**
      * Handle file upload
-     * @param {File} file - Uploaded QLOG file
+     * @param {File} file - Uploaded MLog or QLOG file
      */
     async handleFileUpload(file) {
         if (!file) return;
 
-        this.updateStatus('Loading QLOG file...');
+        this.updateStatus('Loading MoQ log file...');
 
         try {
             const text = await this.readFileAsText(file);
-            const qlogData = JSON.parse(text);
-
-            this.loadQLogData(qlogData);
+            this.loadQLogData(text);
             this.updateStatus(`Loaded ${file.name} successfully`);
         } catch (error) {
             console.error('Error loading file:', error);
@@ -208,18 +218,22 @@ class MoQTimeline {
     loadExampleData() {
         this.updateStatus('Loading example data...');
 
-        const exampleData = this.parser.generateExampleData();
+        const exampleData = {
+            configuration: { time_units: 'ns' },
+            events: this.parser.generateExampleData()
+        };
         this.loadQLogData(exampleData);
         this.updateStatus('Example data loaded');
     }
 
     /**
      * Load and process QLOG data
-     * @param {Object} qlogData - Raw QLOG data
+     * @param {Object|string} qlogData - Parsed data or log file text
      */
     loadQLogData(qlogData) {
         try {
             this.currentData = this.parser.parseQLog(qlogData);
+            this.currentInput = qlogData;
             this.generateTrackColors();
             this.renderTrackSelectionLists();
             this.renderTimeline();
@@ -275,11 +289,9 @@ class MoQTimeline {
         trackIds.forEach(trackId => {
             const track = this.currentData.tracks[trackId];
             
-            // Add to client list if track has client events (server subscribed)
             if (track.client_events && track.client_events.length > 0) {
-                // Initialize track visibility to false (unchecked)
                 if (this.trackVisibility.client[trackId] === undefined) {
-                    this.trackVisibility.client[trackId] = false;
+                    this.trackVisibility.client[trackId] = true;
                 }
 
                 const $checkbox = $(`
@@ -287,19 +299,17 @@ class MoQTimeline {
                         <input type="checkbox" 
                                class="track-visibility-toggle" 
                                data-vantage="client" 
-                               data-track-id="${trackId}"
+                               data-track-id="${this.escapeHTML(trackId)}"
                                ${this.trackVisibility.client[trackId] ? 'checked' : ''}>
-                        <span class="track-name">${track.name}</span>
+                        <span class="track-name">${this.escapeHTML(track.name)}</span>
                     </label>
                 `);
                 $clientList.append($checkbox);
             }
 
-            // Add to server list if track has server events (client subscribed)
             if (track.server_events && track.server_events.length > 0) {
-                // Initialize track visibility to false (unchecked)
                 if (this.trackVisibility.server[trackId] === undefined) {
-                    this.trackVisibility.server[trackId] = false;
+                    this.trackVisibility.server[trackId] = true;
                 }
 
                 const $checkbox = $(`
@@ -307,9 +317,9 @@ class MoQTimeline {
                         <input type="checkbox" 
                                class="track-visibility-toggle" 
                                data-vantage="server" 
-                               data-track-id="${trackId}"
+                               data-track-id="${this.escapeHTML(trackId)}"
                                ${this.trackVisibility.server[trackId] ? 'checked' : ''}>
-                        <span class="track-name">${track.name}</span>
+                        <span class="track-name">${this.escapeHTML(track.name)}</span>
                     </label>
                 `);
                 $serverList.append($checkbox);
@@ -320,7 +330,7 @@ class MoQTimeline {
         $('.track-visibility-toggle').on('change', (e) => {
             const $checkbox = $(e.target);
             const vantage = $checkbox.data('vantage');
-            const trackId = $checkbox.data('track-id');
+            const trackId = $checkbox.attr('data-track-id');
             const isChecked = $checkbox.is(':checked');
 
             this.trackVisibility[vantage][trackId] = isChecked;
@@ -365,7 +375,7 @@ class MoQTimeline {
         $header.append(`
             <div class="column-header control-column client-control-col">
                 <div class="endpoint-label">Client</div>
-                <div class="track-name">Control</div>
+                <div class="track-name">Control / Transport</div>
             </div>
         `);
         $columns.append('<div class="event-column control-column client-control client-control-col" data-column="client-control"></div>');
@@ -376,7 +386,7 @@ class MoQTimeline {
         $header.append(`
             <div class="column-header control-column server-control-col">
                 <div class="endpoint-label">Server</div>
-                <div class="track-name">Control</div>
+                <div class="track-name">Control / Transport</div>
             </div>
         `);
         $columns.append('<div class="event-column control-column server-control server-control-col" data-column="server-control"></div>');
@@ -391,10 +401,10 @@ class MoQTimeline {
                 $header.append(`
                     <div class="column-header track-column client-half">
                         <div class="endpoint-label">Client</div>
-                        <div class="track-name">${track.name}</div>
+                        <div class="track-name">${this.escapeHTML(track.name)}</div>
                     </div>
                 `);
-                $columns.append(`<div class="event-column track-column client-${track.className} client-half" data-column="client-${track.className}" data-track="${trackId}"></div>`);
+                $columns.append(`<div class="event-column track-column client-${track.className} client-half" data-column="client-${track.className}" data-track="${this.escapeHTML(trackId)}"></div>`);
             }
         });
 
@@ -428,10 +438,10 @@ class MoQTimeline {
                 $header.append(`
                     <div class="column-header track-column server-half">
                         <div class="endpoint-label">Server</div>
-                        <div class="track-name">${track.name}</div>
+                        <div class="track-name">${this.escapeHTML(track.name)}</div>
                     </div>
                 `);
-                $columns.append(`<div class="event-column track-column server-${track.className} server-half" data-column="server-${track.className}" data-track="${trackId}"></div>`);
+                $columns.append(`<div class="event-column track-column server-${track.className} server-half" data-column="server-${track.className}" data-track="${this.escapeHTML(trackId)}"></div>`);
             }
         });
     }
@@ -445,7 +455,7 @@ class MoQTimeline {
 
         if (!this.currentData || this.currentData.events.length === 0) return;
 
-        const timelineDuration = this.currentData.timelineBounds.duration;
+        const timelineDuration = Math.max(1, this.currentData.timelineBounds.duration);
 
         // Simple linear time-based positioning
         const baseTimelineHeight = Math.max(2000, timelineDuration * 2);
@@ -455,8 +465,7 @@ class MoQTimeline {
         $('.event-column').css('min-height', `${timelineHeight}px`);
         $timeLabels.css('min-height', `${timelineHeight}px`);
 
-        // Simple time labels every 200ms (0.2 seconds)
-        const interval = 0.2;
+        const interval = Math.max(0.001, timelineDuration / (50 * this.zoomLevel));
 
         // Generate time labels with zoom and pan awareness
         const visibleStart = timelineDuration * (-this.panOffset) / this.zoomLevel;
@@ -475,7 +484,7 @@ class MoQTimeline {
             if (topPosition >= -50 && topPosition <= timelineHeight + 50) {
                 const $label = $(`
                     <div class="time-label" style="top: ${topPosition}px">
-                        ${this.formatTime(time * 1000)}
+                        ${this.formatTime(time)}
                     </div>
                 `);
                 $timeLabels.append($label);
@@ -492,7 +501,7 @@ class MoQTimeline {
         // Clear all event columns
         $('.event-column').empty();
 
-        const timelineDuration = this.currentData.timelineBounds.duration;
+        const timelineDuration = Math.max(1, this.currentData.timelineBounds.duration);
         const baseTimelineHeight = Math.max(2000, timelineDuration * 2);
         const timelineHeight = baseTimelineHeight * this.zoomLevel;
 
@@ -511,7 +520,9 @@ class MoQTimeline {
 
         // Render events with overlap prevention
         Object.keys(eventsByColumn).forEach(columnKey => {
-            this.renderEventsInColumn(eventsByColumn[columnKey], timelineHeight, timelineDuration);
+            if ($(`.event-column.${columnKey}`).length) {
+                this.renderEventsInColumn(eventsByColumn[columnKey], timelineHeight, timelineDuration);
+            }
         });
 
         this.applyFilters();
@@ -523,10 +534,11 @@ class MoQTimeline {
      * @returns {string} Column key
      */
     getEventColumnKey(event) {
-        if (event.event_category === 'control') {
+        if (event.event_category === 'control' || event.event_category === 'padding' ||
+            (event.event_category === 'stream' && event.track_id === null)) {
             return event.vantage_point === 'client' ? 'client-control' : 'server-control';
         } else {
-            const trackId = event.track_id || 'unknown';
+            const trackId = event.track_id ?? 'unknown';
             const track = this.currentData.tracks[trackId];
             const className = track ? track.className : 'unknown';
             return event.vantage_point === 'client' ? `client-${className}` : `server-${className}`;
@@ -580,7 +592,7 @@ class MoQTimeline {
         const columnKey = this.getEventColumnKey(event);
         const columnSelector = `.${columnKey}`;
 
-        const $container = $(columnSelector);
+        const $container = $(`.event-column${columnSelector}`);
         if ($container.length === 0) {
             console.warn(`No column found for selector: ${columnSelector}`, event);
             return;
@@ -589,29 +601,14 @@ class MoQTimeline {
         // Determine event class for styling
         const eventClass = this.getEventClass(event);
 
-        // Create label with Group and Object IDs (explicitly handle 0 values)
-        let label = '';
-        if (this.viewOptions.showObjectIds) {
-            const hasGroupId = (event.group_id !== null && event.group_id !== undefined);
-            const hasObjectId = (event.object_id !== null && event.object_id !== undefined);
-
-            if (hasGroupId && hasObjectId) {
-                label = `Group: ${event.group_id}, Object: ${event.object_id}`;
-            } else if (hasGroupId) {
-                label = `Group: ${event.group_id}`;
-            } else if (hasObjectId) {
-                label = `Object: ${event.object_id}`;
-            } else if (event.control_message_type) {
-                label = event.control_message_type;
-            }
-        }
+        const label = this.getEventLabel(event);
 
         // Determine if this is a control message and add appropriate arrow class
         let arrowClass = '';
         if (event.event_category === 'control') {
-            if (event.vantage_point === 'client') {
+            if (event.sender === 'client') {
                 arrowClass = 'arrow-right'; // Client -> Server
-            } else if (event.vantage_point === 'server') {
+            } else if (event.sender === 'server') {
                 arrowClass = 'arrow-left'; // Server -> Client
             }
         }
@@ -620,7 +617,7 @@ class MoQTimeline {
             <div class="event-bar ${eventClass} ${arrowClass}"
                  data-event-id="${event.id}"
                  style="top: ${top}px; height: ${height}px; z-index: ${zIndex};">
-                ${label}
+                ${this.escapeHTML(label)}
             </div>
         `);
 
@@ -631,7 +628,7 @@ class MoQTimeline {
         $eventBar.on('mouseenter', (e) => {
             // Bring hovered object to top
             $eventBar.css('z-index', 9999);
-            this.showEventTooltip(event, e.pageX, e.pageY);
+            this.showEventTooltip(e, event);
         }).on('mouseleave', () => {
             // Restore original z-index
             $eventBar.css('z-index', $eventBar.data('original-zindex'));
@@ -659,6 +656,7 @@ class MoQTimeline {
             case 'subgroup': baseClass = 'subgroup-operation'; break;
             case 'fetch': baseClass = 'fetch-operation'; break;
             case 'stream': baseClass = 'stream-setting'; break;
+            case 'padding': baseClass = 'padding-datagram stream-setting'; break;
             default: baseClass = 'unknown-event'; break;
         }
 
@@ -669,6 +667,20 @@ class MoQTimeline {
         }
 
         return baseClass;
+    }
+
+    getEventLabel(event) {
+        if (event.control_message_type) return event.control_message_type;
+        const labels = [];
+        if (this.viewOptions.showObjectIds) {
+            if (event.group_id !== null) labels.push(`Group: ${event.group_id}`);
+            if (event.object_id !== null) labels.push(`Object: ${event.object_id}`);
+            else if (event.data.object_id_delta !== undefined) labels.push(`Object delta: ${event.data.object_id_delta}`);
+        }
+        for (const range of ['nonexistent', 'unknown', 'timed_out']) {
+            if (event.data[`end_of_${range}_range`]) labels.push(`End of ${range.replace('_', ' ')} range`);
+        }
+        return labels.join(', ') || event.data.stream_type || event.name.split(':')[1];
     }
 
     /**
@@ -688,6 +700,9 @@ class MoQTimeline {
         }
         if (!this.filters.fetch) {
             $('.fetch-operation').addClass('filtered');
+        }
+        if (!this.filters.transport) {
+            $('.stream-setting').addClass('filtered');
         }
     }
 
@@ -825,7 +840,9 @@ class MoQTimeline {
      * @returns {string} Formatted time string
      */
     formatTime(timeMs) {
-        if (timeMs < 1000) {
+        if (timeMs < 1) {
+            return `${timeMs.toFixed(3)}ms`;
+        } else if (timeMs < 1000) {
             return `${timeMs.toFixed(0)}ms`;
         } else if (timeMs < 60000) {
             return `${(timeMs / 1000).toFixed(2)}s`;
@@ -866,13 +883,14 @@ class MoQTimeline {
      */
     generateTooltipContent(event) {
         let content = `
-            <strong>${event.name}</strong><br>
-            <strong>Time:</strong> ${this.formatTime(event.relative_time * 1000)}<br>
+            <strong>${this.escapeHTML(event.name)}</strong><br>
+            <strong>Time:</strong> ${this.formatTime(event.relative_time)}<br>
             <strong>Vantage:</strong> ${event.vantage_point}<br>
+            <strong>Direction:</strong> ${event.direction}<br>
         `;
 
         if (event.track_id) {
-            content += `<strong>Track:</strong> ${event.track_id}<br>`;
+            content += `<strong>Track:</strong> ${this.escapeHTML(event.track_id)}<br>`;
         }
         if (event.group_id !== null) {
             content += `<strong>Group:</strong> ${event.group_id}<br>`;
@@ -887,8 +905,10 @@ class MoQTimeline {
             content += `<strong>Size:</strong> ${event.object_size} bytes<br>`;
         }
         if (event.control_message_type) {
-            content += `<strong>Type:</strong> ${event.control_message_type}<br>`;
+            content += `<strong>Type:</strong> ${this.escapeHTML(event.control_message_type)}<br>`;
         }
+        if (event.stream_id !== null) content += `<strong>Stream:</strong> ${this.escapeHTML(event.stream_id)}<br>`;
+        if (event.request_id !== null) content += `<strong>Request:</strong> ${this.escapeHTML(event.request_id)}<br>`;
 
         return content;
     }
@@ -899,24 +919,32 @@ class MoQTimeline {
      */
     updateEventDetails(event) {
         const content = `
-            <h4>${event.name}</h4>
-            <p><strong>Timestamp:</strong> ${this.formatTime(event.relative_time * 1000)}</p>
+            <h4>${this.escapeHTML(event.name)}</h4>
+            <p><strong>Timestamp:</strong> ${this.formatTime(event.relative_time)}</p>
             <p><strong>Vantage Point:</strong> ${event.vantage_point}</p>
+            <p><strong>Direction:</strong> ${event.direction}</p>
             <p><strong>Category:</strong> ${event.event_category}</p>
-            ${event.track_id ? `<p><strong>Track ID:</strong> ${event.track_id}</p>` : ''}
+            ${event.track_id ? `<p><strong>Track ID:</strong> ${this.escapeHTML(event.track_id)}</p>` : ''}
+            ${event.stream_id !== null ? `<p><strong>Stream ID:</strong> ${this.escapeHTML(event.stream_id)}</p>` : ''}
+            ${event.request_id !== null ? `<p><strong>Request ID:</strong> ${this.escapeHTML(event.request_id)}</p>` : ''}
             ${event.group_id !== null ? `<p><strong>Group ID:</strong> ${event.group_id}</p>` : ''}
             ${event.subgroup_id !== null ? `<p><strong>Subgroup ID:</strong> ${event.subgroup_id}</p>` : ''}
             ${event.object_id !== null ? `<p><strong>Object ID:</strong> ${event.object_id}</p>` : ''}
             ${event.object_size > 0 ? `<p><strong>Object Size:</strong> ${event.object_size} bytes</p>` : ''}
-            ${event.control_message_type ? `<p><strong>Message Type:</strong> ${event.control_message_type}</p>` : ''}
+            ${event.control_message_type ? `<p><strong>Message Type:</strong> ${this.escapeHTML(event.control_message_type)}</p>` : ''}
             <details>
                 <summary>Raw Event Data</summary>
-                <pre>${JSON.stringify(event.data, null, 2)}</pre>
+                <pre>${this.escapeHTML(JSON.stringify(event.data, null, 2))}</pre>
             </details>
         `;
 
         $('#event-details .details-content').html(content);
         this.showEventDetails();
+    }
+
+    escapeHTML(value) {
+        const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+        return String(value).replace(/[&<>"']/g, c => entities[c]);
     }
 
     /**

@@ -20,8 +20,14 @@
 
     <div class="control-panel">
         <div class="file-upload-section">
-            <label for="qlog-file-input">Upload MoQ QLOG JSON file:</label>
-            <input type="file" id="qlog-file-input" accept=".json" />
+            <label for="qlog-file-input">Upload MLog or QLOG file:</label>
+            <input type="file" id="qlog-file-input" accept=".mlog,.qlog,.json,.jsonl,.jsonseq" />
+            <label for="mlog-time-units">MLog time units:</label>
+            <select id="mlog-time-units">
+                <option value="ns">Nanoseconds</option>
+                <option value="us">Microseconds</option>
+                <option value="ms">Milliseconds</option>
+            </select>
             <button id="load-example-btn">Load Example Data</button>
         </div>
 
@@ -31,6 +37,7 @@
             <label><input type="checkbox" id="filter-objects" checked> Data Objects</label>
             <label><input type="checkbox" id="filter-subgroups" checked> Subgroups</label>
             <label><input type="checkbox" id="filter-fetch" checked> Fetch Operations</label>
+            <label><input type="checkbox" id="filter-transport" checked> Streams / Padding</label>
         </div>
 
         <div class="view-controls">
@@ -42,21 +49,19 @@
     </div>
 
     <div class="user-instructions">
-        <p><strong>Controls:</strong> Mouse wheel to zoom • Drag to pan • Double-click timeline to center • Hover for details</p>
+        <p><strong>Controls:</strong> Ctrl/Cmd + mouse wheel to zoom • Drag to pan • Double-click timeline to center • Hover for details</p>
     </div>
 
     <div class="track-selection-panel">
         <div class="track-list-container">
             <div class="track-list client-published">
-                <h3>Client Published</h3>
+                <h3>Client Events</h3>
                 <div id="client-tracks-list" class="track-checkboxes">
-                    <!-- Dynamic checkboxes for client-published tracks will be inserted here -->
                 </div>
             </div>
             <div class="track-list server-published">
-                <h3>Server Published</h3>
+                <h3>Server Events</h3>
                 <div id="server-tracks-list" class="track-checkboxes">
-                    <!-- Dynamic checkboxes for server-published tracks will be inserted here -->
                 </div>
             </div>
         </div>
@@ -109,7 +114,7 @@
     </div>
 -->
     <div id="status-bar" class="status-bar">
-        <span id="status-text">Ready to load MoQ QLOG data</span>
+        <span id="status-text">Ready to load MLog or QLOG data</span>
         <span id="event-count"></span>
     </div>
 

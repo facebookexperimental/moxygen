@@ -1,0 +1,323 @@
+{
+  "time": "0",
+  "vantagePoint": "client",
+  "name": "moqt:control_message_created",
+  "data": {
+    "stream_id": 0,
+    "message": {
+      "type": "setup",
+      "setup_options": [
+        {
+          "name": "max_request_id",
+          "value": 100
+        }
+      ]
+    }
+  }
+}
+{
+  "time": "25000000",
+  "vantagePoint": "client",
+  "name": "moqt:control_message_parsed",
+  "data": {
+    "stream_id": 0,
+    "message": {
+      "type": "setup",
+      "setup_options": [
+        {
+          "name": "max_request_id",
+          "value": 100
+        }
+      ]
+    }
+  }
+}
+{
+  "time": "55000000",
+  "vantagePoint": "client",
+  "name": "moqt:control_message_parsed",
+  "data": {
+    "stream_id": 0,
+    "message": {
+      "type": "publish",
+      "request_id": 1,
+      "track_alias": 0,
+      "track_namespace": [
+        {
+          "value": "meeting1"
+        },
+        {
+          "value": "bob"
+        }
+      ],
+      "track_name": {
+        "value": "video"
+      },
+      "number_of_parameters": 0
+    }
+  }
+}
+{
+  "time": "100000000",
+  "vantagePoint": "client",
+  "name": "moqt:control_message_created",
+  "data": {
+    "stream_id": 0,
+    "message": {
+      "type": "publish",
+      "request_id": 0,
+      "track_alias": 0,
+      "track_namespace": [
+        {
+          "value": "meeting1"
+        },
+        {
+          "value": "alice"
+        }
+      ],
+      "track_name": {
+        "value": "audio"
+      },
+      "number_of_parameters": 0
+    }
+  }
+}
+{
+  "time": "150000000",
+  "vantagePoint": "client",
+  "name": "moqt:control_message_created",
+  "data": {
+    "stream_id": 0,
+    "message": {
+      "type": "request_ok",
+      "number_of_parameters": 0
+    }
+  }
+}
+{
+  "time": "185000000",
+  "vantagePoint": "client",
+  "name": "moqt:control_message_parsed",
+  "data": {
+    "stream_id": 0,
+    "message": {
+      "type": "request_ok",
+      "number_of_parameters": 0
+    }
+  }
+}
+{
+  "time": "205000000",
+  "vantagePoint": "client",
+  "name": "moqt:subgroup_header_parsed",
+  "data": {
+    "stream_id": 3,
+    "track_alias": 0,
+    "group_id": 0,
+    "subgroup_id_mode": 1,
+    "contains_end_of_group": true,
+    "properties_present": true,
+    "first_object": true
+  }
+}
+{
+  "time": "225000000",
+  "vantagePoint": "client",
+  "name": "moqt:subgroup_object_parsed",
+  "data": {
+    "stream_id": 3,
+    "object_id_delta": 0,
+    "object_payload_length": 40000,
+    "properties": [
+      {
+        "type": 2,
+        "value": 0
+      }
+    ]
+  }
+}
+{
+  "time": "240000000",
+  "vantagePoint": "client",
+  "name": "moqt:object_datagram_created",
+  "data": {
+    "track_alias": 0,
+    "group_id": 0,
+    "object_id": 0,
+    "object_payload": {
+      "length": 256
+    },
+    "end_of_group": false
+  }
+}
+{
+  "time": "325000000",
+  "vantagePoint": "client",
+  "name": "moqt:subgroup_object_parsed",
+  "data": {
+    "stream_id": 3,
+    "object_id_delta": 0,
+    "object_payload_length": 2000,
+    "properties": [
+      {
+        "type": 2,
+        "value": 1
+      }
+    ]
+  }
+}
+{
+  "time": "340000000",
+  "vantagePoint": "client",
+  "name": "moqt:object_datagram_created",
+  "data": {
+    "track_alias": 0,
+    "group_id": 0,
+    "object_id": 1,
+    "object_payload": {
+      "length": 256
+    },
+    "end_of_group": false
+  }
+}
+{
+  "time": "425000000",
+  "vantagePoint": "client",
+  "name": "moqt:subgroup_object_parsed",
+  "data": {
+    "stream_id": 3,
+    "object_id_delta": 0,
+    "object_payload_length": 2000,
+    "properties": [
+      {
+        "type": 2,
+        "value": 2
+      }
+    ]
+  }
+}
+{
+  "time": "440000000",
+  "vantagePoint": "client",
+  "name": "moqt:object_datagram_created",
+  "data": {
+    "track_alias": 0,
+    "group_id": 0,
+    "object_id": 2,
+    "object_payload": {
+      "length": 256
+    },
+    "end_of_group": true
+  }
+}
+{
+  "time": "555000000",
+  "vantagePoint": "client",
+  "name": "moqt:padding_datagram_parsed",
+  "data": {
+    "padding_length": 32
+  }
+}
+{
+  "time": "600000000",
+  "vantagePoint": "client",
+  "name": "moqt:control_message_created",
+  "data": {
+    "stream_id": 0,
+    "message": {
+      "type": "fetch",
+      "request_id": 2,
+      "track_namespace": [
+        {
+          "value": "meeting1"
+        },
+        {
+          "value": "bob"
+        }
+      ],
+      "track_name": {
+        "value": "video"
+      },
+      "number_of_parameters": 1,
+      "parameters": [
+        {
+          "name": "group_order",
+          "value": 2
+        }
+      ]
+    }
+  }
+}
+{
+  "time": "655000000",
+  "vantagePoint": "client",
+  "name": "moqt:control_message_parsed",
+  "data": {
+    "stream_id": 0,
+    "message": {
+      "type": "fetch_ok",
+      "end_of_track": false,
+      "end_location": {
+        "group": 0,
+        "object": 2
+      },
+      "number_of_parameters": 0
+    }
+  }
+}
+{
+  "time": "705000000",
+  "vantagePoint": "client",
+  "name": "moqt:fetch_header_parsed",
+  "data": {
+    "stream_id": 7,
+    "request_id": 2
+  }
+}
+{
+  "time": "755000000",
+  "vantagePoint": "client",
+  "name": "moqt:fetch_object_parsed",
+  "data": {
+    "stream_id": 7,
+    "datagram": false,
+    "subgroup_id_bits": 0,
+    "group_id_delta": 2,
+    "object_id_delta": 0,
+    "object_payload_length": 1200,
+    "end_of_nonexistent_range": false,
+    "end_of_unknown_range": false,
+    "end_of_timed_out_range": false
+  }
+}
+{
+  "time": "855000000",
+  "vantagePoint": "client",
+  "name": "moqt:fetch_object_parsed",
+  "data": {
+    "stream_id": 7,
+    "datagram": false,
+    "subgroup_id_bits": 1,
+    "group_id_delta": 0,
+    "object_id_delta": 0,
+    "object_payload_length": 800,
+    "end_of_nonexistent_range": false,
+    "end_of_unknown_range": false,
+    "end_of_timed_out_range": false
+  }
+}
+{
+  "time": "955000000",
+  "vantagePoint": "client",
+  "name": "moqt:fetch_object_parsed",
+  "data": {
+    "stream_id": 7,
+    "datagram": false,
+    "group_id_delta": 0,
+    "object_id_delta": 2,
+    "object_payload_length": 0,
+    "end_of_nonexistent_range": true,
+    "end_of_unknown_range": false,
+    "end_of_timed_out_range": false
+  }
+}
