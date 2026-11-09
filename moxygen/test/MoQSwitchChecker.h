@@ -59,7 +59,8 @@ class SwitchChecker {
   // A joiner of each track, on session: it subscribes, then a joining FETCH
   // gets its history, from joinGroups groups before its start group up to its
   // start. Returns once subscribed; the history arrives in the background.
-  // Joining FETCH needs a draft before FETCH filling, such as draft 18.
+  // On a draft with FETCH filling instead, such as draft 22, a joiner only
+  // watches, and its history is reported as skipped.
   folly::coro::Task<void> addJoiners(std::shared_ptr<MoQSession> session);
   // A viewer that couldn't connect.
   void addConnectError(std::string error);
@@ -68,7 +69,8 @@ class SwitchChecker {
 
   // Whether everything still due has arrived: every SUBSCRIBE has its reply,
   // every joiner's FETCH its reply and its history's end or reset, and every
-  // ended track's subgroup streams their ends or resets.
+  // subgroup stream of an ended track, or of a group before the newest a
+  // viewer got, its end or reset.
   bool settled() const;
   // "ok" is false if there are no viewers, a session couldn't connect, the
   // objects received span implausibly many groups, or a viewer:
@@ -77,8 +79,10 @@ class SwitchChecker {
   //   - went longer than maxStall without an object, counting up to its
   //     PUBLISH_DONE once it has one;
   //   - received an object outside the track's shape;
-  //   - has a subgroup stream unfinished though its track ended;
-  //   - is a joiner whose history failed, was reset or hasn't ended.
+  //   - has a subgroup stream unfinished though its track ended, or though a
+  //     later group arrived;
+  //   - is a joiner whose history failed, was reset or hasn't ended, or
+  //     whose FETCH_OK names an end other than its start.
   // Missing objects don't make it false: whether a gap is allowed is the
   // scenario's call. Times are in milliseconds since the checker was
   // created.
@@ -102,6 +106,8 @@ class SwitchChecker {
     std::shared_ptr<CheckingFetch> history;
     std::shared_ptr<Publisher::FetchHandle> historyHandle;
     std::optional<std::string> historyError;
+    // Why the joiner has no history to check.
+    std::optional<std::string> historySkipped;
   };
 
   folly::coro::Task<Viewer*> subscribe(

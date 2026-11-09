@@ -71,6 +71,22 @@ folly::dynamic resetsOf(const CheckingViewer& viewer) {
   return resets;
 }
 
+// The subgroup streams the viewer should have seen end or reset: all of them
+// once its track ended, otherwise those of groups before the newest it got.
+std::vector<std::pair<uint64_t, uint64_t>> overdueSubgroups(
+    const CheckingViewer& viewer) {
+  auto overdue = viewer.unfinishedSubgroups();
+  if (viewer.done()) {
+    return overdue;
+  }
+  const auto& received = viewer.received();
+  const auto newest =
+      received.empty() ? 0 : std::ranges::max_element(received)->group;
+  std::erase_if(
+      overdue, [&](auto subgroup) { return subgroup.first >= newest; });
+  return overdue;
+}
+
 } // namespace
 
 SwitchChecker::SwitchChecker(
@@ -150,7 +166,7 @@ folly::coro::Task<void> SwitchChecker::fetchHistory(
     Viewer& joiner) {
   if (const auto version = session->getNegotiatedVersion();
       version && useFillFetch(*version)) {
-    joiner.historyError = fmt::format(
+    joiner.historySkipped = fmt::format(
         "draft {} has no joining FETCH", getDraftMajorVersion(*version));
     co_return;
   }
@@ -184,12 +200,10 @@ bool SwitchChecker::settled() const {
     if (viewer->error) {
       return true;
     }
-    const auto& live = *viewer->live;
-    if (!viewer->handle ||
-        (live.done() && !live.unfinishedSubgroups().empty())) {
+    if (!viewer->handle || !overdueSubgroups(*viewer->live).empty()) {
       return false;
     }
-    if (!viewer->joiner || viewer->historyError) {
+    if (!viewer->joiner || viewer->historyError || viewer->historySkipped) {
       return true;
     }
     const auto& history = viewer->history;
@@ -304,14 +318,13 @@ std::vector<std::string> SwitchChecker::findings(
   if (auto outside = outsideTheShape(live.received())) {
     found.push_back(std::move(*outside));
   }
-  if (live.done()) {
-    for (const auto& [group, subgroup] : live.unfinishedSubgroups()) {
-      found.push_back(
-          fmt::format(
-              "subgroup {}/{} never finished though the track ended",
-              group,
-              subgroup));
-    }
+  for (const auto& [group, subgroup] : overdueSubgroups(live)) {
+    found.push_back(
+        fmt::format(
+            "subgroup {}/{} never finished though {}",
+            group,
+            subgroup,
+            live.done() ? "the track ended" : "a later group arrived"));
   }
   return found;
 }
@@ -392,6 +405,9 @@ folly::dynamic SwitchChecker::reportOn(
 }
 
 folly::dynamic SwitchChecker::historyOf(const Viewer& joiner) const {
+  if (joiner.historySkipped) {
+    return folly::dynamic::object("skipped", *joiner.historySkipped);
+  }
   if (joiner.historyError) {
     return folly::dynamic::object("error", *joiner.historyError);
   }
@@ -411,11 +427,16 @@ folly::dynamic SwitchChecker::historyOf(const Viewer& joiner) const {
   } else if (!history.ended()) {
     violations.emplace_back("unfinished");
   }
+  const auto okEnd = joiner.historyHandle->fetchOk().endLocation;
+  if (okEnd != end) {
+    violations.push_back(
+        fmt::format(
+            "FETCH_OK ends at {}, not {}", describe(okEnd), describe(end)));
+  }
   folly::dynamic summary = folly::dynamic::object("start", describe(start))(
       "end", describe(end))("received", history.received().size())(
       "ended", history.ended())("missing", ranges(history.missing(start, end)))(
-      "violations", strings(violations))(
-      "fetch_ok_end", describe(joiner.historyHandle->fetchOk().endLocation));
+      "violations", strings(violations))("fetch_ok_end", describe(okEnd));
   const auto verifiedFrom =
       std::min(end, firstPublished(joiner.track).value_or(end));
   if (start < verifiedFrom) {
@@ -432,7 +453,8 @@ folly::dynamic SwitchChecker::report(Clock::time_point now) {
   for (auto& viewer : viewers_) {
     auto entry = reportOn(*viewer, now);
     ok = ok && !entry.count("error") && entry["violations"].empty();
-    if (const auto* history = entry.get_ptr("history")) {
+    if (const auto* history = entry.get_ptr("history");
+        history && !history->count("skipped")) {
       ok = ok && !history->count("error") && (*history)["violations"].empty();
     }
     viewers.push_back(std::move(entry));

@@ -150,14 +150,14 @@ class CheckerRun {
       joins_.add(folly::coro::co_withExecutor(executor, join()));
     }
     co_await sleepUntil(start + milliseconds(FLAGS_duration_ms));
+    // Each join's connect and SUBSCRIBE have time limits, so the report
+    // always includes every join, or its error.
+    co_await joins_.joinAsync();
     const auto settleBy = Clock::now() + milliseconds(FLAGS_settle_ms);
     while (!checker_.settled() && Clock::now() < settleBy) {
       co_await folly::coro::sleep(kSettlePoll);
     }
     auto report = checker_.report(Clock::now());
-    closeSessions();
-    co_await joins_.joinAsync();
-    // A join that connected while the others closed.
     closeSessions();
     co_await checker_.join();
     clients_.clear();

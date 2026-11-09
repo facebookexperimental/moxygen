@@ -48,8 +48,9 @@ std::vector<std::string> strings(const folly::dynamic& array) {
 }
 
 // Answers SUBSCRIBE through a hub, and any FETCH, joining ones too, with
-// FETCH_OK and the given objects of the hub's track. The test ends the FETCH,
-// or doesn't.
+// FETCH_OK and the given objects of the hub's track. FETCH_OK ends where the
+// last SUBSCRIBE started, unless okEnd says otherwise. The test ends the
+// FETCH, or doesn't.
 class HistoryPublisher : public Publisher {
  public:
   HistoryPublisher(
@@ -60,11 +61,19 @@ class HistoryPublisher : public Publisher {
   // FETCH_OK waits for it.
   folly::coro::Baton replyGate;
   bool gated{false};
+  std::optional<AbsoluteLocation> okEnd;
 
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest request,
       std::shared_ptr<TrackConsumer> consumer) override {
-    co_return co_await hub_->subscribe(std::move(request), std::move(consumer));
+    auto result =
+        co_await hub_->subscribe(std::move(request), std::move(consumer));
+    if (result.hasValue()) {
+      if (const auto& largest = result.value()->subscribeOk().largest) {
+        subscribedFrom_ = AbsoluteLocation{largest->group, largest->object + 1};
+      }
+    }
+    co_return result;
   }
 
   folly::coro::Task<FetchResult> fetch(
@@ -92,7 +101,7 @@ class HistoryPublisher : public Publisher {
         fetch.requestID,
         GroupOrder::OldestFirst,
         /*endOfTrack=*/0,
-        objects_.empty() ? AbsoluteLocation{} : objects_.back()});
+        okEnd.value_or(subscribedFrom_)});
   }
 
   void end() {
@@ -120,6 +129,7 @@ class HistoryPublisher : public Publisher {
   std::shared_ptr<SwitchTestHub> hub_;
   std::vector<AbsoluteLocation> objects_;
   std::shared_ptr<FetchConsumer> consumer_;
+  AbsoluteLocation subscribedFrom_;
 };
 
 // Holds each SUBSCRIBE until the test opens the gate, then answers it through
@@ -544,6 +554,26 @@ TEST_F(SwitchCheckerTest, HistoryNoViewerSawIsUnverified) {
   }));
 }
 
+// The history's FETCH_OK ends at 2/0, short of the joiner's start at 2/4.
+TEST_F(SwitchCheckerTest, AFetchOkEndingShortOfTheStartIsNotOk) {
+  auto history = std::make_shared<HistoryPublisher>(
+      hubs_[0], std::vector<AbsoluteLocation>{{1, 0}, {1, 1}, {1, 2}, {1, 3}});
+  history->okEnd = AbsoluteLocation{2, 0};
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await joinThrough(history);
+    history->end();
+    co_await settle();
+
+    auto checked = report();
+    EXPECT_FALSE(checked["ok"].asBool());
+    const auto& summary = checked["viewers"][0]["history"];
+    EXPECT_EQ(summary["fetch_ok_end"], "2/0");
+    EXPECT_THAT(
+        strings(summary["violations"]),
+        ElementsAre("FETCH_OK ends at 2/0, not 2/4"));
+  }));
+}
+
 TEST_F(SwitchCheckerTest, AHistoryResetAfterItsFetchOkIsNotOk) {
   auto history = std::make_shared<HistoryPublisher>(
       hubs_[0], std::vector<AbsoluteLocation>{{2, 0}});
@@ -639,6 +669,29 @@ TEST_F(SwitchCheckerTest, AHistoryIsSettledOnceItsFetchOkArrives) {
   }));
 }
 
+// Group 0's stream stays open though group 1 arrives and the track goes on,
+// until later publishing finishes it.
+TEST_F(SwitchCheckerTest, ASubgroupLeftOpenBehindALaterGroupIsAViolation) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await checker().addViewers(co_await connectToHub(0));
+    hubs_[0]->publish(kTrack, 0, 2);
+    hubs_[0]->publishGroup(kTrack, 1);
+    co_await settle();
+
+    EXPECT_FALSE(checker().settled());
+    auto checked = report();
+    EXPECT_FALSE(checked["ok"].asBool());
+    EXPECT_THAT(
+        strings(checked["viewers"][0]["violations"]),
+        ElementsAre(
+            "subgroup 0/0 never finished though a later group arrived"));
+    hubs_[0]->publish(kTrack, 0, 4);
+    co_await settle();
+    EXPECT_TRUE(checker().settled());
+    EXPECT_TRUE(report()["ok"].asBool());
+  }));
+}
+
 // The track ends while group 0's stream is open, and later publishing
 // finishes it.
 TEST_F(SwitchCheckerTest, AnEndedTrackWaitsForItsOpenStreams) {
@@ -726,17 +779,23 @@ TEST_F(SwitchCheckerTest, ObjectsSpanningImplausiblyManyGroupsAreAnError) {
   }));
 }
 
-TEST_F(SwitchCheckerTest, AJoinerOnADraftWithoutJoiningFetchSaysSo) {
+TEST_F(SwitchCheckerTest, AJoinerOnADraftWithoutJoiningFetchOnlyWatches) {
   run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
     hubs_[0]->publishGroup(kTrack, 0);
     auto* link = co_await links22_.connect(hubs_[0]);
     hubs_[0]->attach(link->server);
     co_await checker().addJoiners(link->client);
+    hubs_[0]->publishGroup(kTrack, 1);
     co_await settle();
 
+    EXPECT_TRUE(checker().settled());
+    auto checked = report();
+    EXPECT_TRUE(checked["ok"].asBool());
     EXPECT_EQ(
-        report()["viewers"][0]["history"]["error"],
-        "draft 22 has no joining FETCH");
+        checked["viewers"][0]["history"],
+        folly::dynamic(
+            folly::dynamic::object(
+                "skipped", "draft 22 has no joining FETCH")));
   }));
 }
 
