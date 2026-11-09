@@ -507,6 +507,198 @@ TEST_F(SwitchTestHubTest, UnsubscribedViewersGetNothing) {
   EXPECT_EQ(hub_->subscriptions(kTrack), 0);
 }
 
+struct HubFetch {
+  std::shared_ptr<CheckingFetch> consumer;
+  // FETCH_OK's End Location.
+  std::optional<AbsoluteLocation> end;
+};
+
+HubFetch fetchFrom(
+    SwitchTestHub& hub,
+    const std::shared_ptr<SwitchOrigin>& origin,
+    AbsoluteLocation start,
+    AbsoluteLocation end) {
+  auto fetch = std::make_shared<CheckingFetch>(origin, kTrack);
+  auto result = folly::coro::blockingWait(hub.fetch(
+      Fetch(
+          RequestID(1),
+          kTrack,
+          start,
+          end,
+          kDefaultPriority,
+          GroupOrder::OldestFirst),
+      fetch));
+  EXPECT_TRUE(result.hasValue());
+  if (result.hasError()) {
+    return {fetch, std::nullopt};
+  }
+  return {fetch, result.value()->fetchOk().endLocation};
+}
+
+TEST_F(SwitchTestHubTest, AFetchGetsWhatTheHubPublishedInItsRange) {
+  hub_->publishGroup(kTrack, 0);
+  hub_->publishGroup(kTrack, 1);
+  hub_->publish(kTrack, 2, 2);
+
+  auto [fetch, end] = fetchFrom(*hub_, origin_, {0, 2}, {2, 0});
+
+  const std::vector<AbsoluteLocation> received{
+      {0, 2}, {0, 3}, {1, 0}, {1, 1}, {1, 2}, {1, 3}, {2, 0}, {2, 1}};
+  EXPECT_EQ(fetch->received(), received);
+  EXPECT_TRUE(fetch->ended());
+  // The hub has published group 2 only up to object 1.
+  EXPECT_EQ(end, AbsoluteLocation(2, 2));
+  const std::map<uint64_t, uint64_t> hubOfGroup{{0, 7}, {1, 7}, {2, 7}};
+  EXPECT_EQ(fetch->hubOfGroup(), hubOfGroup);
+  EXPECT_THAT(fetch->violations(), IsEmpty());
+  EXPECT_EQ(hub_->fetches(kTrack), 1);
+}
+
+TEST_F(SwitchTestHubTest, AFetchEndsBeforeItsEndObject) {
+  hub_->publishGroup(kTrack, 0);
+  hub_->publishGroup(kTrack, 1);
+
+  auto [fetch, end] = fetchFrom(*hub_, origin_, {1, 0}, {1, 2});
+
+  const std::vector<AbsoluteLocation> received{{1, 0}, {1, 1}};
+  EXPECT_EQ(fetch->received(), received);
+  EXPECT_TRUE(fetch->ended());
+  EXPECT_EQ(end, AbsoluteLocation(1, 2));
+}
+
+TEST_F(SwitchTestHubTest, AFetchOfNothingPublishedJustEnds) {
+  hub_->publishGroup(kTrack, 0);
+
+  auto [fetch, end] = fetchFrom(*hub_, origin_, {5, 0}, {6, 0});
+
+  EXPECT_THAT(fetch->received(), IsEmpty());
+  EXPECT_TRUE(fetch->ended());
+  EXPECT_EQ(end, AbsoluteLocation(5, 0));
+}
+
+class CheckingFetchTest : public Test {
+ protected:
+  void deliver(AbsoluteLocation location, bool fin = false) {
+    origin_->notePublished(kTrack, location);
+    fetch_->object(
+        location.group,
+        0,
+        location.object,
+        originPayload(location),
+        fromSource(3),
+        fin,
+        /*forwardingPreferenceIsDatagram=*/false);
+  }
+
+  std::shared_ptr<SwitchOrigin> origin_{std::make_shared<SwitchOrigin>()};
+  std::shared_ptr<CheckingFetch> fetch_{
+      std::make_shared<CheckingFetch>(origin_, kTrack)};
+};
+
+TEST_F(CheckingFetchTest, AcceptsTheOriginsObjectsInOrder) {
+  deliver({0, 0});
+  deliver({1, 0}, /*fin=*/true);
+
+  EXPECT_THAT(fetch_->violations(), IsEmpty());
+  EXPECT_TRUE(fetch_->ended());
+  const std::map<uint64_t, uint64_t> hubOfGroup{{0, 3}, {1, 3}};
+  EXPECT_EQ(fetch_->hubOfGroup(), hubOfGroup);
+}
+
+TEST_F(CheckingFetchTest, ReassemblesAnObjectSentInParts) {
+  const auto whole = SwitchOrigin::payload(kTrack, {0, 0});
+  fetch_->beginObject(
+      0,
+      0,
+      0,
+      whole.size(),
+      folly::IOBuf::copyBuffer(whole.substr(0, 3)),
+      fromSource(3));
+  fetch_->objectPayload(folly::IOBuf::copyBuffer(whole.substr(3)), false);
+
+  const std::vector<AbsoluteLocation> received{{0, 0}};
+  EXPECT_EQ(fetch_->received(), received);
+  EXPECT_THAT(fetch_->violations(), IsEmpty());
+}
+
+TEST_F(CheckingFetchTest, FlagsACorruptPayload) {
+  fetch_->object(
+      0,
+      0,
+      0,
+      folly::IOBuf::copyBuffer("junk"),
+      fromSource(3),
+      /*finFetch=*/false,
+      /*forwardingPreferenceIsDatagram=*/false);
+
+  EXPECT_THAT(fetch_->violations(), SizeIs(1));
+}
+
+TEST_F(CheckingFetchTest, FlagsAnObjectOutOfOrder) {
+  deliver({1, 0});
+  deliver({0, 3});
+
+  EXPECT_THAT(fetch_->violations(), SizeIs(1));
+}
+
+TEST_F(CheckingFetchTest, FlagsObjectsOutsideTheExpectedRange) {
+  fetch_->expectedStart = AbsoluteLocation{1, 0};
+  fetch_->expectedEnd = AbsoluteLocation{2, 1};
+  deliver({0, 3});
+  deliver({1, 0});
+  deliver({2, 0});
+  deliver({2, 1});
+
+  EXPECT_THAT(fetch_->violations(), SizeIs(2));
+}
+
+TEST_F(CheckingFetchTest, FlagsAnObjectWithoutAHubId) {
+  fetch_->object(
+      0,
+      0,
+      0,
+      originPayload({0, 0}),
+      noExtensions(),
+      /*finFetch=*/false,
+      /*forwardingPreferenceIsDatagram=*/false);
+
+  EXPECT_THAT(fetch_->violations(), SizeIs(1));
+}
+
+TEST_F(CheckingFetchTest, FlagsAGroupFromTwoHubs) {
+  deliver({0, 0});
+  origin_->notePublished(kTrack, {0, 1});
+  fetch_->object(
+      0,
+      0,
+      1,
+      originPayload({0, 1}),
+      fromSource(4),
+      /*finFetch=*/false,
+      /*forwardingPreferenceIsDatagram=*/false);
+
+  EXPECT_THAT(fetch_->violations(), SizeIs(1));
+}
+
+TEST_F(CheckingFetchTest, FlagsAnythingAfterTheEnd) {
+  deliver({0, 0});
+  fetch_->endOfFetch();
+  deliver({0, 1});
+  fetch_->reset(ResetStreamErrorCode::CANCELLED);
+
+  EXPECT_THAT(fetch_->violations(), SizeIs(2));
+}
+
+TEST_F(CheckingFetchTest, ReportsPublishedObjectsThatNeverArrived) {
+  origin_->notePublished(kTrack, {0, 0});
+  origin_->notePublished(kTrack, {0, 1});
+  origin_->notePublished(kTrack, {1, 0});
+  deliver({0, 1});
+
+  const std::vector<AbsoluteLocation> missing{{0, 0}};
+  EXPECT_EQ(fetch_->missing({0, 0}, {1, 0}), missing);
+}
+
 struct ShapeCase {
   std::string name;
   SwitchTrackShape shape;

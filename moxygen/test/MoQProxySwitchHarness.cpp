@@ -39,6 +39,22 @@ void SwitchOrigin::notePublished(
   published_[track].insert(location);
 }
 
+class SwitchTestHub::FetchHandle final : public Publisher::FetchHandle {
+ public:
+  explicit FetchHandle(FetchOk ok) : Publisher::FetchHandle(std::move(ok)) {}
+
+  void fetchCancel() override {}
+
+  folly::coro::Task<RequestUpdateResult> requestUpdate(
+      RequestUpdate update) override {
+    co_return folly::makeUnexpected(
+        RequestError{
+            update.requestID,
+            RequestErrorCode::NOT_SUPPORTED,
+            "test hub takes no updates"});
+  }
+};
+
 class SwitchTestHub::Handle final : public Publisher::SubscriptionHandle {
  public:
   Handle(SubscribeOk ok, std::weak_ptr<SwitchTestHub> hub, uint64_t id)
@@ -96,6 +112,64 @@ folly::coro::Task<Publisher::SubscribeResult> SwitchTestHub::subscribe(
               sessions_.empty() ? nullptr : MoQSession::getRequestSession(),
           .consumer = std::move(consumer)});
   co_return std::make_shared<Handle>(std::move(ok), weak_from_this(), id);
+}
+
+folly::coro::Task<Publisher::FetchResult> SwitchTestHub::fetch(
+    Fetch fetch,
+    std::shared_ptr<FetchConsumer> consumer) {
+  const auto* range = std::get_if<StandaloneFetch>(&fetch.args);
+  if (!range) {
+    co_return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::NOT_SUPPORTED,
+            "test hub answers standalone FETCH only"});
+  }
+  ++fetches_[fetch.fullTrackName];
+  auto inRange = [range](AbsoluteLocation location) {
+    return !(location < range->start) &&
+        (range->end.object == 0 ? location.group <= range->end.group
+                                : location < range->end);
+  };
+  std::vector<AbsoluteLocation> served;
+  for (const auto& [key, next] : nextObject_) {
+    if (key.first != fetch.fullTrackName) {
+      continue;
+    }
+    for (uint64_t object = 0; object < next; ++object) {
+      if (inRange({key.second, object})) {
+        served.emplace_back(key.second, object);
+      }
+    }
+  }
+  // The exclusive end the request names, cut back to the hub's largest.
+  AbsoluteLocation end = range->end.object == 0
+      ? AbsoluteLocation{range->end.group + 1, 0}
+      : range->end;
+  auto largest = largest_.find(fetch.fullTrackName);
+  if (largest == largest_.end()) {
+    end = range->start;
+  } else if (auto next = largest->second.next(); next && *next < end) {
+    end = std::max(*next, range->start);
+  }
+  for (size_t i = 0; i < served.size(); ++i) {
+    const auto location = served[i];
+    Extensions extensions;
+    extensions.insertMutableExtension(Extension(kHubIdExtensionType, id_));
+    consumer->object(
+        location.group,
+        origin_->shape().subgroupOf(location.object),
+        location.object,
+        folly::IOBuf::copyBuffer(
+            SwitchOrigin::payload(fetch.fullTrackName, location)),
+        std::move(extensions),
+        /*finFetch=*/i + 1 == served.size());
+  }
+  if (served.empty()) {
+    consumer->endOfFetch();
+  }
+  co_return std::make_shared<FetchHandle>(
+      FetchOk{fetch.requestID, GroupOrder::OldestFirst, /*endOfTrack=*/0, end});
 }
 
 void SwitchTestHub::publish(
@@ -260,6 +334,11 @@ SwitchTestHub::subscribeTimes(const FullTrackName& track) const {
   return it == subscribeTimes_.end()
       ? std::vector<std::chrono::steady_clock::time_point>{}
       : it->second;
+}
+
+size_t SwitchTestHub::fetches(const FullTrackName& track) const {
+  auto it = fetches_.find(track);
+  return it == fetches_.end() ? 0 : it->second;
 }
 
 std::vector<uint64_t> SwitchTestHub::subscriptionsTo(
@@ -640,6 +719,156 @@ void CheckingViewer::onReset(
             group,
             subgroup,
             folly::to_underlying(error)));
+  }
+}
+
+folly::Expected<folly::Unit, MoQPublishError> CheckingFetch::object(
+    uint64_t groupID,
+    uint64_t /*subgroupID*/,
+    uint64_t objectID,
+    Payload payload,
+    Extensions extensions,
+    bool finFetch,
+    bool /*forwardingPreferenceIsDatagram*/) {
+  if (!open("an object")) {
+    return folly::unit;
+  }
+  receive({groupID, objectID}, bytesOf(payload), extensions);
+  ended_ = finFetch;
+  return folly::unit;
+}
+
+folly::Expected<folly::Unit, MoQPublishError> CheckingFetch::beginObject(
+    uint64_t groupID,
+    uint64_t /*subgroupID*/,
+    uint64_t objectID,
+    uint64_t length,
+    Payload initialPayload,
+    Extensions extensions) {
+  if (!open("an object")) {
+    return folly::unit;
+  }
+  partial_ = PartialObject{
+      {groupID, objectID}, length, bytesOf(initialPayload), extensions};
+  return folly::unit;
+}
+
+folly::Expected<ObjectPublishStatus, MoQPublishError>
+CheckingFetch::objectPayload(Payload payload, bool /*finSubgroup*/) {
+  if (!partial_) {
+    violations_.push_back("object payload without an object");
+    return ObjectPublishStatus::IN_PROGRESS;
+  }
+  partial_->payload += bytesOf(payload);
+  if (partial_->payload.size() < partial_->length) {
+    return ObjectPublishStatus::IN_PROGRESS;
+  }
+  auto object = std::move(*std::exchange(partial_, std::nullopt));
+  receive(object.location, object.payload, object.extensions);
+  return ObjectPublishStatus::DONE;
+}
+
+folly::Expected<folly::Unit, MoQPublishError> CheckingFetch::endOfGroup(
+    uint64_t /*groupID*/,
+    uint64_t /*subgroupID*/,
+    uint64_t /*objectID*/,
+    bool finFetch) {
+  if (open("an end of group")) {
+    ended_ = finFetch;
+  }
+  return folly::unit;
+}
+
+folly::Expected<folly::Unit, MoQPublishError> CheckingFetch::endOfTrackAndGroup(
+    uint64_t /*groupID*/,
+    uint64_t /*subgroupID*/,
+    uint64_t /*objectID*/) {
+  if (open("an end of track")) {
+    ended_ = true;
+  }
+  return folly::unit;
+}
+
+folly::Expected<folly::Unit, MoQPublishError> CheckingFetch::endOfFetch() {
+  if (open("an end of fetch")) {
+    ended_ = true;
+  }
+  return folly::unit;
+}
+
+void CheckingFetch::reset(ResetStreamErrorCode error) {
+  if (open("a reset")) {
+    reset_ = error;
+  }
+}
+
+std::vector<AbsoluteLocation> CheckingFetch::missing(
+    AbsoluteLocation start,
+    AbsoluteLocation end) const {
+  const std::set<AbsoluteLocation> received(received_.begin(), received_.end());
+  std::vector<AbsoluteLocation> missing;
+  const auto& published = origin_->published(track_);
+  for (auto it = published.lower_bound(start);
+       it != published.end() && *it < end;
+       ++it) {
+    if (!received.contains(*it)) {
+      missing.push_back(*it);
+    }
+  }
+  return missing;
+}
+
+bool CheckingFetch::open(const char* what) {
+  if (ended_ || reset_) {
+    violations_.push_back(fmt::format("{} after the fetch ended", what));
+    return false;
+  }
+  if (partial_) {
+    violations_.push_back(
+        fmt::format(
+            "{} in the middle of object {}",
+            what,
+            describe(partial_->location)));
+    partial_.reset();
+  }
+  return true;
+}
+
+void CheckingFetch::receive(
+    AbsoluteLocation location,
+    const std::string& payload,
+    const Extensions& extensions) {
+  if (!received_.empty() && !(received_.back() < location)) {
+    violations_.push_back(
+        fmt::format(
+            "object {} after {}",
+            describe(location),
+            describe(received_.back())));
+  }
+  received_.push_back(location);
+  if ((expectedStart && location < *expectedStart) ||
+      (expectedEnd && !(location < *expectedEnd))) {
+    violations_.push_back(
+        fmt::format("object {} is outside the range", describe(location)));
+  }
+  if (payload != SwitchOrigin::payload(track_, location)) {
+    violations_.push_back(
+        fmt::format("object {} has payload '{}'", describe(location), payload));
+  }
+  auto hub = extensions.getIntExtension(kHubIdExtensionType);
+  if (!hub) {
+    violations_.push_back(
+        fmt::format("object {} has no hub ID", describe(location)));
+    return;
+  }
+  auto [groupHub, inserted] = hubOfGroup_.try_emplace(location.group, *hub);
+  if (!inserted && groupHub->second != *hub) {
+    violations_.push_back(
+        fmt::format(
+            "group {} came from hubs {} and {}",
+            location.group,
+            groupHub->second,
+            *hub));
   }
 }
 

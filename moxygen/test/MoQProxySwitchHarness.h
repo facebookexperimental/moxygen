@@ -92,6 +92,14 @@ class SwitchTestHub : public Publisher,
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest request,
       std::shared_ptr<TrackConsumer> consumer) override;
+  // Answers a standalone FETCH with the objects of its range the hub has
+  // published, oldest first, each carrying the hub's ID. An end object of 0
+  // takes all of the end group. As a relay does, the hub serves up to the
+  // largest object it has published, and FETCH_OK's exclusive end says where
+  // the reply stops.
+  folly::coro::Task<FetchResult> fetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> consumer) override;
 
   // Publishes objects [0, endObject) of a group to every subscription to the
   // track, continuing where an earlier call stopped. A subgroup stream ends
@@ -125,12 +133,15 @@ class SwitchTestHub : public Publisher,
   // When each of those arrived.
   std::vector<std::chrono::steady_clock::time_point> subscribeTimes(
       const FullTrackName& track) const;
+  // How many FETCHes for the track the hub has answered.
+  size_t fetches(const FullTrackName& track) const;
 
   uint64_t id() const {
     return id_;
   }
 
  private:
+  class FetchHandle;
   class Handle;
   struct Subscription {
     FullTrackName track;
@@ -159,6 +170,7 @@ class SwitchTestHub : public Publisher,
   std::map<FullTrackName, std::vector<LocationFilter>> filters_;
   std::map<FullTrackName, std::vector<std::chrono::steady_clock::time_point>>
       subscribeTimes_;
+  std::map<FullTrackName, size_t> fetches_;
   std::vector<std::weak_ptr<MoQSession>> sessions_;
 };
 
@@ -322,6 +334,96 @@ class CheckingViewer : public TrackConsumer,
   std::vector<OpenedSubgroup> opened_;
   std::vector<Reset> resets_;
   std::optional<PublishDone> done_;
+};
+
+// A FETCH's consumer that checks each object against the origin as it
+// arrives, and records the hub it came from.
+class CheckingFetch : public FetchConsumer {
+ public:
+  CheckingFetch(std::shared_ptr<SwitchOrigin> origin, FullTrackName track)
+      : origin_(std::move(origin)), track_(std::move(track)) {}
+
+  folly::Expected<folly::Unit, MoQPublishError> object(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      Payload payload,
+      Extensions extensions,
+      bool finFetch,
+      bool forwardingPreferenceIsDatagram) override;
+  folly::Expected<folly::Unit, MoQPublishError> beginObject(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      uint64_t length,
+      Payload initialPayload,
+      Extensions extensions) override;
+  folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
+      Payload payload,
+      bool finSubgroup) override;
+  folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      bool finFetch) override;
+  folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID) override;
+  folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override;
+  void reset(ResetStreamErrorCode error) override;
+  folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
+  awaitReadyToConsume() override {
+    return folly::makeSemiFuture<uint64_t>(0);
+  }
+
+  // Corrupt, duplicate or out-of-order objects, objects outside the expected
+  // range or without a hub ID, groups from two hubs, and anything after the
+  // end or a reset.
+  const std::vector<std::string>& violations() const {
+    return violations_;
+  }
+  const std::vector<AbsoluteLocation>& received() const {
+    return received_;
+  }
+  // Objects the origin published in [start, end) that never arrived.
+  std::vector<AbsoluteLocation> missing(
+      AbsoluteLocation start,
+      AbsoluteLocation end) const;
+  // The hub that sent each group's objects, by group.
+  const std::map<uint64_t, uint64_t>& hubOfGroup() const {
+    return hubOfGroup_;
+  }
+  bool ended() const {
+    return ended_;
+  }
+  // The range the FETCH asked for, [expectedStart, expectedEnd): an object
+  // outside it is a violation.
+  std::optional<AbsoluteLocation> expectedStart;
+  std::optional<AbsoluteLocation> expectedEnd;
+
+ private:
+  struct PartialObject {
+    AbsoluteLocation location;
+    uint64_t length;
+    std::string payload;
+    Extensions extensions;
+  };
+
+  void receive(
+      AbsoluteLocation location,
+      const std::string& payload,
+      const Extensions& extensions);
+  bool open(const char* what);
+
+  std::shared_ptr<SwitchOrigin> origin_;
+  FullTrackName track_;
+  std::vector<std::string> violations_;
+  std::vector<AbsoluteLocation> received_;
+  std::map<uint64_t, uint64_t> hubOfGroup_;
+  std::optional<PartialObject> partial_;
+  bool ended_{false};
+  std::optional<ResetStreamErrorCode> reset_;
 };
 
 } // namespace moxygen::test
