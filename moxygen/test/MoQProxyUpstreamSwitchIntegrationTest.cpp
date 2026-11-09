@@ -132,6 +132,7 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
   folly::coro::Task<std::shared_ptr<CheckingViewer>> subscribeViewer(
       FullTrackName track = kTrack) {
     auto* link = co_await links_.connect(edgeProxy_ ? edgeProxy_ : proxy_);
+    viewerSessions_.push_back(link->client);
     auto viewer = std::make_shared<CheckingViewer>(origin_, track);
     auto request = SubscribeRequest::make(track);
     request.filter = LocationFilter::nextObject();
@@ -227,6 +228,8 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
   // Every proxy, closed at teardown.
   std::vector<std::shared_ptr<MoQProxy>> proxies_;
   std::vector<std::shared_ptr<Publisher::SubscriptionHandle>> viewerHandles_;
+  // Each viewer's session, in the order they subscribed.
+  std::vector<std::shared_ptr<MoQSession>> viewerSessions_;
 };
 
 class MoQProxyCleanStreamTest : public MoQProxyUpstreamSwitchTest {};
@@ -649,18 +652,22 @@ class MoQProxyGracefulSwitchTest : public MoQProxyUpstreamSwitchTest {
     return options;
   }
 
-  // Hub 0 publishes groups [0, hub0Groups) and hub 1 [0, hub1Groups), then
-  // hub 0 goes away, and the proxy subscribes to hub 1 from its next group.
+  // Hub 0 publishes groups [0, hub0Groups) and the other hubs
+  // [0, otherGroups), then hub 0 goes away, and the proxy subscribes to hub 1
+  // from its next group.
   folly::coro::Task<std::shared_ptr<CheckingViewer>> startWithHub0GoingAway(
       uint64_t hub0Groups,
-      uint64_t hub1Groups) {
-    co_await start(/*hubCount=*/2);
+      uint64_t otherGroups,
+      size_t hubCount = 2) {
+    co_await start(hubCount);
     auto viewer = co_await subscribeViewer();
     for (uint64_t group = 0; group < hub0Groups; group++) {
       hubs_[0]->publishGroup(kTrack, group);
     }
-    for (uint64_t group = 0; group < hub1Groups; group++) {
-      hubs_[1]->publishGroup(kTrack, group);
+    for (size_t hub = 1; hub < hubCount; hub++) {
+      for (uint64_t group = 0; group < otherGroups; group++) {
+        hubs_[hub]->publishGroup(kTrack, group);
+      }
     }
     co_await settle();
     goAway(Goaway{.timeout = uint64_t(kGoawayTimeout.count())});
@@ -668,16 +675,18 @@ class MoQProxyGracefulSwitchTest : public MoQProxyUpstreamSwitchTest {
     co_return viewer;
   }
 
-  // Hub 0 sends a session GOAWAY. The pool stops choosing it, as health checks
-  // mark a draining hub down.
-  void goAway(Goaway goaway) {
-    hubProviders_[0]->setAvailable(0, false);
-    hubs_[0]->sendGoaway(goaway);
+  // The hub sends a session GOAWAY. The pool stops choosing it, as health
+  // checks mark a draining hub down.
+  void goAway(Goaway goaway, size_t hub = 0) {
+    hubProviders_[0]->setAvailable(hub, false);
+    hubs_[hub]->sendGoaway(goaway);
   }
 
-  // Until the proxy has unsubscribed from hub 0.
-  folly::coro::Task<void> waitForHandover(const FullTrackName& track = kTrack) {
-    co_await waitUntil([&] { return hubs_[0]->subscriptions(track) == 0; });
+  // Until the proxy has unsubscribed from the hub.
+  folly::coro::Task<void> waitForHandover(
+      const FullTrackName& track = kTrack,
+      size_t hub = 0) {
+    co_await waitUntil([&] { return hubs_[hub]->subscriptions(track) == 0; });
   }
 
   // Each group reached the viewer whole, from one hub, and the switch let go
@@ -1202,6 +1211,366 @@ INSTANTIATE_TEST_SUITE_P(
     Draft18AndLater,
     MoQProxyMidSubgroupTest,
     ValuesIn(midSubgroupCases()),
+    caseName);
+
+// Joining FETCH for history the proxy hasn't cached, during and after a switch.
+// The hubs publish groups 0 and 1 before the first viewer subscribes, and
+// group 2 after.
+class MoQProxyJoinDuringSwitchTest : public MoQProxyGracefulSwitchTest {
+ protected:
+  // For a switch that must outlast a join and its wait, under load too.
+  static constexpr std::chrono::milliseconds kLongDeadline{4000};
+  static constexpr uint64_t kLongGoawayTimeout{5000};
+
+  folly::coro::Task<std::shared_ptr<CheckingViewer>> startWithUncachedHistory(
+      size_t hubCount = 2) {
+    co_await start(hubCount);
+    for (uint64_t group = 0; group < 2; group++) {
+      for (auto& hub : hubs_) {
+        hub->publishGroup(kTrack, group);
+      }
+    }
+    co_await settle();
+    auto viewer = co_await subscribeViewer();
+    for (auto& hub : hubs_) {
+      hub->publishGroup(kTrack, 2);
+    }
+    co_await settle();
+    co_return viewer;
+  }
+
+  struct PendingJoin {
+    std::shared_ptr<CheckingViewer> viewer;
+    std::shared_ptr<CheckingFetch> history;
+    folly::SemiFuture<Publisher::FetchResult> reply;
+  };
+
+  struct Join {
+    std::shared_ptr<CheckingViewer> viewer;
+    std::shared_ptr<CheckingFetch> history;
+    Publisher::FetchResult result;
+  };
+
+  // A viewer subscribes, then sends a joining FETCH for everything from
+  // fromGroup to its start.
+  folly::coro::Task<PendingJoin> startJoin(uint64_t fromGroup = 0) {
+    auto viewer = co_await subscribeViewer();
+    auto history = std::make_shared<CheckingFetch>(origin_, kTrack);
+    history->expectedStart = AbsoluteLocation{fromGroup, 0};
+    history->expectedEnd = viewer->expectedStart;
+    Fetch fetch(
+        RequestID(0),
+        viewerHandles_.back()->subscribeOk().requestID,
+        /*joiningStart=*/fromGroup,
+        FetchType::ABSOLUTE_JOINING,
+        kDefaultPriority,
+        GroupOrder::OldestFirst);
+    fetch.fullTrackName = kTrack;
+    auto reply = folly::coro::co_withExecutor(
+                     co_await folly::coro::co_current_executor,
+                     viewerSessions_.back()->fetch(fetch, history))
+                     .start();
+    co_await settle();
+    co_return PendingJoin{
+        std::move(viewer), std::move(history), std::move(reply)};
+  }
+
+  folly::coro::Task<Join> finishJoin(PendingJoin pending) {
+    co_await waitUntil([&] { return pending.reply.isReady(); });
+    if (!pending.reply.isReady()) {
+      co_return Join{
+          pending.viewer,
+          pending.history,
+          folly::makeUnexpected(
+              FetchError{
+                  RequestID(0),
+                  FetchErrorCode::INTERNAL_ERROR,
+                  "no FETCH reply in time"})};
+    }
+    co_return Join{
+        pending.viewer, pending.history, std::move(pending.reply).get()};
+  }
+
+  folly::coro::Task<Join> joinViewer(uint64_t fromGroup = 0) {
+    co_return co_await finishJoin(co_await startJoin(fromGroup));
+  }
+
+  // The joiner got exactly the objects the origin published from fromGroup to
+  // its start, whole and in order, and the FETCH_OK ends at its start.
+  static void expectWholeHistory(const Join& join, uint64_t fromGroup = 0) {
+    ASSERT_TRUE(join.result.hasValue()) << join.result.error().reasonPhrase;
+    EXPECT_EQ(
+        join.result.value()->fetchOk().endLocation,
+        *join.viewer->expectedStart);
+    EXPECT_THAT(join.history->violations(), IsEmpty());
+    EXPECT_TRUE(join.history->ended());
+    ASSERT_FALSE(join.history->received().empty());
+    EXPECT_EQ(join.history->received().front(), AbsoluteLocation(fromGroup, 0));
+    EXPECT_THAT(
+        join.history->missing({fromGroup, 0}, *join.viewer->expectedStart),
+        IsEmpty());
+  }
+
+  // Each group of the history came from hub.
+  static void expectHistoryFrom(const Join& join, uint64_t hub) {
+    std::map<uint64_t, uint64_t> hubOfGroup;
+    for (uint64_t group = 0; group <= join.viewer->expectedStart->group;
+         group++) {
+      hubOfGroup[group] = hub;
+    }
+    if (join.viewer->expectedStart->object == 0) {
+      hubOfGroup.erase(join.viewer->expectedStart->group);
+    }
+    EXPECT_EQ(join.history->hubOfGroup(), hubOfGroup);
+  }
+
+  // Hub 0 serves groups 0 and 1 and goes away, and hub 1 takes over at group
+  // 2 and serves group 3.
+  folly::coro::Task<void> startWithHub0HandedOverAtGroup2() {
+    co_await startWithHub0GoingAway(2, 2);
+    hubs_[1]->publishGroup(kTrack, 2);
+    co_await settle();
+    hubs_[0]->publishGroup(kTrack, 2);
+    co_await waitForHandover();
+    hubs_[1]->publishGroup(kTrack, 3);
+    co_await settle();
+  }
+
+  bool oldHubTakesRequests() const {
+    return getDraftMajorVersion(GetParam().version) < 18;
+  }
+};
+
+// While hub 0 goes away, the history comes from it if it still takes requests
+// (draft 16), and else from hub 1, the replacement. Through an edge proxy, the
+// edge's FETCH reaches whichever hub the pool picks, hub 1.
+TEST_P(
+    MoQProxyJoinDuringSwitchTest,
+    AJoinDuringASwitchGetsItsHistoryFromAHubThatTakesRequests) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await startWithUncachedHistory();
+    goAway(Goaway{.timeout = uint64_t(kGoawayTimeout.count())});
+    co_await waitForSubscribe(*hubs_[1], 1);
+
+    auto join = co_await joinViewer();
+
+    expectWholeHistory(join);
+    const uint64_t hub = oldHubTakesRequests() && !edgeProxy_ ? 0 : 1;
+    expectHistoryFrom(join, hub);
+    EXPECT_EQ(hubs_[hub]->fetches(kTrack), 1);
+    EXPECT_EQ(hubs_[1 - hub]->fetches(kTrack), 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Hub 0 refuses the FETCH before the proxy has a replacement: the FETCH waits
+// until hub 1 is one.
+TEST_P(MoQProxyJoinDuringSwitchTest, AJoinWaitsForTheReplacement) {
+  if (oldHubTakesRequests() || GetParam().hops == Hops::Two) {
+    GTEST_SKIP() << "the proxy's FETCH goes to hub 0 or through the pool";
+  }
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    switchDeadline_ = kLongDeadline;
+    co_await startWithUncachedHistory();
+    hubProviders_[0]->failNextAttempts(1000);
+    goAway(Goaway{.timeout = kLongGoawayTimeout});
+    co_await settle();
+
+    auto pending = co_await startJoin();
+    EXPECT_FALSE(pending.reply.isReady());
+    EXPECT_EQ(hubs_[1]->subscriptions(kTrack), 0);
+    hubProviders_[0]->failNextAttempts(0);
+    auto join = co_await finishJoin(std::move(pending));
+
+    expectWholeHistory(join);
+    expectHistoryFrom(join, 1);
+    EXPECT_EQ(hubs_[0]->fetches(kTrack), 0);
+    EXPECT_EQ(hubs_[1]->fetches(kTrack), 1);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Hub 1 delivered group 4 while hub 0 still owes groups 2 and 3, so the proxy
+// holds hub 1 until hub 0 catches up. Hub 0 refuses the FETCH, and hub 1
+// serves it before it takes over.
+TEST_P(
+    MoQProxyJoinDuringSwitchTest,
+    AJoinIsServedByTheReplacementBeforeItTakesOver) {
+  if (oldHubTakesRequests() || GetParam().hops == Hops::Two) {
+    GTEST_SKIP() << "the proxy's FETCH goes to hub 0 or through the pool";
+  }
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await startWithHub0GoingAway(2, 4);
+    hubs_[1]->publishGroup(kTrack, 4);
+    co_await settle();
+
+    auto join = co_await joinViewer();
+
+    expectWholeHistory(join);
+    expectHistoryFrom(join, 1);
+    EXPECT_EQ(hubs_[0]->subscriptions(kTrack), 1);
+    EXPECT_EQ(hubs_[1]->fetches(kTrack), 1);
+    hubs_[0]->publishGroup(kTrack, 2);
+    hubs_[0]->publishGroup(kTrack, 3);
+    co_await waitForHandover();
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Hub 1, the replacement, goes away too once it froze the split, so the proxy
+// keeps it until hub 0 catches up: it refuses the FETCH as well, which waits
+// for hub 2, the replacement of the switch from hub 1.
+TEST_P(
+    MoQProxyJoinDuringSwitchTest,
+    AJoinRefusedByAReplacementGoingAwayWaitsForTheNext) {
+  if (oldHubTakesRequests() || GetParam().hops == Hops::Two) {
+    GTEST_SKIP() << "the proxy's FETCH goes to hub 0 or through the pool";
+  }
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    // The switch from hub 1 starts once it takes over, within its deadline.
+    switchDeadline_ = kLongDeadline;
+    co_await startWithHub0GoingAway(2, 4, /*hubCount=*/3);
+    hubs_[1]->publishGroup(kTrack, 4);
+    co_await settle();
+    goAway(Goaway{.timeout = kLongGoawayTimeout}, /*hub=*/1);
+    co_await settle();
+
+    auto pending = co_await startJoin();
+    EXPECT_FALSE(pending.reply.isReady());
+    hubs_[2]->publishGroup(kTrack, 4);
+    hubs_[0]->publishGroup(kTrack, 2);
+    hubs_[0]->publishGroup(kTrack, 3);
+    co_await waitForHandover();
+    auto join = co_await finishJoin(std::move(pending));
+
+    expectWholeHistory(join);
+    expectHistoryFrom(join, 2);
+    EXPECT_EQ(hubs_[0]->fetches(kTrack), 0);
+    EXPECT_EQ(hubs_[1]->fetches(kTrack), 0);
+    EXPECT_EQ(hubs_[2]->fetches(kTrack), 1);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Hub 0 refuses the FETCH, and the switch fails at its deadline without a
+// replacement: the FETCH fails with GOING_AWAY.
+TEST_P(
+    MoQProxyJoinDuringSwitchTest,
+    AJoinFailsWhenTheSwitchFindsNoReplacement) {
+  if (oldHubTakesRequests() || GetParam().hops == Hops::Two) {
+    GTEST_SKIP() << "the proxy's FETCH goes to hub 0 or through the pool";
+  }
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    switchDeadline_ = std::chrono::milliseconds(1000);
+    co_await startWithUncachedHistory();
+    hubProviders_[0]->failNextAttempts(1000);
+    goAway(Goaway{.timeout = uint64_t(kGoawayTimeout.count())});
+    co_await settle();
+
+    auto pending = co_await startJoin();
+    EXPECT_FALSE(pending.reply.isReady());
+    auto join = co_await finishJoin(std::move(pending));
+
+    CO_ASSERT_TRUE(join.result.hasError());
+    EXPECT_EQ(join.result.error().errorCode, FetchErrorCode::GOING_AWAY);
+    EXPECT_EQ(join.result.error().reasonPhrase, "Session received GOAWAY");
+    EXPECT_EQ(proxy_->switchStats().gracefulSwitches.failed, 1);
+    EXPECT_EQ(hubs_[0]->fetches(kTrack), 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// After hub 1 took over at group 2, the proxy has groups 1 to 3 cached, the
+// newest three. History from group 1 spans both hubs' groups and comes from
+// the cache, so no hub gets a FETCH.
+TEST_P(MoQProxyJoinDuringSwitchTest, AJoinAfterTheSwitchIsServedFromTheCache) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await startWithHub0HandedOverAtGroup2();
+
+    auto join = co_await joinViewer(/*fromGroup=*/1);
+
+    expectWholeHistory(join, /*fromGroup=*/1);
+    const std::map<uint64_t, uint64_t> hubOfGroup{{1, 0}, {2, 1}, {3, 1}};
+    EXPECT_EQ(join.history->hubOfGroup(), hubOfGroup);
+    EXPECT_EQ(hubs_[0]->fetches(kTrack), 0);
+    EXPECT_EQ(hubs_[1]->fetches(kTrack), 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Group 0 has left the cache, so history from group 0 comes whole from hub 1,
+// and none of it from the cache, which holds hub 0's group 1.
+TEST_P(
+    MoQProxyJoinDuringSwitchTest,
+    HistoryPartlyEvictedAfterTheSwitchComesWholeFromTheReplacement) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await startWithHub0HandedOverAtGroup2();
+
+    auto join = co_await joinViewer();
+
+    expectWholeHistory(join);
+    expectHistoryFrom(join, 1);
+    EXPECT_EQ(hubs_[0]->fetches(kTrack), 0);
+    EXPECT_EQ(hubs_[1]->fetches(kTrack), 1);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Hub 0's session closes partway through group 3, and hub 1 takes over at
+// group 4: the history spans the gap, so it comes whole from hub 1. A joiner
+// that arrives while the proxy still looks for a replacement waits for it.
+TEST_P(
+    MoQProxyJoinDuringSwitchTest,
+    AJoinSpanningALossGapGetsItFromTheReplacement) {
+  if (GetParam().hops == Hops::Two) {
+    GTEST_SKIP() << "the edge proxy's FETCH goes through the pool";
+  }
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    switchDeadline_ = kLongDeadline;
+    auto viewer = co_await startWithUncachedHistory();
+    hubs_[1]->publishGroup(kTrack, 3);
+    hubs_[0]->publish(kTrack, 3, 2);
+    co_await settle();
+    viewer->expectedReset = ResetStreamErrorCode::SESSION_CLOSED;
+    hubProviders_[0]->setAvailable(0, false);
+    hubProviders_[0]->failNextAttempts(1000);
+    hubs_[0]->closeSessions();
+    co_await settle();
+
+    auto pending = co_await startJoin();
+    EXPECT_FALSE(pending.reply.isReady());
+    EXPECT_EQ(hubs_[1]->subscriptions(kTrack), 0);
+    hubProviders_[0]->failNextAttempts(0);
+    auto join = co_await finishJoin(std::move(pending));
+    hubs_[1]->publishGroup(kTrack, 4);
+    co_await settle();
+
+    expectWholeHistory(join);
+    expectHistoryFrom(join, 1);
+    EXPECT_EQ(hubs_[1]->fetches(kTrack), 1);
+    EXPECT_EQ(proxy_->switchStats().lostSwitches.completed, 1);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Joining FETCH exists on drafts 16 and 18; draft 22 replaces it with a fill.
+std::vector<SwitchCase> joinCases() {
+  std::vector<SwitchCase> cases;
+  for (auto version : kSupportedVersions) {
+    if (getDraftMajorVersion(version) >= 22) {
+      continue;
+    }
+    for (auto hops : {Hops::One, Hops::Two}) {
+      cases.push_back(SwitchCase{version, hops, "OneSubgroup", {}});
+    }
+  }
+  return cases;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    JoiningFetch,
+    MoQProxyJoinDuringSwitchTest,
+    ValuesIn(joinCases()),
     caseName);
 
 }} // namespace moxygen::test

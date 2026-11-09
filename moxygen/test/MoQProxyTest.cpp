@@ -810,17 +810,20 @@ TEST_F(MoQProxyTest, StandaloneFetchDoesNotRetryAfterExposure) {
   EXPECT_EQ(fallbackProvider->calls, 0);
 }
 
+// What the first provider's stream delivers after it failed doesn't reach the
+// viewer.
 TEST_F(MoQProxyTest, FetchFallsBackToNextProvider) {
   auto fallbackSession =
       std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
   auto fallbackProvider =
       std::make_shared<TestUpstreamProvider>(fallbackSession);
   proxy_ = MoQProxy::create({provider_, fallbackProvider});
-
+  std::shared_ptr<FetchConsumer> failedConsumer;
   EXPECT_CALL(*upstreamSession_, fetch(_, _))
       .WillOnce(
-          [](Fetch fetch, std::shared_ptr<FetchConsumer>)
+          [&](Fetch fetch, std::shared_ptr<FetchConsumer> consumer)
               -> folly::coro::Task<Publisher::FetchResult> {
+            failedConsumer = std::move(consumer);
             co_return folly::makeUnexpected(
                 FetchError{
                     fetch.requestID,
@@ -835,12 +838,18 @@ TEST_F(MoQProxyTest, FetchFallsBackToNextProvider) {
             co_return upstreamHandle;
           });
 
-  auto result = fetch(makeDownstreamSession(), makeFetch(RequestID(8)));
+  auto viewer = std::make_shared<test::RecordingFetchConsumer>();
+
+  auto result = fetch(makeDownstreamSession(), makeFetch(RequestID(8)), viewer);
 
   ASSERT_TRUE(result.hasValue());
   EXPECT_EQ(result.value(), upstreamHandle);
   EXPECT_EQ(provider_->lastFallbackExists, true);
   EXPECT_EQ(fallbackProvider->lastFallbackExists, false);
+  ASSERT_NE(failedConsumer, nullptr);
+  EXPECT_TRUE(failedConsumer->object(0, 0, 0, folly::IOBuf::copyBuffer("x"))
+                  .hasError());
+  EXPECT_TRUE(viewer->log.empty());
 }
 
 TEST_F(MoQProxyTest, CloseDuringFetchCancelsUpstream) {
@@ -1686,6 +1695,291 @@ TEST_F(MoQProxyJoiningTest, MissOnUnavailableUpstreamIsAnError) {
   EXPECT_EQ(result.error().errorCode, FetchErrorCode::INTERNAL_ERROR);
   EXPECT_EQ(result.error().requestID, RequestID(7));
   EXPECT_TRUE(consumer->log.empty());
+}
+
+// An upstream that refuses the FETCH as going away, with no switch to take
+// history from another: the viewer gets the refusal, after one attempt.
+TEST_F(MoQProxyJoiningTest, HistoryRefusedAsGoingAwayWithoutASwitchFails) {
+  establish();
+  auto active = openSubgroup(42, /*containsLastInGroup=*/false);
+  EXPECT_TRUE(
+      active->object(0, payloadOf(10), noExtensions(), false).hasValue());
+  auto viewer = addViewer(RequestID(5));
+  EXPECT_CALL(*upstreamSession_, fetch(_, _))
+      .WillOnce(
+          [](Fetch request, std::shared_ptr<FetchConsumer>)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            co_return folly::makeUnexpected(
+                FetchError{
+                    request.requestID,
+                    FetchErrorCode::GOING_AWAY,
+                    "Session received GOAWAY"});
+          });
+
+  auto reply = startFetch(
+      viewer,
+      joiningFetch(RequestID(7), RequestID(5), 10),
+      std::make_shared<NiceMock<MockFetchConsumer>>());
+  drive();
+
+  ASSERT_TRUE(reply.isReady());
+  auto result = std::move(reply).get();
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().errorCode, FetchErrorCode::GOING_AWAY);
+  EXPECT_EQ(result.error().requestID, RequestID(7));
+}
+
+// A track whose upstream can be lost, with a second upstream to switch to.
+class MoQProxyJoiningSwitchTest : public MoQProxyJoiningTest {
+ protected:
+  void SetUp() override {
+    MoQProxyJoiningTest::SetUp();
+    replacementSession_ =
+        std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
+    ON_CALL(*replacementSession_, getNegotiatedVersion())
+        .WillByDefault(Return(kVersionDraftCurrent));
+    replacementProvider_ =
+        std::make_shared<TestUpstreamProvider>(replacementSession_);
+    proxy_ = MoQProxy::create({provider_, replacementProvider_}, makeOptions());
+  }
+
+  // The track forwards group 42, and a viewer joins it.
+  std::shared_ptr<NiceMock<test::MockMoQSession>> establishWithViewer() {
+    establish();
+    active_ = openSubgroup(42, /*containsLastInGroup=*/false);
+    EXPECT_TRUE(
+        active_->object(0, payloadOf(10), noExtensions(), false).hasValue());
+    return addViewer(RequestID(5));
+  }
+
+  void loseUpstream() {
+    upstreamConsumer_->publishDone(
+        PublishDone{
+            RequestID(0),
+            PublishDoneStatusCode::SESSION_CLOSED,
+            0,
+            "session closed"});
+  }
+
+  // The second upstream takes the track's SUBSCRIBE.
+  void expectReplacementSubscribe() {
+    EXPECT_CALL(*replacementSession_, subscribe(_, _))
+        .WillOnce(
+            [this](
+                SubscribeRequest request,
+                auto) -> folly::coro::Task<Publisher::SubscribeResult> {
+              co_return Publisher::SubscribeResult(makeUpstreamHandleAt(
+                  request.requestID, AbsoluteLocation{42, 0}));
+            });
+  }
+
+  // The upstream is lost as it fails the FETCH with code, after expose writes
+  // to the FETCH's consumer, if given.
+  void expectFailureAsTheUpstreamIsLost(
+      FetchErrorCode code = FetchErrorCode::GOING_AWAY,
+      std::function<void(FetchConsumer&)> expose = nullptr) {
+    EXPECT_CALL(*upstreamSession_, fetch(_, _))
+        .WillOnce(
+            [this, code, expose](
+                Fetch request, std::shared_ptr<FetchConsumer> consumer)
+                -> folly::coro::Task<Publisher::FetchResult> {
+              refusedConsumer_ = consumer;
+              if (expose) {
+                expose(*consumer);
+              }
+              loseUpstream();
+              co_return folly::makeUnexpected(
+                  FetchError{
+                      request.requestID,
+                      code,
+                      code == FetchErrorCode::GOING_AWAY
+                          ? "Session received GOAWAY"
+                          : "session closed"});
+            });
+  }
+
+  folly::SemiFuture<Publisher::FetchResult> startJoin(
+      const std::shared_ptr<MoQSession>& viewer,
+      folly::CancellationToken cancelled = {}) {
+    return withSessionContext(viewer, [&]() {
+      return folly::coro::co_withExecutor(
+                 executor_.get(),
+                 folly::coro::co_withCancellation(
+                     std::move(cancelled),
+                     proxy_->fetch(
+                         joiningFetch(RequestID(7), RequestID(5), 10),
+                         history_)))
+          .start();
+    });
+  }
+
+  static void expectGoingAway(
+      folly::SemiFuture<Publisher::FetchResult>& reply,
+      const std::string& reason) {
+    ASSERT_TRUE(reply.isReady());
+    auto result = std::move(reply).get();
+    ASSERT_TRUE(result.hasError());
+    EXPECT_EQ(result.error().errorCode, FetchErrorCode::GOING_AWAY);
+    EXPECT_EQ(result.error().reasonPhrase, reason);
+    EXPECT_EQ(result.error().requestID, RequestID(7));
+  }
+
+  std::shared_ptr<NiceMock<test::MockMoQSession>> replacementSession_;
+  std::shared_ptr<TestUpstreamProvider> replacementProvider_;
+  std::shared_ptr<test::RecordingFetchConsumer> history_{
+      std::make_shared<test::RecordingFetchConsumer>()};
+  std::shared_ptr<SubgroupConsumer> active_;
+  // What the refused FETCH was given to write to.
+  std::shared_ptr<FetchConsumer> refusedConsumer_;
+};
+
+// The upstream refuses the FETCH as going away and is lost: the history comes
+// from the replacement the lost switch adopts, for the same range, and
+// nothing the refused FETCH's stream delivers late reaches the viewer or the
+// cache.
+TEST_F(
+    MoQProxyJoiningSwitchTest,
+    HistoryRefusedDuringASwitchComesFromItsReplacement) {
+  auto viewer = establishWithViewer();
+  expectFailureAsTheUpstreamIsLost();
+  expectReplacementSubscribe();
+  Fetch upstreamRequest;
+  EXPECT_CALL(*replacementSession_, fetch(_, _))
+      .WillOnce(
+          [&](Fetch request, std::shared_ptr<FetchConsumer>)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            upstreamRequest = std::move(request);
+            co_return makeFetchHandle(RequestID(200));
+          });
+
+  auto reply = startJoin(viewer);
+  drive();
+
+  ASSERT_TRUE(reply.isReady());
+  EXPECT_TRUE(std::move(reply).get().hasValue());
+  const auto* range = std::get_if<StandaloneFetch>(&upstreamRequest.args);
+  ASSERT_NE(range, nullptr);
+  EXPECT_EQ(range->start, AbsoluteLocation(10, 0));
+  EXPECT_EQ(range->end, AbsoluteLocation(42, 1));
+  ASSERT_NE(refusedConsumer_, nullptr);
+  EXPECT_TRUE(
+      refusedConsumer_
+          ->object(10, 0, 0, payloadOf(10), noExtensions(), false, false)
+          .hasError());
+  EXPECT_TRUE(history_->log.empty());
+  auto track = proxy_->findTrack(kTrackName);
+  ASSERT_NE(track, nullptr);
+  EXPECT_EQ(
+      track->groupCache()->inspect(AbsoluteLocation{10, 0}, {10, 1}),
+      MoQGroupCache::Coverage::Miss);
+}
+
+// The refused FETCH already wrote to the viewer's stream, so another upstream
+// can't serve it.
+TEST_F(MoQProxyJoiningSwitchTest, HistoryAlreadyExposedIsNotRetried) {
+  auto viewer = establishWithViewer();
+  expectFailureAsTheUpstreamIsLost(
+      FetchErrorCode::GOING_AWAY, [](FetchConsumer& consumer) {
+        EXPECT_TRUE(
+            consumer
+                .object(10, 0, 0, payloadOf(10), noExtensions(), false, false)
+                .hasValue());
+      });
+  expectReplacementSubscribe();
+  EXPECT_CALL(*replacementSession_, fetch(_, _)).Times(0);
+
+  auto reply = startJoin(viewer);
+  drive();
+
+  expectGoingAway(reply, "Session received GOAWAY");
+}
+
+// The upstream forwarded a GOAWAY for the FETCH before refusing it, so the
+// viewer already saw it.
+TEST_F(MoQProxyJoiningSwitchTest, HistoryAfterARequestGoawayIsNotRetried) {
+  auto viewer = establishWithViewer();
+  expectFailureAsTheUpstreamIsLost(
+      FetchErrorCode::GOING_AWAY,
+      [](FetchConsumer& consumer) { consumer.goaway(Goaway{}); });
+  expectReplacementSubscribe();
+  EXPECT_CALL(*replacementSession_, fetch(_, _)).Times(0);
+
+  auto reply = startJoin(viewer);
+  drive();
+
+  expectGoingAway(reply, "Session received GOAWAY");
+}
+
+// The upstream is lost while the FETCH waits for its reply, which fails: the
+// history comes from the replacement.
+TEST_F(
+    MoQProxyJoiningSwitchTest,
+    HistoryFailedAsTheUpstreamIsLostComesFromItsReplacement) {
+  auto viewer = establishWithViewer();
+  expectFailureAsTheUpstreamIsLost(FetchErrorCode::INTERNAL_ERROR);
+  expectReplacementSubscribe();
+  EXPECT_CALL(*replacementSession_, fetch(_, _))
+      .WillOnce(
+          [this](Fetch request, std::shared_ptr<FetchConsumer>)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            co_return makeFetchHandle(request.requestID);
+          });
+
+  auto reply = startJoin(viewer);
+  drive();
+
+  ASSERT_TRUE(reply.isReady());
+  EXPECT_TRUE(std::move(reply).get().hasValue());
+}
+
+// A join waiting for the lost switch's replacement fails when the switch does.
+TEST_F(MoQProxyJoiningSwitchTest, AJoinWaitingForAFailedSwitchGoesAway) {
+  auto viewer = establishWithViewer();
+  replacementProvider_->exception = "no replacement";
+  loseUpstream();
+  EXPECT_CALL(*upstreamSession_, fetch(_, _)).Times(0);
+
+  auto reply = startJoin(viewer);
+  drive();
+  ASSERT_FALSE(reply.isReady());
+  timekeeper_->advance(MoQProxySwitchOptions{}.deadline);
+  drive();
+
+  expectGoingAway(reply, "no upstream for history");
+  EXPECT_EQ(proxy_->switchStats().lostSwitches.failed, 1);
+}
+
+TEST_F(MoQProxyJoiningSwitchTest, ClosingTheProxyEndsAJoinWaitingForASwitch) {
+  auto viewer = establishWithViewer();
+  replacementProvider_->exception = "no replacement";
+  expectFailureAsTheUpstreamIsLost();
+
+  auto reply = startJoin(viewer);
+  drive();
+  ASSERT_FALSE(reply.isReady());
+  proxy_->close();
+  drive();
+
+  expectGoingAway(reply, "proxy is closed");
+}
+
+TEST_F(MoQProxyJoiningSwitchTest, ACancelledJoinStopsWaitingForASwitch) {
+  auto viewer = establishWithViewer();
+  replacementProvider_->exception = "no replacement";
+  loseUpstream();
+  EXPECT_CALL(*upstreamSession_, fetch(_, _)).Times(0);
+  folly::CancellationSource cancel;
+
+  auto reply = startJoin(viewer, cancel.getToken());
+  drive();
+  ASSERT_FALSE(reply.isReady());
+  cancel.requestCancellation();
+  drive();
+
+  ASSERT_TRUE(reply.isReady());
+  auto result = std::move(reply).get();
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().errorCode, FetchErrorCode::CANCELLED);
 }
 
 TEST_F(MoQProxyJoiningTest, RetiredSubscriptionCannotBeJoined) {

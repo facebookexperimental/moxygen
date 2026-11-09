@@ -1698,6 +1698,7 @@ void MoQProxyTrack::cancelEstablishment() {
   switchDeadline_.requestCancellation();
   switchStartedAt_.reset();
   endGracefulSwitch();
+  onSwitchProgress();
 }
 
 void MoQProxyTrack::onUpstreamPublishDone() {
@@ -1909,6 +1910,7 @@ void MoQProxyTrack::adoptReplacement(UpstreamAttempt attempt) {
   XDCHECK(state_ == State::SWITCHING);
   upstream_ = std::move(attempt);
   state_ = State::READY;
+  onSwitchProgress();
   if (upstream_.recorder->resumed()) {
     // A gap noted after it resumed, once a graceful switch became a lost one,
     // can't be measured from its first group.
@@ -1926,6 +1928,7 @@ void MoQProxyTrack::completeSwitch() {
   counters.duration +=
       millisecondsSince(*std::exchange(switchStartedAt_, std::nullopt));
   switchDeadline_.requestCancellation();
+  onSwitchProgress();
   switchIfGoingAway();
 }
 
@@ -2056,6 +2059,7 @@ void MoQProxyTrack::holdReplacement(UpstreamAttempt attempt) {
     promoteReplacement();
     return;
   }
+  onSwitchProgress();
   checkHandoff();
 }
 
@@ -2125,6 +2129,7 @@ void MoQProxyTrack::promoteReplacement() {
   switchDeadline_.requestCancellation();
   XLOG(INFO) << "Upstream of " << fullTrackName_
              << " handed over to its replacement";
+  onSwitchProgress();
   switchIfGoingAway();
 }
 
@@ -2148,6 +2153,7 @@ void MoQProxyTrack::countHandoff(const MoQUpstreamHandoffArbiter& arbiter) {
 // GOING_AWAY, or they now get the end it already sent.
 void MoQProxyTrack::onGracefulDeadline() {
   graceful_->deadlinePassed = true;
+  onSwitchProgress();
   if (graceful_->replacement) {
     return;
   }
@@ -2437,6 +2443,41 @@ void MoQProxyTrack::stopCaching() {
   if (cache_) {
     cache_->shutdown();
   }
+}
+
+folly::coro::Task<std::shared_ptr<MoQSession>>
+MoQProxyTrack::awaitUpstreamSession(
+    std::vector<std::shared_ptr<MoQSession>> tried) {
+  auto untried = [&](const std::shared_ptr<MoQSession>& session) {
+    return session &&
+        std::find(tried.begin(), tried.end(), session) == tried.end();
+  };
+  for (;;) {
+    if (state_ == State::READY && untried(upstream_.session)) {
+      co_return upstream_.session;
+    }
+    if (graceful_ && graceful_->replacement &&
+        untried(graceful_->replacement->session)) {
+      co_return graceful_->replacement->session;
+    }
+    if (!switchRuns()) {
+      co_return nullptr;
+    }
+    co_await switchProgress_.getFuture();
+  }
+}
+
+// A graceful switch looks for a replacement until its deadline; a lost one
+// runs until its replacement forwards data, or it fails.
+bool MoQProxyTrack::switchRuns() const {
+  if (graceful_) {
+    return !graceful_->deadlinePassed;
+  }
+  return switchStartedAt_.has_value();
+}
+
+void MoQProxyTrack::onSwitchProgress() {
+  std::exchange(switchProgress_, {}).setValue(folly::unit);
 }
 
 folly::Expected<std::optional<MoQProxyTrack::JoiningRange>, FetchError>

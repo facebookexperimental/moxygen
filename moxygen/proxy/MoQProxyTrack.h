@@ -269,6 +269,12 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     return upstream_.session;
   }
   bool hasEstablishedUpstream() const;
+  // For history, a session other than those already tried: the upstream's, or
+  // that of the replacement a switch on a GOAWAY holds. While a switch runs
+  // and has neither, this waits for one. Null once no switch runs. The caller
+  // holds the track while it waits.
+  folly::coro::Task<std::shared_ptr<MoQSession>> awaitUpstreamSession(
+      std::vector<std::shared_ptr<MoQSession>> tried);
   const Extensions& trackExtensions() const;
 
   void close();
@@ -404,6 +410,11 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       folly::CancellationToken stopped);
   void onTailTimer();
   void dropReplacement(Recorder& replacement);
+  // Wakes awaitUpstreamSession, whose outcome depends on state_, upstream_,
+  // graceful_ and switchStartedAt_: each change to them that can end its wait
+  // calls this. The wait resumes on the executor once the change is done.
+  void onSwitchProgress();
+  bool switchRuns() const;
   void onReplacementGone(const Recorder& replacement);
   void renewHandoff();
   // Drops a replacement waiting for the old upstream to catch up.
@@ -512,6 +523,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   MoQGroupDurationEstimate groupDuration_;
   std::weak_ptr<Callback> callback_;
   folly::coro::SharedPromise<folly::Unit> upstreamSubscriptionReadyPromise_;
+  folly::coro::SharedPromise<folly::Unit> switchProgress_;
   std::optional<UpstreamEstablishmentFailure> upstreamSubscriptionFailure_;
   State state_{State::IDLE};
   bool upstreamSubscriptionPromiseResolved_{false};

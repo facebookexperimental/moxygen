@@ -7,6 +7,7 @@
 #include <fmt/core.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Invoke.h>
 #include <folly/coro/Sleep.h>
 #include <folly/futures/ManualTimekeeper.h>
 #include <folly/io/async/EventBase.h>
@@ -3591,6 +3592,131 @@ TEST(MoQGroupDurationEstimateTest, SmoothsTheSpacingOfGroupStarts) {
   estimate.onGroupStart(start + std::chrono::milliseconds(300));
 
   EXPECT_EQ(estimate.duration(), std::chrono::milliseconds(112));
+}
+
+// The session history goes to, during a switch on a GOAWAY.
+class MoQProxyTrackUpstreamWaitTest : public MoQProxyTrackGracefulSwitchTest {
+ protected:
+  void SetUp() override {
+    MoQProxyTrackGracefulSwitchTest::SetUp();
+    subscribeWithGroup11Open();
+  }
+
+  // Holds the track while it waits, as a joining FETCH does.
+  folly::SemiFuture<std::shared_ptr<MoQSession>> awaitUpstream(
+      std::vector<std::shared_ptr<MoQSession>> tried) {
+    return folly::coro::co_withExecutor(
+               executor_.get(),
+               folly::coro::co_invoke(
+                   [track = track_, tried = std::move(tried)]() mutable
+                       -> folly::coro::Task<std::shared_ptr<MoQSession>> {
+                     co_return co_await track->awaitUpstreamSession(
+                         std::move(tried));
+                   }))
+        .start();
+  }
+};
+
+TEST_F(MoQProxyTrackUpstreamWaitTest, TheUpstreamServesUntilItRefuses) {
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+
+  auto upstream = awaitUpstream({});
+  runPending();
+
+  ASSERT_TRUE(upstream.isReady());
+  EXPECT_EQ(std::move(upstream).get(), upstreamSession_);
+}
+
+TEST_F(MoQProxyTrackUpstreamWaitTest, ARefusalWaitsForTheHeldReplacement) {
+  replacementProvider_->error = "unavailable";
+  receiveSessionGoaway();
+  runPending();
+
+  auto upstream = awaitUpstream({upstreamSession_});
+  runPending();
+  EXPECT_FALSE(upstream.isReady());
+  replacementProvider_->error.reset();
+  expectReplacementSubscribe();
+  advanceTime(std::chrono::milliseconds(40));
+
+  ASSERT_TRUE(upstream.isReady());
+  EXPECT_EQ(std::move(upstream).get(), replacementSession_);
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+}
+
+TEST_F(
+    MoQProxyTrackUpstreamWaitTest,
+    TheWaitEndsAtTheDeadlineWithNoReplacement) {
+  replacementProvider_->error = "unavailable";
+  receiveSessionGoaway();
+  runPending();
+
+  auto upstream = awaitUpstream({upstreamSession_});
+  advanceTime(kDeadline / 2);
+  EXPECT_FALSE(upstream.isReady());
+  advanceTime(kDeadline);
+
+  ASSERT_TRUE(upstream.isReady());
+  EXPECT_EQ(std::move(upstream).get(), nullptr);
+}
+
+// The replacement was tried too: the wait ends at the deadline, though the
+// track still holds it.
+TEST_F(
+    MoQProxyTrackUpstreamWaitTest,
+    TheWaitEndsAtTheDeadlineThoughATriedReplacementIsHeld) {
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+
+  auto upstream = awaitUpstream({upstreamSession_, replacementSession_});
+  advanceTime(kDeadline / 2);
+  EXPECT_FALSE(upstream.isReady());
+  advanceTime(kDeadline);
+
+  ASSERT_TRUE(upstream.isReady());
+  EXPECT_EQ(std::move(upstream).get(), nullptr);
+}
+
+// The replacement was tried too, and takes over with no switch from it.
+TEST_F(
+    MoQProxyTrackUpstreamWaitTest,
+    TheWaitEndsWhenATriedReplacementTakesOver) {
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+
+  auto upstream = awaitUpstream({upstreamSession_, replacementSession_});
+  ASSERT_TRUE(replacementOpens(12));
+  EXPECT_FALSE(oldOpens(12));
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  runPending();
+  EXPECT_FALSE(upstream.isReady());
+  advanceTime(kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  ASSERT_TRUE(upstream.isReady());
+  EXPECT_EQ(std::move(upstream).get(), nullptr);
+}
+
+// A lost switch adopts a replacement that was tried too: the wait lasts until
+// it forwards data, which completes the switch.
+TEST_F(MoQProxyTrackUpstreamWaitTest, TheWaitLastsUntilALostSwitchCompletes) {
+  expectReplacementSubscribe();
+  loseUpstream();
+  runPending();
+  ASSERT_EQ(track_->upstreamSession(), replacementSession_);
+
+  auto upstream = awaitUpstream({replacementSession_});
+  runPending();
+  EXPECT_FALSE(upstream.isReady());
+  ASSERT_TRUE(sendFirstObject(*replacementConsumer_, 12));
+  runPending();
+
+  ASSERT_TRUE(upstream.isReady());
+  EXPECT_EQ(std::move(upstream).get(), nullptr);
 }
 
 }} // namespace moxygen
