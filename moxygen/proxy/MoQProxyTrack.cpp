@@ -13,6 +13,7 @@
 #include <folly/coro/Result.h>
 #include <folly/coro/Sleep.h>
 #include <folly/coro/WithCancellation.h>
+#include <folly/io/async/Request.h>
 #include <folly/logging/xlog.h>
 #include <algorithm>
 #include <map>
@@ -1435,6 +1436,9 @@ MoQProxyTrack::establishUpstream(
     DownstreamPeer downstream,
     folly::CancellationToken cancelled) {
   auto self = shared_from_this();
+  // What the SUBSCRIBE starts can last as long as the subscription, and would
+  // keep the session of the request context it started in.
+  folly::RequestContextScopeGuard fresh;
   std::optional<SubscribeError> lastFailure;
   for (size_t providerIndex = 0; providerIndex < upstreamProviders_.size();
        ++providerIndex) {

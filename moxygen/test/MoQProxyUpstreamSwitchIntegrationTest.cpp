@@ -132,6 +132,7 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
   folly::coro::Task<std::shared_ptr<CheckingViewer>> subscribeViewer(
       FullTrackName track = kTrack) {
     auto* link = co_await links_.connect(edgeProxy_ ? edgeProxy_ : proxy_);
+    viewerLinks_.push_back(link);
     viewerSessions_.push_back(link->client);
     auto viewer = std::make_shared<CheckingViewer>(origin_, track);
     auto request = SubscribeRequest::make(track);
@@ -228,7 +229,8 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
   // Every proxy, closed at teardown.
   std::vector<std::shared_ptr<MoQProxy>> proxies_;
   std::vector<std::shared_ptr<Publisher::SubscriptionHandle>> viewerHandles_;
-  // Each viewer's session, in the order they subscribed.
+  // Each viewer's link and session, in the order they subscribed.
+  std::vector<MoQTestLink*> viewerLinks_;
   std::vector<std::shared_ptr<MoQSession>> viewerSessions_;
 };
 
@@ -302,6 +304,34 @@ std::vector<SwitchCase> everyShapeCases() {
     }
   }
   return cases;
+}
+
+// Of two viewers, the first, whose SUBSCRIBE made the proxy subscribe to the
+// hub, closes its session. The upstream subscription serves the other on, and
+// doesn't keep the proxy's end of the first's link.
+TEST_P(
+    MoQProxyCleanStreamTest,
+    TheUpstreamAViewerStartedDoesntKeepItsSessionOnceItCloses) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await start(/*hubCount=*/1);
+    co_await subscribeViewer();
+    auto staying = co_await subscribeViewer();
+    hubs_[0]->publishGroup(kTrack, 0);
+    co_await settle();
+
+    viewerSessions_.front()->close(SessionCloseErrorCode::NO_ERROR);
+    viewerHandles_.erase(viewerHandles_.begin());
+    co_await settle();
+    auto& link = *viewerLinks_.front();
+    link.clientWt->setPeerHandler(nullptr);
+    std::weak_ptr<MoQSession> proxySide = std::exchange(link.server, nullptr);
+    hubs_[0]->publishGroup(kTrack, 1);
+    co_await settle();
+    EXPECT_TRUE(proxySide.expired());
+
+    expectIntact(*staying);
+    co_await leaveAndExpectIdle();
+  }));
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -88,6 +88,7 @@ moxygen_add_library(moxygen_proxy_moq_proxy_track
     Folly::folly_coro_result
     Folly::folly_coro_sleep
     Folly::folly_coro_with_cancellation
+    Folly::folly_io_async_request_context
     Folly::folly_logging_logging
     Folly::folly_scope_guard
     fmt::fmt
