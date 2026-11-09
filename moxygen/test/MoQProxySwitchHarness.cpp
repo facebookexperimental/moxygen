@@ -637,6 +637,7 @@ folly::Expected<folly::Unit, MoQPublishError> CheckingViewer::publishDone(
             pubDone.reasonPhrase));
   }
   done_ = std::move(pubDone);
+  doneAt_ = clock();
   return folly::unit;
 }
 
@@ -713,6 +714,7 @@ void CheckingViewer::receive(
     const Payload& payload,
     const Extensions& extensions) {
   received_.push_back(location);
+  arrivals_.push_back(clock());
   if (!receivedSet_.insert(location).second) {
     violations_.push_back(
         fmt::format("object {} received twice", describe(location)));

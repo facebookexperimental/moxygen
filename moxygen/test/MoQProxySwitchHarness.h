@@ -7,6 +7,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -311,12 +312,20 @@ class CheckingViewer : public TrackConsumer,
   const std::vector<AbsoluteLocation>& received() const {
     return received_;
   }
+  // When each object of received() arrived, by clock.
+  const std::vector<std::chrono::steady_clock::time_point>& arrivals() const {
+    return arrivals_;
+  }
   std::map<uint64_t, uint64_t> hubOfGroup() const;
   const std::map<uint64_t, Source>& sourceOfGroup() const {
     return sourceOfGroup_;
   }
   const std::optional<PublishDone>& done() const {
     return done_;
+  }
+  // When done() arrived, by clock.
+  const std::optional<std::chrono::steady_clock::time_point>& doneAt() const {
+    return doneAt_;
   }
   // Subgroup streams, by group and subgroup, that neither finished nor were
   // reset.
@@ -337,6 +346,8 @@ class CheckingViewer : public TrackConsumer,
   // Where the viewer's objects should start: an object before it is a
   // violation, and missing() counts from it.
   std::optional<AbsoluteLocation> expectedStart;
+  std::function<std::chrono::steady_clock::time_point()> clock{
+      [] { return std::chrono::steady_clock::now(); }};
 
  private:
   class Subgroup;
@@ -351,6 +362,7 @@ class CheckingViewer : public TrackConsumer,
   FullTrackName track_;
   std::vector<std::string> violations_;
   std::vector<AbsoluteLocation> received_;
+  std::vector<std::chrono::steady_clock::time_point> arrivals_;
   std::set<AbsoluteLocation> receivedSet_;
   std::map<uint64_t, Source> sourceOfGroup_;
   // Each source's lowest group.
@@ -359,6 +371,7 @@ class CheckingViewer : public TrackConsumer,
   std::vector<OpenedSubgroup> opened_;
   std::vector<Reset> resets_;
   std::optional<PublishDone> done_;
+  std::optional<std::chrono::steady_clock::time_point> doneAt_;
 };
 
 // A FETCH's consumer that checks each object against the origin as it
@@ -421,6 +434,9 @@ class CheckingFetch : public FetchConsumer {
   }
   bool ended() const {
     return ended_;
+  }
+  const std::optional<ResetStreamErrorCode>& resetError() const {
+    return reset_;
   }
   // The range the FETCH asked for, [expectedStart, expectedEnd): an object
   // outside it is a violation.
