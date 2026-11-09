@@ -115,6 +115,7 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
       auto* link = co_await links_.connect(hub);
       hub->attach(link->server);
       hubSessions_.push_back(link->client);
+      hubTransports_.push_back(link->serverWt.get());
       if (providers == Providers::OnePerHub || hubProviders_.empty()) {
         hubProviders_.push_back(std::make_shared<ScriptedUpstreamProvider>());
       }
@@ -220,6 +221,8 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
   std::vector<std::shared_ptr<ScriptedUpstreamProvider>> hubProviders_;
   // The proxy's end of each hub's session, in hub order.
   std::vector<std::shared_ptr<MoQSession>> hubSessions_;
+  // Each hub's end of its transport, in hub order.
+  std::vector<proxygen::test::FakeSharedWebTransport*> hubTransports_;
   // For the proxies start() makes.
   std::chrono::milliseconds switchDeadline_{kSwitchDeadline};
   std::vector<std::shared_ptr<SwitchTestHub>> hubs_;
@@ -648,7 +651,9 @@ TEST_P(MoQProxyUpstreamFaultTest, ProxyCloseEndsViewersWithGoingAway) {
   }));
 }
 
-// The hub ends the track, then its session closes.
+// The hub ends the track before group 2's stream has reached the proxy, so the
+// proxy holds the TRACK_ENDED, waiting for that stream, when the hub's session
+// closes.
 TEST_P(
     MoQProxyUpstreamFaultTest,
     ATrackEndedBeforeItsSessionClosesReachesViewers) {
@@ -658,11 +663,15 @@ TEST_P(
     hubs_[0]->publishGroup(kTrack, 0);
     hubs_[0]->publish(kTrack, 1, 2);
     co_await settle();
+    hubTransports_[0]->setDeferNewStreamData(true);
+    hubs_[0]->publish(kTrack, 2, 1);
+    co_await settle();
     viewer->expectedEnd = PublishDoneStatusCode::TRACK_ENDED;
     viewer->expectedReset = ResetStreamErrorCode::CANCELLED;
 
     hubs_[0]->endSubscriptions(kTrack, PublishDoneStatusCode::TRACK_ENDED);
     co_await settle();
+    EXPECT_FALSE(viewer->done().has_value());
     hubs_[0]->closeSessions();
     co_await settle();
 
