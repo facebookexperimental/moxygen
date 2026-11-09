@@ -434,6 +434,41 @@ TEST_P(
   }));
 }
 
+// Hub 0 is lost, and hub 1, which replaces it, is lost too before it
+// forwards anything. The same switch moves on to hub 2.
+TEST_P(MoQProxyLostUpstreamTest, AReplacementLostBeforeItForwardsIsReplaced) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await start(/*hubCount=*/3);
+    auto viewer = co_await subscribeViewer();
+    for (uint64_t group = 0; group < 2; group++) {
+      for (auto& hub : hubs_) {
+        hub->publishGroup(kTrack, group);
+      }
+    }
+    co_await settle();
+
+    hubs_[0]->closeSessions();
+    co_await waitForSubscribe(*hubs_[1], 1);
+    co_await settle();
+    hubs_[1]->closeSessions();
+    co_await waitForSubscribe(*hubs_[2], 1);
+    hubs_[2]->publishGroup(kTrack, 2);
+    hubs_[2]->publishGroup(kTrack, 3);
+    co_await settle();
+
+    expectIntact(*viewer);
+    const std::map<uint64_t, uint64_t> hubOfGroup{
+        {0, 0}, {1, 0}, {2, 2}, {3, 2}};
+    EXPECT_EQ(viewer->hubOfGroup(), hubOfGroup);
+    const auto& stats = proxy_->switchStats();
+    EXPECT_EQ(stats.upstreamsLost, 2);
+    EXPECT_EQ(stats.lostSwitches.started, 1);
+    EXPECT_EQ(stats.lostSwitches.completed, 1);
+    EXPECT_EQ(stats.lostSwitches.failed, 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
 // Hub 1 is two groups behind hub 0, so the groups it publishes first are
 // refused, and none reaches the viewer twice.
 TEST_P(MoQProxyLostUpstreamTest, TheReplacementNeverRedeliversTheLostGroups) {
@@ -1038,6 +1073,89 @@ TEST_P(MoQProxyGracefulSwitchTest, AHubThatTookOverCanGoAwayInTurn) {
     expectIntact(*viewer);
     const std::map<uint64_t, uint64_t> hubOfGroup{
         {0, 0}, {1, 0}, {2, 1}, {3, 1}, {4, 2}, {5, 2}};
+    EXPECT_EQ(viewer->hubOfGroup(), hubOfGroup);
+    const auto& stats = proxy_->switchStats();
+    EXPECT_EQ(stats.gracefulSwitches.started, 2);
+    EXPECT_EQ(stats.gracefulSwitches.completed, 2);
+    EXPECT_EQ(stats.upstreamsLost, 0);
+    EXPECT_EQ(stats.lostSwitches.started, 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Hub 1 took group 4 while hub 0 still owes groups 2 and 3, then its session
+// closes. Hub 0 finishes them and serves on after group 4, which hub 1 sent,
+// until hub 2 takes over.
+TEST_P(
+    MoQProxyGracefulSwitchTest,
+    AReplacementLostAfterTheSplitLeavesTheOldHubServingUntilTheNext) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    auto viewer = co_await startWithHub0GoingAway(2, 4, /*hubCount=*/3);
+    hubs_[1]->publishGroup(kTrack, 4);
+    hubs_[0]->publishGroup(kTrack, 2);
+    for (uint64_t group = 4; group < 6; group++) {
+      hubs_[2]->publishGroup(kTrack, group);
+    }
+    co_await settle();
+
+    hubs_[1]->closeSessions();
+    co_await waitForSubscribe(*hubs_[2], 1);
+    for (uint64_t group = 3; group < 6; group++) {
+      hubs_[0]->publishGroup(kTrack, group);
+    }
+    co_await settle();
+    hubs_[2]->publishGroup(kTrack, 6);
+    co_await settle();
+    hubs_[0]->publishGroup(kTrack, 6);
+    co_await waitForHandover();
+    hubs_[2]->publishGroup(kTrack, 7);
+    co_await settle();
+
+    expectIntact(*viewer);
+    const std::map<uint64_t, uint64_t> hubOfGroup{
+        {0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 1}, {5, 0}, {6, 2}, {7, 2}};
+    EXPECT_EQ(viewer->hubOfGroup(), hubOfGroup);
+    const auto& stats = proxy_->switchStats();
+    EXPECT_EQ(stats.gracefulSwitches.started, 1);
+    EXPECT_EQ(stats.gracefulSwitches.completed, 1);
+    EXPECT_EQ(stats.upstreamsLost, 1);
+    EXPECT_EQ(stats.lostSwitches.started, 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Hub 1 took group 4 while hub 0 still owes groups 2 and 3, then goes away
+// too. The proxy keeps it, since hub 0's group 4 is already refused: hub 1
+// takes over once hub 0 caught up, and the proxy then moves the track on to
+// hub 2.
+TEST_P(
+    MoQProxyGracefulSwitchTest,
+    AReplacementGoingAwayAfterTheSplitTakesOverThenHandsOn) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    auto viewer = co_await startWithHub0GoingAway(2, 4, /*hubCount=*/3);
+    hubs_[1]->publishGroup(kTrack, 4);
+    hubs_[2]->publishGroup(kTrack, 4);
+    co_await settle();
+
+    goAway(Goaway{.timeout = uint64_t(kGoawayTimeout.count())}, /*hub=*/1);
+    co_await settle();
+    EXPECT_EQ(hubs_[1]->subscriptions(kTrack), 1);
+    EXPECT_THAT(hubs_[2]->subscribeFilters(kTrack), IsEmpty());
+    for (uint64_t group = 2; group < 5; group++) {
+      hubs_[0]->publishGroup(kTrack, group);
+    }
+    co_await waitForHandover();
+    co_await waitForSubscribe(*hubs_[2], 1);
+    hubs_[2]->publishGroup(kTrack, 5);
+    co_await settle();
+    hubs_[1]->publishGroup(kTrack, 5);
+    co_await waitForHandover(kTrack, /*hub=*/1);
+    hubs_[2]->publishGroup(kTrack, 6);
+    co_await settle();
+
+    expectIntact(*viewer);
+    const std::map<uint64_t, uint64_t> hubOfGroup{
+        {0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 1}, {5, 2}, {6, 2}};
     EXPECT_EQ(viewer->hubOfGroup(), hubOfGroup);
     const auto& stats = proxy_->switchStats();
     EXPECT_EQ(stats.gracefulSwitches.started, 2);
