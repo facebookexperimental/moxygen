@@ -411,7 +411,7 @@ void SwitchTestHub::unsubscribe(uint64_t subscriptionID) {
 
 size_t ScriptedUpstreamProvider::addUpstream(
     std::shared_ptr<MoQSession> session) {
-  upstreams_.push_back(Upstream{.session = std::move(session)});
+  upstreams_.push_back(Upstream{.held = session, .session = session});
   return upstreams_.size() - 1;
 }
 
@@ -436,9 +436,13 @@ ScriptedUpstreamProvider::getSession(
         MoQUpstreamProviderError{"scripted provider failure"});
   }
   for (size_t i = 0; i < upstreams_.size(); i++) {
-    if (upstreams_[i].available && !upstreams_[i].session->isClosed()) {
+    auto session = upstreams_[i].session.lock();
+    if (upstreams_[i].available && session && !session->isClosed()) {
       attempt.upstream = i;
-      co_return upstreams_[i].session;
+      if (handOutOnce_) {
+        upstreams_[i].held.reset();
+      }
+      co_return session;
     }
   }
   co_return folly::makeUnexpected(

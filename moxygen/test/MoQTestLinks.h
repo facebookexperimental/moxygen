@@ -18,8 +18,9 @@ namespace moxygen::test {
 
 // A client and a server MoQSession over a FakeSharedWebTransport pair.
 struct MoQTestLink {
-  std::unique_ptr<proxygen::test::FakeSharedWebTransport> clientWt;
-  std::unique_ptr<proxygen::test::FakeSharedWebTransport> serverWt;
+  std::shared_ptr<proxygen::test::FakeSharedWebTransport> clientWt;
+  std::shared_ptr<proxygen::test::FakeSharedWebTransport> serverWt;
+  // A test may take either, to leave its new owner the only one.
   std::shared_ptr<MoQSession> client;
   std::shared_ptr<MoQSession> server;
 };

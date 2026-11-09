@@ -114,12 +114,21 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
       auto hub = addHub();
       auto* link = co_await links_.connect(hub);
       hub->attach(link->server);
-      hubSessions_.push_back(link->client);
       hubTransports_.push_back(link->serverWt.get());
+      hubSessionRefs_.push_back(link->client);
+      auto session = link->client;
+      if (trackOwnsHubSessions_) {
+        link->client.reset();
+      } else {
+        hubSessions_.push_back(session);
+      }
       if (providers == Providers::OnePerHub || hubProviders_.empty()) {
         hubProviders_.push_back(std::make_shared<ScriptedUpstreamProvider>());
+        if (trackOwnsHubSessions_) {
+          hubProviders_.back()->handOutOnce();
+        }
       }
-      hubProviders_.back()->addUpstream(link->client);
+      hubProviders_.back()->addUpstream(std::move(session));
     }
     proxy_ = makeProxy({hubProviders_.begin(), hubProviders_.end()});
     if (GetParam().hops == Hops::Two) {
@@ -223,6 +232,12 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
   std::vector<std::shared_ptr<MoQSession>> hubSessions_;
   // Each hub's end of its transport, in hub order.
   std::vector<proxygen::test::FakeSharedWebTransport*> hubTransports_;
+  // When set, start() leaves each hub session to its provider alone, which
+  // hands it out once, so the proxy track that takes it is its only owner.
+  // hubSessions_ then stays empty.
+  bool trackOwnsHubSessions_{false};
+  // The proxy's end of each hub's session, in hub order.
+  std::vector<std::weak_ptr<MoQSession>> hubSessionRefs_;
   // For the proxies start() makes.
   std::chrono::milliseconds switchDeadline_{kSwitchDeadline};
   std::vector<std::shared_ptr<SwitchTestHub>> hubs_;
@@ -362,6 +377,10 @@ class MoQProxyLostUpstreamTest : public MoQProxyUpstreamSwitchTest {
     hubs_[1]->publishGroup(kTrack, 2);
     hubs_[1]->publishGroup(kTrack, 3);
     co_await settle();
+    // The switch is over, so nothing holds hub 0's session.
+    if (trackOwnsHubSessions_) {
+      EXPECT_TRUE(hubSessionRefs_[0].expired());
+    }
 
     expectIntact(*viewer);
     const std::map<uint64_t, uint64_t> hubOfGroup{
@@ -395,6 +414,24 @@ TEST_P(MoQProxyLostUpstreamTest, AnUpstreamEndedWithGoingAwayIsReplaced) {
 
 TEST_P(MoQProxyLostUpstreamTest, AClosedUpstreamIsReplaced) {
   run(expectHub1TakesOver([&] { hubs_[0]->closeSessions(); }));
+}
+
+// The track is each hub session's only owner, as with a provider that
+// connects a new session for each attempt, so it destroys hub 0's session as
+// it releases it from the session's own callbacks.
+TEST_P(MoQProxyLostUpstreamTest, AClosedUpstreamTheTrackOwnsAloneIsReplaced) {
+  trackOwnsHubSessions_ = true;
+  run(expectHub1TakesOver([&] { hubs_[0]->closeSessions(); }));
+}
+
+TEST_P(
+    MoQProxyLostUpstreamTest,
+    AnUpstreamEndedWithGoingAwayTheTrackOwnsAloneIsReplaced) {
+  trackOwnsHubSessions_ = true;
+  run(expectHub1TakesOver([&] {
+    hubProviders_[0]->setAvailable(0, false);
+    hubs_[0]->endSubscriptions(kTrack, PublishDoneStatusCode::GOING_AWAY);
+  }));
 }
 
 // Hub 1 is two groups behind hub 0, so the groups it publishes first are
@@ -788,13 +825,10 @@ class MoQProxyGracefulSwitchTest : public MoQProxyUpstreamSwitchTest {
         ? objectsPerGroup()
         : streamsPerGroup();
   }
-};
 
-// Hub 1 starts at group 2, the next one hub 0 would send. Hub 0 is refused
-// group 2, and once it has stayed caught up the proxy lets it go, long before
-// its GOAWAY times out.
-TEST_P(MoQProxyGracefulSwitchTest, AReplacementAtTheNextGroupTakesOverThere) {
-  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+  // Hub 1 starts at group 2, the next one hub 0 would send. Hub 0 is refused
+  // group 2, and once it has stayed caught up the proxy lets it go.
+  folly::coro::Task<void> expectHub1TakesOverAtTheNextGroup() {
     auto viewer = co_await startWithHub0GoingAway(2, 2);
     hubs_[1]->publishGroup(kTrack, 2);
     co_await settle();
@@ -802,12 +836,31 @@ TEST_P(MoQProxyGracefulSwitchTest, AReplacementAtTheNextGroupTakesOverThere) {
     co_await waitForHandover();
     hubs_[1]->publishGroup(kTrack, 3);
     co_await settle();
+    // The switch is over, so nothing holds hub 0's session.
+    if (trackOwnsHubSessions_) {
+      EXPECT_TRUE(hubSessionRefs_[0].expired());
+    }
 
     expectHandedOver(*viewer, {{0, 0}, {1, 0}, {2, 1}, {3, 1}});
     EXPECT_EQ(proxy_->switchStats().handoffs.equal, 1);
     EXPECT_EQ(refused(), 0);
     co_await leaveAndExpectIdle();
-  }));
+  }
+};
+
+// Hub 1 starts at group 2, the next one hub 0 would send. Hub 0 is refused
+// group 2, and once it has stayed caught up the proxy lets it go, long before
+// its GOAWAY times out.
+TEST_P(MoQProxyGracefulSwitchTest, AReplacementAtTheNextGroupTakesOverThere) {
+  run(expectHub1TakesOverAtTheNextGroup());
+}
+
+// As above, with the track each hub session's only owner, as with a provider
+// that connects a new session for each attempt: it destroys hub 0's session as
+// it lets go of it.
+TEST_P(MoQProxyGracefulSwitchTest, AReplacementTheTrackOwnsAloneTakesOver) {
+  trackOwnsHubSessions_ = true;
+  run(expectHub1TakesOverAtTheNextGroup());
 }
 
 // Hub 1 is two groups behind: its groups 2 and 3, which hub 0 already sent,

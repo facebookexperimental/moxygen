@@ -215,6 +215,12 @@ class ScriptedUpstreamProvider : public MoQUpstreamProvider {
   size_t addUpstream(std::shared_ptr<MoQSession> session);
   void setAvailable(size_t upstream, bool available);
   void failNextAttempts(size_t count);
+  // Once it hands a session out, keeps only a weak reference to it, so the
+  // proxy that took it is its only owner, as with a provider that connects a
+  // new session for each attempt.
+  void handOutOnce() {
+    handOutOnce_ = true;
+  }
 
   const std::vector<Attempt>& attempts() const {
     return attempts_;
@@ -227,12 +233,15 @@ class ScriptedUpstreamProvider : public MoQUpstreamProvider {
 
  private:
   struct Upstream {
-    std::shared_ptr<MoQSession> session;
+    // Until handed out, with handOutOnce().
+    std::shared_ptr<MoQSession> held;
+    std::weak_ptr<MoQSession> session;
     bool available{true};
   };
 
   std::vector<Upstream> upstreams_;
   size_t failuresLeft_{0};
+  bool handOutOnce_{false};
   std::vector<Attempt> attempts_;
 };
 
