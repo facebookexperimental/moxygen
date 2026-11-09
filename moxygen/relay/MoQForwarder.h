@@ -93,6 +93,10 @@ class MoQForwarder : public TrackConsumer {
     deferPublishDone_ = defer;
   }
 
+  void setReplaceDuplicateSubscriptions(bool replace) {
+    replaceDuplicateSubscriptions_ = replace;
+  }
+
   struct SubgroupIdentifier {
     uint64_t group;
     uint64_t subgroup;
@@ -448,6 +452,10 @@ class MoQForwarder : public TrackConsumer {
       std::optional<PublishDone> pubDone,
       const std::string& callsite);
 
+  void replaceSubscriber(
+      SubscriberMap::iterator subIt,
+      std::shared_ptr<Subscriber> subscriber);
+
   // Handles errors on a subgroup for a specific subscriber.
   // Soft errors (CANCELLED - from STOP_SENDING or delivery timeout) tombstone
   // the subgroup, preventing reopening but keeping the subscription alive.
@@ -476,6 +484,7 @@ class MoQForwarder : public TrackConsumer {
   uint64_t forwardingSubscribers_{0};
   bool draining_{false};
   bool deferPublishDone_{false};
+  bool replaceDuplicateSubscriptions_{false};
   std::optional<PublishDone> pendingPublishDone_;
 };
 

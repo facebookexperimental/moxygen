@@ -6,8 +6,10 @@
 
 #include "moxygen/test/MoQSessionTestCommon.h"
 
+#include <folly/coro/Collect.h>
 #include <folly/coro/Timeout.h>
 #include "moxygen/MoQTrackProperties.h"
+#include "moxygen/relay/MoQForwarder.h"
 
 using namespace moxygen;
 using namespace moxygen::test;
@@ -172,6 +174,230 @@ CO_TEST_P_X(MoQSessionTest, SubscribeOkDistinctTrackAliases) {
     }
     EXPECT_FALSE(clientSession_->isClosed());
   }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+}
+
+namespace {
+
+std::shared_ptr<testing::NiceMock<MockTrackConsumer>> makeTrackConsumer() {
+  auto consumer = std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+  ON_CALL(*consumer, setTrackAlias(_))
+      .WillByDefault(testing::Return(folly::unit));
+  ON_CALL(*consumer, publishDone(_))
+      .WillByDefault(testing::Return(folly::unit));
+  return consumer;
+}
+
+void expectObjectZero(MockTrackConsumer& consumer, bool& received) {
+  auto subgroup = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  ON_CALL(*subgroup, object(0, _, _, _))
+      .WillByDefault([&received](uint64_t, Payload, const Extensions&, bool) {
+        received = true;
+        return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+      });
+  EXPECT_CALL(consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(testing::Return(subgroup));
+}
+
+bool publishObjectZero(MoQForwarder& forwarder) {
+  auto subgroup = forwarder.beginSubgroup(0, 0, kDefaultPriority);
+  return subgroup.hasValue() &&
+      (*subgroup)
+          ->object(0, moxygen::test::makeBuf(10), noExtensions(), true)
+          .hasValue();
+}
+
+struct HeldAnswer {
+  folly::coro::Baton added;
+  folly::coro::Baton release;
+};
+
+folly::coro::Task<Publisher::SubscribeResult> answerWhenReleased(
+    std::shared_ptr<Publisher::SubscriptionHandle> handle,
+    folly::coro::Baton& release) {
+  co_await release;
+  co_return handle;
+}
+
+std::function<folly::coro::Task<Publisher::SubscribeResult>(
+    const SubscribeRequest&,
+    std::shared_ptr<TrackConsumer>)>
+subscribeThrough(
+    std::shared_ptr<MoQForwarder> forwarder,
+    SessionId sessionId,
+    HeldAnswer* held = nullptr) {
+  return [forwarder, sessionId, held](
+             const SubscribeRequest& sub, std::shared_ptr<TrackConsumer> pub)
+             -> folly::coro::Task<Publisher::SubscribeResult> {
+    std::shared_ptr<Publisher::SubscriptionHandle> handle =
+        forwarder->addSubscriber(sessionId, sub, std::move(pub));
+    if (!held) {
+      return folly::coro::makeTask<Publisher::SubscribeResult>(
+          Publisher::SubscribeResult(std::move(handle)));
+    }
+    held->added.post();
+    return answerWhenReleased(std::move(handle), held->release);
+  };
+}
+
+} // namespace
+
+CO_TEST_P_X(
+    MoQSessionTest,
+    DuplicateSubscribeThroughAForwarderClosesTheSessionByDefault) {
+  co_await setupMoQSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName);
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .Times(2)
+      .WillRepeatedly(subscribeThrough(forwarder, serverSession_->sessionId()));
+  struct CloseCallback : MoQSession::MoQSessionCloseCallback {
+    void onMoQSessionClosed(
+        SessionCloseErrorCode error,
+        folly::Optional<uint32_t>) override {
+      errors.push_back(error);
+    }
+    std::vector<SessionCloseErrorCode> errors;
+  } closeCallback;
+  clientSession_->setSessionCloseCallback(&closeCallback);
+
+  auto [first, second] = co_await folly::coro::collectAll(
+      clientSession_->subscribe(
+          getSubscribe(kTestTrackName), makeTrackConsumer()),
+      clientSession_->subscribe(
+          getSubscribe(kTestTrackName), makeTrackConsumer()));
+
+  EXPECT_TRUE(first.hasValue());
+  EXPECT_TRUE(second.hasError());
+  co_await rescheduleN(4);
+  const std::vector<SessionCloseErrorCode> duplicateAlias{
+      SessionCloseErrorCode::DUPLICATE_TRACK_ALIAS};
+  EXPECT_EQ(closeCallback.errors, duplicateAlias);
+  clientSession_->setSessionCloseCallback(nullptr);
+}
+
+CO_TEST_P_X(MoQSessionTest, ReplacingForwarderEndsTheFirstOfTwoLiveSubscribes) {
+  co_await setupMoQSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName);
+  forwarder->setReplaceDuplicateSubscriptions(true);
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .Times(2)
+      .WillRepeatedly(subscribeThrough(forwarder, serverSession_->sessionId()));
+  auto firstConsumer = makeTrackConsumer();
+  EXPECT_CALL(*firstConsumer, publishDone(_))
+      .WillOnce([](const PublishDone& done) {
+        EXPECT_EQ(done.statusCode, PublishDoneStatusCode::SUBSCRIPTION_ENDED);
+        return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+      });
+  auto secondConsumer = makeTrackConsumer();
+  bool received = false;
+  expectObjectZero(*secondConsumer, received);
+
+  auto [first, second] = co_await folly::coro::collectAll(
+      clientSession_->subscribe(getSubscribe(kTestTrackName), firstConsumer),
+      clientSession_->subscribe(getSubscribe(kTestTrackName), secondConsumer));
+
+  EXPECT_TRUE(first.hasValue());
+  EXPECT_TRUE(second.hasValue());
+  if (first.hasValue() && second.hasValue()) {
+    EXPECT_NE(
+        first.value()->subscribeOk().trackAlias,
+        second.value()->subscribeOk().trackAlias);
+  }
+  co_await rescheduleN(4);
+  EXPECT_TRUE(publishObjectZero(*forwarder));
+  co_await rescheduleN(8);
+  EXPECT_TRUE(received);
+  EXPECT_FALSE(clientSession_->isClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+}
+
+CO_TEST_P_X(
+    MoQSessionTest,
+    ReplacedSubscribeUnsubscribedAfterTheNewOkKeepsTheNew) {
+  co_await setupMoQSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName);
+  forwarder->setReplaceDuplicateSubscriptions(true);
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .Times(2)
+      .WillRepeatedly(subscribeThrough(forwarder, serverSession_->sessionId()));
+  auto secondConsumer = makeTrackConsumer();
+  bool received = false;
+  expectObjectZero(*secondConsumer, received);
+
+  auto firstFuture = folly::coro::co_withExecutor(
+                         &eventBase_,
+                         clientSession_->subscribe(
+                             getSubscribe(kTestTrackName), makeTrackConsumer()))
+                         .start()
+                         .via(&eventBase_);
+  auto secondFuture = folly::coro::co_withExecutor(
+                          &eventBase_,
+                          clientSession_->subscribe(
+                              getSubscribe(kTestTrackName), secondConsumer))
+                          .start()
+                          .via(&eventBase_);
+  auto first = co_await std::move(firstFuture);
+  EXPECT_TRUE(first.hasValue());
+  if (first.hasValue()) {
+    first.value()->unsubscribe();
+  }
+  auto second = co_await std::move(secondFuture);
+
+  EXPECT_TRUE(second.hasValue());
+  co_await rescheduleN(4);
+  EXPECT_TRUE(publishObjectZero(*forwarder));
+  co_await rescheduleN(8);
+  EXPECT_TRUE(received);
+  EXPECT_FALSE(clientSession_->isClosed());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+}
+
+CO_TEST_P_X(
+    MoQSessionTest,
+    ReplacedSubscribeUnsubscribedBeforeTheNewOkKeepsTheNew) {
+  co_await setupMoQSession();
+  auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName);
+  forwarder->setReplaceDuplicateSubscriptions(true);
+  HeldAnswer held;
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .WillOnce(subscribeThrough(forwarder, serverSession_->sessionId()))
+      .WillOnce(
+          subscribeThrough(forwarder, serverSession_->sessionId(), &held));
+  auto secondConsumer = makeTrackConsumer();
+  bool received = false;
+  expectObjectZero(*secondConsumer, received);
+
+  auto firstFuture = folly::coro::co_withExecutor(
+                         &eventBase_,
+                         clientSession_->subscribe(
+                             getSubscribe(kTestTrackName), makeTrackConsumer()))
+                         .start()
+                         .via(&eventBase_);
+  auto secondFuture = folly::coro::co_withExecutor(
+                          &eventBase_,
+                          clientSession_->subscribe(
+                              getSubscribe(kTestTrackName), secondConsumer))
+                          .start()
+                          .via(&eventBase_);
+  auto first = co_await std::move(firstFuture);
+  co_await held.added;
+  EXPECT_TRUE(first.hasValue());
+  if (first.hasValue()) {
+    first.value()->unsubscribe();
+  }
+  co_await rescheduleN(4);
+  held.release.post();
+  auto second = co_await std::move(secondFuture);
+
+  EXPECT_TRUE(second.hasValue());
+  co_await rescheduleN(4);
+  EXPECT_TRUE(publishObjectZero(*forwarder));
+  co_await rescheduleN(8);
+  EXPECT_TRUE(received);
+  EXPECT_FALSE(clientSession_->isClosed());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
   co_await rescheduleN(4);
 }

@@ -116,6 +116,7 @@ moxygen_add_test(TARGET MoQSessionTests
   DEPENDS
     moqsessiontestcommon
     moxygen_moq_server_base
+    moxygen_relay_moq_forwarder
     testmain
 )
 

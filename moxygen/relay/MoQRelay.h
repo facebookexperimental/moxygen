@@ -42,6 +42,10 @@ class MoQRelay : public std::enable_shared_from_this<MoQRelay>,
     allowedNamespacePrefix_ = std::move(allowed);
   }
 
+  void setReplaceDuplicateSubscriptions(bool replace) {
+    replaceDuplicateSubscriptions_ = replace;
+  }
+
   folly::coro::Task<SubscribeResult> subscribe(
       std::shared_ptr<MoQSession> session,
       SubscribeRequest subReq,
@@ -493,6 +497,7 @@ class MoQRelay : public std::enable_shared_from_this<MoQRelay>,
   void wakePendingRendezvousUnderNamespace(const TrackNamespace& ns);
 
   TrackNamespace allowedNamespacePrefix_;
+  bool replaceDuplicateSubscriptions_{false};
   folly::F14FastMap<FullTrackName, RelaySubscription, FullTrackName::hash>
       subscriptions_;
   PendingRendezvousNode pendingRendezvousRoot_;

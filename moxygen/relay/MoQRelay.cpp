@@ -519,6 +519,7 @@ Subscriber::PublishResult MoQRelay::publish(
 
   // Set Forwarder Params
   forwarder->setExtensions(pub.extensions);
+  forwarder->setReplaceDuplicateSubscriptions(replaceDuplicateSubscriptions_);
 
   auto subRes = subscriptions_.emplace(
       std::piecewise_construct,
@@ -1772,6 +1773,7 @@ MoQRelay::subscribeToFirstRelaySubscription(
   auto forwarder =
       std::make_shared<MoQForwarder>(subReq.fullTrackName, std::nullopt);
   forwarder->setCallback(shared_from_this());
+  forwarder->setReplaceDuplicateSubscriptions(replaceDuplicateSubscriptions_);
   subscriptions_.emplace(
       std::piecewise_construct,
       std::forward_as_tuple(subReq.fullTrackName),

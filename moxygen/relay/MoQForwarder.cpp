@@ -237,7 +237,9 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
     XLOG(ERR) << "addSubscriber called on draining track";
     return nullptr;
   }
-  auto trackAlias = trackAlias_.value_or(subReq.requestID.value);
+  auto trackAlias = replaceDuplicateSubscriptions_
+      ? TrackAlias(subReq.requestID.value)
+      : trackAlias_.value_or(subReq.requestID.value);
   XCHECK(consumer);
   consumer->setTrackAlias(trackAlias);
   auto subscriber = std::make_shared<MoQForwarder::Subscriber>(
@@ -265,6 +267,10 @@ std::shared_ptr<MoQForwarder::Subscriber> MoQForwarder::addSubscriber(
   auto [it, inserted] = subscribers_.emplace(sessionId, subscriber);
   if (inserted && subReq.forward) {
     addForwardingSubscriber();
+  }
+  if (!inserted && replaceDuplicateSubscriptions_) {
+    replaceSubscriber(it, subscriber);
+    return subscriber;
   }
   return it->second;
 }
@@ -464,6 +470,33 @@ void MoQForwarder::removeSubscriberIt(
   subscriber->detach();
   XLOG(DBG1) << "subscribers_.size()=" << subscribers_.size();
   checkAndFireOnEmpty();
+}
+
+void MoQForwarder::replaceSubscriber(
+    SubscriberMap::iterator subIt,
+    std::shared_ptr<Subscriber> subscriber) {
+  OnEmptyGuard guard(this);
+  auto replaced = std::exchange(subIt->second, subscriber);
+  if (replaced->shouldForward && !subscriber->shouldForward) {
+    removeForwardingSubscriber();
+  } else if (!replaced->shouldForward && subscriber->shouldForward) {
+    addForwardingSubscriber();
+  }
+  replaced->detach();
+  XLOG(DBG1) << "Replacing subscriber=" << replaced.get()
+             << " requestID=" << replaced->requestID
+             << " with requestID=" << subscriber->requestID;
+  for (auto& subgroup : replaced->subgroups) {
+    subgroup.second->reset(ResetStreamErrorCode::CANCELLED);
+  }
+  if (replaced->trackConsumer) {
+    replaced->trackConsumer->publishDone(
+        PublishDone{
+            replaced->requestID,
+            PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+            0,
+            "replaced by a newer subscription"});
+  }
 }
 
 void MoQForwarder::updateLargest(uint64_t group, uint64_t object) {

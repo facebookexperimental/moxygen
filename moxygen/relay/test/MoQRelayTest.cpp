@@ -3155,6 +3155,144 @@ TEST_F(
   EXPECT_EQ(forwarder->numForwardingSubscribers(), 0);
 }
 
+TEST_F(MoQRelayTest, DuplicateSubscriptionToAPublishedTrackReplacesTheFirst) {
+  relay_->setReplaceDuplicateSubscriptions(true);
+  auto publisherSession = createMockSession();
+  auto subscriberSession = createMockSession();
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+  ASSERT_NE(publishConsumer, nullptr);
+  ASSERT_TRUE(publishConsumer->setTrackAlias(TrackAlias(77)).hasValue());
+  auto firstConsumer = createMockConsumer();
+  EXPECT_CALL(*firstConsumer, publishDone(_))
+      .WillOnce([](const PublishDone& done) {
+        EXPECT_EQ(done.statusCode, PublishDoneStatusCode::SUBSCRIPTION_ENDED);
+        return folly::makeExpected<MoQPublishError>(folly::unit);
+      });
+
+  auto first = subscribeToTrack(
+      subscriberSession,
+      kTestTrackName,
+      firstConsumer,
+      RequestID(32),
+      /*addToState=*/false);
+  auto second = subscribeToTrack(
+      subscriberSession, kTestTrackName, createMockConsumer(), RequestID(36));
+
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(first->subscribeOk().trackAlias, TrackAlias(32));
+  EXPECT_EQ(second->subscribeOk().trackAlias, TrackAlias(36));
+  removeSession(publisherSession);
+  removeSession(subscriberSession);
+}
+
+TEST_F(MoQRelayTest, ReplacedSubscriptionUnsubscribeLeavesItsReplacement) {
+  relay_->setReplaceDuplicateSubscriptions(true);
+  auto publisherSession = createMockSession();
+  auto subscriberSession = createMockSession();
+  doPublishNamespace(publisherSession, kTestNamespace);
+  SubscribeOk upstreamOk;
+  upstreamOk.requestID = RequestID(1);
+  upstreamOk.trackAlias = TrackAlias(77);
+  std::shared_ptr<TrackConsumer> upstreamConsumer;
+  EXPECT_CALL(*publisherSession, subscribe(_, _))
+      .WillOnce([&upstreamConsumer, upstreamOk](
+                    const auto&, std::shared_ptr<TrackConsumer> consumer) {
+        consumer->setTrackAlias(upstreamOk.trackAlias);
+        upstreamConsumer = std::move(consumer);
+        auto handle =
+            std::make_shared<NiceMock<MockSubscriptionHandle>>(upstreamOk);
+        return folly::coro::makeTask<Publisher::SubscribeResult>(
+            folly::
+                Expected<std::shared_ptr<SubscriptionHandle>, SubscribeError>(
+                    handle));
+      });
+  auto firstConsumer = createMockConsumer();
+  auto secondConsumer = createMockConsumer();
+  auto secondSubgroup = createMockSubgroupConsumer();
+  EXPECT_CALL(*firstConsumer, beginSubgroup(_, _, _, _)).Times(0);
+  EXPECT_CALL(*secondConsumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(
+          folly::
+              makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                  secondSubgroup)));
+  EXPECT_CALL(*secondSubgroup, object(0, _, _, true))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  auto first = subscribeToTrack(
+      subscriberSession,
+      kTestTrackName,
+      firstConsumer,
+      RequestID(32),
+      /*addToState=*/false);
+  auto second = subscribeToTrack(
+      subscriberSession, kTestTrackName, secondConsumer, RequestID(36));
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(second->subscribeOk().trackAlias, TrackAlias(36));
+  first->unsubscribe();
+
+  ASSERT_NE(upstreamConsumer, nullptr);
+  auto subgroup = upstreamConsumer->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(subgroup.hasValue());
+  EXPECT_TRUE((*subgroup)->object(0, nullptr, {}, true).hasValue());
+  removeSession(publisherSession);
+  removeSession(subscriberSession);
+}
+
+TEST_F(MoQRelayTest, TracksFromTwoUpstreamsShareTheUpstreamAliasByDefault) {
+  const FullTrackName otherTrack{kTestNamespace, "track2"};
+  auto firstPublisher = createMockSession();
+  auto secondPublisher = createMockSession();
+  auto subscriberSession = createMockSession();
+  auto firstPublish = doPublish(firstPublisher, kTestTrackName);
+  auto secondPublish = doPublish(secondPublisher, otherTrack);
+  ASSERT_NE(firstPublish, nullptr);
+  ASSERT_NE(secondPublish, nullptr);
+  ASSERT_TRUE(firstPublish->setTrackAlias(TrackAlias(77)).hasValue());
+  ASSERT_TRUE(secondPublish->setTrackAlias(TrackAlias(77)).hasValue());
+
+  auto first = subscribeToTrack(
+      subscriberSession, kTestTrackName, createMockConsumer(), RequestID(32));
+  auto second = subscribeToTrack(
+      subscriberSession, otherTrack, createMockConsumer(), RequestID(36));
+
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(first->subscribeOk().trackAlias, TrackAlias(77));
+  EXPECT_EQ(second->subscribeOk().trackAlias, TrackAlias(77));
+  removeSession(firstPublisher);
+  removeSession(secondPublisher);
+  removeSession(subscriberSession);
+}
+
+TEST_F(MoQRelayTest, ReplaceOptionGivesTracksFromTwoUpstreamsDistinctAliases) {
+  relay_->setReplaceDuplicateSubscriptions(true);
+  const FullTrackName otherTrack{kTestNamespace, "track2"};
+  auto firstPublisher = createMockSession();
+  auto secondPublisher = createMockSession();
+  auto subscriberSession = createMockSession();
+  auto firstPublish = doPublish(firstPublisher, kTestTrackName);
+  auto secondPublish = doPublish(secondPublisher, otherTrack);
+  ASSERT_NE(firstPublish, nullptr);
+  ASSERT_NE(secondPublish, nullptr);
+  ASSERT_TRUE(firstPublish->setTrackAlias(TrackAlias(77)).hasValue());
+  ASSERT_TRUE(secondPublish->setTrackAlias(TrackAlias(77)).hasValue());
+
+  auto first = subscribeToTrack(
+      subscriberSession, kTestTrackName, createMockConsumer(), RequestID(32));
+  auto second = subscribeToTrack(
+      subscriberSession, otherTrack, createMockConsumer(), RequestID(36));
+
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(first->subscribeOk().trackAlias, TrackAlias(32));
+  EXPECT_EQ(second->subscribeOk().trackAlias, TrackAlias(36));
+  removeSession(firstPublisher);
+  removeSession(secondPublisher);
+  removeSession(subscriberSession);
+}
+
 // A late-joining subscriber must receive containsLastInGroup=true when the
 // original beginSubgroup had it set. Previously SubgroupForwarder always
 // passed containsLastInGroup=false (defaulted) in the late-joiner path.

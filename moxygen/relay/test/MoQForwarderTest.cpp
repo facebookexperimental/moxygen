@@ -2834,4 +2834,102 @@ TEST_F(MoQForwarderTest, RequestUpdateWithFillStillAppliesForwardState) {
   forwarder->removeSubscriber(session->sessionId(), std::nullopt, "test");
 }
 
+TEST_F(
+    MoQForwarderTest,
+    DuplicateSubscriptionSharesTheSessionSubscriberByDefault) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto session = createMockSession();
+
+  auto first =
+      addSubscriber(*forwarder, session, createMockConsumer(), RequestID(32));
+  auto second =
+      addSubscriber(*forwarder, session, createMockConsumer(), RequestID(36));
+
+  EXPECT_EQ(second, first);
+  EXPECT_EQ(second->subscribeOk().trackAlias, TrackAlias(32));
+  forwarder->removeSubscriber(session->sessionId(), std::nullopt, "test");
+}
+
+TEST_F(MoQForwarderTest, DuplicateSubscriptionReplacesTheFirstWithItsOwnAlias) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  forwarder->setReplaceDuplicateSubscriptions(true);
+  ASSERT_TRUE(forwarder->setTrackAlias(TrackAlias(77)).hasValue());
+  auto session = createMockSession();
+  auto firstConsumer = createMockConsumer();
+  auto secondConsumer = createMockConsumer();
+  EXPECT_CALL(*firstConsumer, publishDone(_))
+      .WillOnce([](const PublishDone& done) {
+        EXPECT_EQ(done.requestID, RequestID(32));
+        EXPECT_EQ(done.statusCode, PublishDoneStatusCode::SUBSCRIPTION_ENDED);
+        return folly::makeExpected<MoQPublishError>(folly::unit);
+      });
+  EXPECT_CALL(*secondConsumer, setTrackAlias(TrackAlias(36)));
+
+  auto first = addSubscriber(*forwarder, session, firstConsumer, RequestID(32));
+  auto second =
+      addSubscriber(*forwarder, session, secondConsumer, RequestID(36));
+
+  ASSERT_NE(second, first);
+  EXPECT_EQ(first->subscribeOk().trackAlias, TrackAlias(32));
+  EXPECT_EQ(second->subscribeOk().trackAlias, TrackAlias(36));
+  EXPECT_EQ(first->forwarder, nullptr);
+  EXPECT_EQ(forwarder->findSubscriber(session->sessionId()), second);
+  forwarder->removeSubscriber(session->sessionId(), std::nullopt, "test");
+}
+
+TEST_F(
+    MoQForwarderTest,
+    UnsubscribingAReplacedSubscriptionLeavesItsReplacement) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  forwarder->setReplaceDuplicateSubscriptions(true);
+  auto session = createMockSession();
+  auto firstConsumer = createMockConsumer();
+  auto secondConsumer = createMockConsumer();
+  auto firstSubgroup = createMockSubgroupConsumer();
+  auto secondSubgroup = createMockSubgroupConsumer();
+  EXPECT_CALL(*firstConsumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(firstSubgroup)));
+  EXPECT_CALL(*firstSubgroup, reset(ResetStreamErrorCode::CANCELLED));
+  EXPECT_CALL(*secondConsumer, beginSubgroup(1, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(secondSubgroup)));
+  EXPECT_CALL(*secondSubgroup, object(0, _, _, false))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  auto first = addSubscriber(*forwarder, session, firstConsumer, RequestID(32));
+  ASSERT_TRUE(forwarder->beginSubgroup(0, 0, 0).hasValue());
+  addSubscriber(*forwarder, session, secondConsumer, RequestID(36));
+  first->unsubscribe();
+
+  EXPECT_FALSE(forwarder->empty());
+  auto subgroup = forwarder->beginSubgroup(1, 0, 0);
+  ASSERT_TRUE(subgroup.hasValue());
+  EXPECT_TRUE((*subgroup)->object(0, test::makeBuf(10)).hasValue());
+  forwarder->removeSubscriber(session->sessionId(), std::nullopt, "test");
+}
+
+TEST_F(
+    MoQForwarderTest,
+    ReplacingASubscriptionMovesForwardStateWithoutEmptying) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  forwarder->setReplaceDuplicateSubscriptions(true);
+  auto callback = std::make_shared<CountingCallback>();
+  forwarder->setCallback(callback);
+  auto session = createMockSession();
+  SubscribeRequest paused;
+  paused.fullTrackName = kFwdTestTrackName;
+  paused.requestID = RequestID(40);
+  paused.forward = false;
+
+  addSubscriber(*forwarder, session, createMockConsumer(), RequestID(32));
+  addSubscriber(*forwarder, session, createMockConsumer(), RequestID(36));
+  forwarder->addSubscriber(session->sessionId(), paused, createMockConsumer());
+
+  const std::vector<bool> startedThenStopped{true, false};
+  EXPECT_EQ(callback->forwardChanges, startedThenStopped);
+  EXPECT_EQ(forwarder->numForwardingSubscribers(), 0);
+  EXPECT_EQ(callback->onEmptyCount, 0);
+  forwarder->removeSubscriber(session->sessionId(), std::nullopt, "test");
+  EXPECT_EQ(callback->onEmptyCount, 1);
+}
+
 } // namespace moxygen::test
