@@ -500,4 +500,224 @@ folly::Expected<folly::Unit, MoQPublishError> MoQFetchCacheWriter::statusResult(
   return folly::unit;
 }
 
+MoQFetchCacheTee::MoQFetchCacheTee(
+    std::shared_ptr<MoQFetchCacheWriter> writer,
+    std::shared_ptr<FetchConsumer> consumer,
+    OnFinished onFinished,
+    BeforeForward beforeForward)
+    : writer_(std::move(writer)),
+      consumer_(std::move(consumer)),
+      onFinished_(std::move(onFinished)),
+      beforeForward_(std::move(beforeForward)) {}
+
+void MoQFetchCacheTee::setRange(AbsoluteLocation start, AbsoluteLocation end) {
+  if (!beforeForward()) {
+    return;
+  }
+  if (writer_ && !writer_->setRange(start, end)) {
+    writer_.reset();
+  }
+}
+
+folly::Expected<folly::Unit, MoQPublishError> MoQFetchCacheTee::object(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    uint64_t objectID,
+    Payload payload,
+    Extensions extensions,
+    bool finFetch,
+    bool forwardingPreferenceIsDatagram) {
+  if (!beforeForward(true)) {
+    return folly::makeUnexpected(inactiveError());
+  }
+  if (writer_) {
+    record(writer_->object(
+        groupID,
+        subgroupID,
+        objectID,
+        payload ? payload->clone() : nullptr,
+        extensions,
+        finFetch,
+        forwardingPreferenceIsDatagram));
+  }
+  auto result = consumer_->object(
+      groupID,
+      subgroupID,
+      objectID,
+      std::move(payload),
+      std::move(extensions),
+      finFetch,
+      forwardingPreferenceIsDatagram);
+  if (finFetch) {
+    finish();
+  }
+  return result;
+}
+
+void MoQFetchCacheTee::checkpoint() {
+  if (beforeForward()) {
+    consumer_->checkpoint();
+  }
+}
+
+folly::Expected<folly::Unit, MoQPublishError> MoQFetchCacheTee::beginObject(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    uint64_t objectID,
+    uint64_t length,
+    Payload initialPayload,
+    Extensions extensions) {
+  if (!beforeForward(true)) {
+    return folly::makeUnexpected(inactiveError());
+  }
+  if (writer_) {
+    record(writer_->beginObject(
+        groupID,
+        subgroupID,
+        objectID,
+        length,
+        initialPayload ? initialPayload->clone() : nullptr,
+        extensions));
+  }
+  return consumer_->beginObject(
+      groupID,
+      subgroupID,
+      objectID,
+      length,
+      std::move(initialPayload),
+      std::move(extensions));
+}
+
+folly::Expected<ObjectPublishStatus, MoQPublishError>
+MoQFetchCacheTee::objectPayload(Payload payload, bool finFetch) {
+  if (!beforeForward(true)) {
+    return folly::makeUnexpected(inactiveError());
+  }
+  if (writer_) {
+    record(
+        writer_->objectPayload(payload ? payload->clone() : nullptr, finFetch));
+  }
+  auto result = consumer_->objectPayload(std::move(payload), finFetch);
+  const bool objectComplete = result.hasValue()
+      ? *result == ObjectPublishStatus::DONE
+      : result.error().code == MoQPublishError::BLOCKED;
+  if (finFetch && objectComplete) {
+    finish();
+  }
+  return result;
+}
+
+folly::Expected<folly::Unit, MoQPublishError> MoQFetchCacheTee::endOfGroup(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    uint64_t objectID,
+    bool finFetch) {
+  if (!beforeForward(true)) {
+    return folly::makeUnexpected(inactiveError());
+  }
+  if (writer_) {
+    record(writer_->endOfGroup(groupID, subgroupID, objectID, finFetch));
+  }
+  auto result = consumer_->endOfGroup(groupID, subgroupID, objectID, finFetch);
+  if (finFetch) {
+    finish();
+  }
+  return result;
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQFetchCacheTee::endOfTrackAndGroup(
+    uint64_t groupID,
+    uint64_t subgroupID,
+    uint64_t objectID) {
+  if (!beforeForward(true)) {
+    return folly::makeUnexpected(inactiveError());
+  }
+  if (writer_) {
+    record(writer_->endOfTrackAndGroup(groupID, subgroupID, objectID));
+  }
+  auto result = consumer_->endOfTrackAndGroup(groupID, subgroupID, objectID);
+  finish();
+  return result;
+}
+
+folly::Expected<folly::Unit, MoQPublishError> MoQFetchCacheTee::endOfFetch() {
+  if (!beforeForward(true)) {
+    return folly::makeUnexpected(inactiveError());
+  }
+  if (writer_) {
+    record(writer_->endOfFetch());
+  }
+  auto result = consumer_->endOfFetch();
+  finish();
+  return result;
+}
+
+void MoQFetchCacheTee::reset(ResetStreamErrorCode error) {
+  if (!beforeForward(true)) {
+    return;
+  }
+  if (writer_) {
+    writer_->reset(error);
+    writer_.reset();
+  }
+  consumer_->reset(error);
+  finish();
+}
+
+void MoQFetchCacheTee::goaway(Goaway goaway) {
+  if (beforeForward()) {
+    consumer_->goaway(std::move(goaway));
+  }
+}
+
+folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
+MoQFetchCacheTee::awaitReadyToConsume() {
+  if (!beforeForward()) {
+    return folly::makeUnexpected(inactiveError());
+  }
+  return consumer_->awaitReadyToConsume();
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQFetchCacheTee::endOfUnknownRange(
+    uint64_t groupID,
+    uint64_t objectID,
+    bool finFetch) {
+  if (!beforeForward(true)) {
+    return folly::makeUnexpected(inactiveError());
+  }
+  if (writer_) {
+    record(writer_->endOfUnknownRange(groupID, objectID, finFetch));
+  }
+  auto result = consumer_->endOfUnknownRange(groupID, objectID, finFetch);
+  if (finFetch) {
+    finish();
+  }
+  return result;
+}
+
+template <typename Result>
+void MoQFetchCacheTee::record(const Result& result) {
+  if (result.hasError()) {
+    writer_->abort();
+    writer_.reset();
+  }
+}
+
+MoQPublishError MoQFetchCacheTee::inactiveError() {
+  return MoQPublishError(
+      MoQPublishError::CANCELLED, "upstream attempt was abandoned");
+}
+
+bool MoQFetchCacheTee::beforeForward(bool exposesResponse) {
+  return !beforeForward_ || beforeForward_(exposesResponse);
+}
+
+void MoQFetchCacheTee::finish() {
+  if (auto onFinished = std::exchange(onFinished_, nullptr)) {
+    onFinished();
+  }
+}
+
 } // namespace moxygen
