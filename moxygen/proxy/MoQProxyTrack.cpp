@@ -16,6 +16,7 @@
 #include <folly/logging/xlog.h>
 #include <algorithm>
 #include <map>
+#include <set>
 #include <utility>
 
 #include "moxygen/MoQLocation.h"
@@ -217,7 +218,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
 
   // A session that drops a stream after an error calls nothing else.
   ~SubgroupRecorder() override {
-    ended();
+    ended(/*finished=*/false);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> object(
@@ -244,7 +245,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     auto forwarded = leg_->object(
         objectID, std::move(payload), std::move(extensions), finSubgroup);
     if (finSubgroup) {
-      ended();
+      ended(/*finished=*/true);
     }
     return forwarded;
   }
@@ -290,7 +291,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     // correct even when only the cache is consuming.
     auto forwarded = leg_->objectPayload(std::move(payload), finSubgroup);
     if (finSubgroup) {
-      ended();
+      ended(/*finished=*/true);
     }
     return forwarded;
   }
@@ -305,7 +306,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     }
     resume();
     auto forwarded = leg_->endOfGroup(endOfGroupObjectID);
-    ended();
+    ended(/*finished=*/true);
     return forwarded;
   }
 
@@ -319,7 +320,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     }
     resume();
     auto forwarded = leg_->endOfTrackAndGroup(endOfTrackObjectID);
-    ended();
+    ended(/*finished=*/true);
     return forwarded;
   }
 
@@ -331,7 +332,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
       return malformed();
     }
     auto forwarded = leg_->endOfSubgroup();
-    ended();
+    ended(/*finished=*/true);
     return forwarded;
   }
 
@@ -341,22 +342,30 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     }
     recordEnd(/*cleanFin=*/false);
     leg_->reset(error);
-    ended();
+    ended(/*finished=*/false);
+  }
+
+  // Cancels the viewers' copy of the stream, which then ignores every later
+  // callback.
+  void endLeg() {
+    if (!leg_) {
+      return;
+    }
+    recordEnd(/*cleanFin=*/false);
+    stopCaching();
+    std::exchange(leg_, nullptr)->reset(ResetStreamErrorCode::CANCELLED);
+    cachedLeg_.reset();
+    ended(/*finished=*/false);
   }
 
  private:
-  // On the first callback after the attempt was abandoned, ends the leg.
+  // True once the leg has ended. On the first callback after the attempt was
+  // abandoned, ends it.
   bool abandoned() {
-    if (*attemptActive_) {
-      return false;
+    if (!*attemptActive_) {
+      endLeg();
     }
-    if (leg_) {
-      stopCaching();
-      std::exchange(leg_, nullptr)->reset(ResetStreamErrorCode::CANCELLED);
-      cachedLeg_.reset();
-      ended();
-    }
-    return true;
+    return !leg_;
   }
 
   static folly::Unexpected<MoQPublishError> abandonedError() {
@@ -365,8 +374,9 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
   }
 
   void resume();
-  // Only the first call counts.
-  void ended();
+  // Only the first call counts. finished: it reached its end, rather than
+  // being reset or dropped.
+  void ended(bool finished);
 
   // Cache consistency failures disable caching without interrupting delivery.
   template <typename Fn>
@@ -414,7 +424,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
 
   folly::Unexpected<MoQPublishError> malformed() {
     leg_->reset(ResetStreamErrorCode::MALFORMED_TRACK);
-    ended();
+    ended(/*finished=*/false);
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::MALFORMED_TRACK, "malformed subgroup data"));
   }
@@ -506,18 +516,38 @@ class MoQProxyTrack::Recorder final
     return arbiter_;
   }
 
+  // Cancels the viewers' copies of the subgroups it still has open, so their
+  // PUBLISH_DONE doesn't count streams that will never reach them.
+  void endOpenSubgroups() {
+    for (const auto& [_, open] : std::exchange(openSubgroups_, {})) {
+      if (auto subgroup = open.subgroup.lock()) {
+        subgroup->endLeg();
+      }
+    }
+  }
+
   // A stream that reopened the same subgroup replaced the one that ended,
   // unless it is still the one kept.
   void onSubgroupEnded(
       const SubgroupRecorder& ended,
       uint64_t group,
-      uint64_t subgroup) {
+      uint64_t subgroup,
+      bool finished) {
     auto open = openSubgroups_.find({group, subgroup});
     if (open == openSubgroups_.end() || open->second.stream != &ended) {
       return;
     }
     openSubgroups_.erase(open);
+    if (handover_ && !finished) {
+      cutGroups_.insert(group);
+    }
     handOverSubgroupEnd(group, subgroup);
+  }
+
+  // As the old upstream of a switch on a GOAWAY, the groups whose subgroups
+  // were reset or dropped since.
+  const std::set<uint64_t>& cutGroups() const {
+    return cutGroups_;
   }
 
   // What it has open, and the highest group the track opened, which the
@@ -627,6 +657,7 @@ class MoQProxyTrack::Recorder final
     if (!recordStandalone(header, payload, /*datagram=*/false)) {
       return folly::makeUnexpected(malformedError());
     }
+    noteGroup(header.group);
     auto forwarded =
         forwarder_->objectStream(header, std::move(payload), lastInGroup);
     resume(header.group);
@@ -661,6 +692,7 @@ class MoQProxyTrack::Recorder final
     if (!recordStandalone(header, payload, /*datagram=*/true)) {
       return folly::makeUnexpected(malformedError());
     }
+    noteGroup(header.group);
     auto forwarded =
         forwarder_->datagram(header, std::move(payload), lastInGroup);
     resume(header.group);
@@ -706,6 +738,7 @@ class MoQProxyTrack::Recorder final
       uint64_t subgroupID,
       Priority priority,
       BeginSubgroupOptions options) {
+    noteGroup(groupID);
     auto cache = cache_.lock();
     if (!cache ||
         !cache->openSubgroup(
@@ -755,6 +788,17 @@ class MoQProxyTrack::Recorder final
       track->onReplacementRefused(admitted, datagram);
     }
     return false;
+  }
+
+  // Before the forwarder has its data: a group later than any it has starts.
+  void noteGroup(uint64_t group) {
+    const auto largest = forwarder_->largest();
+    if (largest && group <= largest->group) {
+      return;
+    }
+    if (auto track = track_.lock()) {
+      track->onGroupStarted();
+    }
   }
 
   // As the old upstream of a switch on a GOAWAY, whether it still owns the
@@ -871,7 +915,18 @@ class MoQProxyTrack::Recorder final
   std::map<std::pair<uint64_t, uint64_t>, OpenSubgroup> openSubgroups_;
   // The latest group it forwarded datagrams for.
   std::optional<DatagramGroup> datagramGroup_;
+  std::set<uint64_t> cutGroups_;
 };
+
+void MoQGroupDurationEstimate::onGroupStart(
+    std::chrono::steady_clock::time_point at) {
+  if (lastStart_) {
+    const auto spacing =
+        std::chrono::duration_cast<std::chrono::milliseconds>(at - *lastStart_);
+    duration_ = duration_ ? (*duration_ * 7 + spacing) / 8 : spacing;
+  }
+  lastStart_ = at;
+}
 
 void MoQProxyTrack::SubgroupRecorder::resume() {
   if (std::exchange(resumed_, true)) {
@@ -882,12 +937,12 @@ void MoQProxyTrack::SubgroupRecorder::resume() {
   }
 }
 
-void MoQProxyTrack::SubgroupRecorder::ended() {
+void MoQProxyTrack::SubgroupRecorder::ended(bool finished) {
   if (std::exchange(ended_, true)) {
     return;
   }
   if (auto recorder = recorder_.lock()) {
-    recorder->onSubgroupEnded(*this, group_, subgroup_);
+    recorder->onSubgroupEnded(*this, group_, subgroup_, finished);
   }
 }
 
@@ -927,6 +982,10 @@ MoQProxyTrack::MoQProxyTrack(
                                      : std::make_shared<MoQProxySwitchStats>()),
       switchOptions_(upstreamConfig.switchOptions),
       timekeeper_(std::move(upstreamConfig.timekeeper)),
+      clock_(
+          upstreamConfig.clock
+              ? std::move(upstreamConfig.clock)
+              : [] { return std::chrono::steady_clock::now(); }),
       random_(
           upstreamConfig.random
               ? std::move(upstreamConfig.random)
@@ -1947,7 +2006,9 @@ void MoQProxyTrack::startGracefulSwitch(
   upstream_.recorder->handOver(arbiter);
   graceful_ = GracefulSwitch{
       .arbiter = std::move(arbiter),
-      .startedAt = std::chrono::steady_clock::now()};
+      .startedAt = std::chrono::steady_clock::now(),
+      .expiresAt =
+          timeout ? std::optional(receivedAt + *timeout) : std::nullopt};
   lostSessions_ = {upstream_.session->sessionId()};
   XLOG(INFO) << "Upstream of " << fullTrackName_
              << " is going away, looking for a replacement in " << delay.count()
@@ -2005,11 +2066,13 @@ void MoQProxyTrack::onHandoverProgress(const Recorder& old) {
 }
 
 // The track lets the old upstream go once it has stayed caught up with the
-// adopted replacement, which has forwarded an object, for the reorder grace.
+// adopted replacement, which has forwarded an object, for the reorder grace,
+// or once the tail timer that object starts runs out.
 void MoQProxyTrack::checkHandoff() {
-  if (!graceful_->replacement || !graceful_->replacement->recorder->resumed()) {
+  if (!replacementReady()) {
     return;
   }
+  startTail();
   auto& grace = graceful_->grace;
   if (!graceful_->arbiter->oldCaughtUp()) {
     if (grace) {
@@ -2023,6 +2086,10 @@ void MoQProxyTrack::checkHandoff() {
   }
   grace.emplace();
   runDetached(handOverAfterGrace(grace->getToken()));
+}
+
+bool MoQProxyTrack::replacementReady() const {
+  return graceful_->replacement && graceful_->replacement->recorder->resumed();
 }
 
 folly::coro::Task<void> MoQProxyTrack::handOverAfterGrace(
@@ -2044,6 +2111,9 @@ void MoQProxyTrack::promoteReplacement() {
   auto graceful = std::move(*std::exchange(graceful_, std::nullopt));
   if (graceful.grace) {
     graceful.grace->requestCancellation();
+  }
+  if (graceful.tail) {
+    graceful.tail->requestCancellation();
   }
   graceful.arbiter->onOldEnded();
   upstream_ = std::move(*graceful.replacement);
@@ -2103,6 +2173,9 @@ bool MoQProxyTrack::takeOverOldUpstreamLoss(Recorder& old) {
     return false;
   }
   old.markLost();
+  if (!graceful_->arbiter->oldCaughtUp()) {
+    countCutoff(switchStats_->lostCutoffs);
+  }
   graceful_->arbiter->onOldEnded();
   if (held && held->recorder->resumed()) {
     graceful_->replacement = std::move(held);
@@ -2128,6 +2201,76 @@ bool MoQProxyTrack::takeOverOldUpstreamLoss(Recorder& old) {
     adoptReplacement(std::move(*held));
   }
   return true;
+}
+
+// Its groups still open, or cut short since the switch started.
+void MoQProxyTrack::countCutoff(MoQProxyCutoffCounters& counters) {
+  ++counters.cutoffs;
+  auto unfinished = graceful_->arbiter->oldUnfinishedGroups();
+  const auto& cut = upstream_.recorder->cutGroups();
+  unfinished.insert(cut.begin(), cut.end());
+  counters.unfinishedGroups += unfinished.size();
+}
+
+void MoQProxyTrack::onGroupStarted() {
+  groupDuration_.onGroupStart(clock_());
+}
+
+void MoQProxyTrack::startTail() {
+  if (graceful_->tail) {
+    return;
+  }
+  graceful_->tail.emplace();
+  runDetached(letGoOfOldAfterTail(tailDuration(), graceful_->tail->getToken()));
+}
+
+std::chrono::milliseconds MoQProxyTrack::tailDuration() const {
+  auto tail = std::max(
+      2 *
+          groupDuration_.duration().value_or(
+              switchOptions_.defaultGroupDuration),
+      switchOptions_.minTail);
+  if (graceful_->expiresAt) {
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+        *graceful_->expiresAt - std::chrono::steady_clock::now() -
+        switchOptions_.tailMargin);
+    tail = std::max(std::min(tail, left), std::chrono::milliseconds(0));
+  }
+  return tail;
+}
+
+// While the reorder grace runs, the old upstream has caught up and is about
+// to be handed over; a late stream that stops the grace leaves it to the tail.
+folly::coro::Task<void> MoQProxyTrack::letGoOfOldAfterTail(
+    std::chrono::milliseconds tail,
+    folly::CancellationToken stopped) {
+  for (auto wait = tail;; wait = switchOptions_.reorderGrace) {
+    co_await folly::coro::co_awaitTry(
+        folly::coro::co_withCancellation(
+            stopped, folly::coro::sleep(wait, timekeeper_.get())));
+    if (stopped.isCancellationRequested()) {
+      co_return;
+    }
+    if (!graceful_->grace) {
+      break;
+    }
+  }
+  onTailTimer();
+}
+
+// The old upstream hasn't caught up in time, so the replacement takes over and
+// viewers get the old upstream's unfinished groups cut short. Resetting their
+// last streams can end the track, so that comes last.
+void MoQProxyTrack::onTailTimer() {
+  XDCHECK(replacementReady());
+  countCutoff(switchStats_->tailCutoffs);
+  XLOG(INFO) << "Upstream of " << fullTrackName_
+             << " didn't catch up with its replacement in time, letting it go";
+  auto old = std::exchange(upstream_, {});
+  auto recorder = old.recorder;
+  unsubscribe(std::move(old));
+  promoteReplacement();
+  recorder->endOpenSubgroups();
 }
 
 // A replacement that ended before it took over. The old upstream still
@@ -2164,6 +2307,9 @@ void MoQProxyTrack::onReplacementGone(const Recorder& replacement) {
 // groups and takes back the replacement's after the last group the track
 // opened, and splits afresh with the next replacement.
 void MoQProxyTrack::renewHandoff() {
+  if (auto tail = std::exchange(graceful_->tail, std::nullopt)) {
+    tail->requestCancellation();
+  }
   auto& old = *upstream_.recorder;
   graceful_->arbiter = std::make_shared<MoQUpstreamHandoffArbiter>(
       graceful_->arbiter->afterReplacementEnded(
@@ -2178,6 +2324,9 @@ void MoQProxyTrack::endGracefulSwitch() {
   }
   if (graceful->grace) {
     graceful->grace->requestCancellation();
+  }
+  if (graceful->tail) {
+    graceful->tail->requestCancellation();
   }
   if (graceful->replacement) {
     unsubscribe(std::move(*graceful->replacement));

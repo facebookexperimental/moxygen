@@ -820,6 +820,49 @@ TEST_P(
   }));
 }
 
+// Hub 0 stalls in group 2 once hub 1 took group 4. The groups came faster than
+// anything the proxy can measure, so after minTail the tail timer lets go of
+// hub 0: group 2's open streams reset, the rest of it and group 3 are missing,
+// and hub 1 serves.
+TEST_P(MoQProxyGracefulSwitchTest, TheTailTimerLetsGoOfAHubThatStalls) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    auto viewer = co_await startWithHub0GoingAway(2, 4);
+    hubs_[1]->publishGroup(kTrack, 4);
+    hubs_[0]->publish(kTrack, 2, 2);
+    co_await settle();
+    viewer->expectedReset = ResetStreamErrorCode::CANCELLED;
+
+    co_await waitForHandover();
+    hubs_[1]->publishGroup(kTrack, 5);
+    co_await settle();
+
+    EXPECT_THAT(viewer->violations(), IsEmpty());
+    EXPECT_THAT(viewer->unfinishedSubgroups(), IsEmpty());
+    std::vector<AbsoluteLocation> missing;
+    for (uint64_t object = 2; object < objectsPerGroup(); object++) {
+      missing.emplace_back(2, object);
+    }
+    for (uint64_t object = 0; object < objectsPerGroup(); object++) {
+      missing.emplace_back(3, object);
+    }
+    EXPECT_EQ(viewer->missing(), missing);
+    const std::map<uint64_t, uint64_t> hubOfGroup{
+        {0, 0}, {1, 0}, {2, 0}, {4, 1}, {5, 1}};
+    EXPECT_EQ(viewer->hubOfGroup(), hubOfGroup);
+    const auto& stats = proxy_->switchStats();
+    EXPECT_EQ(stats.gracefulSwitches.completed, 1);
+    EXPECT_EQ(stats.tailCutoffs.cutoffs, 1);
+    // An object stream ends with its object.
+    EXPECT_EQ(
+        stats.tailCutoffs.unfinishedGroups,
+        GetParam().shape.delivery == SwitchTrackShape::Delivery::ObjectStreams
+            ? 0
+            : 1);
+    EXPECT_EQ(stats.upstreamsLost, 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     AllVersions,
     MoQProxyGracefulSwitchTest,

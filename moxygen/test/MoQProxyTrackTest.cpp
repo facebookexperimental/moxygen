@@ -1058,26 +1058,38 @@ class MoQProxyTrackSwitchTest : public MoQProxyTrackTest {
   void makeTrack(
       std::vector<std::shared_ptr<MoQUpstreamProvider>> providers,
       std::chrono::milliseconds retryBackoff = std::chrono::milliseconds(10),
-      std::shared_ptr<folly::Timekeeper> timekeeper = nullptr) {
+      std::shared_ptr<folly::Timekeeper> timekeeper = nullptr,
+      MoQProxyTrack::CacheConfig cacheConfig = {}) {
     auto switchOptions = switchOptions_;
     switchOptions.retryBackoff = retryBackoff;
     switchOptions.maxRetryBackoff = 2 * retryBackoff;
+    std::function<std::chrono::steady_clock::time_point()> clock;
+    if (auto manual =
+            std::dynamic_pointer_cast<folly::ManualTimekeeper>(timekeeper)) {
+      clock = [manual] { return manual->now(); };
+    }
     track_ = MoQProxyTrack::create(
         kTrackName,
         std::move(providers),
-        /*cacheConfig=*/{},
+        std::move(cacheConfig),
         MoQProxyTrack::UpstreamConfig{
             .switchStats = switchStats_,
             .switchOptions = switchOptions,
-            .timekeeper = std::move(timekeeper)});
+            .timekeeper = std::move(timekeeper),
+            .clock = std::move(clock)});
     track_->setCallback(callback_);
   }
 
   // A track whose switch timers run on timekeeper_.
   void makeTrackOnManualTime(
-      std::vector<std::shared_ptr<MoQUpstreamProvider>> providers) {
+      std::vector<std::shared_ptr<MoQUpstreamProvider>> providers,
+      MoQProxyTrack::CacheConfig cacheConfig = {}) {
     timekeeper_ = std::make_shared<folly::ManualTimekeeper>();
-    makeTrack(std::move(providers), std::chrono::milliseconds(10), timekeeper_);
+    makeTrack(
+        std::move(providers),
+        std::chrono::milliseconds(10),
+        timekeeper_,
+        std::move(cacheConfig));
   }
 
   // Moves timekeeper_ forward in steps, running what each step wakes.
@@ -1894,6 +1906,8 @@ TEST_F(
   EXPECT_FALSE(viewerSubgroups_.contains(13));
   EXPECT_TRUE(replacementOpens(13));
   EXPECT_TRUE(viewerSubgroups_.contains(13));
+  advanceTime(2 * switchOptions_.defaultGroupDuration);
+  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 0);
   Mock::VerifyAndClearExpectations(consumer_.get());
 }
 
@@ -2286,6 +2300,8 @@ TEST_F(
   EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
   EXPECT_EQ(switchStats_->lostSwitches.started, 0);
   EXPECT_EQ(switchStats_->upstreamsLost, 1);
+  EXPECT_EQ(switchStats_->lostCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->lostCutoffs.unfinishedGroups, 1);
   EXPECT_TRUE(replacementOpens(12));
   EXPECT_TRUE(viewerSubgroups_.contains(12));
   Mock::VerifyAndClearExpectations(consumer_.get());
@@ -2309,6 +2325,366 @@ TEST_F(MoQProxyTrackGracefulSwitchTest, SignalsForOneUpstreamMakeOneSwitch) {
   EXPECT_EQ(switchStats_->lostSwitches.started, 0);
   EXPECT_EQ(replacementProvider_->calls, 1);
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+}
+
+// The old upstream never finishes group 11. The tail timer, which the
+// replacement's first forwarded object starts, lets go of it: its stream of
+// group 11 to the viewer resets, and the replacement serves. The tail is two
+// group durations, no less than minTail, and ends at least tailMargin before
+// the GOAWAY's timeout.
+struct TailCase {
+  std::string name;
+  uint64_t goawayTimeoutMs;
+  // Between the starts of groups 11 and 12.
+  std::chrono::milliseconds groupSpacing;
+  // Still serving from the old upstream then, and no longer by cutBy.
+  std::chrono::milliseconds servesUntil;
+  std::chrono::milliseconds cutBy;
+};
+
+class MoQProxyTrackTailTest : public MoQProxyTrackGracefulSwitchTest {};
+
+class MoQProxyTrackTailCaseTest : public MoQProxyTrackTailTest,
+                                  public WithParamInterface<TailCase> {};
+
+TEST_P(MoQProxyTrackTailCaseTest, TheTailTimerLetsGoOfAnOldUpstreamThatLags) {
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway(Goaway{.timeout = GetParam().goawayTimeoutMs});
+  runPending();
+  advanceTime(GetParam().groupSpacing);
+  ASSERT_TRUE(replacementOpens(12));
+  EXPECT_FALSE(oldOpens(12));
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  advanceTime(GetParam().servesUntil);
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+  EXPECT_CALL(*oldHandle_, unsubscribe());
+  EXPECT_CALL(*viewerSubgroups_[11], reset(ResetStreamErrorCode::CANCELLED));
+
+  advanceTime(GetParam().cutBy - GetParam().servesUntil);
+
+  Mock::VerifyAndClearExpectations(viewerSubgroups_[11].get());
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 1);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+  EXPECT_TRUE(
+      oldSubgroup11_->object(1, folly::IOBuf::copyBuffer("x"), noExtensions())
+          .hasError());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Tail,
+    MoQProxyTrackTailCaseTest,
+    Values(
+        TailCase{
+            "TwoGroupDurations",
+            0,
+            std::chrono::seconds(1),
+            std::chrono::milliseconds(1995),
+            std::chrono::seconds(2)},
+        TailCase{
+            "MinTail",
+            0,
+            std::chrono::milliseconds(100),
+            std::chrono::milliseconds(995),
+            std::chrono::seconds(1)},
+        // The GOAWAY arrived a few milliseconds before the replacement's
+        // first object, on the steady clock.
+        TailCase{
+            "BeforeTheGoawayTimeout",
+            1000,
+            std::chrono::seconds(1),
+            std::chrono::milliseconds(400),
+            std::chrono::milliseconds(500)}),
+    [](const TestParamInfo<TailCase>& info) { return info.param.name; });
+
+// The old upstream had opened no group, so the replacement's group 12 is the
+// first to start and the tail is two default group durations.
+TEST_F(
+    MoQProxyTrackTailTest,
+    BeforeTwoGroupsStartTheTailIsTwoDefaultGroupDurations) {
+  const auto tail = 2 * switchOptions_.defaultGroupDuration;
+  downstreamHandle_ = subscribeThroughUpstream(oldHandle_, consumer_);
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(12));
+
+  advanceTime(tail - std::chrono::milliseconds(5));
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  advanceTime(std::chrono::milliseconds(5));
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 0);
+}
+
+// Groups 11 to 14 start 50 ms apart, so the tail is 100 ms. A second subgroup
+// of group 13 doesn't start a group.
+TEST_F(MoQProxyTrackTailTest, TheTailTimerFollowsTheGroupDuration) {
+  constexpr std::chrono::milliseconds kSpacing{50};
+  switchOptions_.minTail = std::chrono::milliseconds(0);
+  makeTrackOnManualTime({provider_, replacementProvider_});
+  subscribeWithGroup11Open();
+  advanceTime(kSpacing);
+  ASSERT_TRUE(oldOpens(12));
+  advanceTime(kSpacing);
+  ASSERT_TRUE(oldOpens(13));
+  ASSERT_TRUE(upstreamConsumer_->beginSubgroup(13, 1, kDefaultPriority));
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  advanceTime(kSpacing);
+  ASSERT_TRUE(replacementOpens(14));
+
+  advanceTime(2 * kSpacing - std::chrono::milliseconds(5));
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  advanceTime(std::chrono::milliseconds(5));
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 3);
+}
+
+// The replacement's copy of group 12, which the old upstream has open, was
+// refused, so it has forwarded nothing and the old upstream serves past the
+// tail. The replacement's group 13 starts the tail timer.
+TEST_F(MoQProxyTrackTailTest, TheTailTimerStartsOnceTheReplacementForwards) {
+  const auto tail = switchOptions_.minTail;
+  subscribeWithGroup11Open();
+  ASSERT_TRUE(oldOpens(12));
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  EXPECT_FALSE(replacementOpens(12));
+  advanceTime(2 * tail);
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  ASSERT_TRUE(replacementOpens(13));
+
+  advanceTime(tail - std::chrono::milliseconds(5));
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  advanceTime(std::chrono::milliseconds(5));
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 2);
+  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+}
+
+// The replacement delivered group 13 while still subscribing, and the deadline
+// passed before the track adopted it. The tail timer starts only with an
+// adopted replacement, so the old upstream serves on.
+TEST_F(MoQProxyTrackTailTest, TheTailTimerWaitsForAnAdoptedReplacement) {
+  switchOptions_.minTail = std::chrono::milliseconds(0);
+  switchOptions_.defaultGroupDuration = std::chrono::milliseconds(200);
+  makeTrackOnManualTime({provider_, replacementProvider_});
+  subscribeWithGroup11Open();
+  folly::coro::Baton reply;
+  auto lateHandle = makeUpstreamHandle();
+  EXPECT_CALL(*replacementSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [&reply, lateHandle](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            EXPECT_TRUE(sendFirstObject(*cb, 13));
+            co_await reply;
+            co_return Publisher::SubscribeResult(lateHandle);
+          }));
+  receiveSessionGoaway();
+  runPending();
+  advanceTime(kDeadline);
+  ASSERT_EQ(switchStats_->gracefulSwitches.failed, 1);
+
+  advanceTime(std::chrono::milliseconds(200));
+
+  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 0);
+  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  reply.post();
+  runPending();
+  EXPECT_TRUE(oldOpens(14));
+}
+
+// The old upstream catches up half a reorder grace before the tail runs out,
+// so the reorder grace hands over, and no cutoff is counted.
+TEST_F(
+    MoQProxyTrackTailTest,
+    ATailRunningOutDuringTheReorderGraceLeavesTheHandoverToIt) {
+  const auto caughtUpAt = switchOptions_.minTail - kReorderGrace / 2;
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(12));
+  advanceTime(caughtUpAt);
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  EXPECT_FALSE(oldOpens(12));
+
+  advanceTime(kReorderGrace - std::chrono::milliseconds(5));
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  advanceTime(std::chrono::milliseconds(5));
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 0);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+}
+
+// The old upstream catches up half a reorder grace before the tail runs out,
+// and a late stream of group 11 stops the grace after the tail ran out: a
+// reorder grace after it ran out, the tail timer lets go of the old upstream.
+TEST_F(
+    MoQProxyTrackTailTest,
+    ALateStreamThatStopsTheReorderGraceLeavesTheOldUpstreamToTheTail) {
+  const auto tail = switchOptions_.minTail;
+  const auto caughtUpAt = tail - kReorderGrace / 2;
+  const auto lateStreamAt = tail + kReorderGrace / 4;
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(12));
+  advanceTime(caughtUpAt);
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  EXPECT_FALSE(oldOpens(12));
+  advanceTime(lateStreamAt - caughtUpAt);
+  auto late = upstreamConsumer_->beginSubgroup(11, 1, kDefaultPriority);
+  ASSERT_TRUE(late.hasValue());
+
+  advanceTime(
+      tail + kReorderGrace - lateStreamAt - std::chrono::milliseconds(5));
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  advanceTime(std::chrono::milliseconds(5));
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 1);
+}
+
+// Group 11 is still open, and the old upstream's stream of group 12 was reset
+// during the switch: the tail cutoff counts both groups.
+TEST_F(
+    MoQProxyTrackTailTest,
+    ATailCutoffCountsTheGroupsCutShortDuringTheSwitch) {
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(13));
+  ASSERT_TRUE(oldOpens(12));
+  oldSubgroups_[12]->reset(ResetStreamErrorCode::CANCELLED);
+
+  advanceTime(switchOptions_.minTail);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 2);
+}
+
+// The viewer left after the replacement finished its stream of group 12, so
+// the old upstream's stream of group 11 is the last one open. Cancelling it
+// at the tail cutoff ends the track, which unsubscribes from both upstreams.
+TEST_F(MoQProxyTrackTailTest, ATailCutoffThatEndsTheLastStreamClosesTheTrack) {
+  subscribeWithGroup11Open();
+  auto replacementHandle = makeUpstreamHandle();
+  expectReplacementSubscribe(replacementHandle);
+  receiveSessionGoaway();
+  runPending();
+  auto subgroup = replacementConsumer_->beginSubgroup(12, 0, kDefaultPriority);
+  ASSERT_TRUE(subgroup.hasValue());
+  ASSERT_TRUE(subgroup.value()->object(
+      0, folly::IOBuf::copyBuffer("x"), noExtensions(), false));
+  downstreamHandle_->unsubscribe();
+  subgroup.value()->endOfSubgroup();
+  ASSERT_EQ(callback_->calls, 0);
+  EXPECT_CALL(*oldHandle_, unsubscribe());
+  EXPECT_CALL(*replacementHandle, unsubscribe());
+
+  advanceTime(switchOptions_.minTail);
+
+  EXPECT_EQ(callback_->calls, 1);
+  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
+}
+
+// The cache has group 11's first object when the tail cutoff cuts the group
+// short, so the rest of it is a miss at once, not data that may still arrive.
+TEST_F(MoQProxyTrackTailTest, ATailCutoffEndsTheCachedCopyOfTheGroupsItCuts) {
+  makeTrackOnManualTime(
+      {provider_, replacementProvider_},
+      {.maxGroups = 3, .budget = std::make_shared<MoQCacheBudget>(1 << 20)});
+  subscribeWithGroup11Open();
+  ASSERT_TRUE(oldSubgroup11_->object(
+      0, folly::IOBuf::copyBuffer("x"), noExtensions(), false));
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(12));
+  ASSERT_EQ(
+      track_->groupCache()->inspect({11, 1}, {11, 2}),
+      MoQGroupCache::Coverage::AwaitIngress);
+
+  advanceTime(switchOptions_.minTail);
+
+  EXPECT_EQ(
+      track_->groupCache()->inspect({11, 1}, {11, 2}),
+      MoQGroupCache::Coverage::Miss);
+}
+
+// The old upstream had caught up when it was lost, during the reorder grace,
+// so the loss cuts nothing short.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AnUpstreamLostDuringTheReorderGraceIsntACutoff) {
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(12));
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  EXPECT_FALSE(oldOpens(12));
+
+  loseUpstream();
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->lostCutoffs.cutoffs, 0);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+}
+
+// The replacement goes away 200 ms after its first object, and the next
+// one's first object starts the 2 s tail timer again.
+TEST_F(MoQProxyTrackTailTest, ANewSplitRestartsTheTailTimer) {
+  auto thirdSession = makeSession();
+  auto thirdProvider = std::make_shared<TestUpstreamProvider>(thirdSession);
+  switchOptions_.minTail = std::chrono::seconds(2);
+  makeTrackOnManualTime({provider_, replacementProvider_, thirdProvider});
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  std::shared_ptr<TrackConsumer> thirdConsumer;
+  EXPECT_CALL(*thirdSession, subscribe(_, _))
+      .WillOnce(Invoke(
+          [this, &thirdConsumer](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            thirdConsumer = std::move(cb);
+            co_return Publisher::SubscribeResult(makeUpstreamHandle());
+          }));
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(13));
+  advanceTime(std::chrono::milliseconds(200));
+  replacementConsumer_->publishDone(
+      PublishDone{
+          RequestID(100), PublishDoneStatusCode::GOING_AWAY, 0, "going away"});
+  runPending();
+  ASSERT_NE(thirdConsumer, nullptr);
+  ASSERT_TRUE(sendFirstObject(*thirdConsumer, 14));
+
+  advanceTime(std::chrono::milliseconds(1900));
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  advanceTime(std::chrono::milliseconds(100));
+
+  EXPECT_EQ(track_->upstreamSession(), thirdSession);
+  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
 }
 
 // The old upstream is lost before the adopted replacement forwarded an object,
@@ -2659,7 +3035,7 @@ TEST_F(MoQProxyTrackGracefulSwitchTest, ClosingDuringASwitchStopsIt) {
   expectReplacementSubscribe(replacementHandle);
   receiveSessionGoaway();
   runPending();
-  ASSERT_NE(replacementConsumer_, nullptr);
+  ASSERT_TRUE(replacementOpens(12));
   EXPECT_CALL(*replacementHandle, unsubscribe());
   EXPECT_CALL(*oldHandle_, unsubscribe());
 
@@ -2668,8 +3044,10 @@ TEST_F(MoQProxyTrackGracefulSwitchTest, ClosingDuringASwitchStopsIt) {
   Mock::VerifyAndClearExpectations(replacementHandle.get());
   EXPECT_TRUE(
       replacementConsumer_->beginSubgroup(13, 0, kDefaultPriority).hasError());
+  advanceTime(2 * switchOptions_.defaultGroupDuration);
   EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
   EXPECT_EQ(switchStats_->gracefulSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 0);
 }
 
 // The old upstream ends the track before the replacement took over.
@@ -3201,5 +3579,18 @@ INSTANTIATE_TEST_SUITE_P(
     [](const TestParamInfo<SwitchSpreadCase>& info) {
       return info.param.name;
     });
+
+TEST(MoQGroupDurationEstimateTest, SmoothsTheSpacingOfGroupStarts) {
+  const auto start = std::chrono::steady_clock::now();
+  MoQGroupDurationEstimate estimate;
+  estimate.onGroupStart(start);
+  EXPECT_FALSE(estimate.duration().has_value());
+
+  estimate.onGroupStart(start + std::chrono::milliseconds(100));
+  EXPECT_EQ(estimate.duration(), std::chrono::milliseconds(100));
+  estimate.onGroupStart(start + std::chrono::milliseconds(300));
+
+  EXPECT_EQ(estimate.duration(), std::chrono::milliseconds(112));
+}
 
 }} // namespace moxygen

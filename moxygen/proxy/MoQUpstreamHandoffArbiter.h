@@ -121,6 +121,8 @@ class MoQUpstreamHandoffArbiter {
   // opened before them. A late stream for one of those groups makes this false
   // again until it finishes.
   bool oldCaughtUp() const;
+  // The groups old opened and hasn't finished.
+  std::set<uint64_t> oldUnfinishedGroups() const;
   // The replacement has delivered objects of its groups while old still has
   // unfinished groups that viewers may be waiting on.
   bool oldBlocksReplacement() const;

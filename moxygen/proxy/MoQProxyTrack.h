@@ -12,6 +12,7 @@
 #include <folly/coro/SharedPromise.h>
 #include <folly/coro/Task.h>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <random>
@@ -57,6 +58,16 @@ struct MoQProxySwitchOptions {
   // replacement before the track lets it go, since a stream for one of its
   // groups can still arrive late.
   std::chrono::milliseconds reorderGrace{200};
+  // If the upstream that went away hasn't caught up within two group
+  // durations of the adopted replacement forwarding its first object, and no
+  // sooner than minTail, the replacement takes over and the old upstream's
+  // unfinished groups reach viewers cut short. That happens at least
+  // tailMargin before the GOAWAY's timeout, or once a reorder grace that
+  // runs then ends without a handover. Until the track has seen two groups
+  // start, a group lasts defaultGroupDuration.
+  std::chrono::milliseconds minTail{std::chrono::seconds(1)};
+  std::chrono::milliseconds tailMargin{500};
+  std::chrono::milliseconds defaultGroupDuration{std::chrono::seconds(2)};
   // The wait before trying the providers again once they all failed, doubled
   // per pass up to maxRetryBackoff, each with +/-20% jitter.
   std::chrono::milliseconds retryBackoff{100};
@@ -84,6 +95,16 @@ struct MoQProxyHandoffCounters {
   uint64_t equal{0};
   // Later: the old upstream filled groups before it.
   uint64_t ahead{0};
+};
+
+// Graceful switches that let go of the upstream that went away before it
+// caught up with its replacement.
+struct MoQProxyCutoffCounters {
+  uint64_t cutoffs{0};
+  // The groups it had opened and not finished, which reached viewers cut
+  // short, summed. Groups it never opened, and object streams, which each end
+  // with their object, aren't counted.
+  uint64_t unfinishedGroups{0};
 };
 
 // Where viewers may have missed groups because the track resumed from another
@@ -124,6 +145,11 @@ struct MoQProxySwitchStats {
   // Completed graceful switches whose replacement delivered data before the
   // old upstream ended.
   MoQProxyHandoffCounters handoffs;
+  // Graceful switches whose old upstream was lost, or that the tail timer let
+  // go of, before it caught up. The tail timer's hand over to the replacement
+  // and complete.
+  MoQProxyCutoffCounters lostCutoffs;
+  MoQProxyCutoffCounters tailCutoffs;
   // Replacement data refused before it reached the cache or viewers: subgroup
   // and object streams, and datagrams.
   uint64_t refusedStreams{0};
@@ -149,8 +175,24 @@ struct MoQProxyTrackUpstreamConfig {
   MoQProxySwitchOptions switchOptions;
   // Times the switch deadline and retry backoff; null uses folly's default.
   std::shared_ptr<folly::Timekeeper> timekeeper;
+  // What the track measures group durations by; null reads the steady clock.
+  std::function<std::chrono::steady_clock::time_point()> clock;
   // Null seeds a per-track generator from switchOptions.randomSeed.
   std::shared_ptr<std::mt19937_64> random;
+};
+
+// How far apart a track's groups start, smoothed: each new spacing weighs an
+// eighth.
+class MoQGroupDurationEstimate {
+ public:
+  void onGroupStart(std::chrono::steady_clock::time_point at);
+  const std::optional<std::chrono::milliseconds>& duration() const {
+    return duration_;
+  }
+
+ private:
+  std::optional<std::chrono::steady_clock::time_point> lastStart_;
+  std::optional<std::chrono::milliseconds> duration_;
 };
 
 class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
@@ -346,11 +388,21 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   void holdReplacement(UpstreamAttempt attempt);
   void onHandoverProgress(const Recorder& old);
   void checkHandoff();
+  // The adopted replacement has forwarded an object.
+  bool replacementReady() const;
   folly::coro::Task<void> handOverAfterGrace(folly::CancellationToken stopped);
   void promoteReplacement();
   void countHandoff(const MoQUpstreamHandoffArbiter& arbiter);
   void onGracefulDeadline();
   bool takeOverOldUpstreamLoss(Recorder& old);
+  void countCutoff(MoQProxyCutoffCounters& counters);
+  void onGroupStarted();
+  void startTail();
+  std::chrono::milliseconds tailDuration() const;
+  folly::coro::Task<void> letGoOfOldAfterTail(
+      std::chrono::milliseconds tail,
+      folly::CancellationToken stopped);
+  void onTailTimer();
   void dropReplacement(Recorder& replacement);
   void onReplacementGone(const Recorder& replacement);
   void renewHandoff();
@@ -396,6 +448,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   std::shared_ptr<MoQProxySwitchStats> switchStats_;
   MoQProxySwitchOptions switchOptions_;
   std::shared_ptr<folly::Timekeeper> timekeeper_;
+  std::function<std::chrono::steady_clock::time_point()> clock_;
   std::shared_ptr<std::mt19937_64> random_;
   UpstreamAttempt upstream_;
   // The GOAWAY watch of the upstream attempt being established, which the
@@ -435,11 +488,15 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     // froze its split is gone.
     std::shared_ptr<MoQUpstreamHandoffArbiter> arbiter;
     std::chrono::steady_clock::time_point startedAt;
+    // When the GOAWAY's timeout runs out, if it has one.
+    std::optional<std::chrono::steady_clock::time_point> expiresAt;
     // The replacement the track adopted, which takes over once the old
     // upstream has caught up with it.
     std::optional<UpstreamAttempt> replacement;
     // Stops the reorder grace, while it runs.
     std::optional<folly::CancellationSource> grace;
+    // Stops the tail timer, from the replacement's first forwarded object.
+    std::optional<folly::CancellationSource> tail;
     bool deadlinePassed{false};
     // The old upstream's end, held for a replacement still subscribing.
     std::optional<PublishDone> oldEnd;
@@ -452,6 +509,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     bool afterGoaway{false};
   };
   std::optional<LostUpstream> lostUpstream_;
+  MoQGroupDurationEstimate groupDuration_;
   std::weak_ptr<Callback> callback_;
   folly::coro::SharedPromise<folly::Unit> upstreamSubscriptionReadyPromise_;
   std::optional<UpstreamEstablishmentFailure> upstreamSubscriptionFailure_;

@@ -273,6 +273,17 @@ TEST_F(MoQProxyTest, RejectsSwitchOptionsItCannotRun) {
           {provider_}, withSwitch({.reorderGrace = milliseconds(-1)})),
       std::invalid_argument);
   EXPECT_THROW(
+      MoQProxy::create({provider_}, withSwitch({.minTail = milliseconds(-1)})),
+      std::invalid_argument);
+  EXPECT_THROW(
+      MoQProxy::create(
+          {provider_}, withSwitch({.tailMargin = milliseconds(-1)})),
+      std::invalid_argument);
+  EXPECT_THROW(
+      MoQProxy::create(
+          {provider_}, withSwitch({.defaultGroupDuration = milliseconds(-1)})),
+      std::invalid_argument);
+  EXPECT_THROW(
       MoQProxy::create(
           {provider_}, withSwitch({.retryBackoff = milliseconds(0)})),
       std::invalid_argument);
@@ -289,7 +300,10 @@ TEST_F(MoQProxyTest, RejectsSwitchOptionsItCannotRun) {
           withSwitch(
               {.deadline = milliseconds(0),
                .maxStartDelay = milliseconds(0),
-               .reorderGrace = milliseconds(0)})));
+               .reorderGrace = milliseconds(0),
+               .minTail = milliseconds(0),
+               .tailMargin = milliseconds(0),
+               .defaultGroupDuration = milliseconds(0)})));
 }
 
 TEST_F(MoQProxyTest, TriesUpstreamProvidersInOrder) {

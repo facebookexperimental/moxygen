@@ -120,6 +120,17 @@ bool MoQUpstreamHandoffArbiter::oldCaughtUp() const {
   return oldReachedReplacement_ && !oldHasOpenGroups();
 }
 
+std::set<uint64_t> MoQUpstreamHandoffArbiter::oldUnfinishedGroups() const {
+  std::set<uint64_t> groups;
+  for (const auto& [group, _] : oldOpenSubgroups_) {
+    groups.insert(group);
+  }
+  if (oldDatagramGroup_ && oldDatagramGroup_->open) {
+    groups.insert(oldDatagramGroup_->group);
+  }
+  return groups;
+}
+
 bool MoQUpstreamHandoffArbiter::oldBlocksReplacement() const {
   return replacementDelivering_ && !oldEnded_ && oldHasOpenGroups();
 }

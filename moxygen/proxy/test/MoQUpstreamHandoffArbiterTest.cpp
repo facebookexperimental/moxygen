@@ -6,6 +6,7 @@
 
 #include <folly/portability/GTest.h>
 #include <algorithm>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -383,6 +384,17 @@ TEST_F(MoQUpstreamHandoffArbiterTest, OldEndingKeepsPartialGroupsOffLimits) {
   EXPECT_EQ(replacementOpens(14, /*subgroup=*/1), kRefuse);
   EXPECT_EQ(replacementOpens(13), kRefuse);
   EXPECT_EQ(replacementOpens(15), kAccept);
+}
+
+TEST_F(MoQUpstreamHandoffArbiterTest, OldsUnfinishedGroupsAreItsOpenOnes) {
+  MoQUpstreamHandoffArbiter arbiter(
+      {.highestGroup = 12, .openSubgroups = {{11, 0}}});
+  arbiter.onBeginSubgroup(Source::Old, 12, 0);
+  arbiter.onBeginSubgroup(Source::Old, 12, 1);
+  arbiter.onDatagram(Source::Old, 13, false);
+  arbiter.onSubgroupEnded(Source::Old, 11, 0);
+
+  EXPECT_EQ(arbiter.oldUnfinishedGroups(), (std::set<uint64_t>{12, 13}));
 }
 
 // Old ending, or the caller tearing it down on a timer, stops it even with an
