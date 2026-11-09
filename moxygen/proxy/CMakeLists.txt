@@ -81,9 +81,13 @@ moxygen_add_library(moxygen_proxy_moq_proxy_track
   SRCS
     MoQProxyTrack.cpp
   DEPS
+    moxygen_events_moq_executor
     moxygen_moq_location
     moxygen_relay_moq_forwarder
+    Folly::folly_coro_current_executor
     Folly::folly_coro_result
+    Folly::folly_coro_sleep
+    Folly::folly_coro_with_cancellation
     Folly::folly_logging_logging
     Folly::folly_scope_guard
     fmt::fmt
@@ -91,8 +95,10 @@ moxygen_add_library(moxygen_proxy_moq_proxy_track
     moxygen_moq
     moxygen_proxy_moq_group_cache
     moxygen_proxy_moq_upstream_goaways
+    moxygen_proxy_moq_upstream_handoff_arbiter
     moxygen_proxy_moq_upstream_provider
     Folly::folly_cancellation_token
+    Folly::folly_executor
     Folly::folly_coro_shared_promise
     Folly::folly_coro_task
     Folly::folly_expected

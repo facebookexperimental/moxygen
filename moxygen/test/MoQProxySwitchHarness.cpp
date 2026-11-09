@@ -285,15 +285,16 @@ folly::coro::Task<MoQUpstreamSessionResult>
 ScriptedUpstreamProvider::getSession(
     const FullTrackName&,
     const TrackRequestParameters&,
-    bool) {
-  auto& attempt = attempts_.emplace_back();
+    bool hasFallbackProvider) {
+  auto& attempt = attempts_.emplace_back(
+      Attempt{.hasFallbackProvider = hasFallbackProvider});
   if (failuresLeft_ > 0) {
     --failuresLeft_;
     co_return folly::makeUnexpected(
         MoQUpstreamProviderError{"scripted provider failure"});
   }
   for (size_t i = 0; i < upstreams_.size(); i++) {
-    if (upstreams_[i].available) {
+    if (upstreams_[i].available && !upstreams_[i].session->isClosed()) {
       attempt.upstream = i;
       co_return upstreams_[i].session;
     }
@@ -522,7 +523,8 @@ std::vector<std::string> CheckingViewer::violations() const {
   for (const auto& [source, group] : firstGroupOf_) {
     const auto startGroup =
         expectedStart ? expectedStart->group : receivedSet_.begin()->group;
-    if (group != startGroup && !receivedSet_.contains({group, 0})) {
+    if (group != startGroup && !expectedGapGroups.contains(group) &&
+        !receivedSet_.contains({group, 0})) {
       violations.push_back(
           fmt::format(
               "hub {} subscription {} started in group {} without object 0",

@@ -279,9 +279,22 @@ MoQProxy::MoQProxy(
     MoQProxyOptions options)
     : upstreamProviders_(std::move(upstreamProviders)),
       options_(std::move(options)),
-      budget_(std::make_shared<MoQCacheBudget>(options_.maxCacheBytes)) {
+      budget_(std::make_shared<MoQCacheBudget>(options_.maxCacheBytes)),
+      switchRandom_(
+          std::make_shared<std::mt19937_64>(
+              options_.upstreamSwitch.randomSeed != 0
+                  ? options_.upstreamSwitch.randomSeed
+                  : std::random_device{}())) {
   if (options_.replayStallTimeout.count() <= 0) {
     throw std::invalid_argument("MoQProxy requires a positive stall timeout");
+  }
+  const auto& upstreamSwitch = options_.upstreamSwitch;
+  if (upstreamSwitch.deadline.count() < 0 ||
+      upstreamSwitch.retryBackoff.count() <= 0 ||
+      upstreamSwitch.maxRetryBackoff < upstreamSwitch.retryBackoff) {
+    throw std::invalid_argument(
+        "MoQProxy requires a non-negative switch deadline, a positive retry "
+        "backoff and a maximum backoff no smaller than it");
   }
   if (upstreamProviders_.empty()) {
     throw std::invalid_argument("MoQProxy requires upstream providers");
@@ -850,7 +863,11 @@ std::shared_ptr<MoQProxyTrack> MoQProxy::getOrCreateTrack(
       MoQProxyTrack::CacheConfig{
           .maxGroups = options_.maxGroupsPerTrack, .budget = budget_},
       MoQProxyTrack::UpstreamConfig{
-          .goaways = upstreamGoaways_, .switchStats = switchStats_});
+          .goaways = upstreamGoaways_,
+          .switchStats = switchStats_,
+          .switchOptions = options_.upstreamSwitch,
+          .timekeeper = options_.timekeeper,
+          .random = switchRandom_});
   track->setCallback(shared_from_this());
   tracks_.emplace(fullTrackName, track);
   return track;

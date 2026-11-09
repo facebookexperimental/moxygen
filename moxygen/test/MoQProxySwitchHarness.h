@@ -158,12 +158,14 @@ class SwitchTestHub : public Publisher,
 };
 
 // Routes the proxy to the first available upstream, as a consistent-hash pool
-// keeps choosing one hub until health checks mark it down.
+// keeps choosing one hub until health checks mark it down. An upstream whose
+// session closed is skipped, as a pool drops a closed connection.
 class ScriptedUpstreamProvider : public MoQUpstreamProvider {
  public:
   struct Attempt {
     // The upstream returned; none if the attempt failed.
     std::optional<size_t> upstream;
+    bool hasFallbackProvider{false};
   };
 
   // Returns the upstream's index.
@@ -284,6 +286,9 @@ class CheckingViewer : public TrackConsumer,
     return opened_;
   }
 
+  // Groups that may reach the viewer without their first objects, exempt from
+  // the object-0 check; missing() still counts what they lack.
+  std::set<uint64_t> expectedGapGroups;
   // The PUBLISH_DONE the viewer must get, if any.
   std::optional<PublishDoneStatusCode> expectedEnd;
   std::optional<ResetStreamErrorCode> expectedReset;

@@ -18,10 +18,11 @@ namespace moxygen {
 // one attempt and none twice.
 //
 // Old forwards as before until the replacement delivers its first data. The
-// replacement subscribes from the next group start, so whichever of its
-// objects arrives first, that object's group, N, should be whole on the
-// replacement. N freezes the split: the replacement owns groups at or after N
-// that are also after the highest group the track had opened by then, H. Old
+// replacement subscribes from the object after its Largest, so its first data
+// is usually the rest of a group the track has already opened, which isn't
+// the replacement's. Whichever of its objects arrives first, that object's
+// group, N, freezes the split: the replacement owns groups at or after N that
+// are also after the highest group the track had opened by then, H. Old
 // owns, and finishes, every group before that. Data from the attempt that
 // doesn't own its group is refused, before it reaches the cache or the
 // forwarder. Once old has ended, the replacement owns every group after both
@@ -34,7 +35,9 @@ namespace moxygen {
 // neither that group nor an earlier one can become the replacement's. If its
 // group is already the replacement's, that group reaches viewers without the
 // subgroup, and the arbiter says so with RefuseWithGap. Draft 16 doesn't say,
-// so nothing catches it there.
+// so nothing catches it there. Nor do datagrams and object streams: a
+// replacement whose Largest is in a group after H gives viewers only the rest
+// of that group.
 //
 // Old has caught up once it tries to open a replacement group and has
 // finished every subgroup and datagram group it opened before them. A datagram

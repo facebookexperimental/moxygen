@@ -259,6 +259,20 @@ TEST_F(CheckingViewerTest, FlagsALaterSourceThatStartsMidGroupAndArrivesFirst) {
       ElementsAre("hub 2 subscription 0 started in group 1 without object 0"));
 }
 
+TEST_F(CheckingViewerTest, AcceptsADeclaredGapAtTheStartOfASource) {
+  deliverSubgroup(0, {0, 1, 2, 3}, /*hub=*/1);
+  origin_->notePublished(kTrack, {1, 0});
+  origin_->notePublished(kTrack, {1, 1});
+  viewer_->expectedGapGroups = {1};
+
+  deliverSubgroup(1, {2, 3}, /*hub=*/2);
+
+  EXPECT_THAT(viewer_->violations(), IsEmpty());
+  EXPECT_THAT(
+      viewer_->missing(),
+      ElementsAre(AbsoluteLocation(1, 0), AbsoluteLocation(1, 1)));
+}
+
 TEST_F(CheckingViewerTest, AcceptsALaterSourceWhoseFirstObjectArrivesLast) {
   deliverSubgroup(0, {0, 1, 2, 3}, /*hub=*/1);
   deliverDatagram({1, 1}, /*hub=*/2);
@@ -579,6 +593,32 @@ TEST_F(ScriptedUpstreamProviderTest, RoutesToTheFirstAvailableUpstream) {
   EXPECT_TRUE(noneLeft.hasError());
   const std::vector<std::optional<size_t>> upstreams{0, 1, std::nullopt};
   EXPECT_EQ(attemptedUpstreams(), upstreams);
+}
+
+TEST_F(ScriptedUpstreamProviderTest, SkipsAnUpstreamWhoseSessionClosed) {
+  auto first = makeSession();
+  auto second = makeSession();
+  provider_.addUpstream(first);
+  provider_.addUpstream(second);
+
+  first->close(SessionCloseErrorCode::NO_ERROR);
+  auto result = getSession();
+
+  EXPECT_EQ(result.value(), second);
+}
+
+TEST_F(ScriptedUpstreamProviderTest, RecordsWhetherEachAttemptHasAFallback) {
+  provider_.addUpstream(makeSession());
+
+  folly::coro::blockingWait(provider_.getSession(
+      kTrack,
+      TrackRequestParameters{FrameType::SUBSCRIBE},
+      /*hasFallbackProvider=*/true));
+  getSession();
+
+  ASSERT_EQ(provider_.attempts().size(), 2);
+  EXPECT_TRUE(provider_.attempts()[0].hasFallbackProvider);
+  EXPECT_FALSE(provider_.attempts()[1].hasFallbackProvider);
 }
 
 TEST_F(ScriptedUpstreamProviderTest, FailsTheNextAttempts) {

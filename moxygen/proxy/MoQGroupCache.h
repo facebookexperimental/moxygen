@@ -22,6 +22,8 @@
 namespace moxygen {
 
 // The newest groups of one live track, fed by its associated upstream requests.
+// During a switch, each group comes from whichever upstream subscription owns
+// it: the current one or its replacement.
 // A joining FETCH is served from it only when every requested location is
 // proven: a complete object, or authoritative evidence that it does not
 // exist.

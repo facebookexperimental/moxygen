@@ -254,6 +254,31 @@ TEST_F(MoQProxyTest, FillOpensAndResets) {
   result.value()->unsubscribe();
 }
 
+TEST_F(MoQProxyTest, RejectsSwitchOptionsItCannotRun) {
+  auto withSwitch = [](MoQProxySwitchOptions upstreamSwitch) {
+    MoQProxyOptions options;
+    options.upstreamSwitch = upstreamSwitch;
+    return options;
+  };
+  using std::chrono::milliseconds;
+  EXPECT_THROW(
+      MoQProxy::create({provider_}, withSwitch({.deadline = milliseconds(-1)})),
+      std::invalid_argument);
+  EXPECT_THROW(
+      MoQProxy::create(
+          {provider_}, withSwitch({.retryBackoff = milliseconds(0)})),
+      std::invalid_argument);
+  EXPECT_THROW(
+      MoQProxy::create(
+          {provider_},
+          withSwitch(
+              {.retryBackoff = milliseconds(100),
+               .maxRetryBackoff = milliseconds(50)})),
+      std::invalid_argument);
+  EXPECT_NO_THROW(
+      MoQProxy::create({provider_}, withSwitch({.deadline = milliseconds(0)})));
+}
+
 TEST_F(MoQProxyTest, TriesUpstreamProvidersInOrder) {
   auto fallbackSession =
       std::make_shared<NiceMock<test::MockMoQSession>>(executor_);

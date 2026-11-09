@@ -11,6 +11,7 @@
 #include <folly/futures/Future.h>
 #include <chrono>
 #include <memory>
+#include <random>
 #include <vector>
 
 #include "moxygen/Publisher.h"
@@ -33,7 +34,10 @@ struct MoQProxyOptions {
   // Longest time a local replay may go without an accepted write.
   // Provisional; must be positive.
   std::chrono::milliseconds replayStallTimeout{std::chrono::seconds(5)};
-  // Times the bounded waits above; null uses folly's default.
+  // Moving a track to a replacement upstream when its upstream goes away.
+  MoQProxySwitchOptions upstreamSwitch;
+  // Times the bounded waits above and the switch retries; null uses folly's
+  // default.
   std::shared_ptr<folly::Timekeeper> timekeeper;
 };
 
@@ -176,6 +180,8 @@ class MoQProxy : public Publisher,
   // Shared by all tracks, which may share upstream sessions.
   std::shared_ptr<MoQUpstreamGoaways> upstreamGoaways_{
       std::make_shared<MoQUpstreamGoaways>()};
+  // Jitter for every track's switches.
+  std::shared_ptr<std::mt19937_64> switchRandom_;
   // Cancels cache waits and local replays when the proxy closes.
   folly::CancellationSource shutdown_;
   folly::F14FastMap<
