@@ -102,6 +102,7 @@ moxygen_add_test(TARGET MoQSessionTests
   PREFIX "MoQSession"
   SOURCES
     MoQSessionFetchTests.cpp
+    MoQSessionGroupRankTests.cpp
     MoQSessionObjectDeliveryTests.cpp
     MoQSessionPublishNamespaceTests.cpp
     MoQSessionPublishTests.cpp

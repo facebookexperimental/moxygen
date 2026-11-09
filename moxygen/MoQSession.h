@@ -74,6 +74,7 @@ struct MoQSettings {
   size_t maxPendingUniStreams{64};
   // Timeout for waiting for acks once a draining session has no open requests
   std::chrono::milliseconds drainFlushTimeout{std::chrono::seconds(2)};
+  bool rankOldestFirstGroups{false};
 };
 
 class ReplyContext;
@@ -398,6 +399,10 @@ class MoQSession : public Subscriber,
     initializeNegotiatedVersion(version);
   }
 
+  void setNextGroupRankForTesting(uint64_t rank) {
+    nextGroupRank_ = rank;
+  }
+
   static GroupOrder resolveGroupOrder(
       GroupOrder pubOrder,
       std::optional<GroupOrder> subOrder);
@@ -508,7 +513,8 @@ class MoQSession : public Subscriber,
     quic::PriorityQueue::Priority elementPriority(
         uint64_t groupId,
         uint64_t subgroupId,
-        uint8_t pubPri) const;
+        uint8_t pubPri,
+        std::optional<uint64_t> groupRank = std::nullopt) const;
 
     virtual void terminatePublish(
         PublishDone pubDone,
@@ -1740,6 +1746,7 @@ class MoQSession : public Subscriber,
   ServerSetupCallback* serverSetupCallback_{nullptr};
   MoQSessionCloseCallback* closeCallback_{nullptr};
   MoQSettings moqSettings_;
+  uint64_t nextGroupRank_{0};
 
   bool authTokenCacheEnabled_{true};
 

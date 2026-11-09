@@ -22,11 +22,13 @@
 #include <folly/logging/xlog.h>
 
 #include <algorithm>
+#include <map>
 #include <utility>
 
 namespace {
 using namespace moxygen;
 constexpr uint64_t kMaxSendTokenCacheSize(1024);
+constexpr size_t kGroupRankWindow = 64;
 
 // Draft-18 §10.4: GOAWAY newSessionUri MUST NOT exceed 8192 bytes.
 constexpr uint64_t kMaxGoawayUriLength(8192);
@@ -89,14 +91,19 @@ StreamPriority getStreamPriority(
     uint64_t subgroupID,
     uint8_t subPri,
     uint8_t pubPri,
-    GroupOrder pubGroupOrder) {
+    GroupOrder pubGroupOrder,
+    std::optional<uint64_t> groupRank) {
   // 32-bit order: 5 sub pri | 8 pub pri | 14 group order | 5 subgroup
   // Urgency: 3 MSB of subPri
   uint8_t urgency = subPri >> 5;
   uint32_t subPriBits = subPri & kSubPriMask;
   uint32_t pubPriBits = pubPri & kPubPriMask;
-  uint32_t groupBits = groupPriorityBits(pubGroupOrder, groupID);
-  uint32_t subgroupBits = subgroupPriorityBits(subgroupID);
+  uint32_t groupBits = groupRank
+      ? static_cast<uint32_t>(std::min<uint64_t>(*groupRank, kGroupMask))
+      : groupPriorityBits(pubGroupOrder, groupID);
+  uint32_t subgroupBits = groupRank && *groupRank >= kGroupMask
+      ? 0
+      : subgroupPriorityBits(static_cast<uint32_t>(subgroupID));
   uint32_t order = (subPriBits << (kPubPriBits + kGroupBits + kSubgroupBits)) |
       (pubPriBits << (kGroupBits + kSubgroupBits)) |
       (groupBits << kSubgroupBits) | subgroupBits;
@@ -1969,6 +1976,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     return session_->getTransportInfo().srtt;
   }
 
+  std::optional<uint64_t> groupRank(uint64_t groupID);
+
   std::shared_ptr<MLogger> logger_ = nullptr;
   std::shared_ptr<Subscriber::SubscriptionHandle> subscriptionHandle_;
   std::optional<LocationType> subscribeLocType_;
@@ -1991,6 +2000,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   // Largest object published so far; advances as objects are written and is
   // reported in REQUEST_UPDATE acks. Seeded from the SUBSCRIBE_OK largest.
   std::optional<AbsoluteLocation> largest_;
+  std::map<uint64_t, uint64_t> groupRanks_;
+  std::deque<uint64_t> groupRankOrder_;
 };
 
 class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
@@ -2298,7 +2309,8 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
     return folly::makeUnexpected(MoQPublishError(
         MoQPublishError::API_ERROR, "Publish after publishDone"));
   }
-  auto priority = elementPriority(groupID, subgroupID, pubPriority);
+  auto priority =
+      elementPriority(groupID, subgroupID, pubPriority, groupRank(groupID));
   proxygen::WebTransport::StreamWriteHandle* writeHandle = nullptr;
   // Streams already waiting for credit go first.
   if (numUniStreamRequests() == 0) {
@@ -2349,6 +2361,28 @@ MoQSession::TrackPublisherImpl::beginSubgroup(
   }
 
   return subgroupPublisher;
+}
+
+std::optional<uint64_t> MoQSession::TrackPublisherImpl::groupRank(
+    uint64_t groupID) {
+  if (!session_->getMoqSettings().rankOldestFirstGroups ||
+      getGroupOrder() != GroupOrder::OldestFirst) {
+    return std::nullopt;
+  }
+  auto it = groupRanks_.lower_bound(groupID);
+  if (it != groupRanks_.end() && it->first == groupID) {
+    return it->second;
+  }
+  uint64_t rank = it == groupRanks_.end() ? session_->nextGroupRank_++
+      : it == groupRanks_.begin()         ? it->second
+                                          : std::prev(it)->second;
+  groupRanks_.emplace_hint(it, groupID, rank);
+  groupRankOrder_.push_back(groupID);
+  if (groupRankOrder_.size() > kGroupRankWindow) {
+    groupRanks_.erase(groupRankOrder_.front());
+    groupRankOrder_.pop_front();
+  }
+  return rank;
 }
 
 folly::Expected<folly::SemiFuture<folly::Unit>, MoQPublishError>
@@ -3410,9 +3444,10 @@ const folly::RequestToken& MoQSession::sessionRequestToken() {
 quic::PriorityQueue::Priority MoQSession::PublisherImpl::elementPriority(
     uint64_t groupId,
     uint64_t subgroupId,
-    uint8_t pubPri) const {
-  auto pri =
-      getStreamPriority(groupId, subgroupId, subPriority_, pubPri, groupOrder_);
+    uint8_t pubPri,
+    std::optional<uint64_t> groupRank) const {
+  auto pri = getStreamPriority(
+      groupId, subgroupId, subPriority_, pubPri, groupOrder_, groupRank);
   return quic::HTTPPriorityQueue::Priority(pri.urgency, false, pri.order);
 }
 
