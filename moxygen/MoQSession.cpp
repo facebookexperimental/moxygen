@@ -679,10 +679,12 @@ void StreamPublisherImpl::setWriteHandle(
           trackAlias_,
           header_.group,
           header_.subgroup,
-          publisher_->subPriority(),
+          header_.priority.value_or(0),
           subgroupOptions_.subgroupIDFormat,
           subgroupOptions_.hasExtensions,
-          subgroupOptions_.hasEndOfGroup);
+          subgroupOptions_.hasEndOfGroup,
+          subgroupOptions_.beginsWithFirstObject,
+          header_.priority.has_value());
     }
     for (auto& [header, payload] : std::exchange(pendingObjectLogs_, {})) {
       logObjectCreated(streamID, header, std::move(payload));
@@ -765,6 +767,15 @@ StreamPublisherImpl::writeCurrentObject(
   header_.length = length;
   // copy is gratuitous
   header_.extensions = extensions;
+  header_.forwardingPreferenceIsDatagram = forwardingPreferenceIsDatagram;
+  if (logger_) {
+    auto payloadClone = payload ? payload->clone() : nullptr;
+    if (writeHandle_) {
+      logObjectCreated(writeHandle_->getID(), header_, std::move(payloadClone));
+    } else if (waitingForStream()) {
+      pendingObjectLogs_.emplace_back(header_, std::move(payloadClone));
+    }
+  }
   XLOG(DBG6) << "writeCurrentObject sgp=" << this << " objectID=" << objectID;
   bool entireObjectWritten = (!currentLengthRemaining_.has_value());
   (void)moqFrameWriter_.writeStreamObject(
@@ -934,15 +945,6 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::objectImpl(
   }
   auto length = payload ? payload->computeChainDataLength() : 0;
   header_.status = ObjectStatus::NORMAL;
-
-  if (logger_) {
-    auto payloadClone = payload ? payload->clone() : nullptr;
-    if (writeHandle_) {
-      logObjectCreated(writeHandle_->getID(), header_, std::move(payloadClone));
-    } else if (waitingForStream()) {
-      pendingObjectLogs_.emplace_back(header_, std::move(payloadClone));
-    }
-  }
 
   // Start delivery timeout timer when object begins being sent to stream. A 0
   // ("no timeout") value leaves deliveryTimeoutActive_ false, so no timer arms.
@@ -2508,7 +2510,8 @@ MoQSession::TrackPublisherImpl::datagram(
   }
 
   if (logger_) {
-    logger_->logObjectDatagramCreated(*trackAlias_, header, payload);
+    logger_->logObjectDatagramCreated(
+        *trackAlias_, header, payload, lastInGroup);
   }
 
   // Elide priority if it matches publisher priority
@@ -4992,6 +4995,13 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
     if (isCancelled()) {
       return MoQCodec::ParseResult::ERROR_TERMINATE;
     }
+    if (logger_ && subscribeState_) {
+      logger_->logSubgroupObjectParsed(
+          currentStreamId_,
+          trackAlias_,
+          ObjectHeader(group, subgroup, objectID, priority, status),
+          nullptr);
+    }
     // Handle subscription/fetch consumers
     switch (status) {
       case ObjectStatus::END_OF_GROUP:
@@ -5028,6 +5038,14 @@ class ObjectStreamCallback : public MoQObjectStreamCodec::ObjectCallback {
       uint64_t groupId,
       uint64_t objectId,
       bool isUnknownOrNonexistent) override {
+    if (logger_) {
+      logger_->logFetchObjectParsed(
+          currentStreamId_,
+          groupId,
+          objectId,
+          isUnknownOrNonexistent ? MOQTFetchRangeEndType::UNKNOWN
+                                 : MOQTFetchRangeEndType::NONEXISTENT);
+    }
     // For non-existent range (0x8C), just continue - the next object()
     // call will implicitly tell us where we are.
     if (!isUnknownOrNonexistent) {
@@ -9075,10 +9093,13 @@ void MoQSession::handleDatagram(
   remainingLength -= type->second;
 
   if (isPaddingDatagramType(*negotiatedVersion_, type->first)) {
+    auto paddingLength = remainingLength;
     auto paddingResult = parsePaddingData(cursor, remainingLength);
     if (paddingResult.hasError()) {
       XLOG(ERR) << __func__ << " Bad padding datagram";
       close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    } else if (logger_) {
+      logger_->logPaddingDatagramParsed(paddingLength);
     }
     return;
   }
@@ -9138,7 +9159,10 @@ void MoQSession::handleDatagram(
       }
     }
     logger_->logObjectDatagramParsed(
-        objHeader.trackAlias, objHeader.objectHeader, payload);
+        objHeader.trackAlias,
+        objHeader.objectHeader,
+        payload,
+        objHeader.endOfGroup);
   }
   if (state) {
     auto callback = state->getSubscribeCallback();
