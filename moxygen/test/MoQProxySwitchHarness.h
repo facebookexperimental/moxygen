@@ -122,6 +122,9 @@ class SwitchTestHub : public Publisher,
   // order.
   std::vector<LocationFilter> subscribeFilters(
       const FullTrackName& track) const;
+  // When each of those arrived.
+  std::vector<std::chrono::steady_clock::time_point> subscribeTimes(
+      const FullTrackName& track) const;
 
   uint64_t id() const {
     return id_;
@@ -154,6 +157,8 @@ class SwitchTestHub : public Publisher,
   std::map<std::pair<FullTrackName, uint64_t>, uint64_t> nextObject_;
   std::map<FullTrackName, AbsoluteLocation> largest_;
   std::map<FullTrackName, std::vector<LocationFilter>> filters_;
+  std::map<FullTrackName, std::vector<std::chrono::steady_clock::time_point>>
+      subscribeTimes_;
   std::vector<std::weak_ptr<MoQSession>> sessions_;
 };
 

@@ -450,4 +450,59 @@ TEST_F(MoQUpstreamHandoffArbiterTest, OldBlocksTheReplacementWhileUnfinished) {
   EXPECT_FALSE(arbiter_.oldBlocksReplacement());
 }
 
+// The replacement that froze the split at 13 ends after the track opened
+// group 14. Old keeps its groups, also 12, which it hadn't opened, and takes
+// back those after 14. The next replacement gets only groups after 14 too.
+TEST_F(
+    MoQUpstreamHandoffArbiterTest,
+    AReplacementEndingFirstHandsOldBackItsGroupsAfterTheTracks) {
+  oldOpens(11);
+  oldDatagram(11);
+  replacementOpens(13);
+  replacementOpens(14);
+
+  auto renewed = arbiter_.afterReplacementEnded(
+      {.highestGroup = 14,
+       .openSubgroups = {{11, 0}},
+       .openDatagramGroup = 11});
+
+  EXPECT_FALSE(renewed.split().has_value());
+  EXPECT_EQ(renewed.onDatagram(Source::Old, 11, /*lastInGroup=*/true), kAccept);
+  EXPECT_EQ(renewed.onBeginSubgroup(Source::Old, 11, 1), kAccept);
+  EXPECT_EQ(renewed.onBeginSubgroup(Source::Old, 12, 0), kAccept);
+  EXPECT_EQ(renewed.onBeginSubgroup(Source::Old, 13, 1), kRefuse);
+  EXPECT_EQ(renewed.onDatagram(Source::Old, 14, false), kRefuse);
+  auto next = renewed;
+  EXPECT_EQ(next.onBeginSubgroup(Source::Replacement, 14, 1), kRefuse);
+  EXPECT_EQ(next.onBeginSubgroup(Source::Replacement, 15, 0), kAccept);
+  EXPECT_EQ(renewed.onBeginSubgroup(Source::Old, 15, 0), kAccept);
+  EXPECT_EQ(renewed.onBeginSubgroup(Source::Replacement, 16, 0), kAccept);
+  EXPECT_EQ(renewed.split()->replacementFirstGroup, 16);
+  EXPECT_EQ(renewed.split()->oldLastGroup, 15);
+  // Refused for an ended replacement's group, old hasn't reached the next
+  // replacement's.
+  EXPECT_FALSE(renewed.oldCaughtUp());
+}
+
+// Each replacement that ended keeps its groups from old.
+TEST_F(
+    MoQUpstreamHandoffArbiterTest,
+    EveryEndedReplacementKeepsItsGroupsFromOld) {
+  oldOpens(11);
+  replacementOpens(13);
+  auto second = arbiter_.afterReplacementEnded(
+      {.highestGroup = 13, .openSubgroups = {{11, 0}}});
+  ASSERT_EQ(second.onBeginSubgroup(Source::Old, 14, 0), kAccept);
+  ASSERT_EQ(second.onBeginSubgroup(Source::Replacement, 16, 0), kAccept);
+
+  auto third = second.afterReplacementEnded(
+      {.highestGroup = 16, .openSubgroups = {{11, 0}, {14, 0}}});
+
+  EXPECT_EQ(third.onBeginSubgroup(Source::Old, 11, 1), kAccept);
+  EXPECT_EQ(third.onBeginSubgroup(Source::Old, 13, 0), kRefuse);
+  EXPECT_EQ(third.onBeginSubgroup(Source::Old, 15, 0), kAccept);
+  EXPECT_EQ(third.onBeginSubgroup(Source::Old, 16, 0), kRefuse);
+  EXPECT_EQ(third.onBeginSubgroup(Source::Old, 17, 0), kAccept);
+}
+
 }} // namespace moxygen

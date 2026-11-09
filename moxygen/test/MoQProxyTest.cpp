@@ -266,6 +266,14 @@ TEST_F(MoQProxyTest, RejectsSwitchOptionsItCannotRun) {
       std::invalid_argument);
   EXPECT_THROW(
       MoQProxy::create(
+          {provider_}, withSwitch({.maxStartDelay = milliseconds(-1)})),
+      std::invalid_argument);
+  EXPECT_THROW(
+      MoQProxy::create(
+          {provider_}, withSwitch({.reorderGrace = milliseconds(-1)})),
+      std::invalid_argument);
+  EXPECT_THROW(
+      MoQProxy::create(
           {provider_}, withSwitch({.retryBackoff = milliseconds(0)})),
       std::invalid_argument);
   EXPECT_THROW(
@@ -276,7 +284,12 @@ TEST_F(MoQProxyTest, RejectsSwitchOptionsItCannotRun) {
                .maxRetryBackoff = milliseconds(50)})),
       std::invalid_argument);
   EXPECT_NO_THROW(
-      MoQProxy::create({provider_}, withSwitch({.deadline = milliseconds(0)})));
+      MoQProxy::create(
+          {provider_},
+          withSwitch(
+              {.deadline = milliseconds(0),
+               .maxStartDelay = milliseconds(0),
+               .reorderGrace = milliseconds(0)})));
 }
 
 TEST_F(MoQProxyTest, TriesUpstreamProvidersInOrder) {
@@ -392,6 +405,7 @@ TEST_F(MoQProxyTest, SessionGoawayReachesEveryTrackOnThatSession) {
       .onGoaway(Goaway{});
 
   EXPECT_EQ(proxy_->switchStats().upstreamGoaways, 2);
+  EXPECT_EQ(proxy_->switchStats().gracefulSwitches.started, 2);
   video.value()->unsubscribe();
   audio.value()->unsubscribe();
 }

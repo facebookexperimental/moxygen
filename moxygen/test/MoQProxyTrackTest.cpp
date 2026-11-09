@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <fmt/core.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Sleep.h>
@@ -12,9 +13,11 @@
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <chrono>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <thread>
 #include <utility>
@@ -34,6 +37,8 @@ const FullTrackName kTrackName{TrackNamespace{{"live"}}, "video"};
 // Long enough to only end by cancellation in a passing test, short enough
 // that a test whose wait isn't cancelled fails rather than hangs.
 constexpr std::chrono::seconds kCancellationWait{5};
+// The switch tests' deadline.
+constexpr std::chrono::milliseconds kSwitchDeadline{300};
 
 class TestUpstreamProvider final : public MoQUpstreamProvider {
  public:
@@ -164,15 +169,20 @@ class MoQProxyTrackTest : public Test {
 
   // Establishes the upstream for one subscriber; returns its downstream handle
   // and saves the upstream consumer, which stands in for the upstream session.
+  // whileSubscribing runs while the upstream SUBSCRIBE is in flight.
   std::shared_ptr<Publisher::SubscriptionHandle> subscribeThroughUpstream(
       const std::shared_ptr<NiceMock<MockSubscriptionHandle>>& upstreamHandle,
-      const std::shared_ptr<TrackConsumer>& consumer) {
+      const std::shared_ptr<TrackConsumer>& consumer,
+      std::function<void()> whileSubscribing = nullptr) {
     EXPECT_CALL(*upstreamSession_, subscribe(_, _))
         .WillOnce(Invoke(
-            [this, upstreamHandle](
+            [this, upstreamHandle, whileSubscribing](
                 SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
                 -> folly::coro::Task<Publisher::SubscribeResult> {
               upstreamConsumer_ = std::move(cb);
+              if (whileSubscribing) {
+                whileSubscribing();
+              }
               co_return Publisher::SubscribeResult(upstreamHandle);
             }));
     auto result = folly::coro::blockingWait(
@@ -225,9 +235,9 @@ class MoQProxyTrackTest : public Test {
   }
 
   // Delivers a session GOAWAY as if parsed from the upstream peer.
-  void receiveSessionGoaway() {
+  void receiveSessionGoaway(Goaway goaway = {}) {
     static_cast<MoQControlCodec::ControlCallback&>(*upstreamSession_)
-        .onGoaway(Goaway{});
+        .onGoaway(std::move(goaway));
   }
 
   folly::EventBase eventBase_;
@@ -1049,16 +1059,16 @@ class MoQProxyTrackSwitchTest : public MoQProxyTrackTest {
       std::vector<std::shared_ptr<MoQUpstreamProvider>> providers,
       std::chrono::milliseconds retryBackoff = std::chrono::milliseconds(10),
       std::shared_ptr<folly::Timekeeper> timekeeper = nullptr) {
+    auto switchOptions = switchOptions_;
+    switchOptions.retryBackoff = retryBackoff;
+    switchOptions.maxRetryBackoff = 2 * retryBackoff;
     track_ = MoQProxyTrack::create(
         kTrackName,
         std::move(providers),
         /*cacheConfig=*/{},
         MoQProxyTrack::UpstreamConfig{
             .switchStats = switchStats_,
-            .switchOptions =
-                {.deadline = kDeadline,
-                 .retryBackoff = retryBackoff,
-                 .maxRetryBackoff = 2 * retryBackoff},
+            .switchOptions = switchOptions,
             .timekeeper = std::move(timekeeper)});
     track_->setCallback(callback_);
   }
@@ -1118,16 +1128,21 @@ class MoQProxyTrackSwitchTest : public MoQProxyTrackTest {
     return session;
   }
 
-  // The replacement session accepts the next SUBSCRIBE; saves its request
-  // and consumer.
-  void expectReplacementSubscribe() {
+  // The replacement session accepts the next SUBSCRIBE with handle, or a
+  // new one; saves its request and consumer.
+  void expectReplacementSubscribe(
+      std::shared_ptr<NiceMock<MockSubscriptionHandle>> handle = nullptr) {
+    if (!handle) {
+      handle = makeUpstreamHandle();
+    }
     EXPECT_CALL(*replacementSession_, subscribe(_, _))
         .WillOnce(Invoke(
-            [this](SubscribeRequest request, std::shared_ptr<TrackConsumer> cb)
+            [this, handle](
+                SubscribeRequest request, std::shared_ptr<TrackConsumer> cb)
                 -> folly::coro::Task<Publisher::SubscribeResult> {
               replacementRequest_ = std::move(request);
               replacementConsumer_ = std::move(cb);
-              co_return Publisher::SubscribeResult(makeUpstreamHandle());
+              co_return Publisher::SubscribeResult(handle);
             }));
   }
 
@@ -1161,6 +1176,9 @@ class MoQProxyTrackSwitchTest : public MoQProxyTrackTest {
           ON_CALL(*subgroup, object(_, _, _, _))
               .WillByDefault(
                   Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+          ON_CALL(*subgroup, endOfSubgroup())
+              .WillByDefault(
+                  Return(folly::makeExpected<MoQPublishError>(folly::unit)));
           viewerSubgroups_[group] = subgroup;
           return folly::makeExpected<MoQPublishError>(
               std::static_pointer_cast<SubgroupConsumer>(subgroup));
@@ -1168,8 +1186,10 @@ class MoQProxyTrackSwitchTest : public MoQProxyTrackTest {
     return consumer;
   }
 
-  static constexpr std::chrono::milliseconds kDeadline{300};
+  static constexpr std::chrono::milliseconds kDeadline{kSwitchDeadline};
 
+  // makeTrack sets the retry backoffs.
+  MoQProxySwitchOptions switchOptions_{.deadline = kDeadline, .randomSeed = 1};
   std::shared_ptr<folly::ManualTimekeeper> timekeeper_;
   std::shared_ptr<NiceMock<test::MockMoQSession>> replacementSession_;
   std::shared_ptr<TestUpstreamProvider> replacementProvider_;
@@ -1782,5 +1802,1404 @@ TEST_F(
 
   EXPECT_EQ(switchStats_->midSubgroupGaps, 0);
 }
+
+// A switch on a GOAWAY, on manual time, with no start delay unless a test
+// sets one. The viewer subscribes through the upstream, which serves group 11
+// on subgroup 11/0, still open.
+class MoQProxyTrackGracefulSwitchTest : public MoQProxyTrackSwitchTest {
+ protected:
+  void SetUp() override {
+    MoQProxyTrackSwitchTest::SetUp();
+    switchOptions_.maxStartDelay = std::chrono::milliseconds(0);
+    makeTrackOnManualTime({provider_, replacementProvider_});
+  }
+
+  void subscribeWithGroup11Open(
+      std::function<void()> whileSubscribing = nullptr) {
+    downstreamHandle_ =
+        subscribeThroughUpstream(oldHandle_, consumer_, whileSubscribing);
+    ASSERT_NE(upstreamConsumer_, nullptr);
+    auto subgroup = upstreamConsumer_->beginSubgroup(11, 0, kDefaultPriority);
+    ASSERT_TRUE(subgroup.hasValue());
+    oldSubgroup11_ = subgroup.value();
+  }
+
+  // The old upstream finishes a subgroup it opened.
+  [[nodiscard]] static bool finish(SubgroupConsumer& subgroup) {
+    return subgroup.endOfSubgroup().hasValue();
+  }
+
+  [[nodiscard]] bool replacementOpens(uint64_t group) {
+    return sendFirstObject(*replacementConsumer_, group);
+  }
+
+  [[nodiscard]] bool oldOpens(uint64_t group) {
+    auto subgroup =
+        upstreamConsumer_->beginSubgroup(group, 0, kDefaultPriority);
+    if (subgroup.hasError()) {
+      return false;
+    }
+    oldSubgroups_[group] = subgroup.value();
+    return true;
+  }
+
+  static constexpr std::chrono::milliseconds kReorderGrace{200};
+
+  std::shared_ptr<NiceMock<MockTrackConsumer>> consumer_{
+      makeRecordingConsumer()};
+  std::shared_ptr<NiceMock<MockSubscriptionHandle>> oldHandle_{
+      makeUpstreamHandle()};
+  std::shared_ptr<Publisher::SubscriptionHandle> downstreamHandle_;
+  std::shared_ptr<SubgroupConsumer> oldSubgroup11_;
+  std::map<uint64_t, std::shared_ptr<SubgroupConsumer>> oldSubgroups_;
+};
+
+// The replacement, on the next provider since the session going away is
+// refused, starts at the next group, 12. The old upstream finishes group 11
+// and is refused group 12; once it has stayed caught up for the reorder grace,
+// the track unsubscribes from it and serves from the replacement.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    TheOldUpstreamGoesOnceItHasCaughtUpForTheReorderGrace) {
+  EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  EXPECT_EQ(replacementRequest_->filter, LocationFilter::nextObject());
+  EXPECT_EQ(provider_->calls, 2);
+  ASSERT_TRUE(replacementOpens(12));
+  EXPECT_FALSE(oldOpens(12));
+  EXPECT_TRUE(viewerSubgroups_.contains(12));
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  advanceTime(kReorderGrace - std::chrono::milliseconds(1));
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+  EXPECT_CALL(*oldHandle_, unsubscribe());
+
+  advanceTime(std::chrono::milliseconds(1));
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->handoffs.equal, 1);
+  EXPECT_EQ(switchStats_->upstreamsLost, 0);
+  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+  EXPECT_EQ(switchStats_->refusedStreams, 0);
+  EXPECT_FALSE(oldOpens(13));
+  EXPECT_FALSE(viewerSubgroups_.contains(13));
+  EXPECT_TRUE(replacementOpens(13));
+  EXPECT_TRUE(viewerSubgroups_.contains(13));
+  Mock::VerifyAndClearExpectations(consumer_.get());
+}
+
+// A late stream for group 11 reopens it, which restarts the reorder grace
+// once it finishes.
+TEST_F(MoQProxyTrackGracefulSwitchTest, ALateOldStreamRestartsTheReorderGrace) {
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(12));
+  EXPECT_FALSE(oldOpens(12));
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  advanceTime(kReorderGrace / 2);
+  auto late = upstreamConsumer_->beginSubgroup(11, 1, kDefaultPriority);
+  ASSERT_TRUE(late.hasValue());
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  advanceTime(kReorderGrace);
+  ASSERT_TRUE(finish(*late.value()));
+  advanceTime(kReorderGrace - std::chrono::milliseconds(1));
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+  EXPECT_CALL(*oldHandle_, unsubscribe());
+
+  advanceTime(std::chrono::milliseconds(1));
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+}
+
+// The old upstream opens a second stream for 11/0. The first one ending,
+// before or after the GOAWAY, leaves group 11 open until the second ends.
+class MoQProxyTrackReopenedSubgroupTest
+    : public MoQProxyTrackGracefulSwitchTest,
+      public WithParamInterface<bool> {};
+
+TEST_P(
+    MoQProxyTrackReopenedSubgroupTest,
+    TheHandoverWaitsForTheStreamThatReopenedASubgroup) {
+  const bool firstEndsBeforeGoaway = GetParam();
+  subscribeWithGroup11Open();
+  auto reopened = upstreamConsumer_->beginSubgroup(11, 0, kDefaultPriority);
+  ASSERT_TRUE(reopened.hasValue());
+  if (firstEndsBeforeGoaway) {
+    oldSubgroup11_.reset();
+  }
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(12));
+  EXPECT_FALSE(oldOpens(12));
+  oldSubgroup11_.reset();
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  advanceTime(2 * kReorderGrace);
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+  EXPECT_CALL(*oldHandle_, unsubscribe());
+
+  reopened.value().reset();
+  advanceTime(kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ReopenedSubgroup,
+    MoQProxyTrackReopenedSubgroupTest,
+    Values(true, false),
+    [](const TestParamInfo<bool>& info) {
+      return info.param ? "FirstEndsBeforeTheGoaway" : "FirstEndsAfterIt";
+    });
+
+// The replacement starts at group 12, which the old upstream has opened, so
+// its copies of the groups through 12 are refused and it takes over at 13.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AReplacementBehindTakesOverAfterTheOldUpstreamsGroups) {
+  subscribeWithGroup11Open();
+  ASSERT_TRUE(oldOpens(12));
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+
+  EXPECT_FALSE(replacementOpens(12));
+  EXPECT_FALSE(oldOpens(13));
+  EXPECT_TRUE(replacementOpens(13));
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  ASSERT_TRUE(finish(*oldSubgroups_[12]));
+  advanceTime(kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->refusedStreams, 1);
+  EXPECT_EQ(switchStats_->handoffs.behind, 1);
+}
+
+// The replacement starts at group 13, so the old upstream still serves group
+// 12 before it is refused 13.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AReplacementAheadLetsTheOldUpstreamFillTheGroupsBeforeIt) {
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+
+  ASSERT_TRUE(replacementOpens(13));
+  EXPECT_TRUE(oldOpens(12));
+  EXPECT_TRUE(viewerSubgroups_.contains(12));
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  ASSERT_TRUE(finish(*oldSubgroups_[12]));
+  advanceTime(kReorderGrace);
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  EXPECT_FALSE(oldOpens(13));
+  advanceTime(kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->refusedStreams, 0);
+  EXPECT_EQ(switchStats_->handoffs.ahead, 1);
+  // The deadline passed while the replacement waited.
+  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 0);
+}
+
+// Draft 18+: a replacement stream that starts mid-subgroup is refused. Before
+// the split, it keeps its group the old upstream's; after, its group reaches
+// viewers without it.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AReplacementStreamStartingMidSubgroupIsRefused) {
+  ON_CALL(*replacementSession_, getNegotiatedVersion())
+      .WillByDefault(Return(kVersionDraft18));
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  auto midSubgroup = [this](uint64_t group, uint64_t subgroup) {
+    return replacementConsumer_
+        ->beginSubgroup(
+            group, subgroup, kDefaultPriority, {.beginsWithFirstObject = false})
+        .hasError();
+  };
+
+  EXPECT_TRUE(midSubgroup(12, 1));
+  EXPECT_EQ(switchStats_->midSubgroupGaps, 0);
+  EXPECT_FALSE(replacementOpens(12));
+  EXPECT_TRUE(oldOpens(12));
+  ASSERT_TRUE(replacementOpens(13));
+  EXPECT_TRUE(midSubgroup(13, 1));
+
+  EXPECT_EQ(switchStats_->midSubgroupGaps, 1);
+  EXPECT_EQ(switchStats_->refusedStreams, 3);
+}
+
+// What the old upstream had open when it went away holds the handover until
+// it finishes, on every kind of delivery.
+enum class OldDelivery { SubgroupStream, ObjectStream, Datagram };
+
+class MoQProxyTrackHandoverDeliveryTest
+    : public MoQProxyTrackGracefulSwitchTest,
+      public WithParamInterface<OldDelivery> {};
+
+TEST_P(MoQProxyTrackHandoverDeliveryTest, TheOldUpstreamFinishesItsOpenGroup) {
+  downstreamHandle_ = subscribeThroughUpstream(oldHandle_, consumer_);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  ON_CALL(*consumer_, objectStream(_, _, _))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  ON_CALL(*consumer_, datagram(_, _, _))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  auto payload = [] { return folly::IOBuf::copyBuffer("x"); };
+  // Sends object 0 of group 11; what finishes the group, if anything is left
+  // open.
+  folly::Function<bool()> finishGroup11;
+  switch (GetParam()) {
+    case OldDelivery::SubgroupStream: {
+      auto subgroup = upstreamConsumer_->beginSubgroup(11, 0, kDefaultPriority);
+      ASSERT_TRUE(subgroup.hasValue());
+      finishGroup11 = [subgroup = subgroup.value()] {
+        return subgroup->endOfSubgroup().hasValue();
+      };
+      break;
+    }
+    case OldDelivery::ObjectStream:
+      ASSERT_TRUE(upstreamConsumer_->objectStream(
+          ObjectHeader(11, 0, 0, 0, uint64_t(1)), payload()));
+      break;
+    case OldDelivery::Datagram:
+      ASSERT_TRUE(upstreamConsumer_->datagram(
+          ObjectHeader(11, 0, 0, 0, uint64_t(1)), payload(), false));
+      finishGroup11 = [this, payload] {
+        return upstreamConsumer_
+            ->datagram(ObjectHeader(11, 0, 1, 0, uint64_t(1)), payload(), true)
+            .hasValue();
+      };
+      break;
+  }
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  ASSERT_TRUE(replacementOpens(12));
+  // A stream, since a datagram of a later group would end group 11 itself.
+  EXPECT_FALSE(oldOpens(12));
+  advanceTime(kReorderGrace);
+  if (!finishGroup11) {
+    EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+    return;
+  }
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+
+  ASSERT_TRUE(finishGroup11());
+  advanceTime(kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    HandoverDelivery,
+    MoQProxyTrackHandoverDeliveryTest,
+    Values(
+        OldDelivery::SubgroupStream,
+        OldDelivery::ObjectStream,
+        OldDelivery::Datagram),
+    [](const TestParamInfo<OldDelivery>& info) {
+      switch (info.param) {
+        case OldDelivery::SubgroupStream:
+          return "SubgroupStream";
+        case OldDelivery::ObjectStream:
+          return "ObjectStream";
+        case OldDelivery::Datagram:
+          return "Datagram";
+      }
+      return "Unknown";
+    });
+
+// However the old upstream's open subgroup ends, it counts as finished.
+enum class SubgroupEnd {
+  FinObject,
+  FinPayload,
+  EndOfSubgroup,
+  EndOfGroup,
+  EndOfTrack,
+  Reset,
+  Dropped,
+};
+
+class MoQProxyTrackOldSubgroupEndTest : public MoQProxyTrackGracefulSwitchTest,
+                                        public WithParamInterface<SubgroupEnd> {
+ protected:
+  // The session holds the subgroup after it ends, unless it dropped it.
+  void end(std::shared_ptr<SubgroupConsumer>& subgroup) {
+    auto payload = [] { return folly::IOBuf::copyBuffer("x"); };
+    switch (GetParam()) {
+      case SubgroupEnd::FinObject:
+        EXPECT_TRUE(subgroup->object(0, payload(), noExtensions(), true));
+        break;
+      case SubgroupEnd::FinPayload:
+        EXPECT_TRUE(subgroup->beginObject(0, 2, payload(), noExtensions()));
+        EXPECT_TRUE(subgroup->objectPayload(payload(), true));
+        break;
+      case SubgroupEnd::EndOfSubgroup:
+        EXPECT_TRUE(subgroup->endOfSubgroup());
+        break;
+      case SubgroupEnd::EndOfGroup:
+        EXPECT_TRUE(subgroup->endOfGroup(0));
+        break;
+      case SubgroupEnd::EndOfTrack:
+        EXPECT_TRUE(subgroup->endOfTrackAndGroup(0));
+        break;
+      case SubgroupEnd::Reset:
+        subgroup->reset(ResetStreamErrorCode::CANCELLED);
+        break;
+      case SubgroupEnd::Dropped:
+        subgroup.reset();
+        break;
+    }
+  }
+};
+
+TEST_P(MoQProxyTrackOldSubgroupEndTest, TheHandoverGoesOnOnceItEnds) {
+  ON_CALL(*consumer_, beginSubgroup(_, _, _, _))
+      .WillByDefault(Invoke([](uint64_t,
+                               uint64_t,
+                               Priority,
+                               TrackConsumer::BeginSubgroupOptions) {
+        auto subgroup = std::make_shared<NiceMock<MockSubgroupConsumer>>();
+        auto ok = folly::makeExpected<MoQPublishError>(folly::unit);
+        ON_CALL(*subgroup, object(_, _, _, _)).WillByDefault(Return(ok));
+        ON_CALL(*subgroup, beginObject(_, _, _, _)).WillByDefault(Return(ok));
+        ON_CALL(*subgroup, objectPayload(_, _))
+            .WillByDefault(Return(
+                folly::makeExpected<MoQPublishError>(
+                    ObjectPublishStatus::DONE)));
+        ON_CALL(*subgroup, endOfSubgroup()).WillByDefault(Return(ok));
+        ON_CALL(*subgroup, endOfGroup(_)).WillByDefault(Return(ok));
+        ON_CALL(*subgroup, endOfTrackAndGroup(_)).WillByDefault(Return(ok));
+        return folly::makeExpected<MoQPublishError>(
+            std::static_pointer_cast<SubgroupConsumer>(subgroup));
+      }));
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(12));
+  EXPECT_FALSE(oldOpens(12));
+  advanceTime(kReorderGrace);
+  ASSERT_EQ(track_->upstreamSession(), upstreamSession_);
+
+  end(oldSubgroup11_);
+  advanceTime(kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    OldSubgroupEnd,
+    MoQProxyTrackOldSubgroupEndTest,
+    Values(
+        SubgroupEnd::FinObject,
+        SubgroupEnd::FinPayload,
+        SubgroupEnd::EndOfSubgroup,
+        SubgroupEnd::EndOfGroup,
+        SubgroupEnd::EndOfTrack,
+        SubgroupEnd::Reset,
+        SubgroupEnd::Dropped),
+    [](const TestParamInfo<SubgroupEnd>& info) {
+      switch (info.param) {
+        case SubgroupEnd::FinObject:
+          return "FinObject";
+        case SubgroupEnd::FinPayload:
+          return "FinPayload";
+        case SubgroupEnd::EndOfSubgroup:
+          return "EndOfSubgroup";
+        case SubgroupEnd::EndOfGroup:
+          return "EndOfGroup";
+        case SubgroupEnd::EndOfTrack:
+          return "EndOfTrack";
+        case SubgroupEnd::Reset:
+          return "Reset";
+        case SubgroupEnd::Dropped:
+          return "Dropped";
+      }
+      return "Unknown";
+    });
+
+// Lost before a replacement was adopted, the old upstream leaves a gap that
+// the switch, now a lost one, fills without waiting out its start delay.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AnUpstreamLostBeforeItsReplacementCarriesOnAsALostSwitch) {
+  switchOptions_.maxStartDelay = std::chrono::seconds(1);
+  makeTrackOnManualTime({provider_, replacementProvider_});
+  EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  // The seed's start delay isn't zero.
+  ASSERT_EQ(replacementConsumer_, nullptr);
+
+  loseUpstream();
+  runPending();
+
+  ASSERT_EQ(track_->upstreamSession(), replacementSession_);
+  ASSERT_TRUE(replacementOpens(12));
+  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->lostSwitches.started, 1);
+  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->lateReplacementGaps.gaps, 1);
+  Mock::VerifyAndClearExpectations(consumer_.get());
+}
+
+// The old upstream's session closes while it is still in group 11, and the
+// replacement already serves group 13: the replacement takes over at once, and
+// owns group 12 too.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AnUpstreamLostOnceItsReplacementWasAdoptedHandsOverAtOnce) {
+  EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(13));
+
+  oldSubgroup11_->reset(ResetStreamErrorCode::SESSION_CLOSED);
+  loseUpstream(PublishDoneStatusCode::SESSION_CLOSED);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+  EXPECT_EQ(switchStats_->upstreamsLost, 1);
+  EXPECT_TRUE(replacementOpens(12));
+  EXPECT_TRUE(viewerSubgroups_.contains(12));
+  Mock::VerifyAndClearExpectations(consumer_.get());
+}
+
+// The session GOAWAY, the request-stream GOAWAY and the loss of the old
+// upstream make one switch.
+TEST_F(MoQProxyTrackGracefulSwitchTest, SignalsForOneUpstreamMakeOneSwitch) {
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+
+  receiveSessionGoaway();
+  upstreamConsumer_->goaway(Goaway{});
+  runPending();
+  ASSERT_TRUE(replacementOpens(12));
+  loseUpstream(PublishDoneStatusCode::SESSION_CLOSED);
+
+  EXPECT_EQ(switchStats_->upstreamGoaways, 2);
+  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+  EXPECT_EQ(replacementProvider_->calls, 1);
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+}
+
+// The old upstream is lost before the adopted replacement forwarded an object,
+// so the switch carries on as a lost one with that replacement.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AnUpstreamLostWhileItsReplacementIsSilentCarriesOnAsALostSwitch) {
+  EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+
+  loseUpstream();
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->lostSwitches.started, 1);
+  ASSERT_TRUE(replacementOpens(12));
+  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->lateReplacementGaps.gaps, 1);
+  Mock::VerifyAndClearExpectations(consumer_.get());
+}
+
+// The deadline passed while the replacement waited, and it still forwards
+// nothing once the old upstream is lost: the lost switch it carries on as gets
+// a deadline of its own, then ends the viewer with GOING_AWAY.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    ASilentReplacementFailsTheSwitchItCarriesOnAs) {
+  EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  advanceTime(kDeadline);
+  ASSERT_EQ(switchStats_->gracefulSwitches.failed, 0);
+
+  loseUpstream();
+  advanceTime(kDeadline - std::chrono::milliseconds(5));
+  EXPECT_EQ(switchStats_->lostSwitches.failed, 0);
+  Mock::VerifyAndClearExpectations(consumer_.get());
+  EXPECT_CALL(
+      *consumer_,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::GOING_AWAY)))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  advanceTime(std::chrono::milliseconds(5));
+
+  EXPECT_EQ(switchStats_->lostSwitches.failed, 1);
+}
+
+// The replacement's stream header alone doesn't let the old upstream go.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    TheOldUpstreamStaysUntilTheReplacementForwardsAnObject) {
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  auto replacement12 =
+      replacementConsumer_->beginSubgroup(12, 0, kDefaultPriority);
+  ASSERT_TRUE(replacement12.hasValue());
+  EXPECT_FALSE(oldOpens(12));
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  advanceTime(2 * kReorderGrace);
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+  EXPECT_CALL(*oldHandle_, unsubscribe());
+
+  ASSERT_TRUE(replacement12.value()->object(
+      0, folly::IOBuf::copyBuffer("x"), noExtensions(), false));
+  advanceTime(kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+}
+
+// The replacement goes away after it served group 13 and before the old
+// upstream caught up: the old upstream still fills group 12, takes back the
+// groups after 13, and the next replacement takes over from it.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AReplacementLostBeforeTakingOverIsReplacedByTheNext) {
+  auto thirdSession = makeSession();
+  auto thirdProvider = std::make_shared<TestUpstreamProvider>(thirdSession);
+  makeTrackOnManualTime({provider_, replacementProvider_, thirdProvider});
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  std::shared_ptr<TrackConsumer> thirdConsumer;
+  EXPECT_CALL(*thirdSession, subscribe(_, _))
+      .WillOnce(Invoke(
+          [this, &thirdConsumer](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            thirdConsumer = std::move(cb);
+            co_return Publisher::SubscribeResult(makeUpstreamHandle());
+          }));
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(13));
+
+  replacementConsumer_->publishDone(
+      PublishDone{
+          RequestID(100), PublishDoneStatusCode::GOING_AWAY, 0, "going away"});
+  runPending();
+
+  EXPECT_TRUE(oldOpens(12));
+  EXPECT_FALSE(oldOpens(13));
+  EXPECT_TRUE(oldOpens(14));
+  EXPECT_TRUE(viewerSubgroups_.contains(14));
+  ASSERT_NE(thirdConsumer, nullptr);
+  EXPECT_EQ(replacementProvider_->calls, 2);
+  ASSERT_TRUE(sendFirstObject(*thirdConsumer, 15));
+  EXPECT_FALSE(oldOpens(15));
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  ASSERT_TRUE(finish(*oldSubgroups_[14]));
+  advanceTime(kReorderGrace);
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  ASSERT_TRUE(finish(*oldSubgroups_[12]));
+  advanceTime(kReorderGrace);
+  EXPECT_EQ(track_->upstreamSession(), thirdSession);
+  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->refusedStreams, 0);
+}
+
+// The old upstream had datagram group 11 open, and a stream of it arrives
+// late, after the replacement that took group 13 went away. It also sends
+// group 12 as an object stream.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AfterItsReplacementGoesTheOldUpstreamStillFinishesItsGroups) {
+  downstreamHandle_ = subscribeThroughUpstream(oldHandle_, consumer_);
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  ON_CALL(*consumer_, datagram(_, _, _))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  ON_CALL(*consumer_, objectStream(_, _, _))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  auto payload = [] { return folly::IOBuf::copyBuffer("x"); };
+  ASSERT_TRUE(upstreamConsumer_->datagram(
+      ObjectHeader(11, 0, 0, 0, uint64_t(1)), payload(), false));
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(replacementOpens(13));
+
+  replacementConsumer_->publishDone(
+      PublishDone{
+          RequestID(100), PublishDoneStatusCode::GOING_AWAY, 0, "going away"});
+  runPending();
+
+  EXPECT_TRUE(
+      upstreamConsumer_
+          ->datagram(ObjectHeader(11, 0, 1, 0, uint64_t(1)), payload(), true)
+          .hasValue());
+  EXPECT_TRUE(
+      upstreamConsumer_->beginSubgroup(11, 1, kDefaultPriority).hasValue());
+  EXPECT_TRUE(upstreamConsumer_
+                  ->objectStream(
+                      ObjectHeader(12, 0, 0, 0, uint64_t(1)), payload(), false)
+                  .hasValue());
+  EXPECT_FALSE(oldOpens(13));
+  EXPECT_TRUE(oldOpens(14));
+  EXPECT_EQ(switchStats_->refusedStreams, 0);
+  EXPECT_EQ(switchStats_->refusedDatagrams, 0);
+}
+
+// The replacement ends the track before it took over: the old upstream still
+// serves the viewer, and the track looks for another replacement.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AReplacementEndingTheTrackBeforeTakingOverIsDropped) {
+  EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+
+  replacementConsumer_->publishDone(
+      PublishDone{
+          RequestID(100), PublishDoneStatusCode::TRACK_ENDED, 0, "ended"});
+  runPending();
+
+  EXPECT_TRUE(oldOpens(12));
+  EXPECT_TRUE(viewerSubgroups_.contains(12));
+  EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
+  EXPECT_GT(provider_->calls, 2);
+  Mock::VerifyAndClearExpectations(consumer_.get());
+}
+
+// The switch deadline passes while the replacement, which already served
+// group 13, is still subscribing. The old upstream takes back the groups after
+// 13.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AReplacementCutOffWhileSubscribingGivesItsGroupsBack) {
+  subscribeWithGroup11Open();
+  auto lateHandle = makeUpstreamHandle();
+  auto subscribeReturned = std::make_shared<bool>(false);
+  EXPECT_CALL(*replacementSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [lateHandle, subscribeReturned](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            EXPECT_TRUE(sendFirstObject(*cb, 13));
+            co_await folly::coro::co_awaitTry(
+                folly::coro::sleep(kCancellationWait));
+            *subscribeReturned = true;
+            co_return Publisher::SubscribeResult(lateHandle);
+          }));
+  EXPECT_CALL(*lateHandle, unsubscribe());
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(viewerSubgroups_.contains(13));
+  EXPECT_FALSE(oldOpens(14));
+
+  advanceTime(kDeadline);
+  runUntil([&] { return *subscribeReturned; });
+  runPending();
+
+  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 1);
+  EXPECT_FALSE(oldOpens(13));
+  EXPECT_TRUE(oldOpens(14));
+  EXPECT_TRUE(viewerSubgroups_.contains(14));
+}
+
+// The replacement of a lost upstream went away before its first object, an
+// object stream for group 12, which starts a switch from it at once. The next
+// replacement can't take group 12.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    ASwitchStartedByAFirstObjectStreamCountsItsGroup) {
+  auto thirdSession = makeSession();
+  auto thirdProvider = std::make_shared<TestUpstreamProvider>(thirdSession);
+  makeTrackOnManualTime({provider_, replacementProvider_, thirdProvider});
+  ON_CALL(*consumer_, objectStream(_, _, _))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  subscribeWithGroup11Open();
+  provider_->error = "unavailable";
+  expectReplacementSubscribe();
+  loseUpstream();
+  ASSERT_TRUE(runUntilAdopted(replacementSession_));
+  std::shared_ptr<TrackConsumer> thirdConsumer;
+  EXPECT_CALL(*thirdSession, subscribe(_, _))
+      .WillOnce(Invoke(
+          [this, &thirdConsumer](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            thirdConsumer = std::move(cb);
+            co_return Publisher::SubscribeResult(makeUpstreamHandle());
+          }));
+  replacementConsumer_->goaway(Goaway{});
+
+  ASSERT_TRUE(replacementConsumer_->objectStream(
+      ObjectHeader(12, 0, 0, 0, uint64_t(1)),
+      folly::IOBuf::copyBuffer("x"),
+      false));
+  runPending();
+
+  ASSERT_EQ(switchStats_->gracefulSwitches.started, 1);
+  ASSERT_NE(thirdConsumer, nullptr);
+  EXPECT_FALSE(sendFirstObject(*thirdConsumer, 12));
+  EXPECT_TRUE(sendFirstObject(*thirdConsumer, 13));
+}
+
+// The replacement of a lost upstream goes away before it forwards an object.
+// The track switches from it once the lost switch completes, not before.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AReplacementThatWentAwayIsSwitchedFromOnceTheLostSwitchCompletes) {
+  auto thirdSession = makeSession();
+  auto thirdProvider = std::make_shared<TestUpstreamProvider>(thirdSession);
+  makeTrackOnManualTime({provider_, replacementProvider_, thirdProvider});
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  std::shared_ptr<TrackConsumer> thirdConsumer;
+  EXPECT_CALL(*thirdSession, subscribe(_, _))
+      .WillOnce(Invoke(
+          [this, &thirdConsumer](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            thirdConsumer = std::move(cb);
+            co_return Publisher::SubscribeResult(makeUpstreamHandle());
+          }));
+  loseUpstream();
+  provider_->error = "closed";
+  runPending();
+  ASSERT_EQ(track_->upstreamSession(), replacementSession_);
+
+  replacementConsumer_->goaway(Goaway{});
+  runPending();
+  EXPECT_EQ(switchStats_->gracefulSwitches.started, 0);
+  EXPECT_EQ(thirdConsumer, nullptr);
+  ASSERT_TRUE(replacementOpens(12));
+  runPending();
+
+  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
+  EXPECT_NE(thirdConsumer, nullptr);
+}
+
+// The adopted replacement goes away before it took over. Once it takes over,
+// the track switches from it too.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AReplacementThatWentAwayIsSwitchedFromOnceItTakesOver) {
+  auto thirdSession = makeSession();
+  auto thirdProvider = std::make_shared<TestUpstreamProvider>(thirdSession);
+  makeTrackOnManualTime({provider_, replacementProvider_, thirdProvider});
+  subscribeWithGroup11Open();
+  expectReplacementSubscribe();
+  std::shared_ptr<TrackConsumer> thirdConsumer;
+  EXPECT_CALL(*thirdSession, subscribe(_, _))
+      .WillOnce(Invoke(
+          [this, &thirdConsumer](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            thirdConsumer = std::move(cb);
+            co_return Publisher::SubscribeResult(makeUpstreamHandle());
+          }));
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  provider_->error = "closed";
+
+  replacementConsumer_->goaway(Goaway{});
+  runPending();
+  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
+  ASSERT_TRUE(replacementOpens(12));
+  EXPECT_FALSE(oldOpens(12));
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  advanceTime(kReorderGrace);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->gracefulSwitches.started, 2);
+  EXPECT_NE(thirdConsumer, nullptr);
+}
+
+TEST_F(MoQProxyTrackGracefulSwitchTest, ClosingDuringASwitchStopsIt) {
+  subscribeWithGroup11Open();
+  auto replacementHandle = makeUpstreamHandle();
+  expectReplacementSubscribe(replacementHandle);
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  EXPECT_CALL(*replacementHandle, unsubscribe());
+  EXPECT_CALL(*oldHandle_, unsubscribe());
+
+  track_->close();
+
+  Mock::VerifyAndClearExpectations(replacementHandle.get());
+  EXPECT_TRUE(
+      replacementConsumer_->beginSubgroup(13, 0, kDefaultPriority).hasError());
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 0);
+}
+
+// The old upstream ends the track before the replacement took over.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    TheOldUpstreamEndingTheTrackStopsTheSwitch) {
+  subscribeWithGroup11Open();
+  auto replacementHandle = makeUpstreamHandle();
+  expectReplacementSubscribe(replacementHandle);
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  EXPECT_CALL(*replacementHandle, unsubscribe());
+  EXPECT_CALL(
+      *consumer_,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::TRACK_ENDED)));
+
+  loseUpstream(PublishDoneStatusCode::TRACK_ENDED);
+
+  Mock::VerifyAndClearExpectations(replacementHandle.get());
+  EXPECT_EQ(switchStats_->upstreamsLost, 0);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
+}
+
+// The old upstream finishes group 11 and ends the track while the replacement
+// is still sending group 12, the last one, which its stream header alone, or
+// with the first object, made the replacement's. The replacement takes over,
+// so the rest of group 12 reaches viewers, and its own end of the track ends
+// theirs.
+class MoQProxyTrackOldUpstreamEndTest : public MoQProxyTrackGracefulSwitchTest,
+                                        public WithParamInterface<bool> {};
+
+TEST_P(
+    MoQProxyTrackOldUpstreamEndTest,
+    TheOldUpstreamEndingTheTrackLeavesItsLastGroupsToTheReplacement) {
+  const bool firstObject = GetParam();
+  subscribeWithGroup11Open();
+  auto replacementHandle = makeUpstreamHandle();
+  expectReplacementSubscribe(replacementHandle);
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  auto group12 = replacementConsumer_->beginSubgroup(12, 0, kDefaultPriority);
+  ASSERT_TRUE(group12.hasValue());
+  if (firstObject) {
+    ASSERT_TRUE(group12.value()
+                    ->object(0, folly::IOBuf::copyBuffer("x"), noExtensions())
+                    .hasValue());
+  }
+  EXPECT_FALSE(oldOpens(12));
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  EXPECT_CALL(*replacementHandle, unsubscribe()).Times(0);
+  EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
+
+  loseUpstream(PublishDoneStatusCode::TRACK_ENDED);
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  const uint64_t next = firstObject ? 1 : 0;
+  EXPECT_TRUE(group12.value()
+                  ->object(next, folly::IOBuf::copyBuffer("y"), noExtensions())
+                  .hasValue());
+  EXPECT_TRUE(finish(*group12.value()));
+  ASSERT_TRUE(viewerSubgroups_.contains(12));
+  Mock::VerifyAndClearExpectations(consumer_.get());
+  EXPECT_CALL(
+      *consumer_,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::TRACK_ENDED)));
+
+  replacementConsumer_->publishDone(
+      PublishDone{
+          RequestID(101), PublishDoneStatusCode::TRACK_ENDED, 1, "ended"});
+
+  Mock::VerifyAndClearExpectations(consumer_.get());
+  Mock::VerifyAndClearExpectations(replacementHandle.get());
+}
+
+// The same, but the old upstream ends the track while the replacement's
+// SUBSCRIBE is still in flight. The replacement takes over once adopted.
+TEST_P(
+    MoQProxyTrackOldUpstreamEndTest,
+    TheOldUpstreamEndingTheTrackWaitsForAReplacementStillSubscribing) {
+  const bool firstObject = GetParam();
+  subscribeWithGroup11Open();
+  auto replacementHandle = makeUpstreamHandle();
+  folly::coro::Baton subscribeReply;
+  std::shared_ptr<SubgroupConsumer> group12;
+  EXPECT_CALL(*replacementSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [this, firstObject, replacementHandle, &subscribeReply, &group12](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            replacementConsumer_ = cb;
+            auto subgroup = cb->beginSubgroup(12, 0, kDefaultPriority);
+            EXPECT_TRUE(subgroup.hasValue());
+            if (subgroup.hasValue()) {
+              group12 = subgroup.value();
+            }
+            if (group12 && firstObject) {
+              EXPECT_TRUE(
+                  group12
+                      ->object(0, folly::IOBuf::copyBuffer("x"), noExtensions())
+                      .hasValue());
+            }
+            co_await subscribeReply;
+            co_return Publisher::SubscribeResult(replacementHandle);
+          }));
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_NE(group12, nullptr);
+  EXPECT_FALSE(oldOpens(12));
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  EXPECT_CALL(*replacementHandle, unsubscribe()).Times(0);
+  EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
+
+  loseUpstream(PublishDoneStatusCode::TRACK_ENDED);
+  runPending();
+  subscribeReply.post();
+  runPending();
+
+  EXPECT_EQ(track_->upstreamSession(), replacementSession_);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  const uint64_t next = firstObject ? 1 : 0;
+  EXPECT_TRUE(
+      group12->object(next, folly::IOBuf::copyBuffer("y"), noExtensions())
+          .hasValue());
+  EXPECT_TRUE(finish(*group12));
+  ASSERT_TRUE(viewerSubgroups_.contains(12));
+  Mock::VerifyAndClearExpectations(consumer_.get());
+  EXPECT_CALL(
+      *consumer_,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::TRACK_ENDED)));
+
+  replacementConsumer_->publishDone(
+      PublishDone{
+          RequestID(101), PublishDoneStatusCode::TRACK_ENDED, 1, "ended"});
+
+  Mock::VerifyAndClearExpectations(consumer_.get());
+  Mock::VerifyAndClearExpectations(replacementHandle.get());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TheReplacementTookGroup12,
+    MoQProxyTrackOldUpstreamEndTest,
+    Values(false, true),
+    [](const TestParamInfo<bool>& info) {
+      return info.param ? "WithItsFirstObject" : "WithItsStreamHeader";
+    });
+
+// The old upstream ends the track while the replacement, which already served
+// group 13, is still subscribing, and the switch deadline passes before its
+// SUBSCRIBE returns. Viewers get the old upstream's end then.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    TheOldUpstreamsEndReachesViewersIfNoReplacementIsAdoptedByTheDeadline) {
+  subscribeWithGroup11Open();
+  auto lateHandle = makeUpstreamHandle();
+  auto subscribeReturned = std::make_shared<bool>(false);
+  EXPECT_CALL(*replacementSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [lateHandle, subscribeReturned](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            EXPECT_TRUE(sendFirstObject(*cb, 13));
+            co_await folly::coro::co_awaitTry(
+                folly::coro::sleep(kCancellationWait));
+            *subscribeReturned = true;
+            co_return Publisher::SubscribeResult(lateHandle);
+          }));
+  EXPECT_CALL(*lateHandle, unsubscribe());
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(viewerSubgroups_.contains(13));
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
+  loseUpstream(PublishDoneStatusCode::TRACK_ENDED);
+  runPending();
+  Mock::VerifyAndClearExpectations(consumer_.get());
+  EXPECT_CALL(
+      *consumer_,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::TRACK_ENDED)));
+
+  advanceTime(kDeadline);
+  runUntil([&] { return *subscribeReturned; });
+  runPending();
+
+  Mock::VerifyAndClearExpectations(consumer_.get());
+  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
+}
+
+// The switch deadline passed while the replacement, which already served group
+// 13, is still subscribing, and the old upstream then ends the track. Viewers
+// get its end at once.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    TheOldUpstreamsEndAfterTheDeadlineReachesViewersAtOnce) {
+  subscribeWithGroup11Open();
+  auto lateHandle = makeUpstreamHandle();
+  folly::coro::Baton subscribeReply;
+  EXPECT_CALL(*replacementSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [lateHandle, &subscribeReply](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            EXPECT_TRUE(sendFirstObject(*cb, 13));
+            co_await subscribeReply;
+            co_return Publisher::SubscribeResult(lateHandle);
+          }));
+  EXPECT_CALL(*lateHandle, unsubscribe());
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(viewerSubgroups_.contains(13));
+  advanceTime(kDeadline);
+  ASSERT_EQ(switchStats_->gracefulSwitches.failed, 1);
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  EXPECT_CALL(
+      *consumer_,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::TRACK_ENDED)));
+
+  loseUpstream(PublishDoneStatusCode::TRACK_ENDED);
+
+  Mock::VerifyAndClearExpectations(consumer_.get());
+  subscribeReply.post();
+  runPending();
+  Mock::VerifyAndClearExpectations(lateHandle.get());
+}
+
+// The viewer leaves while the old upstream's end waits for the replacement,
+// which served group 13. The old upstream's subscription already ended, so it
+// isn't unsubscribed.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AnOldUpstreamWhoseEndWaitsIsNotUnsubscribed) {
+  subscribeWithGroup11Open();
+  auto lateHandle = makeUpstreamHandle();
+  auto subscribeReturned = std::make_shared<bool>(false);
+  EXPECT_CALL(*replacementSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [lateHandle, subscribeReturned](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> cb)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            auto subgroup = cb->beginSubgroup(13, 0, kDefaultPriority);
+            EXPECT_TRUE(
+                subgroup.hasValue() &&
+                subgroup.value()
+                    ->object(0, folly::IOBuf::copyBuffer("x"), noExtensions())
+                    .hasValue() &&
+                subgroup.value()->endOfSubgroup().hasValue());
+            co_await folly::coro::co_awaitTry(
+                folly::coro::sleep(kCancellationWait));
+            *subscribeReturned = true;
+            co_return Publisher::SubscribeResult(lateHandle);
+          }));
+  EXPECT_CALL(*lateHandle, unsubscribe());
+  receiveSessionGoaway();
+  runPending();
+  ASSERT_TRUE(finish(*oldSubgroup11_));
+  loseUpstream(PublishDoneStatusCode::TRACK_ENDED);
+  runPending();
+  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+
+  downstreamHandle_->unsubscribe();
+  runUntil([&] { return *subscribeReturned; });
+  runPending();
+
+  Mock::VerifyAndClearExpectations(oldHandle_.get());
+  Mock::VerifyAndClearExpectations(lateHandle.get());
+}
+
+// The upstream went away while its SUBSCRIBE was in flight, before the track
+// adopted it.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AnUpstreamThatWentAwayIsSwitchedFromOnceAdopted) {
+  expectReplacementSubscribe();
+
+  subscribeWithGroup11Open([this] { receiveSessionGoaway(); });
+  runPending();
+
+  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
+  EXPECT_NE(replacementConsumer_, nullptr);
+  EXPECT_EQ(switchStats_->upstreamGoaways, 1);
+}
+
+// The upstream is lost before the switch on the GOAWAY it got before the track
+// adopted it finds a replacement, so its gap counts as one after a GOAWAY.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AnUpstreamLostAfterAnEarlierGoawayLeavesALateReplacementGap) {
+  switchOptions_.maxStartDelay = std::chrono::seconds(1);
+  makeTrackOnManualTime({provider_, replacementProvider_});
+  expectReplacementSubscribe();
+  subscribeWithGroup11Open([this] { receiveSessionGoaway(); });
+  runPending();
+  ASSERT_EQ(switchStats_->gracefulSwitches.started, 1);
+  // The seed's start delay isn't zero.
+  ASSERT_EQ(replacementConsumer_, nullptr);
+
+  loseUpstream();
+  ASSERT_TRUE(runUntilAdopted(replacementSession_));
+  ASSERT_TRUE(replacementOpens(12));
+
+  EXPECT_EQ(switchStats_->lateReplacementGaps.gaps, 1);
+  EXPECT_EQ(switchStats_->lostGaps.gaps, 0);
+}
+
+// The GOAWAY the upstream got while the track subscribed expired before the
+// SUBSCRIBE returned, so the track waits for the upstream to go and switches
+// from it then.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    AGoawayWithNoTimeLeftLeavesTheSwitchToTheLoss) {
+  subscribeWithGroup11Open([this] {
+    receiveSessionGoaway(Goaway{.timeout = 20});
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  });
+  runPending();
+  EXPECT_EQ(switchStats_->gracefulSwitches.started, 0);
+  expectReplacementSubscribe();
+
+  loseUpstream();
+
+  ASSERT_TRUE(runUntilAdopted(replacementSession_));
+  EXPECT_EQ(switchStats_->lostSwitches.started, 1);
+}
+
+// The switch's start delay and deadline run from the GOAWAY's arrival, here
+// while the track subscribed.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    TheDeadlineOfAnEarlierGoawayRunsFromItsArrival) {
+  static constexpr std::chrono::milliseconds kBeforeAdopting{50};
+  makeTrackOnManualTime({provider_});
+  subscribeWithGroup11Open([this] {
+    receiveSessionGoaway();
+    std::this_thread::sleep_for(kBeforeAdopting);
+  });
+  ASSERT_EQ(switchStats_->gracefulSwitches.started, 1);
+
+  advanceTime(kDeadline - kBeforeAdopting);
+
+  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 1);
+}
+
+// Of a request-stream GOAWAY and a session GOAWAY, the one that expires
+// first, the session's, bounds the switch.
+TEST_F(
+    MoQProxyTrackGracefulSwitchTest,
+    TheGoawayThatExpiresFirstBoundsTheSwitch) {
+  static constexpr std::chrono::milliseconds kSessionTimeout{100};
+  makeTrackOnManualTime({provider_});
+  subscribeWithGroup11Open([this] {
+    receiveSessionGoaway(Goaway{.timeout = uint64_t(kSessionTimeout.count())});
+    upstreamConsumer_->goaway(Goaway{});
+  });
+
+  advanceTime(kSessionTimeout);
+
+  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 1);
+}
+
+// With no replacement, the track stops looking at the switch deadline, or at
+// the GOAWAY's timeout if that is sooner. The old upstream serves until it
+// goes, and the viewer then gets GOING_AWAY at once.
+struct GracefulDeadlineCase {
+  std::string name;
+  uint64_t goawayTimeoutMs;
+  std::chrono::milliseconds stopsLookingAfter;
+};
+
+class MoQProxyTrackGracefulDeadlineTest
+    : public MoQProxyTrackGracefulSwitchTest,
+      public WithParamInterface<GracefulDeadlineCase> {};
+
+TEST_P(
+    MoQProxyTrackGracefulDeadlineTest,
+    WithNoReplacementTheOldUpstreamServesUntilItGoes) {
+  makeTrackOnManualTime({provider_});
+  EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
+  subscribeWithGroup11Open();
+
+  receiveSessionGoaway(Goaway{.timeout = GetParam().goawayTimeoutMs});
+  advanceTime(GetParam().stopsLookingAfter - std::chrono::milliseconds(1));
+  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 0);
+  advanceTime(std::chrono::milliseconds(1));
+  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 1);
+  const auto attempts = provider_->calls;
+  EXPECT_GT(attempts, 1);
+  advanceTime(std::chrono::milliseconds(50));
+  EXPECT_EQ(provider_->calls, attempts);
+  EXPECT_TRUE(oldOpens(12));
+  EXPECT_TRUE(viewerSubgroups_.contains(12));
+  Mock::VerifyAndClearExpectations(consumer_.get());
+  EXPECT_CALL(
+      *consumer_,
+      publishDone(
+          Field(&PublishDone::statusCode, PublishDoneStatusCode::GOING_AWAY)))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  loseUpstream();
+
+  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    GracefulDeadline,
+    MoQProxyTrackGracefulDeadlineTest,
+    Values(
+        GracefulDeadlineCase{"NoTimeout", 0, kSwitchDeadline},
+        GracefulDeadlineCase{
+            "ShorterTimeout",
+            100,
+            std::chrono::milliseconds(100)},
+        // The largest a varint holds, too long for the clock.
+        GracefulDeadlineCase{
+            "TimeoutPastTheClock",
+            (uint64_t(1) << 62) - 1,
+            kSwitchDeadline}),
+    [](const TestParamInfo<GracefulDeadlineCase>& info) {
+      return info.param.name;
+    });
+
+// The tracks of a session that goes away get its one GOAWAY, and their
+// replacement SUBSCRIBEs spread over the start delay rather than go out at
+// once: up to a quarter of the GOAWAY's timeout, and at most maxStartDelay.
+struct SwitchSpreadCase {
+  std::string name;
+  uint64_t goawayTimeoutMs;
+  std::chrono::milliseconds maxStartDelay;
+  std::chrono::milliseconds longestDelay;
+};
+
+class MoQProxyTrackSwitchSpreadTest
+    : public MoQProxyTrackSwitchTest,
+      public WithParamInterface<SwitchSpreadCase> {};
+
+TEST_P(
+    MoQProxyTrackSwitchSpreadTest,
+    TheTracksOfASessionGoingAwaySpreadTheirSwitches) {
+  constexpr size_t kTracks = 20;
+  constexpr std::chrono::milliseconds kStep{5};
+  const auto longestDelay = GetParam().longestDelay;
+  timekeeper_ = std::make_shared<folly::ManualTimekeeper>();
+  auto goaways = std::make_shared<MoQUpstreamGoaways>();
+  auto random = std::make_shared<std::mt19937_64>(1);
+  ON_CALL(*upstreamSession_, subscribe(_, _))
+      .WillByDefault(Invoke(
+          [this](SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return Publisher::SubscribeResult(makeUpstreamHandle());
+          }));
+  size_t replacementSubscribes = 0;
+  ON_CALL(*replacementSession_, subscribe(_, _))
+      .WillByDefault(Invoke(
+          [this, &replacementSubscribes](
+              SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            ++replacementSubscribes;
+            co_return Publisher::SubscribeResult(makeUpstreamHandle());
+          }));
+  std::vector<std::shared_ptr<MoQProxyTrack>> tracks;
+  std::vector<std::shared_ptr<Publisher::SubscriptionHandle>> viewers;
+  for (size_t i = 0; i < kTracks; i++) {
+    FullTrackName name{kTrackName.trackNamespace, fmt::format("video{}", i)};
+    tracks.push_back(
+        MoQProxyTrack::create(
+            name,
+            {provider_, replacementProvider_},
+            {},
+            MoQProxyTrack::UpstreamConfig{
+                .goaways = goaways,
+                .switchStats = switchStats_,
+                .switchOptions =
+                    {.deadline = std::chrono::seconds(1),
+                     .maxStartDelay = GetParam().maxStartDelay},
+                .timekeeper = timekeeper_,
+                .random = random}));
+    auto request = makeSubscribeRequest(RequestID(1));
+    request.fullTrackName = name;
+    auto viewer = folly::coro::blockingWait(
+        tracks.back()->subscribe(
+            std::move(request), makeConsumer(), makeDownstreamPeer()),
+        &eventBase_);
+    ASSERT_TRUE(viewer.hasValue());
+    viewers.push_back(viewer.value());
+  }
+
+  receiveSessionGoaway(Goaway{.timeout = GetParam().goawayTimeoutMs});
+  runPending();
+  const auto atOnce = replacementSubscribes;
+  std::chrono::milliseconds lastAfter{0};
+  for (auto elapsed = kStep; elapsed <= longestDelay; elapsed += kStep) {
+    const auto before = replacementSubscribes;
+    advanceTime(kStep);
+    if (replacementSubscribes > before) {
+      lastAfter = elapsed;
+    }
+  }
+
+  EXPECT_EQ(switchStats_->gracefulSwitches.started, kTracks);
+  EXPECT_EQ(replacementSubscribes, kTracks);
+  EXPECT_LT(atOnce, kTracks / 4);
+  EXPECT_GT(lastAfter, longestDelay / 2);
+  for (const auto& track : tracks) {
+    track->close();
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SwitchSpread,
+    MoQProxyTrackSwitchSpreadTest,
+    Values(
+        SwitchSpreadCase{
+            "NoTimeout",
+            0,
+            std::chrono::milliseconds(100),
+            std::chrono::milliseconds(100)},
+        SwitchSpreadCase{
+            "ShortTimeout",
+            200,
+            std::chrono::seconds(1),
+            std::chrono::milliseconds(50)}),
+    [](const TestParamInfo<SwitchSpreadCase>& info) {
+      return info.param.name;
+    });
 
 }} // namespace moxygen

@@ -12,7 +12,9 @@
 namespace moxygen::test {
 namespace {
 
-constexpr uint64_t kMaxRequestID = 100;
+// Enough for 100 requests open at once on draft 16, which spends two IDs per
+// request.
+constexpr uint64_t kMaxRequestID = 256;
 
 } // namespace
 

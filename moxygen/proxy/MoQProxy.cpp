@@ -298,11 +298,14 @@ MoQProxy::MoQProxy(
   }
   const auto& upstreamSwitch = options_.upstreamSwitch;
   if (upstreamSwitch.deadline.count() < 0 ||
+      upstreamSwitch.maxStartDelay.count() < 0 ||
+      upstreamSwitch.reorderGrace.count() < 0 ||
       upstreamSwitch.retryBackoff.count() <= 0 ||
       upstreamSwitch.maxRetryBackoff < upstreamSwitch.retryBackoff) {
     throw std::invalid_argument(
-        "MoQProxy requires a non-negative switch deadline, a positive retry "
-        "backoff and a maximum backoff no smaller than it");
+        "MoQProxy requires a non-negative switch deadline, start delay and "
+        "reorder grace, a positive retry backoff and a maximum backoff no "
+        "smaller than it");
   }
   if (upstreamProviders_.empty()) {
     throw std::invalid_argument("MoQProxy requires upstream providers");

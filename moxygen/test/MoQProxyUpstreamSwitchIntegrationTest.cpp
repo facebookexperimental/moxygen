@@ -18,6 +18,7 @@
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <memory>
@@ -81,10 +82,10 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
     folly::coro::blockingWait(std::move(body), &eventBase_);
   }
 
-  static MoQProxyOptions proxyOptions() {
+  virtual MoQProxyOptions proxyOptions() const {
     MoQProxyOptions options;
     options.upstreamSwitch = {
-        .deadline = kSwitchDeadline,
+        .deadline = switchDeadline_,
         .retryBackoff = std::chrono::milliseconds(10),
         .maxRetryBackoff = std::chrono::milliseconds(50),
         .randomSeed = 1};
@@ -128,10 +129,11 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
     }
   }
 
-  folly::coro::Task<std::shared_ptr<CheckingViewer>> subscribeViewer() {
+  folly::coro::Task<std::shared_ptr<CheckingViewer>> subscribeViewer(
+      FullTrackName track = kTrack) {
     auto* link = co_await links_.connect(edgeProxy_ ? edgeProxy_ : proxy_);
-    auto viewer = std::make_shared<CheckingViewer>(origin_, kTrack);
-    auto request = SubscribeRequest::make(kTrack);
+    auto viewer = std::make_shared<CheckingViewer>(origin_, track);
+    auto request = SubscribeRequest::make(track);
     request.filter = LocationFilter::nextObject();
     const auto filter = request.filter;
     auto handle = co_await link->client->subscribe(std::move(request), viewer);
@@ -172,17 +174,20 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
         [&] { return hub.subscribeFilters(kTrack).size() == count; });
   }
 
-  // Every proxy and hub lets go of the track once its viewers leave.
-  folly::coro::Task<void> leaveAndExpectIdle() {
+  // Every proxy and hub lets go of the tracks once their viewers leave.
+  folly::coro::Task<void> leaveAndExpectIdle(
+      std::vector<FullTrackName> tracks = {kTrack}) {
     for (auto& handle : std::exchange(viewerHandles_, {})) {
       handle->unsubscribe();
     }
     co_await settle();
-    for (const auto& proxy : proxies_) {
-      EXPECT_EQ(proxy->findTrack(kTrack), nullptr);
-    }
-    for (const auto& hub : hubs_) {
-      EXPECT_EQ(hub->subscriptions(kTrack), 0);
+    for (const auto& track : tracks) {
+      for (const auto& proxy : proxies_) {
+        EXPECT_EQ(proxy->findTrack(track), nullptr);
+      }
+      for (const auto& hub : hubs_) {
+        EXPECT_EQ(hub->subscriptions(track), 0);
+      }
     }
   }
 
@@ -213,6 +218,8 @@ class MoQProxyUpstreamSwitchTest : public TestWithParam<SwitchCase> {
   std::vector<std::shared_ptr<ScriptedUpstreamProvider>> hubProviders_;
   // The proxy's end of each hub's session, in hub order.
   std::vector<std::shared_ptr<MoQSession>> hubSessions_;
+  // For the proxies start() makes.
+  std::chrono::milliseconds switchDeadline_{kSwitchDeadline};
   std::vector<std::shared_ptr<SwitchTestHub>> hubs_;
   // The proxy in front of the hubs, and the edge proxy in front of it.
   std::shared_ptr<MoQProxy> proxy_;
@@ -433,9 +440,9 @@ INSTANTIATE_TEST_SUITE_P(
 
 class MoQProxyUpstreamFaultTest : public MoQProxyUpstreamSwitchTest {};
 
-// GOAWAYs from the hub reach the proxy, which only counts them for now: the
+// GOAWAYs from the hub reach the proxy. With no other hub to switch to, the
 // hub keeps serving.
-TEST_P(MoQProxyUpstreamFaultTest, GoawaysAreCountedWhileTheHubServes) {
+TEST_P(MoQProxyUpstreamFaultTest, WithNoOtherHubAHubGoingAwayKeepsServing) {
   run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
     co_await start(/*hubCount=*/1);
     auto viewer = co_await subscribeViewer();
@@ -449,6 +456,7 @@ TEST_P(MoQProxyUpstreamFaultTest, GoawaysAreCountedWhileTheHubServes) {
     co_await settle();
 
     EXPECT_EQ(proxy_->switchStats().upstreamGoaways, requestStreams ? 2 : 1);
+    EXPECT_EQ(proxy_->switchStats().gracefulSwitches.started, 1);
     EXPECT_THAT(viewer->violations(), IsEmpty());
     EXPECT_THAT(viewer->unfinishedSubgroups(), IsEmpty());
     EXPECT_THAT(viewer->missing(), IsEmpty());
@@ -457,10 +465,12 @@ TEST_P(MoQProxyUpstreamFaultTest, GoawaysAreCountedWhileTheHubServes) {
   }));
 }
 
-// The proxy doesn't act on the GOAWAY yet, so when the hub then closes, the
-// track resumes from the other hub only after losing it: a gap a graceful
-// switch would have avoided.
-TEST_P(MoQProxyUpstreamFaultTest, GoawayThenCloseResumesFromAnotherHub) {
+// The hub closes right after its GOAWAY, before the switch's start delay
+// ends, so the track resumes from the other hub only after losing it: a gap a
+// replacement found in time would have avoided.
+TEST_P(
+    MoQProxyUpstreamFaultTest,
+    AHubClosingRightAfterItsGoawayIsReplacedAsLost) {
   run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
     co_await start(/*hubCount=*/2);
     auto viewer = co_await subscribeViewer();
@@ -480,6 +490,8 @@ TEST_P(MoQProxyUpstreamFaultTest, GoawayThenCloseResumesFromAnotherHub) {
     const auto& stats = proxy_->switchStats();
     EXPECT_EQ(stats.upstreamGoaways, 1);
     EXPECT_EQ(stats.upstreamsLost, 1);
+    EXPECT_EQ(stats.gracefulSwitches.started, 1);
+    EXPECT_EQ(stats.lostSwitches.completed, 1);
     EXPECT_EQ(stats.lateReplacementGaps.gaps, 1);
     EXPECT_EQ(stats.lostGaps.gaps, 0);
     co_await leaveAndExpectIdle();
@@ -618,6 +630,413 @@ std::vector<SwitchCase> faultCases() {
 INSTANTIATE_TEST_SUITE_P(
     AllVersions,
     MoQProxyUpstreamFaultTest,
+    ValuesIn(faultCases()),
+    caseName);
+
+constexpr std::chrono::milliseconds kMaxStartDelay{50};
+constexpr std::chrono::milliseconds kReorderGrace{50};
+// Far longer than a switch takes here.
+constexpr std::chrono::milliseconds kGoawayTimeout{2000};
+
+// Hub 0 sends a GOAWAY, and the proxy moves the track to hub 1 while hub 0
+// still serves.
+class MoQProxyGracefulSwitchTest : public MoQProxyUpstreamSwitchTest {
+ protected:
+  MoQProxyOptions proxyOptions() const override {
+    auto options = MoQProxyUpstreamSwitchTest::proxyOptions();
+    options.upstreamSwitch.maxStartDelay = kMaxStartDelay;
+    options.upstreamSwitch.reorderGrace = kReorderGrace;
+    return options;
+  }
+
+  // Hub 0 publishes groups [0, hub0Groups) and hub 1 [0, hub1Groups), then
+  // hub 0 goes away, and the proxy subscribes to hub 1 from its next group.
+  folly::coro::Task<std::shared_ptr<CheckingViewer>> startWithHub0GoingAway(
+      uint64_t hub0Groups,
+      uint64_t hub1Groups) {
+    co_await start(/*hubCount=*/2);
+    auto viewer = co_await subscribeViewer();
+    for (uint64_t group = 0; group < hub0Groups; group++) {
+      hubs_[0]->publishGroup(kTrack, group);
+    }
+    for (uint64_t group = 0; group < hub1Groups; group++) {
+      hubs_[1]->publishGroup(kTrack, group);
+    }
+    co_await settle();
+    goAway(Goaway{.timeout = uint64_t(kGoawayTimeout.count())});
+    co_await waitForSubscribe(*hubs_[1], 1);
+    co_return viewer;
+  }
+
+  // Hub 0 sends a session GOAWAY. The pool stops choosing it, as health checks
+  // mark a draining hub down.
+  void goAway(Goaway goaway) {
+    hubProviders_[0]->setAvailable(0, false);
+    hubs_[0]->sendGoaway(goaway);
+  }
+
+  // Until the proxy has unsubscribed from hub 0.
+  folly::coro::Task<void> waitForHandover(const FullTrackName& track = kTrack) {
+    co_await waitUntil([&] { return hubs_[0]->subscriptions(track) == 0; });
+  }
+
+  // Each group reached the viewer whole, from one hub, and the switch let go
+  // of hub 0 without losing it.
+  void expectHandedOver(
+      const CheckingViewer& viewer,
+      const std::map<uint64_t, uint64_t>& hubOfGroup) {
+    expectIntact(viewer);
+    EXPECT_EQ(viewer.hubOfGroup(), hubOfGroup);
+    const auto& stats = proxy_->switchStats();
+    EXPECT_EQ(stats.gracefulSwitches.started, 1);
+    EXPECT_EQ(stats.gracefulSwitches.completed, 1);
+    EXPECT_EQ(stats.upstreamsLost, 0);
+    EXPECT_EQ(stats.lostSwitches.started, 0);
+    EXPECT_THAT(
+        hubs_[1]->subscribeFilters(kTrack),
+        ElementsAre(LocationFilter::nextObject()));
+    if (edgeProxy_) {
+      EXPECT_EQ(edgeProxy_->switchStats().upstreamGoaways, 0);
+      EXPECT_EQ(edgeProxy_->switchStats().upstreamsLost, 0);
+    }
+  }
+
+  uint64_t refused() const {
+    const auto& stats = proxy_->switchStats();
+    return stats.refusedStreams + stats.refusedDatagrams;
+  }
+
+  // What a hub sends for whole groups.
+  uint64_t refusedPerGroup() const {
+    return GetParam().shape.delivery == SwitchTrackShape::Delivery::Datagrams
+        ? objectsPerGroup()
+        : streamsPerGroup();
+  }
+};
+
+// Hub 1 starts at group 2, the next one hub 0 would send. Hub 0 is refused
+// group 2, and once it has stayed caught up the proxy lets it go, long before
+// its GOAWAY times out.
+TEST_P(MoQProxyGracefulSwitchTest, AReplacementAtTheNextGroupTakesOverThere) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    auto viewer = co_await startWithHub0GoingAway(2, 2);
+    hubs_[1]->publishGroup(kTrack, 2);
+    co_await settle();
+    hubs_[0]->publishGroup(kTrack, 2);
+    co_await waitForHandover();
+    hubs_[1]->publishGroup(kTrack, 3);
+    co_await settle();
+
+    expectHandedOver(*viewer, {{0, 0}, {1, 0}, {2, 1}, {3, 1}});
+    EXPECT_EQ(proxy_->switchStats().handoffs.equal, 1);
+    EXPECT_EQ(refused(), 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Hub 1 is two groups behind: its groups 2 and 3, which hub 0 already sent,
+// are refused, and it takes over at group 4.
+TEST_P(MoQProxyGracefulSwitchTest, AReplacementBehindTakesOverAfterTheOldHub) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    auto viewer = co_await startWithHub0GoingAway(4, 2);
+    hubs_[1]->publishGroup(kTrack, 2);
+    hubs_[1]->publishGroup(kTrack, 3);
+    co_await settle();
+    hubs_[0]->publishGroup(kTrack, 4);
+    hubs_[1]->publishGroup(kTrack, 4);
+    co_await waitForHandover();
+    hubs_[1]->publishGroup(kTrack, 5);
+    co_await settle();
+
+    expectHandedOver(*viewer, {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 1}, {5, 1}});
+    EXPECT_EQ(proxy_->switchStats().handoffs.behind, 1);
+    EXPECT_EQ(refused(), 2 * refusedPerGroup());
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Hub 1 is two groups ahead, so it starts at group 4, which reaches the viewer
+// while hub 0 still owes groups 2 and 3. The proxy keeps hub 0 until it has
+// finished them and reached group 4.
+TEST_P(
+    MoQProxyGracefulSwitchTest,
+    AReplacementAheadLetsTheOldHubFinishTheGroupsBeforeIt) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    auto viewer = co_await startWithHub0GoingAway(2, 4);
+    hubs_[1]->publishGroup(kTrack, 4);
+    hubs_[0]->publishGroup(kTrack, 2);
+    hubs_[0]->publish(kTrack, 3, 1);
+    co_await folly::coro::sleep(2 * kReorderGrace);
+    EXPECT_EQ(hubs_[0]->subscriptions(kTrack), 1);
+    hubs_[0]->publishGroup(kTrack, 3);
+    hubs_[0]->publishGroup(kTrack, 4);
+    co_await waitForHandover();
+    hubs_[1]->publishGroup(kTrack, 5);
+    co_await settle();
+
+    expectHandedOver(*viewer, {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 1}, {5, 1}});
+    EXPECT_EQ(proxy_->switchStats().handoffs.ahead, 1);
+    EXPECT_EQ(refused(), 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Hub 0's session closes while it is in group 2, once hub 1 took group 4: hub
+// 1 takes over at once, the rest of group 2 and group 3 are a gap, and group
+// 2's open streams reset.
+TEST_P(
+    MoQProxyGracefulSwitchTest,
+    TheOldHubClosingBeforeItCatchesUpHandsOverAtOnce) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    auto viewer = co_await startWithHub0GoingAway(2, 4);
+    hubs_[1]->publishGroup(kTrack, 4);
+    hubs_[0]->publish(kTrack, 2, 2);
+    co_await settle();
+    viewer->expectedReset = ResetStreamErrorCode::SESSION_CLOSED;
+
+    hubs_[0]->closeSessions();
+    co_await settle();
+    hubs_[1]->publishGroup(kTrack, 5);
+    co_await settle();
+
+    EXPECT_THAT(viewer->violations(), IsEmpty());
+    EXPECT_THAT(viewer->unfinishedSubgroups(), IsEmpty());
+    std::vector<AbsoluteLocation> missing;
+    for (uint64_t object = 2; object < objectsPerGroup(); object++) {
+      missing.emplace_back(2, object);
+    }
+    for (uint64_t object = 0; object < objectsPerGroup(); object++) {
+      missing.emplace_back(3, object);
+    }
+    EXPECT_EQ(viewer->missing(), missing);
+    const std::map<uint64_t, uint64_t> hubOfGroup{
+        {0, 0}, {1, 0}, {2, 0}, {4, 1}, {5, 1}};
+    EXPECT_EQ(viewer->hubOfGroup(), hubOfGroup);
+    const auto& stats = proxy_->switchStats();
+    EXPECT_EQ(stats.gracefulSwitches.completed, 1);
+    EXPECT_EQ(stats.upstreamsLost, 1);
+    EXPECT_EQ(stats.lostSwitches.started, 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AllVersions,
+    MoQProxyGracefulSwitchTest,
+    ValuesIn(everyShapeCases()),
+    caseName);
+
+// The signals of a hub going away, on one track shape.
+class MoQProxyGoawaySignalTest : public MoQProxyGracefulSwitchTest {
+ protected:
+  bool requestStreams() const {
+    return getDraftMajorVersion(GetParam().version) >= 18;
+  }
+};
+
+// Group IDs skip: hub 1 starts at group 9, the next one after hub 0's group 5,
+// and no gap is reported for the IDs the origin never used.
+TEST_P(MoQProxyGoawaySignalTest, GroupIdsThatSkipHandOverAtTheNextGroup) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await start(/*hubCount=*/2);
+    auto viewer = co_await subscribeViewer();
+    for (uint64_t group : {0, 5}) {
+      hubs_[0]->publishGroup(kTrack, group);
+      hubs_[1]->publishGroup(kTrack, group);
+    }
+    co_await settle();
+    goAway(Goaway{.timeout = uint64_t(kGoawayTimeout.count())});
+    co_await waitForSubscribe(*hubs_[1], 1);
+
+    hubs_[1]->publishGroup(kTrack, 9);
+    co_await settle();
+    hubs_[0]->publishGroup(kTrack, 9);
+    co_await waitForHandover();
+    hubs_[1]->publishGroup(kTrack, 14);
+    co_await settle();
+
+    expectHandedOver(*viewer, {{0, 0}, {5, 0}, {9, 1}, {14, 1}});
+    EXPECT_EQ(proxy_->switchStats().handoffs.equal, 1);
+    EXPECT_EQ(proxy_->switchStats().lateReplacementGaps.gaps, 0);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// A request-stream GOAWAY moves only its own track: another track on the same
+// session stays on hub 0.
+TEST_P(MoQProxyGoawaySignalTest, ARequestStreamGoawayMovesOnlyItsTrack) {
+  if (!requestStreams()) {
+    GTEST_SKIP() << "request-stream GOAWAYs are draft 18+";
+  }
+  const FullTrackName audio{kTrack.trackNamespace, "audio"};
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await start(/*hubCount=*/2);
+    auto videoViewer = co_await subscribeViewer();
+    auto audioViewer = co_await subscribeViewer(audio);
+    for (const auto& track : {kTrack, audio}) {
+      for (uint64_t group = 0; group < 2; group++) {
+        hubs_[0]->publishGroup(track, group);
+        hubs_[1]->publishGroup(track, group);
+      }
+    }
+    co_await settle();
+
+    hubProviders_[0]->setAvailable(0, false);
+    hubs_[0]->sendRequestGoaway(kTrack, kGoawayTimeout);
+    co_await waitForSubscribe(*hubs_[1], 1);
+    hubs_[1]->publishGroup(kTrack, 2);
+    co_await settle();
+    hubs_[0]->publishGroup(kTrack, 2);
+    hubs_[0]->publishGroup(audio, 2);
+    co_await waitForHandover();
+
+    expectHandedOver(*videoViewer, {{0, 0}, {1, 0}, {2, 1}});
+    expectIntact(*audioViewer);
+    const std::map<uint64_t, uint64_t> audioHubOfGroup{{0, 0}, {1, 0}, {2, 0}};
+    EXPECT_EQ(audioViewer->hubOfGroup(), audioHubOfGroup);
+    EXPECT_EQ(hubs_[0]->subscriptions(audio), 1);
+    EXPECT_THAT(hubs_[1]->subscribeFilters(audio), IsEmpty());
+    EXPECT_EQ(proxy_->switchStats().upstreamGoaways, 1);
+    co_await leaveAndExpectIdle({kTrack, audio});
+  }));
+}
+
+// The session GOAWAY, whose new session URI the proxy ignores, the
+// request-stream GOAWAY on draft 18+, and hub 0 then closing make one switch,
+// to the hub the provider picks.
+TEST_P(MoQProxyGoawaySignalTest, EverySignalOfAHubGoingAwayMakesOneSwitch) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await start(/*hubCount=*/2);
+    auto viewer = co_await subscribeViewer();
+    for (uint64_t group = 0; group < 2; group++) {
+      hubs_[0]->publishGroup(kTrack, group);
+      hubs_[1]->publishGroup(kTrack, group);
+    }
+    co_await settle();
+
+    if (requestStreams()) {
+      hubs_[0]->sendRequestGoaway(kTrack, kGoawayTimeout);
+    }
+    goAway(
+        Goaway{
+            .newSessionUri = "moqt://elsewhere.example/relay",
+            .timeout = uint64_t(kGoawayTimeout.count())});
+    co_await waitForSubscribe(*hubs_[1], 1);
+    hubs_[1]->publishGroup(kTrack, 2);
+    co_await settle();
+    hubs_[0]->closeSessions();
+    co_await settle();
+    hubs_[1]->publishGroup(kTrack, 3);
+    co_await settle();
+
+    expectIntact(*viewer);
+    const std::map<uint64_t, uint64_t> hubOfGroup{
+        {0, 0}, {1, 0}, {2, 1}, {3, 1}};
+    EXPECT_EQ(viewer->hubOfGroup(), hubOfGroup);
+    const auto& stats = proxy_->switchStats();
+    EXPECT_EQ(stats.upstreamGoaways, requestStreams() ? 2 : 1);
+    EXPECT_EQ(stats.gracefulSwitches.started, 1);
+    EXPECT_EQ(stats.gracefulSwitches.completed, 1);
+    EXPECT_EQ(stats.lostSwitches.started, 0);
+    EXPECT_THAT(hubs_[1]->subscribeFilters(kTrack), SizeIs(1));
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// With no other hub, the proxy stops looking at the GOAWAY's timeout, sooner
+// than its switch deadline, so viewers get GOING_AWAY once the hub closes then
+// rather than a switch deadline later. Through two hops the edge proxy then
+// loses its upstream, and passes GOING_AWAY on at its own deadline.
+TEST_P(
+    MoQProxyGoawaySignalTest,
+    AGoawayTimeoutShorterThanTheDeadlineBoundsTheSwitch) {
+  if (!requestStreams()) {
+    GTEST_SKIP() << "draft 16 GOAWAYs carry no timeout";
+  }
+  constexpr std::chrono::milliseconds kShortTimeout{100};
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await start(/*hubCount=*/1);
+    auto viewer = co_await subscribeViewer();
+    hubs_[0]->publishGroup(kTrack, 0);
+    co_await settle();
+    viewer->expectedEnd = PublishDoneStatusCode::GOING_AWAY;
+
+    const auto goawayAt = std::chrono::steady_clock::now();
+    hubs_[0]->sendGoaway(Goaway{.timeout = uint64_t(kShortTimeout.count())});
+    co_await waitUntil([&] {
+      return edgeProxy_ ? edgeProxy_->switchStats().upstreamsLost == 1
+                        : viewer->done().has_value();
+    });
+
+    EXPECT_LT(std::chrono::steady_clock::now() - goawayAt, kSwitchDeadline);
+    co_await waitUntil([&] { return viewer->done().has_value(); });
+    expectIntact(*viewer);
+    CO_ASSERT_TRUE(viewer->done().has_value());
+    EXPECT_EQ(viewer->done()->statusCode, PublishDoneStatusCode::GOING_AWAY);
+    const auto& stats = proxy_->switchStats();
+    EXPECT_EQ(stats.gracefulSwitches.started, 1);
+    EXPECT_EQ(stats.gracefulSwitches.failed + stats.lostSwitches.failed, 1);
+    co_await leaveAndExpectIdle();
+  }));
+}
+
+// Hub 0 carries 100 tracks on its one session when it goes away, and every
+// track moves to hub 1. How their SUBSCRIBEs spread is checked on manual time
+// in MoQProxyTrackTest.
+TEST_P(MoQProxyGoawaySignalTest, EveryTrackOfAHubGoingAwayMovesToAnotherHub) {
+  constexpr size_t kTracks = 100;
+  // Under ASan and parallel tests, the last of the 100 SUBSCRIBEs can take
+  // longer than kSwitchDeadline, and the switches longer than kGoawayTimeout,
+  // after which hub 0 closes its session.
+  constexpr std::chrono::milliseconds kManyTracksGoawayTimeout{10000};
+  switchDeadline_ = kManyTracksGoawayTimeout;
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await start(/*hubCount=*/2);
+    std::vector<FullTrackName> tracks;
+    std::vector<std::shared_ptr<CheckingViewer>> viewers;
+    for (size_t i = 0; i < kTracks; i++) {
+      tracks.push_back({kTrack.trackNamespace, fmt::format("video{}", i)});
+      viewers.push_back(co_await subscribeViewer(tracks.back()));
+    }
+    for (const auto& track : tracks) {
+      hubs_[0]->publishGroup(track, 0);
+      hubs_[1]->publishGroup(track, 0);
+    }
+    co_await settle();
+
+    goAway(Goaway{.timeout = uint64_t(kManyTracksGoawayTimeout.count())});
+    co_await waitUntil([&] {
+      return std::ranges::all_of(tracks, [&](const auto& track) {
+        return hubs_[1]->subscriptions(track) == 1;
+      });
+    });
+    for (const auto& track : tracks) {
+      hubs_[1]->publishGroup(track, 1);
+    }
+    co_await settle();
+    for (const auto& track : tracks) {
+      hubs_[0]->publishGroup(track, 1);
+    }
+    co_await waitUntil([&] {
+      return std::ranges::all_of(tracks, [&](const auto& track) {
+        return hubs_[0]->subscriptions(track) == 0;
+      });
+    });
+
+    for (const auto& viewer : viewers) {
+      expectIntact(*viewer);
+      const std::map<uint64_t, uint64_t> hubOfGroup{{0, 0}, {1, 1}};
+      EXPECT_EQ(viewer->hubOfGroup(), hubOfGroup);
+    }
+    EXPECT_EQ(proxy_->switchStats().gracefulSwitches.completed, kTracks);
+    EXPECT_EQ(proxy_->switchStats().upstreamsLost, 0);
+    co_await leaveAndExpectIdle(tracks);
+  }));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AllVersions,
+    MoQProxyGoawaySignalTest,
     ValuesIn(faultCases()),
     caseName);
 

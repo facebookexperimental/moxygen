@@ -420,7 +420,8 @@ TEST_F(SwitchTestHubTest, NextGroupStartSkipsTheGroupInProgress) {
   EXPECT_THAT(viewer_->violations(), IsEmpty());
 }
 
-TEST_F(SwitchTestHubTest, RecordsEverySubscribeFilter) {
+TEST_F(SwitchTestHubTest, RecordsEverySubscribeFilterAndWhenItArrived) {
+  const auto before = std::chrono::steady_clock::now();
   auto first = subscribe(viewer_, LocationFilter::nextObject());
   first->unsubscribe();
   auto second = subscribe(viewer_, LocationFilter::relativeStart(0));
@@ -429,6 +430,11 @@ TEST_F(SwitchTestHubTest, RecordsEverySubscribeFilter) {
       hub_->subscribeFilters(kTrack),
       ElementsAre(
           LocationFilter::nextObject(), LocationFilter::relativeStart(0)));
+  const auto times = hub_->subscribeTimes(kTrack);
+  ASSERT_THAT(times, SizeIs(2));
+  EXPECT_GE(times[0], before);
+  EXPECT_GE(times[1], times[0]);
+  EXPECT_LE(times[1], std::chrono::steady_clock::now());
 }
 
 TEST_F(SwitchTestHubTest, StreamsOpenedMidSubgroupDoNotClaimItsFirstObject) {

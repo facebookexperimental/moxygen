@@ -10,6 +10,7 @@
 #include <optional>
 #include <set>
 #include <utility>
+#include <vector>
 
 namespace moxygen {
 
@@ -49,6 +50,12 @@ namespace moxygen {
 // or a tail or old-stall timer fires, and reports that with onOldEnded().
 // Everything from old is refused after that.
 //
+// A replacement can end before old does, after it froze the split. Old and
+// the next replacement then go through the arbiter afterReplacementEnded()
+// returns: old keeps its own groups and takes back the ended replacement's
+// after the highest group the track had opened. The ended replacement's
+// groups up to that one are no one's, since viewers may have part of them.
+//
 // The caller also keeps track aliases hop-local (the replacement's
 // setTrackAlias is not passed on) and lets only a group's owner advance the
 // track's Largest.
@@ -80,6 +87,10 @@ class MoQUpstreamHandoffArbiter {
 
   explicit MoQUpstreamHandoffArbiter(OldProgress oldProgress = {});
 
+  // For when the replacement that froze the split ended before old did. What
+  // old has open, and the highest group the track opened, come from progress.
+  MoQUpstreamHandoffArbiter afterReplacementEnded(OldProgress progress) const;
+
   // A received object stream is a subgroup of its own, so it arrives here
   // too. startsMidSubgroup is true only when the stream is known not to begin
   // with its subgroup's first object; draft 16 doesn't say.
@@ -102,6 +113,10 @@ class MoQUpstreamHandoffArbiter {
   const std::optional<Split>& split() const {
     return split_;
   }
+  // The highest group old has opened, counting what it was seeded with.
+  const std::optional<uint64_t>& highestOldGroup() const {
+    return highestOldGroup_;
+  }
   // Old has reached the replacement's groups and finished every group it
   // opened before them. A late stream for one of those groups makes this false
   // again until it finishes.
@@ -116,7 +131,19 @@ class MoQUpstreamHandoffArbiter {
     bool open;
   };
 
+  // The groups of a replacement that ended before old, up to the highest
+  // group the track had opened by then.
+  struct EndedReplacement {
+    Split split;
+    uint64_t lastGroup;
+
+    bool owned(uint64_t group) const {
+      return group <= lastGroup && split.ownedByReplacement(group);
+    }
+  };
+
   Admit admit(Source source, uint64_t group);
+  bool endedReplacementOwned(uint64_t group) const;
   Split splitAfterOldEnded() const;
   void raiseHighestOldGroup(uint64_t group);
   void raiseReplacementIncompleteGroup(uint64_t group);
@@ -135,6 +162,8 @@ class MoQUpstreamHandoffArbiter {
   // refused: a stream that started mid-subgroup, or data for a group old
   // owned.
   std::optional<uint64_t> replacementIncompleteGroup_;
+  // Old can't take these back.
+  std::vector<EndedReplacement> endedReplacements_;
   bool oldReachedReplacement_{false};
   bool oldEnded_{false};
   bool replacementDelivering_{false};

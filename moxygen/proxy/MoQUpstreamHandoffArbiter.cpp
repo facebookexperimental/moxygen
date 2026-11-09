@@ -22,6 +22,18 @@ MoQUpstreamHandoffArbiter::MoQUpstreamHandoffArbiter(OldProgress oldProgress)
   }
 }
 
+MoQUpstreamHandoffArbiter MoQUpstreamHandoffArbiter::afterReplacementEnded(
+    OldProgress progress) const {
+  const auto highestGroup = progress.highestGroup;
+  MoQUpstreamHandoffArbiter renewed(std::move(progress));
+  renewed.endedReplacements_ = endedReplacements_;
+  if (split_ && highestGroup) {
+    renewed.endedReplacements_.push_back(
+        EndedReplacement{.split = *split_, .lastGroup = *highestGroup});
+  }
+  return renewed;
+}
+
 MoQUpstreamHandoffArbiter::Admit MoQUpstreamHandoffArbiter::onBeginSubgroup(
     Source source,
     uint64_t group,
@@ -117,6 +129,13 @@ bool MoQUpstreamHandoffArbiter::oldHasOpenGroups() const {
       (oldDatagramGroup_ && oldDatagramGroup_->open);
 }
 
+bool MoQUpstreamHandoffArbiter::endedReplacementOwned(uint64_t group) const {
+  return std::any_of(
+      endedReplacements_.begin(),
+      endedReplacements_.end(),
+      [group](const EndedReplacement& ended) { return ended.owned(group); });
+}
+
 void MoQUpstreamHandoffArbiter::raiseHighestOldGroup(uint64_t group) {
   highestOldGroup_ = std::max(highestOldGroup_.value_or(group), group);
 }
@@ -136,6 +155,9 @@ MoQUpstreamHandoffArbiter::Admit MoQUpstreamHandoffArbiter::admit(
     }
     if (ownership_ && ownership_->ownedByReplacement(group)) {
       oldReachedReplacement_ = true;
+      return Admit::Refuse;
+    }
+    if (endedReplacementOwned(group)) {
       return Admit::Refuse;
     }
     raiseHighestOldGroup(group);

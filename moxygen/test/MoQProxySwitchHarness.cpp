@@ -78,6 +78,8 @@ folly::coro::Task<Publisher::SubscribeResult> SwitchTestHub::subscribe(
     ok.largest = largest->second;
   }
   filters_[request.fullTrackName].push_back(request.filter);
+  subscribeTimes_[request.fullTrackName].push_back(
+      std::chrono::steady_clock::now());
   // Draft 16+ carries the publisher's group order only as a track property.
   ok.extensions.insertMutableExtension(Extension(
       kPublisherGroupOrderExtensionType,
@@ -250,6 +252,14 @@ std::vector<LocationFilter> SwitchTestHub::subscribeFilters(
     const FullTrackName& track) const {
   auto it = filters_.find(track);
   return it == filters_.end() ? std::vector<LocationFilter>{} : it->second;
+}
+
+std::vector<std::chrono::steady_clock::time_point>
+SwitchTestHub::subscribeTimes(const FullTrackName& track) const {
+  auto it = subscribeTimes_.find(track);
+  return it == subscribeTimes_.end()
+      ? std::vector<std::chrono::steady_clock::time_point>{}
+      : it->second;
 }
 
 std::vector<uint64_t> SwitchTestHub::subscriptionsTo(
