@@ -564,7 +564,6 @@ class ConnectResponseHandler : public proxygen::HTTPTransactionHandler {
   void onBody(std::unique_ptr<folly::IOBuf>) noexcept override {}
   void onTrailers(std::unique_ptr<proxygen::HTTPHeaders>) noexcept override {}
   void onEOM() noexcept override {}
-  void onUpgrade(proxygen::UpgradeProtocol) noexcept override {}
   void onError(const proxygen::HTTPException& ex) noexcept override {
     if (!status_.first.isFulfilled()) {
       status_.first.setException(std::runtime_error(ex.what()));

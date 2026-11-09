@@ -62,7 +62,6 @@ class MoQWebTransportClient : public MoQClient {
 
     void onBody(std::unique_ptr<folly::IOBuf>) noexcept override {}
     void onTrailers(std::unique_ptr<proxygen::HTTPHeaders>) noexcept override {}
-    void onUpgrade(proxygen::UpgradeProtocol) noexcept override {}
     void onEgressPaused() noexcept override {}
     void onEgressResumed() noexcept override {}
 

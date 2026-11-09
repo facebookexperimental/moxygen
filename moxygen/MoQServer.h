@@ -229,7 +229,6 @@ class MoQServer : public MoQServerBase {
         txn_->sendEOM();
       }
     }
-    void onUpgrade(proxygen::UpgradeProtocol) noexcept override {}
     void onError(const proxygen::HTTPException& error) noexcept override {
       XLOG(ERR) << folly::exceptionStr(error);
       onSessionEnd(proxygen::WebTransport::kInternalError);
