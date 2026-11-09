@@ -497,6 +497,24 @@ TEST_F(SwitchTestHubTest, EndingSubscriptionsResetsOpenStreamsThenEndsThem) {
   EXPECT_EQ(hub_->subscriptions(kTrack), 0);
 }
 
+TEST_F(SwitchTestHubTest, FinishingSubscriptionsLetsOpenStreamsFinish) {
+  auto handle = subscribe(viewer_);
+  hub_->publish(kTrack, 0, 2);
+  viewer_->expectedEnd = PublishDoneStatusCode::TRACK_ENDED;
+
+  hub_->finishSubscriptions(kTrack, PublishDoneStatusCode::TRACK_ENDED);
+  ASSERT_TRUE(viewer_->done().has_value());
+  EXPECT_EQ(hub_->subscriptions(kTrack), 0);
+  hub_->publishGroup(kTrack, 0);
+  hub_->publishGroup(kTrack, 1);
+
+  const std::vector<AbsoluteLocation> received{{0, 0}, {0, 1}, {0, 2}, {0, 3}};
+  EXPECT_EQ(viewer_->received(), received);
+  EXPECT_THAT(viewer_->violations(), IsEmpty());
+  EXPECT_THAT(viewer_->unfinishedSubgroups(), IsEmpty());
+  EXPECT_THAT(viewer_->resets(), IsEmpty());
+}
+
 TEST_F(SwitchTestHubTest, UnsubscribedViewersGetNothing) {
   auto handle = subscribe(viewer_);
 

@@ -9,6 +9,8 @@
 #include <fmt/core.h>
 #include <algorithm>
 
+#include "moxygen/MoQVersions.h"
+
 namespace moxygen::test {
 namespace {
 
@@ -185,16 +187,35 @@ void SwitchTestHub::publish(
       largest->second = std::max(largest->second, location);
     }
     // Publishing can end a subscription.
-    for (auto id : subscriptionsTo(track)) {
+    for (auto id : subscriptionsTo(track, /*includeEnded=*/true)) {
       auto it = subscriptions_.find(id);
       if (it == subscriptions_.end()) {
         continue;
       }
-      const auto& range = it->second.range;
+      auto& subscription = it->second;
+      if (subscription.ended) {
+        finishStream(id, subscription, location);
+        continue;
+      }
+      const auto& range = subscription.range;
       if (range.start <= location && location <= range.end) {
-        publishObject(id, it->second, location);
+        publishObject(id, subscription, location);
       }
     }
+  }
+}
+
+void SwitchTestHub::finishStream(
+    uint64_t subscriptionID,
+    Subscription& subscription,
+    AbsoluteLocation location) {
+  if (!subscription.openSubgroups.contains(
+          {location.group, origin_->shape().subgroupOf(location.object)})) {
+    return;
+  }
+  publishObject(subscriptionID, subscription, location);
+  if (subscription.openSubgroups.empty()) {
+    subscriptions_.erase(subscriptionID);
   }
 }
 
@@ -267,26 +288,34 @@ void SwitchTestHub::publishObject(
 }
 
 void SwitchTestHub::attach(const std::shared_ptr<MoQSession>& session) {
-  sessions_.push_back(session);
+  sessions_.push_back({session});
 }
 
-void SwitchTestHub::sendGoaway(const Goaway& goaway) {
-  for (const auto& weakSession : sessions_) {
-    if (auto session = weakSession.lock()) {
+size_t SwitchTestHub::sendGoaway(const Goaway& goaway) {
+  size_t sent = 0;
+  for (auto& attached : sessions_) {
+    if (auto session = attached.session.lock()) {
       session->goaway(goaway);
+      sent += !std::exchange(attached.goawaySent, true);
     }
   }
+  return sent;
 }
 
-void SwitchTestHub::sendRequestGoaway(
+size_t SwitchTestHub::sendRequestGoaway(
     const FullTrackName& track,
     std::chrono::milliseconds timeout) {
+  size_t sent = 0;
   for (auto id : subscriptionsTo(track)) {
-    const auto& subscription = subscriptions_.at(id);
+    auto& subscription = subscriptions_.at(id);
     if (auto session = subscription.session.lock()) {
       session->requestStreamGoaway(subscription.requestID, "", timeout);
+      const auto version = session->getNegotiatedVersion();
+      sent += version && getDraftMajorVersion(*version) >= 18 &&
+          !std::exchange(subscription.goawaySent, true);
     }
   }
+  return sent;
 }
 
 void SwitchTestHub::endSubscriptions(
@@ -310,12 +339,35 @@ void SwitchTestHub::endSubscriptions(
   }
 }
 
-void SwitchTestHub::closeSessions(SessionCloseErrorCode error) {
-  for (const auto& weakSession : std::exchange(sessions_, {})) {
-    if (auto session = weakSession.lock()) {
+void SwitchTestHub::finishSubscriptions(
+    const FullTrackName& track,
+    PublishDoneStatusCode statusCode) {
+  for (auto id : subscriptionsTo(track)) {
+    auto it = subscriptions_.find(id);
+    if (it == subscriptions_.end()) {
+      continue;
+    }
+    auto consumer = it->second.consumer;
+    const auto requestID = it->second.requestID;
+    if (it->second.openSubgroups.empty()) {
+      subscriptions_.erase(it);
+    } else {
+      it->second.ended = true;
+    }
+    consumer->publishDone(
+        PublishDone{requestID, statusCode, 0, "test hub ended the track"});
+  }
+}
+
+size_t SwitchTestHub::closeSessions(SessionCloseErrorCode error) {
+  size_t closed = 0;
+  for (const auto& attached : std::exchange(sessions_, {})) {
+    if (auto session = attached.session.lock()) {
       session->close(error);
+      ++closed;
     }
   }
+  return closed;
 }
 
 size_t SwitchTestHub::subscriptions(const FullTrackName& track) const {
@@ -342,10 +394,11 @@ size_t SwitchTestHub::fetches(const FullTrackName& track) const {
 }
 
 std::vector<uint64_t> SwitchTestHub::subscriptionsTo(
-    const FullTrackName& track) const {
+    const FullTrackName& track,
+    bool includeEnded) const {
   std::vector<uint64_t> ids;
   for (const auto& [id, subscription] : subscriptions_) {
-    if (subscription.track == track) {
+    if (subscription.track == track && (includeEnded || !subscription.ended)) {
       ids.push_back(id);
     }
   }

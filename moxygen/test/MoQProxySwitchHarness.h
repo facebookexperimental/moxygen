@@ -110,19 +110,29 @@ class SwitchTestHub : public Publisher,
   // The hub serves on the server side of these sessions.
   void attach(const std::shared_ptr<MoQSession>& session);
 
-  void sendGoaway(const Goaway& goaway);
+  // Returns how many sessions got their first GOAWAY; a session ignores any
+  // later one.
+  size_t sendGoaway(const Goaway& goaway);
   // A request-stream GOAWAY on each subscription to the track (draft 18+).
-  void sendRequestGoaway(
+  // Returns how many subscriptions got their first, on a session that can
+  // send one.
+  size_t sendRequestGoaway(
       const FullTrackName& track,
       std::chrono::milliseconds timeout = {});
   // Resets the subscriptions' open subgroup streams, then sends PUBLISH_DONE,
-  // as a session does when a request-stream GOAWAY times out. A relay passing
-  // on its upstream's PUBLISH_DONE lets open streams finish instead.
+  // as a session does when a request-stream GOAWAY times out.
   void endSubscriptions(
       const FullTrackName& track,
       PublishDoneStatusCode statusCode,
       ResetStreamErrorCode reset = ResetStreamErrorCode::CANCELLED);
-  void closeSessions(
+  // Sends PUBLISH_DONE while open subgroup streams stay open, and later
+  // publishing finishes them, as a relay passing on its upstream's
+  // PUBLISH_DONE does.
+  void finishSubscriptions(
+      const FullTrackName& track,
+      PublishDoneStatusCode statusCode);
+  // Returns how many sessions it closed.
+  size_t closeSessions(
       SessionCloseErrorCode error = SessionCloseErrorCode::NO_ERROR);
 
   size_t subscriptions(const FullTrackName& track) const;
@@ -152,13 +162,28 @@ class SwitchTestHub : public Publisher,
     // Subgroup streams still open, by group and subgroup.
     std::map<std::pair<uint64_t, uint64_t>, std::shared_ptr<SubgroupConsumer>>
         openSubgroups;
+    // Sent PUBLISH_DONE; only finishes its open subgroup streams.
+    bool ended{false};
+    bool goawaySent{false};
+  };
+  struct AttachedSession {
+    std::weak_ptr<MoQSession> session;
+    bool goawaySent{false};
   };
 
   void publishObject(
       uint64_t subscriptionID,
       Subscription& subscription,
       AbsoluteLocation location);
-  std::vector<uint64_t> subscriptionsTo(const FullTrackName& track) const;
+  // For an ended subscription: publishes the object if it continues an open
+  // stream, and drops the subscription once none is left.
+  void finishStream(
+      uint64_t subscriptionID,
+      Subscription& subscription,
+      AbsoluteLocation location);
+  std::vector<uint64_t> subscriptionsTo(
+      const FullTrackName& track,
+      bool includeEnded = false) const;
   void unsubscribe(uint64_t subscriptionID);
 
   uint64_t id_;
@@ -171,7 +196,7 @@ class SwitchTestHub : public Publisher,
   std::map<FullTrackName, std::vector<std::chrono::steady_clock::time_point>>
       subscribeTimes_;
   std::map<FullTrackName, size_t> fetches_;
-  std::vector<std::weak_ptr<MoQSession>> sessions_;
+  std::vector<AttachedSession> sessions_;
 };
 
 // Routes the proxy to the first available upstream, as a consistent-hash pool
