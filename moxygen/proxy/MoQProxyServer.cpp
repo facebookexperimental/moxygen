@@ -23,8 +23,12 @@
 #include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/synchronization/Baton.h>
 #include <proxygen/httpserver/samples/hq/FizzContext.h>
+#include <algorithm>
+#include <chrono>
+#include <csignal>
 #include <iostream>
 #include <optional>
+#include <thread>
 #include <vector>
 
 DEFINE_string(cert, "", "Cert path");
@@ -74,6 +78,12 @@ DEFINE_int32(
     cache_completion_wait_ms,
     100,
     "How long a join waits for open streams to complete its range");
+DEFINE_int32(
+    drain_timeout_ms,
+    0,
+    "On SIGTERM, send downstream sessions a GOAWAY, with this timeout on draft "
+    "18 and later, and wait up to it, and the sessions' drain flush timeout "
+    "after it, for them to leave before closing; 0 closes at once");
 DEFINE_int32(
     replay_stall_timeout_ms,
     5000,
@@ -211,6 +221,50 @@ class ProxyServer : public MoQServer {
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
     clientSession->setPublishHandler(proxy_);
     clientSession->setSubscribeHandler(proxy_);
+    std::erase_if(downstream_, [](const auto& downstream) {
+      return downstream.session.expired();
+    });
+    downstream_.push_back({.session = clientSession});
+  }
+
+  folly::Try<Setup> onClientSetup(
+      Setup clientSetup,
+      const std::shared_ptr<MoQSession>& session) override {
+    auto serverSetup =
+        MoQServer::onClientSetup(std::move(clientSetup), session);
+    if (serverSetup.hasValue()) {
+      // Runs once the session has sent its SERVER_SETUP, so that a GOAWAY
+      // follows it.
+      session->getExecutor()->add([weakServer = weak_from_this(),
+                                   weakSession = std::weak_ptr(session)] {
+        auto server = weakServer.lock();
+        auto session = weakSession.lock();
+        if (server && session && !session->isClosed()) {
+          static_cast<ProxyServer&>(*server).onSetupComplete(session);
+        }
+      });
+    }
+    return serverSetup;
+  }
+
+  // Asks every downstream session to move elsewhere within timeout, and each
+  // still setting up to move within what is left of it once it has.
+  void drain(std::chrono::milliseconds timeout) {
+    drainDeadline_ = std::chrono::steady_clock::now() + timeout;
+    for (const auto& downstream : downstream_) {
+      auto session = downstream.session.lock();
+      if (session && downstream.setUp) {
+        sendDrainGoaway(*session);
+      }
+    }
+  }
+
+  // Counts sessions still setting up too, which a drain waits to send away.
+  bool hasOpenDownstream() const {
+    return std::ranges::any_of(downstream_, [](const auto& downstream) {
+      auto session = downstream.session.lock();
+      return session && !session->isClosed();
+    });
   }
 
  protected:
@@ -224,8 +278,64 @@ class ProxyServer : public MoQServer {
   }
 
  private:
+  struct Downstream {
+    std::weak_ptr<MoQSession> session;
+    bool setUp{false};
+  };
+
+  void onSetupComplete(const std::shared_ptr<MoQSession>& session) {
+    for (auto& downstream : downstream_) {
+      if (downstream.session.lock() == session) {
+        downstream.setUp = true;
+      }
+    }
+    if (drainDeadline_) {
+      sendDrainGoaway(*session);
+    }
+  }
+
+  void sendDrainGoaway(MoQSession& session) const {
+    // A GOAWAY timeout of 0 means none.
+    const auto left = std::max<int64_t>(
+        1,
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            *drainDeadline_ - std::chrono::steady_clock::now())
+            .count());
+    session.goaway(Goaway{.timeout = static_cast<uint64_t>(left)});
+  }
+
   std::shared_ptr<MoQProxy> proxy_;
+  std::vector<Downstream> downstream_;
+  std::optional<std::chrono::steady_clock::time_point> drainDeadline_;
 };
+
+// Drains the server, waiting up to timeout, and the sessions' drain flush
+// after it, for its downstream sessions to close.
+void drainDownstream(
+    folly::EventBase& workerEvb,
+    ProxyServer& server,
+    std::chrono::milliseconds timeout) {
+  constexpr std::chrono::milliseconds kPoll{50};
+  XLOG(INFO) << "Draining for up to " << timeout.count() << "ms";
+  workerEvb.runInEventBaseThreadAndWait([&] { server.drain(timeout); });
+  const auto start = std::chrono::steady_clock::now();
+  // A session still open at its GOAWAY timeout ends its requests, then waits
+  // up to its drain flush timeout for the peer to have the replies.
+  const auto deadline = start + timeout + MoQSettings{}.drainFlushTimeout;
+  bool open = true;
+  while (open && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(kPoll);
+    workerEvb.runInEventBaseThreadAndWait(
+        [&] { open = server.hasOpenDownstream(); });
+  }
+  const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+  if (open) {
+    XLOG(WARN) << "Drain timed out with downstream sessions open";
+  } else {
+    XLOG(INFO) << "Drained in " << took.count() << "ms";
+  }
+}
 
 void logJoinStats(const MoQProxyJoinStats& stats) {
   XLOG(INFO) << "Join stats: immediateHits=" << stats.immediateHits
@@ -260,6 +370,8 @@ int main(int argc, char* argv[]) {
       << "--upstream_idle_timeout_ms can't be negative";
   XLOG_IF(FATAL, FLAGS_upstream_retry_ms < 0)
       << "--upstream_retry_ms can't be negative";
+  XLOG_IF(FATAL, FLAGS_drain_timeout_ms < 0)
+      << "--drain_timeout_ms can't be negative";
   auto upstreamTransport =
       samples::parseTransportType(FLAGS_upstream_transport);
   XLOG_IF(FATAL, !upstreamTransport) << "Invalid --upstream_transport";
@@ -310,7 +422,16 @@ int main(int argc, char* argv[]) {
   std::cout << "ready port=" << server->getAddress().getPort() << std::endl;
 
   folly::EventBase evb;
-  SignalHandler signalHandler(&evb, [&](int) {
+  SignalHandler signalHandler(&evb, [&](int signum) {
+    if (signum == SIGTERM && FLAGS_drain_timeout_ms > 0) {
+      // A second signal stops the proxy at once.
+      std::signal(SIGINT, SIG_DFL);
+      std::signal(SIGTERM, SIG_DFL);
+      drainDownstream(
+          workerEvb,
+          *server,
+          std::chrono::milliseconds(FLAGS_drain_timeout_ms));
+    }
     XLOG(INFO) << "Caught signal, stopping proxy server";
     workerEvb.runInEventBaseThreadAndWait([&proxy, &providers] {
       logJoinStats(proxy->joinStats());
