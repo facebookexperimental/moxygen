@@ -1290,6 +1290,10 @@ class MoQSession : public Subscriber,
       bool parityMatters = true);
   bool shouldRejectNewPeerRequestDueToGoaway() const;
   bool shouldFailNewLocalRequestDueToGoaway() const;
+  // The error for a new local request that must not start: the session is
+  // closed, or draining unless allowedWhileDraining, or got a GOAWAY.
+  std::optional<RequestError> refuseNewLocalRequest(
+      bool allowedWhileDraining = false) const;
   uint8_t getRequestIDMultiplier() const {
     return 2;
   }

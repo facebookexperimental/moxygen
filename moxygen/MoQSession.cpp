@@ -7189,24 +7189,8 @@ folly::coro::Task<MoQSession::TrackStatusResult> MoQSession::trackStatus(
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onTrackStatus);
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName
              << "sess=" << this;
-  if (draining_ || closed_) {
-    XLOG(DBG1)
-        << "Rejecting track status request, session draining/closed sess="
-        << this;
-    TrackStatusError trackStatusError{
-        trackStatus.requestID,
-        TrackStatusErrorCode::INTERNAL_ERROR,
-        "draining/closed session"};
-    co_return folly::makeUnexpected(trackStatusError);
-  }
-  if (shouldFailNewLocalRequestDueToGoaway()) {
-    XLOG(DBG1) << "Rejecting track status request, received GOAWAY sess="
-               << this;
-    TrackStatusError trackStatusError{
-        failedLocalRequestID(),
-        TrackStatusErrorCode::GOING_AWAY,
-        "Session received GOAWAY"};
-    co_return folly::makeUnexpected(trackStatusError);
+  if (auto refusal = refuseNewLocalRequest()) {
+    co_return folly::makeUnexpected(std::move(*refusal));
   }
   aliasifyAuthTokens(trackStatus.params);
   trackStatus.requestID = getNextRequestID();
@@ -7488,23 +7472,8 @@ Subscriber::PublishResult MoQSession::publish(
   XLOG(DBG1) << __func__ << " reqID=" << pub.requestID
              << " track=" << pub.fullTrackName.trackName << " sess=" << this;
 
-  // Reject new publish attempts if session is draining or closed
-  if (draining_ || closed_) {
-    XLOG(DBG1) << "Rejecting publish request, session draining/closed sess="
-               << this;
-    return folly::makeUnexpected(
-        PublishError{
-            pub.requestID,
-            PublishErrorCode::INTERNAL_ERROR,
-            "draining/closed session"});
-  }
-  if (shouldFailNewLocalRequestDueToGoaway()) {
-    XLOG(DBG1) << "Rejecting publish request, received GOAWAY sess=" << this;
-    return folly::makeUnexpected(
-        PublishError{
-            failedLocalRequestID(),
-            PublishErrorCode::GOING_AWAY,
-            "Session received GOAWAY"});
+  if (auto refusal = refuseNewLocalRequest()) {
+    return folly::makeUnexpected(std::move(*refusal));
   }
 
   if (!handle) {
@@ -7786,23 +7755,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
     MOQ_SUBSCRIBER_STATS(
         subscriberStatsCallback_, recordSubscribeLatency, durationMsec.count());
   };
-  if (draining_ || closed_) {
-    SubscribeError subscribeError = {
-        failedLocalRequestID(),
-        SubscribeErrorCode::INTERNAL_ERROR,
-        "draining/closed session"};
+  if (auto refusal = refuseNewLocalRequest()) {
     MOQ_SUBSCRIBER_STATS(
-        subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
-    co_return folly::makeUnexpected(subscribeError);
-  }
-  if (shouldFailNewLocalRequestDueToGoaway()) {
-    SubscribeError subscribeError = {
-        failedLocalRequestID(),
-        SubscribeErrorCode::GOING_AWAY,
-        "Session received GOAWAY"};
-    MOQ_SUBSCRIBER_STATS(
-        subscriberStatsCallback_, onSubscribeError, subscribeError.errorCode);
-    co_return folly::makeUnexpected(subscribeError);
+        subscriberStatsCallback_, onSubscribeError, refusal->errorCode);
+    co_return folly::makeUnexpected(std::move(*refusal));
   }
   auto fullTrackName = sub.fullTrackName;
   RequestID reqID = getNextRequestID();
@@ -8458,23 +8414,10 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
         subscriberStatsCallback_, onFetchError, fetchError.errorCode);
     co_return folly::makeUnexpected(fetchError);
   }
-  if (draining_ || closed_) {
-    FetchError fetchError = {
-        failedLocalRequestID(),
-        FetchErrorCode::INTERNAL_ERROR,
-        "draining/closed session"};
+  if (auto refusal = refuseNewLocalRequest()) {
     MOQ_SUBSCRIBER_STATS(
-        subscriberStatsCallback_, onFetchError, fetchError.errorCode);
-    co_return folly::makeUnexpected(fetchError);
-  }
-  if (shouldFailNewLocalRequestDueToGoaway()) {
-    FetchError fetchError = {
-        failedLocalRequestID(),
-        FetchErrorCode::GOING_AWAY,
-        "Session received GOAWAY"};
-    MOQ_SUBSCRIBER_STATS(
-        subscriberStatsCallback_, onFetchError, fetchError.errorCode);
-    co_return folly::makeUnexpected(fetchError);
+        subscriberStatsCallback_, onFetchError, refusal->errorCode);
+    co_return folly::makeUnexpected(std::move(*refusal));
   }
 
   auto [standalone, joining] = fetchType(fetch);
@@ -9279,6 +9222,23 @@ bool MoQSession::shouldRejectNewPeerRequestDueToGoaway() const {
   }
   return draining_ && negotiatedVersion_.has_value() &&
       getDraftMajorVersion(*negotiatedVersion_) >= 18;
+}
+
+std::optional<RequestError> MoQSession::refuseNewLocalRequest(
+    bool allowedWhileDraining) const {
+  if (closed_ || (draining_ && !allowedWhileDraining)) {
+    return RequestError{
+        failedLocalRequestID(),
+        RequestErrorCode::INTERNAL_ERROR,
+        "draining/closed session"};
+  }
+  if (shouldFailNewLocalRequestDueToGoaway()) {
+    return RequestError{
+        failedLocalRequestID(),
+        RequestErrorCode::GOING_AWAY,
+        "Session received GOAWAY"};
+  }
+  return std::nullopt;
 }
 
 bool MoQSession::shouldFailNewLocalRequestDueToGoaway() const {

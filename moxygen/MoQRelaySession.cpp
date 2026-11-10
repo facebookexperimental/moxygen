@@ -552,19 +552,8 @@ MoQRelaySession::sendRequestUpdateOnBidi(
     RequestUpdate reqUpdate,
     RequestID existingRequestID,
     std::shared_ptr<BidiStreamControl> control) {
-  if (isClosed()) {
-    co_return folly::makeUnexpected(
-        RequestError{
-            failedLocalRequestID(),
-            RequestErrorCode::INTERNAL_ERROR,
-            "Session closed"});
-  }
-  if (shouldFailNewLocalRequestDueToGoaway()) {
-    co_return folly::makeUnexpected(
-        RequestError{
-            failedLocalRequestID(),
-            RequestErrorCode::GOING_AWAY,
-            "Session received GOAWAY"});
+  if (auto refusal = refuseNewLocalRequest(/*allowedWhileDraining=*/true)) {
+    co_return folly::makeUnexpected(std::move(*refusal));
   }
   auto version = getNegotiatedVersion();
   if (!version) {
@@ -812,17 +801,8 @@ MoQRelaySession::publishNamespace(
         recordPublishNamespaceLatency,
         durationMsec.count());
   };
-  if (isClosed()) {
-    co_return folly::makeUnexpected(PublishNamespaceError(
-        {failedLocalRequestID(),
-         PublishNamespaceErrorCode::INTERNAL_ERROR,
-         "closed session"}));
-  }
-  if (shouldFailNewLocalRequestDueToGoaway()) {
-    co_return folly::makeUnexpected(PublishNamespaceError(
-        {failedLocalRequestID(),
-         PublishNamespaceErrorCode::GOING_AWAY,
-         "Session received GOAWAY"}));
+  if (auto refusal = refuseNewLocalRequest(/*allowedWhileDraining=*/true)) {
+    co_return folly::makeUnexpected(std::move(*refusal));
   }
   aliasifyAuthTokens(pubNs.params);
   pubNs.requestID = getNextRequestID();
@@ -1357,17 +1337,8 @@ MoQRelaySession::subscribeNamespace(
     std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
-  if (isClosed()) {
-    co_return folly::makeUnexpected(SubscribeNamespaceError(
-        {failedLocalRequestID(),
-         SubscribeNamespaceErrorCode::INTERNAL_ERROR,
-         "closed session"}));
-  }
-  if (shouldFailNewLocalRequestDueToGoaway()) {
-    co_return folly::makeUnexpected(SubscribeNamespaceError(
-        {failedLocalRequestID(),
-         SubscribeNamespaceErrorCode::GOING_AWAY,
-         "Session received GOAWAY"}));
+  if (auto refusal = refuseNewLocalRequest(/*allowedWhileDraining=*/true)) {
+    co_return folly::makeUnexpected(std::move(*refusal));
   }
   aliasifyAuthTokens(sa.params);
   sa.requestID = getNextRequestID();
@@ -1678,19 +1649,8 @@ MoQRelaySession::subscribeTracks(
     co_return std::make_shared<NamespaceBackedSubscribeTracksHandle>(
         std::move(res.value()));
   }
-  if (isClosed()) {
-    co_return folly::makeUnexpected(SubscribeTracksError(
-        {failedLocalRequestID(),
-         SubscribeTracksErrorCode::INTERNAL_ERROR,
-         "closed session"}));
-  }
-  // Mirror subscribe/subscribeNamespace/publishNamespace: don't start a new
-  // local request after we've received a GOAWAY.
-  if (shouldFailNewLocalRequestDueToGoaway()) {
-    co_return folly::makeUnexpected(SubscribeTracksError(
-        {failedLocalRequestID(),
-         SubscribeTracksErrorCode::GOING_AWAY,
-         "Session received GOAWAY"}));
+  if (auto refusal = refuseNewLocalRequest(/*allowedWhileDraining=*/true)) {
+    co_return folly::makeUnexpected(std::move(*refusal));
   }
   aliasifyAuthTokens(subTracks.params);
   subTracks.requestID = getNextRequestID();
