@@ -801,7 +801,7 @@ MoQRelaySession::publishNamespace(
         recordPublishNamespaceLatency,
         durationMsec.count());
   };
-  if (auto refusal = refuseNewLocalRequest(/*allowedWhileDraining=*/true)) {
+  if (auto refusal = refuseNewLocalRequest()) {
     co_return folly::makeUnexpected(std::move(*refusal));
   }
   aliasifyAuthTokens(pubNs.params);
@@ -1337,7 +1337,7 @@ MoQRelaySession::subscribeNamespace(
     std::shared_ptr<NamespacePublishHandle> namespacePublishHandle) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
-  if (auto refusal = refuseNewLocalRequest(/*allowedWhileDraining=*/true)) {
+  if (auto refusal = refuseNewLocalRequest()) {
     co_return folly::makeUnexpected(std::move(*refusal));
   }
   aliasifyAuthTokens(sa.params);
@@ -1649,7 +1649,7 @@ MoQRelaySession::subscribeTracks(
     co_return std::make_shared<NamespaceBackedSubscribeTracksHandle>(
         std::move(res.value()));
   }
-  if (auto refusal = refuseNewLocalRequest(/*allowedWhileDraining=*/true)) {
+  if (auto refusal = refuseNewLocalRequest()) {
     co_return folly::makeUnexpected(std::move(*refusal));
   }
   aliasifyAuthTokens(subTracks.params);

@@ -3649,6 +3649,39 @@ TEST(MoQSessionTest, BidiStreamDemuxerHonorsStreamCancellation) {
   EXPECT_FALSE(serverWt->writeHandles[streamId]->pri.has_value());
 }
 
+CO_TEST_P_X(MoQSessionTest, NamespaceRequestsAreRefusedWhileDraining) {
+  co_await setupMoQSession();
+  // An open subscription keeps the draining session from closing.
+  expectSubscribe([](auto sub, auto) -> TaskSubscribeResult {
+    co_return makeSubscribeOkResult(sub);
+  });
+  auto handle = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  CO_ASSERT_TRUE(handle.hasValue());
+  clientSession_->drain();
+  CO_ASSERT_FALSE(clientSession_->isClosed());
+
+  auto expectRefused = [](const RequestError& error) {
+    EXPECT_EQ(error.errorCode, RequestErrorCode::INTERNAL_ERROR);
+    EXPECT_EQ(error.reasonPhrase, "draining/closed session");
+  };
+  auto pubNs = co_await clientSession_->publishNamespace(getPublishNamespace());
+  CO_ASSERT_TRUE(pubNs.hasError());
+  expectRefused(pubNs.error());
+  auto subNs = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), nullptr);
+  CO_ASSERT_TRUE(subNs.hasError());
+  expectRefused(subNs.error());
+  auto subTracks =
+      co_await clientSession_->subscribeTracks(getSubscribeTracks());
+  CO_ASSERT_TRUE(subTracks.hasError());
+  expectRefused(subTracks.error());
+
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillRepeatedly(testing::Return(folly::unit));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     MoQSessionTest,
     MoQSessionTest,
