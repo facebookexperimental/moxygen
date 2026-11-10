@@ -438,6 +438,53 @@ TEST_P(ProxyJoinIntegrationTest, PassThroughSharedFetchPopulatesTheCache) {
   }));
 }
 
+// Draft 18 request streams can hand the proxy a viewer's joining FETCH just
+// ahead of its SUBSCRIBE, as a relay sending both upstream at once does. The
+// join of the cold track still succeeds.
+TEST_P(ProxyJoinIntegrationTest, JoiningFetchAheadOfItsSubscribeJoins) {
+  if (getDraftMajorVersion(GetParam()) < 18) {
+    GTEST_SKIP() << "Before draft 18 requests share the control stream";
+  }
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    const std::map<AbsoluteLocation, uint64_t> history{
+        {{39, 0}, 0}, {{40, 0}, 0}};
+    origin_->history = &history;
+    co_await startProxy(MoQProxyOptions{.maxGroupsPerTrack = 4});
+    auto* viewer = co_await connect(proxy_);
+    viewer->clientWt->setDeferNewStreamData(true);
+    auto fetched = std::make_shared<RecordingFetchConsumer>();
+    auto join = startJoin(
+        *viewer,
+        std::make_shared<LiveViewerConsumer>(),
+        fetched,
+        1,
+        GroupOrder::OldestFirst,
+        FetchType::RELATIVE_JOINING);
+    // Lets the proxy wait to read both request streams.
+    co_await settle();
+    viewer->clientWt->setDeferNewStreamData(false);
+    // The join opened the SUBSCRIBE request stream first, then the FETCH one.
+    EXPECT_EQ(viewer->clientWt->writeHandles.count(8), 0);
+    auto subscribeStream = viewer->clientWt->writeHandles.at(0);
+    auto fetchStream = viewer->clientWt->writeHandles.at(4);
+    fetchStream->setImmediateDelivery(true);
+    fetchStream->deliverInflightData();
+    subscribeStream->setImmediateDelivery(true);
+    subscribeStream->deliverInflightData();
+
+    auto result = co_await std::move(join);
+
+    CO_ASSERT_TRUE(result.subscribeResult.hasValue());
+    CO_ASSERT_TRUE(result.fetchResult.hasValue())
+        << result.fetchResult.error().reasonPhrase;
+    CO_ASSERT_EQ(origin_->fetches.size(), 1);
+    EXPECT_NE(std::get_if<JoiningFetch>(&origin_->fetches[0].args), nullptr);
+    EXPECT_EQ(
+        historyLocations(fetched->log),
+        (std::vector<AbsoluteLocation>{{39, 0}, {40, 0}}));
+  }));
+}
+
 TEST_P(
     ProxyJoinIntegrationTest,
     PassThroughFetchSurvivesCacheAdmissionFailure) {

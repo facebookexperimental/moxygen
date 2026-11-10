@@ -153,6 +153,7 @@ CO_TEST_P_X(Draft18Test, JoiningFetchArrivesBeforeItsSubscribe) {
   co_await rescheduleN(3);
   clientWt_->setDeferNewStreamData(false);
   // The join opened the SUBSCRIBE request stream first, then the FETCH one.
+  EXPECT_EQ(clientWt_->writeHandles.count(8), 0);
   auto subscribeStream = clientWt_->writeHandles.at(0);
   auto fetchStream = clientWt_->writeHandles.at(4);
   fetchStream->setImmediateDelivery(true);
@@ -170,6 +171,248 @@ CO_TEST_P_X(Draft18Test, JoiningFetchArrivesBeforeItsSubscribe) {
   co_await publishDone_;
   co_await fetchObject;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// The joining FETCH can also be read just ahead of its SUBSCRIBE, before the
+// FETCH's handler first runs. The Publisher still sees the SUBSCRIBE first.
+CO_TEST_P_X(Draft18Test, JoiningFetchReadJustAheadOfItsSubscribe) {
+  if (useFillFetch(getServerSelectedVersion())) {
+    // Draft 22 retires Joining FETCH.
+    co_return;
+  }
+  co_await setupMoQSession();
+  folly::coro::Baton releaseSubscribe;
+  folly::coro::Baton fetchStarted;
+  bool subscribeStarted = false;
+  expectSubscribe([&](auto sub, auto pub) -> TaskSubscribeResult {
+    subscribeStarted = true;
+    co_await releaseSubscribe;
+    pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+  expectFetch([&](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    EXPECT_TRUE(subscribeStarted);
+    fetchStarted.post();
+    EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
+    fetchPub->object(0, 0, 0, makeBuf(10), noExtensions(), /*finFetch=*/true);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 1});
+  });
+  expectPublishDone();
+  folly::coro::Baton fetchObject;
+  EXPECT_CALL(*fetchCallback_, object(0, 0, 0, _, _, true, _)).WillOnce([&] {
+    fetchObject.post();
+    return folly::unit;
+  });
+  expectFetchSuccess();
+
+  clientWt_->setDeferNewStreamData(true);
+  auto join = JoiningFetchTestHelper::startJoin(
+      eventBase_,
+      clientSession_,
+      getSubscribe(kTestTrackName),
+      subscribeCallback_,
+      fetchCallback_);
+  co_await rescheduleN(3);
+  clientWt_->setDeferNewStreamData(false);
+  EXPECT_EQ(clientWt_->writeHandles.count(8), 0);
+  auto subscribeStream = clientWt_->writeHandles.at(0);
+  auto fetchStream = clientWt_->writeHandles.at(4);
+  fetchStream->setImmediateDelivery(true);
+  fetchStream->deliverInflightData();
+  subscribeStream->setImmediateDelivery(true);
+  subscribeStream->deliverInflightData();
+  co_await fetchStarted;
+  releaseSubscribe.post();
+  auto res = co_await std::move(join);
+
+  EXPECT_FALSE(res.subscribeResult.hasError());
+  EXPECT_FALSE(res.fetchResult.hasError());
+  co_await publishDone_;
+  co_await fetchObject;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A FETCH read ahead of its SUBSCRIBE stops counting toward the deferred limit
+// once the SUBSCRIBE is read, even though both requests still wait to be
+// handled.
+CO_TEST_P_X(Draft18Test, FetchFirstJoinsReadTogetherShareTheDeferredLimit) {
+  if (useFillFetch(getServerSelectedVersion())) {
+    // Draft 22 retires Joining FETCH.
+    co_return;
+  }
+  serverSession_->setMoqSettings(joiningSettings(2000ms, /*maxDeferred=*/1));
+  // Two joins issue four requests.
+  initialMaxRequestID_ = 4 * getRequestIDMultiplier();
+  co_await setupMoQSession();
+  const FullTrackName otherTrackName{kTestTrackName.trackNamespace, "other"};
+  // The actions run their bodies eagerly: gmock does not keep a capturing
+  // coroutine lambda alive across its suspension.
+  std::vector<FullTrackName> subscribed;
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .Times(2)
+      .WillRepeatedly([&](const auto& sub, auto pub) -> TaskSubscribeResult {
+        subscribed.push_back(sub.fullTrackName);
+        pub->setTrackAlias(TrackAlias(sub.requestID.value));
+        pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+        return folly::coro::makeTask<Publisher::SubscribeResult>(
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0}));
+      });
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .Times(2)
+      .WillRepeatedly(
+          [&](const Fetch& fetch, auto fetchPub) -> TaskFetchResult {
+            EXPECT_NE(
+                std::find(
+                    subscribed.begin(), subscribed.end(), fetch.fullTrackName),
+                subscribed.end());
+            fetchPub->endOfFetch();
+            return folly::coro::makeTask<Publisher::FetchResult>(
+                makeFetchOkResult(fetch, AbsoluteLocation{0, 1}));
+          });
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  EXPECT_CALL(*fetchCallback_, endOfFetch())
+      .WillOnce(testing::Return(folly::unit));
+  auto secondSubscribeCallback =
+      std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+  ON_CALL(*secondSubscribeCallback, setTrackAlias(_))
+      .WillByDefault(testing::Return(folly::unit));
+  ON_CALL(*secondSubscribeCallback, publishDone(_))
+      .WillByDefault(testing::Return(folly::unit));
+  auto secondFetchCallback =
+      std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+  EXPECT_CALL(*secondFetchCallback, endOfFetch())
+      .WillOnce(testing::Return(folly::unit));
+
+  clientWt_->setDeferNewStreamData(true);
+  auto first = JoiningFetchTestHelper::startJoin(
+      eventBase_,
+      clientSession_,
+      getSubscribe(kTestTrackName),
+      subscribeCallback_,
+      fetchCallback_);
+  co_await rescheduleN(3);
+  auto second = JoiningFetchTestHelper::startJoin(
+      eventBase_,
+      clientSession_,
+      getSubscribe(otherTrackName),
+      secondSubscribeCallback,
+      secondFetchCallback);
+  co_await rescheduleN(3);
+  clientWt_->setDeferNewStreamData(false);
+  EXPECT_EQ(clientWt_->writeHandles.count(16), 0);
+  // Each join opened its SUBSCRIBE request stream, then its FETCH one. All
+  // four are read before any of their handlers runs.
+  for (auto id : {4, 0, 12, 8}) {
+    auto stream = clientWt_->writeHandles.at(id);
+    stream->setImmediateDelivery(true);
+    stream->deliverInflightData();
+  }
+  auto firstRes = co_await std::move(first);
+  auto secondRes = co_await std::move(second);
+
+  EXPECT_FALSE(firstRes.subscribeResult.hasError());
+  EXPECT_FALSE(firstRes.fetchResult.hasError());
+  EXPECT_FALSE(secondRes.subscribeResult.hasError());
+  EXPECT_FALSE(secondRes.fetchResult.hasError());
+  EXPECT_EQ(
+      subscribed, (std::vector<FullTrackName>{kTestTrackName, otherTrackName}));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A FETCH held for a SUBSCRIBE whose stream is reset before the SUBSCRIBE's
+// handler runs fails at once without reaching the Publisher, and leaves its
+// place under the deferred limit free.
+CO_TEST_P_X(Draft18Test, HeldFetchFailsWhenItsSubscribeIsResetBeforeItRuns) {
+  if (useFillFetch(getServerSelectedVersion())) {
+    // Draft 22 retires Joining FETCH.
+    co_return;
+  }
+  // Long enough that the unseen-ID timeout can't be what fails the FETCH.
+  serverSession_->setMoqSettings(joiningSettings(10s, /*maxDeferred=*/1));
+  // Two joins issue four requests.
+  initialMaxRequestID_ = 4 * getRequestIDMultiplier();
+  co_await setupMoQSession();
+  const FullTrackName otherTrackName{kTestTrackName.trackNamespace, "other"};
+  // The first join's SUBSCRIBE gets no answer, so that join completes only when
+  // the session closes; its FETCH's failure shows first.
+  folly::coro::Baton fetchFailed;
+  EXPECT_CALL(
+      *clientSubscriberStatsCallback_,
+      onFetchError(FetchErrorCode::INVALID_JOINING_REQUEST_ID))
+      .WillOnce([&] { fetchFailed.post(); });
+  // Only the second join reaches the Publisher.
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .WillOnce([&](const auto& sub, auto pub) -> TaskSubscribeResult {
+        EXPECT_EQ(sub.fullTrackName, otherTrackName);
+        pub->setTrackAlias(TrackAlias(sub.requestID.value));
+        pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+        return folly::coro::makeTask<Publisher::SubscribeResult>(
+            makeSubscribeOkResult(sub, AbsoluteLocation{0, 0}));
+      });
+  EXPECT_CALL(*serverPublisher, fetch(_, _))
+      .WillOnce([&](const Fetch& fetch, auto fetchPub) -> TaskFetchResult {
+        EXPECT_EQ(fetch.fullTrackName, otherTrackName);
+        fetchPub->endOfFetch();
+        return folly::coro::makeTask<Publisher::FetchResult>(
+            makeFetchOkResult(fetch, AbsoluteLocation{0, 1}));
+      });
+  auto secondSubscribeCallback =
+      std::make_shared<testing::NiceMock<MockTrackConsumer>>();
+  ON_CALL(*secondSubscribeCallback, setTrackAlias(_))
+      .WillByDefault(testing::Return(folly::unit));
+  ON_CALL(*secondSubscribeCallback, publishDone(_))
+      .WillByDefault(testing::Return(folly::unit));
+  auto secondFetchCallback =
+      std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+  EXPECT_CALL(*secondFetchCallback, endOfFetch())
+      .WillOnce(testing::Return(folly::unit));
+
+  clientWt_->setDeferNewStreamData(true);
+  auto first = JoiningFetchTestHelper::startJoin(
+      eventBase_,
+      clientSession_,
+      getSubscribe(kTestTrackName),
+      subscribeCallback_,
+      fetchCallback_);
+  co_await rescheduleN(3);
+  clientWt_->setDeferNewStreamData(false);
+  EXPECT_EQ(clientWt_->writeHandles.count(8), 0);
+  auto fetchStream = clientWt_->writeHandles.at(4);
+  fetchStream->setImmediateDelivery(true);
+  fetchStream->deliverInflightData();
+  // The reset is read right behind the SUBSCRIBE, before its handler runs.
+  auto subscribeStream = clientWt_->writeHandles.at(0);
+  subscribeStream->setImmediateDelivery(true);
+  subscribeStream->deliverInflightData();
+  subscribeStream->deliverPeerReset(
+      static_cast<uint32_t>(ResetStreamErrorCode::CANCELLED));
+  co_await fetchFailed;
+
+  clientWt_->setDeferNewStreamData(true);
+  auto second = JoiningFetchTestHelper::startJoin(
+      eventBase_,
+      clientSession_,
+      getSubscribe(otherTrackName),
+      secondSubscribeCallback,
+      secondFetchCallback);
+  co_await rescheduleN(3);
+  clientWt_->setDeferNewStreamData(false);
+  for (auto id : {12, 8}) {
+    auto stream = clientWt_->writeHandles.at(id);
+    stream->setImmediateDelivery(true);
+    stream->deliverInflightData();
+  }
+  auto secondRes = co_await std::move(second);
+
+  EXPECT_FALSE(secondRes.subscribeResult.hasError());
+  EXPECT_FALSE(secondRes.fetchResult.hasError());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  auto firstRes = co_await std::move(first);
+  CO_ASSERT_TRUE(firstRes.fetchResult.hasError());
+  EXPECT_EQ(
+      firstRes.fetchResult.error().errorCode,
+      FetchErrorCode::INVALID_JOINING_REQUEST_ID);
 }
 
 // Binding removes the unseen-ID timeout even while SUBSCRIBE remains pending.

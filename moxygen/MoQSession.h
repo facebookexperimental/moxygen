@@ -65,7 +65,7 @@ struct MoQSettings {
   // that has not arrived yet. Once the SUBSCRIBE arrives, the FETCH follows
   // that subscription's outcome instead.
   std::chrono::milliseconds joiningDependencyTimeout{std::chrono::seconds(2)};
-  // Joining FETCHes held while their subscription is unseen or pending.
+  // Joining FETCHes held while the SUBSCRIBE they reference is unseen.
   size_t maxDeferredJoiningFetches{16};
   bool acceptRequestUpdatesAfterReceivedGoaway{false};
   bool closeOnControlStreamFailure{false};
@@ -1065,7 +1065,7 @@ class MoQSession : public Subscriber,
   void beginSubscriptionStat(PublisherImpl& pubTrack);
   void endSubscriptionStat(PublisherImpl& pubTrack);
 
-  // A joining FETCH waiting for its subscription to be established.
+  // A joining FETCH waiting for the subscription it references.
   struct JoiningDependency;
   class JoiningDependencyTimeout;
   using JoiningDependencyResult = folly::Expected<FullTrackName, FetchError>;
@@ -1091,6 +1091,8 @@ class MoQSession : public Subscriber,
       ReplyContext& replyContext);
   void removeJoiningDependency(
       const std::shared_ptr<JoiningDependency>& dependency);
+  // The SUBSCRIBE these FETCHes reference was read; its handler releases them.
+  void bindJoiningDependencies(RequestID subscriptionID);
   void resolveJoiningDependencies(
       RequestID subscriptionID,
       const JoiningDependencyResult& result);
