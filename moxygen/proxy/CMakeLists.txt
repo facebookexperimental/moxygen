@@ -13,16 +13,15 @@ moxygen_add_library(moxygen_proxy_moq_upstream_provider
     Folly::folly_expected
 )
 
-moxygen_add_library(moxygen_proxy_moq_webtransport_bootstrap_handler
+moxygen_add_library(moxygen_proxy_moq_wt_session_factory
   SRCS
-    MoQWebTransportBootstrapHandler.cpp
+    MoQWtSessionFactory.cpp
   DEPS
-    moxygen_moq_versions
+    proxygen::proxygen_http_webtransport_shared_handler
     Folly::folly_maybe_managed_ptr
   EXPORTED_DEPS
     moxygen_moq
     proxygen::proxygen_http_webtransport
-    Folly::folly_coro_promise
     Folly::folly_coro_task
 )
 
