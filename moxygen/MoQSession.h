@@ -261,6 +261,14 @@ class MoQSession : public Subscriber,
     return closed_;
   }
 
+  bool isDraining() const {
+    return draining_;
+  }
+
+  bool hasReceivedGoaway() const {
+    return receivedGoaway_;
+  }
+
   const std::optional<CloseResult>& getCloseResult() const {
     return closeResult_;
   }
