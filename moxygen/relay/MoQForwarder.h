@@ -210,6 +210,8 @@ class MoQForwarder : public TrackConsumer {
     return it == subscribers_.end() ? nullptr : it->second;
   }
 
+  // subReq's request ID becomes the subscriber's alias, so it has to be a
+  // request ID of sessionId's session.
   std::shared_ptr<MoQForwarder::Subscriber> addSubscriber(
       SessionId sessionId,
       const SubscribeRequest& subReq,
@@ -258,6 +260,8 @@ class MoQForwarder : public TrackConsumer {
       const MoQPublishError& err,
       const std::string& callsite /*for logging*/);
 
+  // Does nothing. An alias is unique only on its own session, so addSubscriber
+  // gives each subscriber its request ID instead.
   folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
       TrackAlias alias) override;
 
@@ -467,7 +471,6 @@ class MoQForwarder : public TrackConsumer {
       const std::string& callsite);
 
   FullTrackName fullTrackName_;
-  std::optional<TrackAlias> trackAlias_;
   SubscriberMap subscribers_;
   folly::F14FastMap<
       SubgroupIdentifier,

@@ -579,8 +579,7 @@ class MoQProxyTrack::Recorder final
   }
 
   // Makes this a replacement: it admits data through arbiter, as the
-  // replacement, and keeps its track alias to itself, since aliases are
-  // hop-local. It stays for the attempt's life: a later stream that starts
+  // replacement. It stays for the attempt's life: a later stream that starts
   // mid-subgroup is refused too. Below draft 18 an upstream can't mark a
   // subgroup as starting mid-subgroup.
   void replaceUpstream(
@@ -597,12 +596,10 @@ class MoQProxyTrack::Recorder final
     handover_ = std::move(arbiter);
   }
 
+  // The upstream's alias is local to the upstream session.
   folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
-      TrackAlias alias) override {
-    if (disabled_ || arbiter_) {
-      return folly::unit;
-    }
-    return forwarder_->setTrackAlias(alias);
+      TrackAlias) override {
+    return folly::unit;
   }
 
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>

@@ -276,6 +276,55 @@ CO_TEST_P_X(
   clientSession_->setSessionCloseCallback(nullptr);
 }
 
+CO_TEST_P_X(MoQSessionTest, ForwardersWhoseSourcesShareAnAliasKeepTracksApart) {
+  co_await setupMoQSession();
+  const FullTrackName otherTrackName{kTestTrackName.trackNamespace, "other"};
+  auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName);
+  auto otherForwarder = std::make_shared<MoQForwarder>(otherTrackName);
+  EXPECT_TRUE(forwarder->setTrackAlias(TrackAlias(0)).hasValue());
+  EXPECT_TRUE(otherForwarder->setTrackAlias(TrackAlias(0)).hasValue());
+  EXPECT_CALL(*serverPublisher, subscribe(_, _))
+      .WillOnce(subscribeThrough(forwarder, serverSession_->sessionId()))
+      .WillOnce(subscribeThrough(otherForwarder, serverSession_->sessionId()));
+  struct CloseCallback : MoQSession::MoQSessionCloseCallback {
+    void onMoQSessionClosed(
+        SessionCloseErrorCode error,
+        folly::Optional<uint32_t>) override {
+      errors.push_back(error);
+    }
+    std::vector<SessionCloseErrorCode> errors;
+  } closeCallback;
+  clientSession_->setSessionCloseCallback(&closeCallback);
+  auto consumer = makeTrackConsumer();
+  auto otherConsumer = makeTrackConsumer();
+  bool received = false;
+  bool otherReceived = false;
+  expectObjectZero(*consumer, received);
+  expectObjectZero(*otherConsumer, otherReceived);
+
+  auto subscription = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), consumer);
+  auto otherSubscription = co_await clientSession_->subscribe(
+      getSubscribe(otherTrackName), otherConsumer);
+  EXPECT_TRUE(publishObjectZero(*forwarder));
+  EXPECT_TRUE(publishObjectZero(*otherForwarder));
+  co_await rescheduleN(4);
+
+  EXPECT_TRUE(subscription.hasValue());
+  EXPECT_TRUE(otherSubscription.hasValue());
+  if (subscription.hasValue() && otherSubscription.hasValue()) {
+    EXPECT_NE(
+        subscription.value()->subscribeOk().trackAlias,
+        otherSubscription.value()->subscribeOk().trackAlias);
+  }
+  EXPECT_TRUE(received);
+  EXPECT_TRUE(otherReceived);
+  EXPECT_TRUE(closeCallback.errors.empty());
+  clientSession_->setSessionCloseCallback(nullptr);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+}
+
 CO_TEST_P_X(MoQSessionTest, ReplacingForwarderEndsTheFirstOfTwoLiveSubscribes) {
   co_await setupMoQSession();
   auto forwarder = std::make_shared<MoQForwarder>(kTestTrackName);

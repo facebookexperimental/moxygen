@@ -286,7 +286,6 @@ folly::coro::Task<folly::coro::Task<void>> MoQTestPublisher::startPublishTrack(
     MoQTestParameters params,
     RequestID requestID) {
   auto forwarder = std::make_shared<MoQForwarder>(std::move(ftn));
-  forwarder->setTrackAlias(TrackAlias(requestID.value));
 
   // The track starts paused and is unpaused once the peer asks for data. When
   // the subscriber registered before we published, PUBLISH_OK already carries

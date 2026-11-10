@@ -59,9 +59,7 @@ namespace moxygen {
 // after the highest group the track had opened. The ended replacement's
 // groups up to that one are no one's, since viewers may have part of them.
 //
-// The caller also keeps track aliases hop-local (the replacement's
-// setTrackAlias is not passed on) and lets only a group's owner advance the
-// track's Largest.
+// The caller also lets only a group's owner advance the track's Largest.
 class MoQUpstreamHandoffArbiter {
  public:
   enum class Source { Old, Replacement };

@@ -17,6 +17,7 @@
 #include <optional>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "moxygen/events/MoQFollyExecutorImpl.h"
 #include "moxygen/proxy/MoQProxy.h"
@@ -71,6 +72,29 @@ class TestUpstreamProvider final : public MoQUpstreamProvider {
 
  private:
   std::shared_ptr<MoQSession> session_;
+};
+
+// Connects each track through its own upstream session.
+class SessionPerTrackProvider final : public MoQUpstreamProvider {
+ public:
+  void add(FullTrackName fullTrackName, std::shared_ptr<MoQSession> session) {
+    sessions_.emplace_back(std::move(fullTrackName), std::move(session));
+  }
+
+  folly::coro::Task<MoQUpstreamSessionResult> getSession(
+      const FullTrackName& fullTrackName,
+      const TrackRequestParameters&,
+      bool) override {
+    for (const auto& [name, session] : sessions_) {
+      if (name == fullTrackName) {
+        co_return session;
+      }
+    }
+    co_return folly::makeUnexpected(MoQUpstreamProviderError{"no session"});
+  }
+
+ private:
+  std::vector<std::pair<FullTrackName, std::shared_ptr<MoQSession>>> sessions_;
 };
 
 class MoQProxyTest : public Test {
@@ -391,6 +415,56 @@ TEST_F(MoQProxyTest, CreatesSeparateTracksForDifferentNames) {
   EXPECT_EQ(provider_->calls, 2);
   video.value()->unsubscribe();
   audio.value()->unsubscribe();
+}
+
+TEST_F(MoQProxyTest, ViewerOfTracksFromSeparateUpstreamsGetsDistinctAliases) {
+  auto provider = std::make_shared<SessionPerTrackProvider>();
+  for (const auto& name : {kTrackName, kOtherTrackName}) {
+    auto upstream = makeDownstreamSession();
+    // Each upstream session numbers its aliases independently, so both
+    // answer with alias 0.
+    EXPECT_CALL(*upstream, subscribe(_, _))
+        .WillOnce(Invoke(
+            [](SubscribeRequest request, std::shared_ptr<TrackConsumer> cb)
+                -> folly::coro::Task<Publisher::SubscribeResult> {
+              EXPECT_TRUE(cb->setTrackAlias(TrackAlias(0)).hasValue());
+              co_return Publisher::SubscribeResult(
+                  std::make_shared<NiceMock<MockSubscriptionHandle>>(
+                      SubscribeOk{
+                          .requestID = request.requestID,
+                          .trackAlias = TrackAlias(0),
+                          .groupOrder = GroupOrder::OldestFirst,
+                          .largest = AbsoluteLocation{10, 2}}));
+            }));
+    provider->add(name, upstream);
+  }
+  proxy_ = MoQProxy::create({provider});
+  auto firstViewer = makeDownstreamSession();
+  auto firstVideo = subscribe(firstViewer, makeSubscribeRequest(RequestID(0)));
+  auto firstAudio = subscribe(
+      firstViewer, makeSubscribeRequest(RequestID(2), kOtherTrackName));
+  ASSERT_TRUE(firstVideo.hasValue());
+  ASSERT_TRUE(firstAudio.hasValue());
+
+  auto viewer = makeDownstreamSession();
+  auto videoConsumer = makeConsumer();
+  auto audioConsumer = makeConsumer();
+  EXPECT_CALL(*videoConsumer, setTrackAlias(TrackAlias(4)));
+  EXPECT_CALL(*audioConsumer, setTrackAlias(TrackAlias(6)));
+  auto video =
+      subscribe(viewer, makeSubscribeRequest(RequestID(4)), videoConsumer);
+  auto audio = subscribe(
+      viewer,
+      makeSubscribeRequest(RequestID(6), kOtherTrackName),
+      audioConsumer);
+
+  ASSERT_TRUE(video.hasValue());
+  ASSERT_TRUE(audio.hasValue());
+  EXPECT_EQ(video.value()->subscribeOk().trackAlias, TrackAlias(4));
+  EXPECT_EQ(audio.value()->subscribeOk().trackAlias, TrackAlias(6));
+  for (auto* result : {&firstVideo, &firstAudio, &video, &audio}) {
+    result->value()->unsubscribe();
+  }
 }
 
 TEST_F(MoQProxyTest, SessionGoawayReachesEveryTrackOnThatSession) {

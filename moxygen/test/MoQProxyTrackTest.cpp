@@ -1857,9 +1857,9 @@ TEST_F(
   EXPECT_TRUE(viewerSubgroups_.contains(12));
 }
 
-// Aliases are hop-local, so a viewer that subscribes after the switch still
-// gets the alias the first upstream gave the track.
-TEST_F(MoQProxyTrackSwitchTest, TheReplacementKeepsItsTrackAliasToItself) {
+// Aliases are hop-local, so a viewer that subscribes after the switch gets its
+// own request ID as its alias.
+TEST_F(MoQProxyTrackSwitchTest, AViewerAfterASwitchGetsNeitherUpstreamsAlias) {
   auto downstreamHandle =
       subscribeThroughUpstream(makeUpstreamHandle(), makeConsumer());
   ASSERT_NE(upstreamConsumer_, nullptr);
@@ -1869,14 +1869,15 @@ TEST_F(MoQProxyTrackSwitchTest, TheReplacementKeepsItsTrackAliasToItself) {
   ASSERT_TRUE(runUntilAdopted(replacementSession_));
   ASSERT_TRUE(replacementConsumer_->setTrackAlias(TrackAlias(77)));
   auto lateViewer = makeConsumer();
-  EXPECT_CALL(*lateViewer, setTrackAlias(TrackAlias(9)));
+  EXPECT_CALL(*lateViewer, setTrackAlias(TrackAlias(2)));
 
   auto lateResult = folly::coro::blockingWait(
       track_->subscribe(
           makeSubscribeRequest(RequestID(2)), lateViewer, makeDownstreamPeer()),
       &eventBase_);
 
-  EXPECT_TRUE(lateResult.hasValue());
+  ASSERT_TRUE(lateResult.hasValue());
+  EXPECT_EQ(lateResult.value()->subscribeOk().trackAlias, TrackAlias(2));
 }
 
 // The upstream goes away between its SUBSCRIBE_OK and the track resuming.

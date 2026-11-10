@@ -2834,6 +2834,29 @@ TEST_F(MoQForwarderTest, RequestUpdateWithFillStillAppliesForwardState) {
   forwarder->removeSubscriber(session->sessionId(), std::nullopt, "test");
 }
 
+TEST_F(MoQForwarderTest, SubscribersGetTheirRequestIDAsAliasNotTheUpstreams) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  ASSERT_TRUE(forwarder->setTrackAlias(TrackAlias(77)).hasValue());
+  auto firstSession = createMockSession();
+  auto secondSession = createMockSession();
+  auto firstConsumer = createMockConsumer();
+  auto secondConsumer = createMockConsumer();
+  EXPECT_CALL(*firstConsumer, setTrackAlias(TrackAlias(32)));
+  EXPECT_CALL(*secondConsumer, setTrackAlias(TrackAlias(36)));
+
+  auto first =
+      addSubscriber(*forwarder, firstSession, firstConsumer, RequestID(32));
+  auto second =
+      addSubscriber(*forwarder, secondSession, secondConsumer, RequestID(36));
+
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(first->subscribeOk().trackAlias, TrackAlias(32));
+  EXPECT_EQ(second->subscribeOk().trackAlias, TrackAlias(36));
+  forwarder->removeSubscriber(firstSession->sessionId(), std::nullopt, "test");
+  forwarder->removeSubscriber(secondSession->sessionId(), std::nullopt, "test");
+}
+
 TEST_F(
     MoQForwarderTest,
     DuplicateSubscriptionSharesTheSessionSubscriberByDefault) {

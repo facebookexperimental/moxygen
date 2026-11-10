@@ -3240,34 +3240,7 @@ TEST_F(MoQRelayTest, ReplacedSubscriptionUnsubscribeLeavesItsReplacement) {
   removeSession(subscriberSession);
 }
 
-TEST_F(MoQRelayTest, TracksFromTwoUpstreamsShareTheUpstreamAliasByDefault) {
-  const FullTrackName otherTrack{kTestNamespace, "track2"};
-  auto firstPublisher = createMockSession();
-  auto secondPublisher = createMockSession();
-  auto subscriberSession = createMockSession();
-  auto firstPublish = doPublish(firstPublisher, kTestTrackName);
-  auto secondPublish = doPublish(secondPublisher, otherTrack);
-  ASSERT_NE(firstPublish, nullptr);
-  ASSERT_NE(secondPublish, nullptr);
-  ASSERT_TRUE(firstPublish->setTrackAlias(TrackAlias(77)).hasValue());
-  ASSERT_TRUE(secondPublish->setTrackAlias(TrackAlias(77)).hasValue());
-
-  auto first = subscribeToTrack(
-      subscriberSession, kTestTrackName, createMockConsumer(), RequestID(32));
-  auto second = subscribeToTrack(
-      subscriberSession, otherTrack, createMockConsumer(), RequestID(36));
-
-  ASSERT_NE(first, nullptr);
-  ASSERT_NE(second, nullptr);
-  EXPECT_EQ(first->subscribeOk().trackAlias, TrackAlias(77));
-  EXPECT_EQ(second->subscribeOk().trackAlias, TrackAlias(77));
-  removeSession(firstPublisher);
-  removeSession(secondPublisher);
-  removeSession(subscriberSession);
-}
-
-TEST_F(MoQRelayTest, ReplaceOptionGivesTracksFromTwoUpstreamsDistinctAliases) {
-  relay_->setReplaceDuplicateSubscriptions(true);
+TEST_F(MoQRelayTest, TracksFromTwoUpstreamsGetDistinctAliases) {
   const FullTrackName otherTrack{kTestNamespace, "track2"};
   auto firstPublisher = createMockSession();
   auto secondPublisher = createMockSession();
