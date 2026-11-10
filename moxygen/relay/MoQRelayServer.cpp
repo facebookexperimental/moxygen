@@ -48,6 +48,11 @@ DEFINE_bool(
     false,
     "Listen on QMUX-on-TCP (TLS via Fizz is mandatory). May be combined with "
     "--quic for dual-stack.");
+DEFINE_bool(
+    rank_oldest_first_groups,
+    false,
+    "Order oldest-first subgroups by each group's first appearance on the "
+    "session instead of the low 14 bits of its group ID");
 
 namespace {
 using namespace moxygen;
@@ -61,6 +66,9 @@ class RelayServerImpl : public ServerBase {
         relay_(std::move(relay)) {}
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
+    auto settings = clientSession->getMoqSettings();
+    settings.rankOldestFirstGroups = FLAGS_rank_oldest_first_groups;
+    clientSession->setMoqSettings(settings);
     auto handler = MoQRelay::makeSessionHandler(relay_);
     clientSession->setPublishHandler(handler);
     clientSession->setSubscribeHandler(handler);

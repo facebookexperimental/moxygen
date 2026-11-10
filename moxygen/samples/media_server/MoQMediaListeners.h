@@ -23,6 +23,7 @@ struct MediaListenerOptions {
   std::string key;
   // Use the built-in insecure certificate instead of cert/key.
   bool insecure{false};
+  MoQSettings moqSettings;
 };
 
 // The QUIC/WebTransport and QMUX listeners of one media server. Both hand their

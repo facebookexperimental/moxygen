@@ -38,6 +38,9 @@ Flags:
   single-field namespace `["moq-media"]`.
 - `--file_pr_control_port` (default `60101`): HTTP port for the experimental
   `file_pr` fault-control UI; `0` disables it.
+- `--rank_oldest_first_groups` (default off): order oldest-first subgroups by
+  each group's first appearance on the session instead of the low 14 bits of
+  its group ID, which wrap.
 
 The catalog JSON lists tracks, each with a `sourceFile` (an fMP4 resolved next to
 the catalog).

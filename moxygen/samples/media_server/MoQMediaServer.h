@@ -35,9 +35,14 @@ class MoQMediaServerImpl : public ServerBase {
       : ServerBase(std::forward<BaseArgs>(baseArgs)...),
         publisher_(std::move(publisher)) {}
 
+  void setMoqSettings(MoQSettings settings) {
+    moqSettings_ = std::move(settings);
+  }
+
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
     XLOG(INFO) << "[MoQMediaServer:" << kTransport
                << "] onNewSession sess=" << clientSession.get();
+    clientSession->setMoqSettings(moqSettings_);
     clientSession->setPublishHandler(publisher_);
   }
 
@@ -57,6 +62,7 @@ class MoQMediaServerImpl : public ServerBase {
       std::is_same_v<ServerBase, MoQQmuxServer> ? "qmux" : "quic";
 
   std::shared_ptr<MoQBroadcastDispatcher> publisher_;
+  MoQSettings moqSettings_;
 };
 
 using MoQMediaServer = MoQMediaServerImpl<MoQServer>;

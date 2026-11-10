@@ -54,6 +54,7 @@ std::shared_ptr<MoQMediaServer> startQuicServer(
   auto* evb = dispatcher->eventBase();
   auto server = std::make_shared<MoQMediaServer>(
       std::move(dispatcher), makeFizzContext(quicAlpns(), options), kEndpoint);
+  server->setMoqSettings(options.moqSettings);
   server->start(addr, {evb});
   server->waitUntilInitialized();
   return server;
@@ -73,6 +74,7 @@ std::shared_ptr<MoQMediaQmuxServer> startQmuxServer(
       kEndpoint,
       makeFizzContext(getMoqtProtocols("", true), options),
       std::move(config));
+  server->setMoqSettings(options.moqSettings);
   server->start(addr, {evb});
   return server;
 }

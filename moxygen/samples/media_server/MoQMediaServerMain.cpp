@@ -54,6 +54,11 @@ DEFINE_int32(
     file_pr_control_port,
     60101,
     "Loopback HTTP port for file_pr fault controls; 0 disables the UI");
+DEFINE_bool(
+    rank_oldest_first_groups,
+    false,
+    "Order oldest-first subgroups by each group's first appearance on the "
+    "session instead of the low 14 bits of its group ID");
 
 namespace {
 using namespace moxygen;
@@ -106,7 +111,9 @@ int main(int argc, char* argv[]) {
             .qmux = FLAGS_qmux,
             .cert = FLAGS_cert,
             .key = FLAGS_key,
-            .insecure = FLAGS_insecure});
+            .insecure = FLAGS_insecure,
+            .moqSettings = {
+                .rankOldestFirstGroups = FLAGS_rank_oldest_first_groups}});
   } catch (const std::exception& ex) {
     XLOG(ERR) << "[main] failed to start listeners: " << ex.what();
     return EXIT_FAILURE;
