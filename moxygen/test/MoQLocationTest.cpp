@@ -253,32 +253,43 @@ TEST(LocationFilter, Resolve) {
   }
 }
 
-TEST(LocationFilter, FromFieldsRejectsTooManyFields) {
+TEST(LocationFilter, FromWireRejectsUndefinedType) {
   std::array<uint64_t, LocationFilter::kMaxFields> fields{1, 2, 3, 4};
-  EXPECT_TRUE(LocationFilter::fromFields(fields, 4).hasValue());
-  auto res = LocationFilter::fromFields(fields, 5);
+  EXPECT_TRUE(LocationFilter::fromWire(4, fields).hasValue());
+  auto nextObject = LocationFilter::fromWire(5, fields);
+  ASSERT_TRUE(nextObject.hasValue());
+  EXPECT_EQ(*nextObject, LocationFilter::nextObject());
+  auto res = LocationFilter::fromWire(6, fields);
   ASSERT_TRUE(res.hasError());
   EXPECT_EQ(res.error(), ErrorCode::PROTOCOL_VIOLATION);
 }
 
-TEST(LocationFilter, FromFieldsRejectsEndGroupOverflow) {
+TEST(LocationFilter, TwoZeroFieldsAreAnAbsoluteStart) {
+  auto res = LocationFilter::fromWire(2, {});
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_NE(*res, LocationFilter::nextObject());
+  EXPECT_FALSE(res->needsLargest());
+  EXPECT_EQ(res->absoluteStartLocation(), kLocationMin);
+}
+
+TEST(LocationFilter, FromWireRejectsEndGroupOverflow) {
   // Only a sum past 2^64-1 is a violation. Two varints cannot reach it, so
   // this case arrives from a direct caller rather than from the wire.
   std::array<uint64_t, LocationFilter::kMaxFields> fields{
       1, 0, std::numeric_limits<uint64_t>::max(), 0};
-  auto res = LocationFilter::fromFields(fields, 3);
+  auto res = LocationFilter::fromWire(3, fields);
   ASSERT_TRUE(res.hasError());
   EXPECT_EQ(res.error(), ErrorCode::PROTOCOL_VIOLATION);
 
   // A sum past the varint limit is legal, and the end group saturates there.
   fields[2] = kEightByteLimit;
-  auto saturated = LocationFilter::fromFields(fields, 3);
+  auto saturated = LocationFilter::fromWire(3, fields);
   ASSERT_TRUE(saturated.hasValue());
   EXPECT_EQ(saturated->fields()[2], kEightByteLimit - 1);
 
   // The same delta is fine from group 0.
   fields[0] = 0;
-  EXPECT_TRUE(LocationFilter::fromFields(fields, 3).hasValue());
+  EXPECT_TRUE(LocationFilter::fromWire(3, fields).hasValue());
 }
 
 // The end group is delta encoded, so it round-trips through the wire form.
@@ -291,7 +302,7 @@ TEST(LocationFilter, FieldsRoundTrip) {
       LocationFilter::range({10, 20}, 30),
       LocationFilter::range({10, 20}, {30, 4})};
   for (const auto& filter : filters) {
-    auto res = LocationFilter::fromFields(filter.fields(), filter.fieldCount());
+    auto res = LocationFilter::fromWire(filter.type(), filter.fields());
     ASSERT_TRUE(res.hasValue()) << filter.describe();
     EXPECT_EQ(*res, filter) << filter.describe();
   }

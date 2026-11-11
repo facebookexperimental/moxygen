@@ -3016,19 +3016,27 @@ std::unique_ptr<folly::IOBuf> subscribeWithRawParam(
   writeVarintTo(body, 1); // one parameter
   // The first key is a delta from zero, so it goes out as its own value.
   writeVarintTo(body, folly::to_underlying(key));
-  writeVarintTo(body, value.size());
+  // A Location Filter has no length; its type decides how many fields follow.
+  if (key != TrackRequestParamKey::LOCATION_FILTER) {
+    writeVarintTo(body, value.size());
+  }
   body.append(folly::IOBuf::copyBuffer(value));
   return body.move();
 }
 
-ErrorCode parseSubscribeBodyError(const std::unique_ptr<folly::IOBuf>& bytes) {
+folly::Expected<SubscribeRequest, ErrorCode> parseSubscribeBody(
+    const std::unique_ptr<folly::IOBuf>& bytes,
+    uint64_t version = kVersionDraft22) {
   MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft22);
+  parser.initializeVersion(version);
   MoQTokenCache tokenCache;
   parser.setTokenCache(&tokenCache);
   folly::io::Cursor cursor(bytes.get());
-  auto res =
-      parser.parseSubscribeRequest(cursor, bytes->computeChainDataLength());
+  return parser.parseSubscribeRequest(cursor, bytes->computeChainDataLength());
+}
+
+ErrorCode parseSubscribeBodyError(const std::unique_ptr<folly::IOBuf>& bytes) {
+  auto res = parseSubscribeBody(bytes);
   EXPECT_TRUE(res.hasError());
   return res.hasError() ? res.error() : ErrorCode::NO_ERROR;
 }
@@ -3057,23 +3065,46 @@ TEST(MoQFramerFillParameters, RangeFilterIsAViolation) {
       ErrorCode::PROTOCOL_VIOLATION);
 }
 
-// A Location Filter has at most four fields.
-TEST(MoQFramerLocationFilter, MoreThanFourFieldsIsAViolation) {
+TEST(MoQFramerLocationFilter, UndefinedTypeIsAViolation) {
   EXPECT_EQ(
       parseSubscribeBodyError(subscribeWithRawParam(
-          TrackRequestParamKey::LOCATION_FILTER,
-          std::string("\x01\x02\x03\x04\x05", 5))),
+          TrackRequestParamKey::LOCATION_FILTER, std::string("\x06", 1))),
       ErrorCode::PROTOCOL_VIOLATION);
 }
 
-// The parameter length is known up front, so a field that runs past it is
-// malformed rather than a signal to wait for more bytes.
-TEST(MoQFramerLocationFilter, FieldCrossingParamLengthIsAViolation) {
-  // 0x80 opens a two byte varint with only one byte left in the parameter.
+TEST(MoQFramerLocationFilter, MissingFieldIsAnError) {
   EXPECT_EQ(
       parseSubscribeBodyError(subscribeWithRawParam(
-          TrackRequestParamKey::LOCATION_FILTER, std::string("\x01\x80", 2))),
-      ErrorCode::PROTOCOL_VIOLATION);
+          TrackRequestParamKey::LOCATION_FILTER, std::string("\x02\x01", 2))),
+      ErrorCode::PARSE_UNDERFLOW);
+}
+
+TEST(MoQFramerLocationFilter, ParsesTypedForm) {
+  const std::vector<std::pair<std::string, LocationFilter>> cases{
+      {std::string("\x00", 1), LocationFilter::none()},
+      {std::string("\x01\x03", 2), LocationFilter::relativeStart(3)},
+      {std::string("\x02\x0a\x14", 3), LocationFilter::absoluteStart({10, 20})},
+      {std::string("\x03\x0a\x14\x05", 4), LocationFilter::range({10, 20}, 15)},
+      {std::string("\x04\x0a\x14\x05\x02", 5),
+       LocationFilter::range({10, 20}, {15, 2})},
+      {std::string("\x05", 1), LocationFilter::nextObject()}};
+  for (const auto& [wire, expected] : cases) {
+    SCOPED_TRACE(expected.describe());
+    auto res = parseSubscribeBody(
+        subscribeWithRawParam(TrackRequestParamKey::LOCATION_FILTER, wire));
+    ASSERT_TRUE(res.hasValue());
+    EXPECT_EQ(res->filter, expected);
+  }
+}
+
+// Type 0x02 with two zero fields starts at {0,0}; only type 0x05 means Next
+// Object.
+TEST(MoQFramerLocationFilter, TwoZeroFieldsAreNotNextObject) {
+  auto res = parseSubscribeBody(subscribeWithRawParam(
+      TrackRequestParamKey::LOCATION_FILTER, std::string("\x02\x00\x00", 3)));
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_NE(res->filter, LocationFilter::nextObject());
+  EXPECT_EQ(res->filter.absoluteStartLocation(), kLocationMin);
 }
 
 namespace {
@@ -3194,22 +3225,11 @@ TEST(MoQFramerFillParameters, AbsentWhenNotRequested) {
 
 // FILL_PARAMETERS below draft 22 is a protocol violation.
 TEST(MoQFramerFillParameters, RejectedBelowV22) {
-  MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft22);
-  FillParameters fill;
-  fill.locationFilter = LocationFilter::relativeStart(1);
-  auto bytes = writeFillSubscribe(writer, fill);
-
-  MoQFrameParser parser;
-  parser.initializeVersion(kVersionDraft18);
-  MoQTokenCache tokenCache;
-  parser.setTokenCache(&tokenCache);
-
-  folly::io::Cursor cursor(bytes.get());
-  auto frameType = quic::follyutils::decodeQuicInteger(cursor);
-  ASSERT_TRUE(frameType.has_value());
-  auto frameLen = cursor.readBE<uint16_t>();
-  auto parseRes = parser.parseSubscribeRequest(cursor, frameLen);
+  // A nested LOCATION_FILTER of one group back.
+  const std::string nested("\x21\x01\x01", 3);
+  auto parseRes = parseSubscribeBody(
+      subscribeWithRawParam(TrackRequestParamKey::FILL_PARAMETERS, nested),
+      kVersionDraft18);
   ASSERT_TRUE(parseRes.hasError());
   EXPECT_EQ(parseRes.error(), ErrorCode::PROTOCOL_VIOLATION);
 }

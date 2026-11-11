@@ -924,24 +924,28 @@ MoQFrameParser::parseSubscriptionFilter(
 folly::Expected<LocationFilter, ErrorCode> MoQFrameParser::parseLocationFilter(
     folly::io::Cursor& cursor,
     size_t& length) const noexcept {
+  auto type = decodeVarint(cursor, length);
+  if (!type) {
+    XLOG(DBG4) << "parseLocationFilter: UNDERFLOW on type";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= type->second;
+  const auto count = LocationFilter::fieldCountForType(type->first);
+  if (!count) {
+    XLOG(ERR) << "parseLocationFilter: undefined type " << type->first;
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
   std::array<uint64_t, LocationFilter::kMaxFields> fields{};
-  uint8_t count = 0;
-  while (length > 0) {
-    if (count == LocationFilter::kMaxFields) {
-      XLOG(ERR) << "parseLocationFilter: more than four fields";
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-    }
+  for (uint8_t i = 0; i < *count; i++) {
     auto field = decodeVarint(cursor, length);
     if (!field) {
-      // The parameter length is known, so a field running past it is
-      // malformed rather than a signal to wait for more bytes.
-      XLOG(ERR) << "parseLocationFilter: field crosses the parameter length";
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+      XLOG(DBG4) << "parseLocationFilter: UNDERFLOW on field " << int(i);
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
     }
-    fields[count++] = field->first;
+    fields[i] = field->first;
     length -= field->second;
   }
-  return LocationFilter::fromFields(fields, count);
+  return LocationFilter::fromWire(type->first, fields);
 }
 
 folly::Expected<FillParameters, ErrorCode> MoQFrameParser::parseFillParameters(
@@ -962,17 +966,7 @@ folly::Expected<FillParameters, ErrorCode> MoQFrameParser::parseFillParameters(
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
     }
     if (*key == folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER)) {
-      auto lenRes = decodeVarint(cursor, length);
-      if (!lenRes) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      length -= lenRes->second;
-      if (lenRes->first > length || !cursor.canAdvance(lenRes->first)) {
-        return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
-      }
-      size_t valueLen = lenRes->first;
-      length -= valueLen;
-      auto filter = parseLocationFilter(cursor, valueLen);
+      auto filter = parseLocationFilter(cursor, length);
       if (!filter) {
         return folly::makeUnexpected(filter.error());
       }
@@ -1037,6 +1031,13 @@ MoQFrameParser::parseVariableParam(
       return std::nullopt;
     }
     p.asAuthToken = std::move(*tokenRes.value());
+  } else if (key == subscriptionFilterKey && useLocationFilter(version)) {
+    // The Location Filter Type, not a length, decides how many fields follow.
+    auto res = parseLocationFilter(cursor, length);
+    if (!res) {
+      return folly::makeUnexpected(res.error());
+    }
+    p.asLocationFilter = res.value();
   } else if (
       key == subscriptionFilterKey ||
       (key == folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS) &&
@@ -1061,12 +1062,6 @@ MoQFrameParser::parseVariableParam(
         return folly::makeUnexpected(res.error());
       }
       p.asFillParameters = res.value();
-    } else if (useLocationFilter(version)) {
-      auto res = parseLocationFilter(cursor, valueSize);
-      if (!res) {
-        return folly::makeUnexpected(res.error());
-      }
-      p.asLocationFilter = res.value();
     } else {
       auto res = parseSubscriptionFilter(cursor, valueSize);
       if (!res) {
@@ -4401,6 +4396,13 @@ void MoQFrameWriter::writeV18ParamValue(
     case ParameterValueEncoding::LengthPrefixed: {
       const bool isFill = param.key ==
           folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS);
+      if (!isExtension &&
+          param.key ==
+              folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER) &&
+          useLocationFilter(*version_)) {
+        writeLocationFilter(writeBuf, param.asLocationFilter, size, error);
+        return;
+      }
       if (isExtension ||
           (!isFill &&
            param.key !=
@@ -4413,8 +4415,6 @@ void MoQFrameWriter::writeV18ParamValue(
       size_t tmpSize = 0;
       if (isFill) {
         writeFillParameters(tmpBuf, param.asFillParameters, tmpSize, error);
-      } else if (useLocationFilter(*version_)) {
-        writeLocationFilter(tmpBuf, param.asLocationFilter, tmpSize, error);
       } else {
         writeSubscriptionFilter(
             tmpBuf,
@@ -4562,6 +4562,7 @@ void MoQFrameWriter::writeLocationFilter(
     const LocationFilter& filter,
     size_t& size,
     bool& error) const noexcept {
+  writeVarint(writeBuf, filter.type(), size, error);
   const auto fields = filter.fields();
   for (uint8_t i = 0; i < filter.fieldCount(); i++) {
     writeVarint(writeBuf, fields[i], size, error);
@@ -4591,15 +4592,7 @@ void MoQFrameWriter::writeFillParameters(
   }
   if (fill.locationFilter) {
     writeKey(TrackRequestParamKey::LOCATION_FILTER);
-    folly::IOBufQueue tmpBuf{folly::IOBufQueue::cacheChainLength()};
-    size_t tmpSize = 0;
-    writeLocationFilter(tmpBuf, *fill.locationFilter, tmpSize, error);
-    if (error) {
-      return;
-    }
-    writeVarint(writeBuf, tmpSize, size, error);
-    writeBuf.append(tmpBuf.move());
-    size += tmpSize;
+    writeLocationFilter(writeBuf, *fill.locationFilter, size, error);
   }
   if (fill.groupOrder) {
     writeKey(TrackRequestParamKey::GROUP_ORDER);
