@@ -1063,11 +1063,13 @@ TEST(MoQFramerMessageParameterExtensionTest, NegotiatedParametersRoundTrip) {
     extensions->emplace(
         kIntegerParameter,
         MessageParameterExtension{
-            ParameterValueEncoding::Varint, {FrameType::SUBSCRIBE}});
+            .encoding = ParameterValueEncoding::Varint,
+            .allowedFrames = {FrameType::SUBSCRIBE}});
     extensions->emplace(
         kStringParameter,
         MessageParameterExtension{
-            ParameterValueEncoding::LengthPrefixed, {FrameType::SUBSCRIBE}});
+            .encoding = ParameterValueEncoding::LengthPrefixed,
+            .allowedFrames = {FrameType::SUBSCRIBE}});
 
     auto request =
         SubscribeRequest::make(FullTrackName{TrackNamespace({"ns"}), "track"});
@@ -1106,7 +1108,8 @@ TEST(
     writerExtensions->emplace(
         kCustomParameter,
         MessageParameterExtension{
-            ParameterValueEncoding::LengthPrefixed, {FrameType::SUBSCRIBE}});
+            .encoding = ParameterValueEncoding::LengthPrefixed,
+            .allowedFrames = {FrameType::SUBSCRIBE}});
     MoQFrameWriter writer;
     writer.initializeVersion(version);
     writer.setMessageParameterExtensions(writerExtensions);
@@ -1125,7 +1128,8 @@ TEST(
     disallowedExtensions->emplace(
         kCustomParameter,
         MessageParameterExtension{
-            ParameterValueEncoding::LengthPrefixed, {FrameType::FETCH}});
+            .encoding = ParameterValueEncoding::LengthPrefixed,
+            .allowedFrames = {FrameType::FETCH}});
     for (const auto& extensions : {emptyExtensions, disallowedExtensions}) {
       MoQFrameParser parser;
       parser.initializeVersion(version);
@@ -1182,6 +1186,295 @@ TEST(MoQFramerMessageParameterExtensionTest, FailedResponseWritesAreAtomic) {
         [&](auto& writeBuf, const auto& message) {
           return writer.writeFetchOk(writeBuf, message);
         });
+  }
+}
+
+namespace {
+
+// Odd, so it is length-prefixed on draft 16 as well.
+constexpr uint64_t kFilterParameter = 0x3F;
+
+std::unique_ptr<folly::IOBuf> writeSubscribeNamespaceWith(
+    uint64_t version,
+    std::shared_ptr<const MessageParameterExtensions> extensions,
+    const std::vector<Parameter>& params) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  writer.setMessageParameterExtensions(std::move(extensions));
+  SubscribeNamespace subNs;
+  subNs.trackNamespacePrefix = TrackNamespace({"ns"});
+  for (const auto& param : params) {
+    EXPECT_TRUE(subNs.params.insertParam(param).hasValue());
+  }
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  if (writer.writeSubscribeNamespace(writeBuf, subNs).hasError()) {
+    return nullptr;
+  }
+  return writeBuf.move();
+}
+
+folly::Expected<SubscribeNamespace, ErrorCode> parseSubscribeNamespaceWith(
+    uint64_t version,
+    std::shared_ptr<const MessageParameterExtensions> extensions,
+    const folly::IOBuf& serialized) {
+  MoQFrameParser parser;
+  parser.initializeVersion(version);
+  parser.setMessageParameterExtensions(std::move(extensions));
+  folly::io::Cursor cursor(&serialized);
+  EXPECT_TRUE(parser.decodeVarint(cursor).has_value());
+  return parser.parseSubscribeNamespace(cursor, cursor.readBE<uint16_t>());
+}
+
+std::shared_ptr<MessageParameterExtensions> makeFilterExtensions(
+    const MessageParameterExtension& rule) {
+  auto extensions = std::make_shared<MessageParameterExtensions>();
+  extensions->emplace(kFilterParameter, rule);
+  return extensions;
+}
+
+std::unique_ptr<folly::IOBuf> writePublishNamespaceWith(
+    uint64_t version,
+    std::shared_ptr<const MessageParameterExtensions> extensions,
+    const std::vector<Parameter>& params) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  writer.setMessageParameterExtensions(std::move(extensions));
+  PublishNamespace pubNs;
+  pubNs.trackNamespace = TrackNamespace({"ns"});
+  for (const auto& param : params) {
+    EXPECT_TRUE(pubNs.params.insertParam(param).hasValue());
+  }
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  if (writer.writePublishNamespace(writeBuf, pubNs).hasError()) {
+    return nullptr;
+  }
+  return writeBuf.move();
+}
+
+folly::Expected<PublishNamespace, ErrorCode> parsePublishNamespaceWith(
+    uint64_t version,
+    std::shared_ptr<const MessageParameterExtensions> extensions,
+    const folly::IOBuf& serialized) {
+  MoQFrameParser parser;
+  parser.initializeVersion(version);
+  parser.setMessageParameterExtensions(std::move(extensions));
+  folly::io::Cursor cursor(&serialized);
+  EXPECT_TRUE(parser.decodeVarint(cursor).has_value());
+  return parser.parsePublishNamespace(cursor, cursor.readBE<uint16_t>());
+}
+
+MessageParameterExtension filterRule() {
+  return MessageParameterExtension{
+      .encoding = ParameterValueEncoding::LengthPrefixed,
+      .allowedFrames = {FrameType::SUBSCRIBE_NAMESPACE}};
+}
+
+} // namespace
+
+TEST(MoQFramerMessageParameterExtensionTest, StructuredValueRoundTrips) {
+  auto rule = filterRule();
+  rule.repeatable = false;
+  rule.validate = [](uint64_t, const Parameter& param) {
+    return param.asString.size() == 2;
+  };
+  auto extensions = makeFilterExtensions(rule);
+  const std::string value("\x01\x03", 2);
+  for (auto version : {kVersionDraft16, kVersionDraft18, kVersionDraft22}) {
+    SCOPED_TRACE(version);
+    auto serialized = writeSubscribeNamespaceWith(
+        version, extensions, {Parameter(kFilterParameter, value)});
+    ASSERT_NE(serialized, nullptr);
+    auto parsed = parseSubscribeNamespaceWith(version, extensions, *serialized);
+    ASSERT_TRUE(parsed.hasValue());
+    const auto* param = parsed->params.getFirstParam(kFilterParameter);
+    ASSERT_NE(param, nullptr);
+    EXPECT_EQ(param->asString, value);
+  }
+}
+
+TEST(MoQFramerMessageParameterExtensionTest, ParityMismatchUnusableOnDraft16) {
+  constexpr uint64_t kEvenParameter = 0x3E;
+  auto lengthPrefixed = std::make_shared<MessageParameterExtensions>();
+  lengthPrefixed->emplace(
+      kEvenParameter,
+      MessageParameterExtension{
+          .encoding = ParameterValueEncoding::LengthPrefixed,
+          .allowedFrames = {FrameType::SUBSCRIBE_NAMESPACE}});
+  const std::vector<Parameter> stringParam{
+      Parameter(kEvenParameter, std::string("route"))};
+  EXPECT_EQ(
+      writeSubscribeNamespaceWith(kVersionDraft16, lengthPrefixed, stringParam),
+      nullptr);
+  EXPECT_NE(
+      writeSubscribeNamespaceWith(kVersionDraft18, lengthPrefixed, stringParam),
+      nullptr);
+
+  auto varint = std::make_shared<MessageParameterExtensions>();
+  varint->emplace(
+      kEvenParameter,
+      MessageParameterExtension{
+          .encoding = ParameterValueEncoding::Varint,
+          .allowedFrames = {FrameType::SUBSCRIBE_NAMESPACE}});
+  auto serialized = writeSubscribeNamespaceWith(
+      kVersionDraft16, varint, {Parameter(kEvenParameter, 7)});
+  ASSERT_NE(serialized, nullptr);
+  EXPECT_TRUE(parseSubscribeNamespaceWith(kVersionDraft16, varint, *serialized)
+                  .hasValue());
+  auto parsed =
+      parseSubscribeNamespaceWith(kVersionDraft16, lengthPrefixed, *serialized);
+  ASSERT_TRUE(parsed.hasError());
+  EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST(MoQFramerMessageParameterExtensionTest, RulesAreEnforcedBothWays) {
+  auto permissive = makeFilterExtensions(filterRule());
+
+  auto validated = filterRule();
+  validated.validate = [](uint64_t, const Parameter& param) {
+    return param.asString.size() == 2;
+  };
+  auto throwing = filterRule();
+  throwing.validate = [](uint64_t, const Parameter& param) {
+    if (param.asString.size() < 2) {
+      throw std::out_of_range("short value");
+    }
+    return true;
+  };
+  auto single = filterRule();
+  single.repeatable = false;
+  auto required = filterRule();
+  required.requiredFrames = {FrameType::SUBSCRIBE_NAMESPACE};
+
+  struct Case {
+    std::string name;
+    std::shared_ptr<MessageParameterExtensions> strict;
+    std::vector<Parameter> params;
+  };
+  const std::vector<Case> cases{
+      {"validate",
+       makeFilterExtensions(validated),
+       {Parameter(kFilterParameter, std::string("x"))}},
+      {"throwing validate",
+       makeFilterExtensions(throwing),
+       {Parameter(kFilterParameter, std::string("x"))}},
+      {"repeatable",
+       makeFilterExtensions(single),
+       {Parameter(kFilterParameter, std::string("ab")),
+        Parameter(kFilterParameter, std::string("cd"))}},
+      {"requiredFrames", makeFilterExtensions(required), {}},
+  };
+  for (auto version : {kVersionDraft16, kVersionDraft18, kVersionDraft22}) {
+    for (const auto& testCase : cases) {
+      SCOPED_TRACE(testCase.name + " " + std::to_string(version));
+      EXPECT_EQ(
+          writeSubscribeNamespaceWith(
+              version, testCase.strict, testCase.params),
+          nullptr);
+      auto serialized =
+          writeSubscribeNamespaceWith(version, permissive, testCase.params);
+      ASSERT_NE(serialized, nullptr);
+      auto parsed =
+          parseSubscribeNamespaceWith(version, testCase.strict, *serialized);
+      ASSERT_TRUE(parsed.hasError());
+      EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
+    }
+  }
+}
+
+TEST(MoQFramerMessageParameterExtensionTest, RequiredOnResponseWithoutParams) {
+  auto required = std::make_shared<MessageParameterExtensions>();
+  required->emplace(
+      kFilterParameter,
+      MessageParameterExtension{
+          .encoding = ParameterValueEncoding::LengthPrefixed,
+          .allowedFrames = {FrameType::REQUEST_OK},
+          .requiredFrames = {FrameType::REQUEST_OK}});
+  for (auto version : {kVersionDraft16, kVersionDraft18, kVersionDraft22}) {
+    SCOPED_TRACE(version);
+    RequestOk requestOk;
+    requestOk.requestID = 1;
+    auto write = [&](std::shared_ptr<const MessageParameterExtensions> rules) {
+      MoQFrameWriter writer;
+      writer.initializeVersion(version);
+      writer.setMessageParameterExtensions(std::move(rules));
+      folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+      auto res =
+          writer.writeRequestOk(writeBuf, requestOk, FrameType::REQUEST_OK);
+      return res.hasValue() ? writeBuf.move() : nullptr;
+    };
+    EXPECT_EQ(write(required), nullptr);
+    auto serialized = write(nullptr);
+    ASSERT_NE(serialized, nullptr);
+
+    MoQFrameParser parser;
+    parser.initializeVersion(version);
+    parser.setMessageParameterExtensions(required);
+    folly::io::Cursor cursor(serialized.get());
+    EXPECT_TRUE(parser.decodeVarint(cursor).has_value());
+    auto parsed = parser.parseRequestOk(
+        cursor, cursor.readBE<uint16_t>(), FrameType::REQUEST_OK);
+    ASSERT_TRUE(parsed.hasError());
+    EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
+  }
+}
+
+// One extension enabling two parameters with different rules, shaped like
+// MoQ Cluster's HOP_PATH and ROUTE_COST.
+TEST(MoQFramerMessageParameterExtensionTest, OneExtensionManyParameters) {
+  constexpr uint64_t kPathParameter = 0x3F;
+  constexpr uint64_t kCostParameter = 0x3C;
+  const std::vector<FrameType> advertisements{
+      FrameType::PUBLISH_NAMESPACE, FrameType::SUBSCRIBE_NAMESPACE};
+  auto extensions = std::make_shared<MessageParameterExtensions>();
+  extensions->emplace(
+      kPathParameter,
+      MessageParameterExtension{
+          .encoding = ParameterValueEncoding::LengthPrefixed,
+          .allowedFrames = advertisements,
+          .requiredFrames = {FrameType::PUBLISH_NAMESPACE},
+          .repeatable = false});
+  extensions->emplace(
+      kCostParameter,
+      MessageParameterExtension{
+          .encoding = ParameterValueEncoding::Varint,
+          .allowedFrames = advertisements,
+          .repeatable = false});
+  auto permissive = std::make_shared<MessageParameterExtensions>();
+  permissive->emplace(
+      kPathParameter,
+      MessageParameterExtension{
+          .encoding = ParameterValueEncoding::LengthPrefixed,
+          .allowedFrames = advertisements});
+  permissive->emplace(
+      kCostParameter,
+      MessageParameterExtension{
+          .encoding = ParameterValueEncoding::Varint,
+          .allowedFrames = advertisements});
+
+  const Parameter path(kPathParameter, std::string("\x01", 1));
+  const Parameter cost(kCostParameter, 5);
+  for (auto version : {kVersionDraft16, kVersionDraft18, kVersionDraft22}) {
+    SCOPED_TRACE(version);
+    auto ok = writePublishNamespaceWith(version, extensions, {path, cost});
+    ASSERT_NE(ok, nullptr);
+    EXPECT_TRUE(parsePublishNamespaceWith(version, extensions, *ok).hasValue());
+    // Neither parameter is required on SUBSCRIBE_NAMESPACE.
+    auto optional = writeSubscribeNamespaceWith(version, extensions, {});
+    ASSERT_NE(optional, nullptr);
+    EXPECT_TRUE(
+        parseSubscribeNamespaceWith(version, extensions, *optional).hasValue());
+
+    for (const auto& params :
+         {std::vector<Parameter>{cost},
+          std::vector<Parameter>{path, cost, cost}}) {
+      EXPECT_EQ(
+          writePublishNamespaceWith(version, extensions, params), nullptr);
+      auto serialized = writePublishNamespaceWith(version, permissive, params);
+      ASSERT_NE(serialized, nullptr);
+      auto parsed = parsePublishNamespaceWith(version, extensions, *serialized);
+      ASSERT_TRUE(parsed.hasError());
+      EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
+    }
   }
 }
 

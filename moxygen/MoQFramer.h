@@ -19,6 +19,7 @@
 #include <quic/codec/QuicInteger.h>
 #include <quic/folly_utils/Utils.h>
 
+#include <functional>
 #include <memory>
 #include <variant>
 
@@ -36,9 +37,20 @@ enum class ParameterValueEncoding {
   LengthPrefixed,
 };
 
+// Before draft 18 a key's parity sets its encoding: an even key is usable only
+// as Uint8 or Varint, an odd key only as LengthPrefixed, and a Uint8 is not
+// range-checked.
 struct MessageParameterExtension {
   ParameterValueEncoding encoding;
+  // Empty allows every frame. Frames are matched by wire type, so REQUEST_OK
+  // matches every OK response.
   std::vector<FrameType> allowedFrames;
+  // Frames that must carry the parameter.
+  std::vector<FrameType> requiredFrames;
+  // False allows at most one per message.
+  bool repeatable{true};
+  // Optional check of each value. Throwing counts as invalid.
+  std::function<bool(uint64_t version, const Parameter&)> validate;
 };
 
 using MessageParameterExtensions =

@@ -71,15 +71,39 @@ moxygen::ParameterValueEncoding paramEncodingV18(uint64_t key) {
   return E::Varint;
 }
 
+bool encodingMatchesParity(
+    moxygen::ParameterValueEncoding encoding,
+    uint64_t key) {
+  using E = moxygen::ParameterValueEncoding;
+  if (key & 0x01) {
+    return encoding == E::LengthPrefixed;
+  }
+  return encoding == E::Uint8 || encoding == E::Varint;
+}
+
+// Before draft 18, the parity of `key` fixes its encoding.
+bool isMessageParameterExtensionUsable(
+    uint64_t key,
+    const moxygen::MessageParameterExtension& extension,
+    uint64_t majorVersion) {
+  return majorVersion >= 18 || encodingMatchesParity(extension.encoding, key);
+}
+
+// Null when `key` isn't registered or its encoding is unusable on this draft.
 const moxygen::MessageParameterExtension* findMessageParameterExtension(
     const std::shared_ptr<const moxygen::MessageParameterExtensions>&
         extensions,
-    uint64_t key) {
+    uint64_t key,
+    uint64_t majorVersion) {
   if (!extensions) {
     return nullptr;
   }
   auto it = extensions->find(key);
-  return it == extensions->end() ? nullptr : &it->second;
+  if (it == extensions->end() ||
+      !isMessageParameterExtensionUsable(key, it->second, majorVersion)) {
+    return nullptr;
+  }
+  return &it->second;
 }
 
 bool isMessageParameterAllowed(
@@ -103,10 +127,62 @@ bool containsInvalidMessageParameterExtension(
         if (moxygen::Parameters::isKnownParamKey(parameter.key, majorVersion)) {
           return false;
         }
-        const auto* extension =
-            findMessageParameterExtension(extensions, parameter.key);
+        const auto* extension = findMessageParameterExtension(
+            extensions, parameter.key, majorVersion);
         return !extension || !isMessageParameterAllowed(*extension, frameType);
       });
+}
+
+// Applies each registered parameter's validate, repeatable and requiredFrames
+// rules to one message's parameters.
+template <class Params>
+bool satisfiesMessageParameterRules(
+    const Params& parameters,
+    uint64_t version,
+    moxygen::FrameType frameType,
+    const std::shared_ptr<const moxygen::MessageParameterExtensions>&
+        extensions) {
+  if (!extensions || extensions->empty()) {
+    return true;
+  }
+  const auto majorVersion = moxygen::getDraftMajorVersion(version);
+  folly::F14FastMap<uint64_t, size_t> counts;
+  for (const auto& parameter : parameters) {
+    if (moxygen::Parameters::isKnownParamKey(parameter.key, majorVersion)) {
+      continue;
+    }
+    const auto* rule =
+        findMessageParameterExtension(extensions, parameter.key, majorVersion);
+    if (!rule) {
+      continue;
+    }
+    if (rule->validate) {
+      try {
+        if (!rule->validate(version, parameter)) {
+          return false;
+        }
+      } catch (const std::exception& ex) {
+        XLOG(ERR) << "validate threw for parameter key=" << parameter.key
+                  << ": " << ex.what();
+        return false;
+      }
+    }
+    if (++counts[parameter.key] > 1 && !rule->repeatable) {
+      return false;
+    }
+  }
+  for (const auto& [key, rule] : *extensions) {
+    const bool isMissing = counts.count(key) == 0;
+    const bool isRequired = std::find(
+                                rule.requiredFrames.begin(),
+                                rule.requiredFrames.end(),
+                                frameType) != rule.requiredFrames.end();
+    if (isMissing && isRequired &&
+        isMessageParameterExtensionUsable(key, rule, majorVersion)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // The parameter types draft 22 permits inside FILL_PARAMETERS. Range Filters
@@ -1824,7 +1900,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
         Parameters::isKnownParamKey(key, getDraftMajorVersion(version));
     const auto* extension = isBuiltIn
         ? nullptr
-        : findMessageParameterExtension(messageParameterExtensions_, key);
+        : findMessageParameterExtension(
+              messageParameterExtensions_, key, getDraftMajorVersion(version));
     if (!isBuiltIn && !extension) {
       XLOG(ERR) << "Unknown parameter key " << key;
       return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
@@ -1922,6 +1999,14 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
         }
       }
     }
+  }
+  if (!satisfiesMessageParameterRules(
+          params,
+          version,
+          params.getFrameType(),
+          messageParameterExtensions_)) {
+    XLOG(ERR) << "parseTrackRequestParams: extension parameter rule violated";
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   XLOG(DBG4) << "parseTrackRequestParams: returning success";
   return folly::unit;
@@ -2573,20 +2658,19 @@ folly::Expected<PublishNamespaceOk, ErrorCode> MoQFrameParser::parseRequestOk(
     return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
   }
   length -= numParams->second;
-  if (numParams->first > 0) {
-    if (frameType == FrameType::SUBSCRIBE_NAMESPACE_OK) {
-      // no params supported
-      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
-    }
-    auto res = parseTrackRequestParams(
-        cursor,
-        length,
-        numParams->first,
-        requestOk.params,
-        requestOk.requestSpecificParams);
-    if (!res) {
-      return folly::makeUnexpected(res.error());
-    }
+  if (frameType == FrameType::SUBSCRIBE_NAMESPACE_OK && numParams->first > 0) {
+    // no params supported
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+  }
+  // Runs even with no params, so that requiredFrames is enforced.
+  auto res = parseTrackRequestParams(
+      cursor,
+      length,
+      numParams->first,
+      requestOk.params,
+      requestOk.requestSpecificParams);
+  if (!res) {
+    return folly::makeUnexpected(res.error());
   }
 
   if (getDraftMajorVersion(*version_) >= 18 && length > 0) {
@@ -4228,6 +4312,11 @@ void MoQFrameWriter::writeTrackRequestParams(
           allParams,
           majorVersion,
           params.getFrameType(),
+          messageParameterExtensions_) ||
+      !satisfiesMessageParameterRules(
+          allParams,
+          *version_,
+          params.getFrameType(),
           messageParameterExtensions_)) {
     error = true;
     return;
@@ -4324,7 +4413,10 @@ void MoQFrameWriter::writeParamValue(
     const auto* extension =
         Parameters::isKnownParamKey(param.key, getDraftMajorVersion(*version_))
         ? nullptr
-        : findMessageParameterExtension(messageParameterExtensions_, param.key);
+        : findMessageParameterExtension(
+              messageParameterExtensions_,
+              param.key,
+              getDraftMajorVersion(*version_));
     writeV18ParamValue(
         writeBuf,
         param,
