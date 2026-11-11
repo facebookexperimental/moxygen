@@ -118,8 +118,8 @@ TEST_F(MoQWtSessionFactoryTest, CreatesSessionAndOwnsTransport) {
 // waiting for CLIENT_SETUP.
 TEST_F(MoQWtSessionFactoryTest, ServerSetupBeforeClientSetup) {
   MoQWtSessionFactory factory(executor_);
-  makeServerSession(kAlpnMoqtDraft18);
-  auto handler = startWebTransport(factory, kAlpnMoqtDraft18);
+  makeServerSession(kAlpnMoqtDraft18Latest);
+  auto handler = startWebTransport(factory, kAlpnMoqtDraft18Latest);
   serverSession_->start();
   ASSERT_FALSE(
       serverSession_->sendSetup(AcceptingServerSetupCallback::makeServerSetup())
