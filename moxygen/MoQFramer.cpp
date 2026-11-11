@@ -133,6 +133,24 @@ bool containsInvalidMessageParameterExtension(
       });
 }
 
+// NAMESPACE has no parameter block of its own; it carries one when a usable
+// registry entry lists NAMESPACE in its allowedFrames or requiredFrames.
+bool namespaceCarriesParams(
+    const std::shared_ptr<const moxygen::MessageParameterExtensions>&
+        extensions,
+    uint64_t majorVersion) {
+  if (!extensions) {
+    return false;
+  }
+  return std::any_of(
+      extensions->begin(), extensions->end(), [&](const auto& keyAndRule) {
+        return keyAndRule.second.explicitlyAllows(
+                   moxygen::FrameType::NAMESPACE) &&
+            isMessageParameterExtensionUsable(
+                   keyAndRule.first, keyAndRule.second, majorVersion);
+      });
+}
+
 // Applies each registered parameter's validate, repeatable and requiredFrames
 // rules to one message's parameters.
 template <class Params>
@@ -3321,6 +3339,24 @@ folly::Expected<Namespace, ErrorCode> MoQFrameParser::parseNamespace(
   }
   ns.trackNamespaceSuffix = TrackNamespace(std::move(res.value()));
 
+  if (namespaceCarriesParams(
+          messageParameterExtensions_, getDraftMajorVersion(*version_))) {
+    auto numParams = decodeVarint(cursor, length);
+    if (!numParams) {
+      XLOG(DBG4) << "parseNamespace: UNDERFLOW on numParams";
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
+    length -= numParams->second;
+    std::vector<Parameter> requestSpecificParams;
+    auto paramsRes = parseTrackRequestParams(
+        cursor, length, numParams->first, ns.params, requestSpecificParams);
+    if (!paramsRes) {
+      return folly::makeUnexpected(paramsRes.error());
+    }
+    if (!requestSpecificParams.empty()) {
+      return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
+    }
+  }
   if (length > 0) {
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
@@ -5595,12 +5631,22 @@ WriteResult MoQFrameWriter::writeNamespace(
   XCHECK(version_.has_value()) << "Version needs to be set to write namespace";
   size_t size = 0;
   bool error = false;
-  auto sizePtr = writeFrameHeader(writeBuf, FrameType::NAMESPACE, error);
-  writeTrackNamespace(writeBuf, ns.trackNamespaceSuffix, size, error);
+  const bool carriesParams = namespaceCarriesParams(
+      messageParameterExtensions_, getDraftMajorVersion(*version_));
+  if (!carriesParams && !ns.params.empty()) {
+    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  folly::IOBufQueue frameBuf{folly::IOBufQueue::cacheChainLength()};
+  auto sizePtr = writeFrameHeader(frameBuf, FrameType::NAMESPACE, error);
+  writeTrackNamespace(frameBuf, ns.trackNamespaceSuffix, size, error);
+  if (carriesParams) {
+    writeTrackRequestParams(frameBuf, ns.params, {}, size, error);
+  }
   writeSize(sizePtr, size, error, *version_);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  writeBuf.append(frameBuf.move());
   return size;
 }
 

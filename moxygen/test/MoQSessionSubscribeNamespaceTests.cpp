@@ -273,6 +273,122 @@ CO_TEST_P_X(
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+namespace {
+
+// Odd, so it is length-prefixed on draft 16 as well.
+constexpr uint64_t kNamespaceParameter = 0x3F;
+
+class NamespaceParameterExtension : public MoQExtension {
+ public:
+  folly::Expected<MessageParameterExtensions, SessionCloseErrorCode> negotiate(
+      uint64_t,
+      const SetupParameters&,
+      const SetupParameters&) const override {
+    MessageParameterExtensions rules;
+    rules.emplace(
+        kNamespaceParameter,
+        MessageParameterExtension{
+            .encoding = ParameterValueEncoding::LengthPrefixed,
+            .allowedFrames = {FrameType::NAMESPACE}});
+    return rules;
+  }
+};
+
+class RecordingNamespacePublishHandle
+    : public Publisher::NamespacePublishHandle {
+ public:
+  void namespaceMsg(const Namespace& ns) override {
+    received = ns;
+    baton.post();
+  }
+  void namespaceMsg(const TrackNamespace&) override {}
+  void namespaceDoneMsg(const TrackNamespace&) override {}
+
+  std::optional<Namespace> received;
+  folly::coro::Baton baton;
+};
+
+} // namespace
+
+CO_TEST_P_X(V16PlusSubscribeNamespaceTest, NamespaceCarriesExtensionParameter) {
+  clientSession_->addExtension(std::make_shared<NamespaceParameterExtension>());
+  serverSession_->addExtension(std::make_shared<NamespaceParameterExtension>());
+  co_await setupMoQSession();
+
+  std::shared_ptr<Publisher::NamespacePublishHandle> serverPublishHandle;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          [&serverPublishHandle](auto /*subNs*/, auto handler)
+              -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+            serverPublishHandle = handler;
+            co_return std::make_shared<MockSubscribeNamespaceHandle>(
+                SubscribeNamespaceOk(
+                    {.requestID = RequestID(0), .requestSpecificParams = {}}));
+          });
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeNamespaceSuccess());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeNamespaceSuccess());
+  auto clientHandle = std::make_shared<RecordingNamespacePublishHandle>();
+  auto subNsResult = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), clientHandle);
+  CO_ASSERT_FALSE(subNsResult.hasError());
+  CO_ASSERT_TRUE(serverPublishHandle);
+
+  Namespace ns;
+  ns.trackNamespaceSuffix = TrackNamespace({"bar"});
+  CO_ASSERT_TRUE(
+      ns.params.insertParam(Parameter(kNamespaceParameter, std::string("hop")))
+          .hasValue());
+  serverPublishHandle->namespaceMsg(ns);
+  co_await clientHandle->baton;
+
+  CO_ASSERT_TRUE(clientHandle->received.has_value());
+  EXPECT_EQ(
+      clientHandle->received->trackNamespaceSuffix, ns.trackNamespaceSuffix);
+  const auto* param =
+      clientHandle->received->params.getFirstParam(kNamespaceParameter);
+  CO_ASSERT_NE(param, nullptr);
+  EXPECT_EQ(param->asString, "hop");
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    V16PlusSubscribeNamespaceTest,
+    UnnegotiatedNamespaceParameterDropped) {
+  co_await setupMoQSession();
+
+  std::shared_ptr<Publisher::NamespacePublishHandle> serverPublishHandle;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          [&serverPublishHandle](auto /*subNs*/, auto handler)
+              -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+            serverPublishHandle = handler;
+            co_return std::make_shared<MockSubscribeNamespaceHandle>(
+                SubscribeNamespaceOk(
+                    {.requestID = RequestID(0), .requestSpecificParams = {}}));
+          });
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onSubscribeNamespaceSuccess());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onSubscribeNamespaceSuccess());
+  auto clientHandle = std::make_shared<RecordingNamespacePublishHandle>();
+  auto subNsResult = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), clientHandle);
+  CO_ASSERT_FALSE(subNsResult.hasError());
+  CO_ASSERT_TRUE(serverPublishHandle);
+
+  Namespace ns;
+  ns.trackNamespaceSuffix = TrackNamespace({"bar"});
+  CO_ASSERT_TRUE(
+      ns.params.insertParam(Parameter(kNamespaceParameter, std::string("hop")))
+          .hasValue());
+  serverPublishHandle->namespaceMsg(ns);
+  co_await clientHandle->baton;
+
+  CO_ASSERT_TRUE(clientHandle->received.has_value());
+  EXPECT_EQ(
+      clientHandle->received->trackNamespaceSuffix, ns.trackNamespaceSuffix);
+  EXPECT_TRUE(clientHandle->received->params.empty());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     V16PlusSubscribeNamespaceTest,
     V16PlusSubscribeNamespaceTest,

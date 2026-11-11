@@ -1478,6 +1478,99 @@ TEST(MoQFramerMessageParameterExtensionTest, OneExtensionManyParameters) {
   }
 }
 
+TEST(MoQFramerMessageParameterExtensionTest, NamespaceParametersGated) {
+  auto namespaceRules = std::make_shared<MessageParameterExtensions>();
+  namespaceRules->emplace(
+      kFilterParameter,
+      MessageParameterExtension{
+          .encoding = ParameterValueEncoding::LengthPrefixed,
+          .allowedFrames = {FrameType::NAMESPACE},
+          .requiredFrames = {FrameType::NAMESPACE}});
+  // Allows every frame and requires NAMESPACE.
+  auto requiredOnly = std::make_shared<MessageParameterExtensions>();
+  requiredOnly->emplace(
+      kFilterParameter,
+      MessageParameterExtension{
+          .encoding = ParameterValueEncoding::LengthPrefixed,
+          .requiredFrames = {FrameType::NAMESPACE}});
+  // Allows every frame, but doesn't name NAMESPACE.
+  auto anyFrame = std::make_shared<MessageParameterExtensions>();
+  anyFrame->emplace(
+      kFilterParameter,
+      MessageParameterExtension{
+          .encoding = ParameterValueEncoding::LengthPrefixed});
+
+  auto write = [](uint64_t version,
+                  std::shared_ptr<const MessageParameterExtensions> rules,
+                  const Namespace& ns) -> std::unique_ptr<folly::IOBuf> {
+    MoQFrameWriter writer;
+    writer.initializeVersion(version);
+    writer.setMessageParameterExtensions(std::move(rules));
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    if (writer.writeNamespace(writeBuf, ns).hasError()) {
+      return nullptr;
+    }
+    return writeBuf.move();
+  };
+  auto parse = [](uint64_t version,
+                  std::shared_ptr<const MessageParameterExtensions> rules,
+                  const folly::IOBuf& serialized) {
+    MoQFrameParser parser;
+    parser.initializeVersion(version);
+    parser.setMessageParameterExtensions(std::move(rules));
+    folly::io::Cursor cursor(&serialized);
+    EXPECT_TRUE(parser.decodeVarint(cursor).has_value());
+    return parser.parseNamespace(cursor, cursor.readBE<uint16_t>());
+  };
+
+  Namespace bare;
+  bare.trackNamespaceSuffix = TrackNamespace({"bar"});
+  Namespace withParam = bare;
+  ASSERT_TRUE(withParam.params
+                  .insertParam(Parameter(kFilterParameter, std::string("hop")))
+                  .hasValue());
+  for (auto version : {kVersionDraft16, kVersionDraft18, kVersionDraft22}) {
+    SCOPED_TRACE(version);
+    auto serialized = write(version, namespaceRules, withParam);
+    ASSERT_NE(serialized, nullptr);
+    auto parsed = parse(version, namespaceRules, *serialized);
+    ASSERT_TRUE(parsed.hasValue());
+    EXPECT_EQ(parsed->trackNamespaceSuffix, bare.trackNamespaceSuffix);
+    const auto* param = parsed->params.getFirstParam(kFilterParameter);
+    ASSERT_NE(param, nullptr);
+    EXPECT_EQ(param->asString, "hop");
+
+    // Without a rule naming NAMESPACE there is no param block: params can't be
+    // written, and the bytes of one are left over.
+    EXPECT_EQ(write(version, anyFrame, withParam), nullptr);
+    EXPECT_EQ(write(version, nullptr, withParam), nullptr);
+    auto leftover = parse(version, anyFrame, *serialized);
+    ASSERT_TRUE(leftover.hasError());
+    EXPECT_EQ(leftover.error(), ErrorCode::PROTOCOL_VIOLATION);
+    auto plain = write(version, anyFrame, bare);
+    ASSERT_NE(plain, nullptr);
+    EXPECT_TRUE(parse(version, nullptr, *plain).hasValue());
+    // With the block expected, a NAMESPACE without one is rejected.
+    EXPECT_TRUE(parse(version, namespaceRules, *plain).hasError());
+
+    // Listing NAMESPACE only in requiredFrames also turns the block on.
+    auto required = write(version, requiredOnly, withParam);
+    ASSERT_NE(required, nullptr);
+    EXPECT_TRUE(parse(version, requiredOnly, *required).hasValue());
+    EXPECT_EQ(write(version, requiredOnly, bare), nullptr);
+
+    // A required NAMESPACE parameter is enforced, and the failed write leaves
+    // nothing behind.
+    EXPECT_EQ(write(version, namespaceRules, bare), nullptr);
+    MoQFrameWriter writer;
+    writer.initializeVersion(version);
+    writer.setMessageParameterExtensions(namespaceRules);
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    EXPECT_TRUE(writer.writeNamespace(writeBuf, bare).hasError());
+    EXPECT_EQ(writeBuf.chainLength(), 0);
+  }
+}
+
 ObjectHeader MoQFramerTest::testUnderflowDatagramHelper(
     folly::IOBufQueue& writeBuf,
     bool isStatus,

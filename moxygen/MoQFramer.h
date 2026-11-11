@@ -19,6 +19,7 @@
 #include <quic/codec/QuicInteger.h>
 #include <quic/folly_utils/Utils.h>
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <variant>
@@ -51,6 +52,15 @@ struct MessageParameterExtension {
   bool repeatable{true};
   // Optional check of each value. Throwing counts as invalid.
   std::function<bool(uint64_t version, const Parameter&)> validate;
+
+  // True if allowedFrames or requiredFrames lists frameType; an empty
+  // allowedFrames does not count.
+  bool explicitlyAllows(FrameType frameType) const {
+    return std::find(allowedFrames.begin(), allowedFrames.end(), frameType) !=
+        allowedFrames.end() ||
+        std::find(requiredFrames.begin(), requiredFrames.end(), frameType) !=
+        requiredFrames.end();
+  }
 };
 
 using MessageParameterExtensions =

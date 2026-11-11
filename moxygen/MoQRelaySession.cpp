@@ -1266,7 +1266,7 @@ class SubNsStreamCallback : public MoQControlCodec::ControlCallback {
 
   void onNamespace(Namespace ns) override {
     if (namespacePublishHandle_) {
-      namespacePublishHandle_->namespaceMsg(ns.trackNamespaceSuffix);
+      namespacePublishHandle_->namespaceMsg(ns);
     }
   }
 
@@ -1446,19 +1446,33 @@ class MoQNamespacePublishHandle : public Publisher::NamespacePublishHandle {
  public:
   MoQNamespacePublishHandle(
       std::shared_ptr<SubNSReply> subNsReply,
-      uint64_t negotiatedVersion)
-      : subNsReply_(std::move(subNsReply)) {
-    moqFrameWriter_.initializeVersion(negotiatedVersion);
+      MessageParameterExtensions extensions)
+      : subNsReply_(std::move(subNsReply)),
+        extensions_(std::move(extensions)) {}
+
+  // Drops params not negotiated on this session for NAMESPACE, so one
+  // NAMESPACE can go to sessions with different extensions.
+  void namespaceMsg(const Namespace& ns) override {
+    Namespace negotiated;
+    negotiated.trackNamespaceSuffix = ns.trackNamespaceSuffix;
+    for (const auto& param : ns.params) {
+      auto it = extensions_.find(param.key);
+      if (it != extensions_.end() &&
+          it->second.explicitlyAllows(FrameType::NAMESPACE)) {
+        negotiated.params.insertParam(param);
+      }
+    }
+    auto writeResult = subNsReply_->namespaceMsg(negotiated);
+    if (!writeResult) {
+      XLOG(ERR) << "writeNamespace failed";
+      return;
+    }
   }
 
   void namespaceMsg(const TrackNamespace& trackNamespaceSuffix) override {
     Namespace ns;
     ns.trackNamespaceSuffix = trackNamespaceSuffix;
-    auto writeResult = subNsReply_->namespaceMsg(ns);
-    if (!writeResult) {
-      XLOG(ERR) << "writeNamespace failed";
-      return;
-    }
+    namespaceMsg(ns);
   }
 
   void namespaceDoneMsg(const TrackNamespace& trackNamespaceSuffix) override {
@@ -1473,7 +1487,8 @@ class MoQNamespacePublishHandle : public Publisher::NamespacePublishHandle {
 
  private:
   std::shared_ptr<SubNSReply> subNsReply_;
-  MoQFrameWriter moqFrameWriter_;
+  // A copy, because the handle can outlive the session.
+  MessageParameterExtensions extensions_;
 };
 
 folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
@@ -1483,7 +1498,7 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeNamespace(
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   auto publishHandle = std::make_shared<MoQNamespacePublishHandle>(
-      subNsReply, *negotiatedVersion_);
+      subNsReply, getMessageParameterExtensions());
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto subNsResult = co_await co_awaitTry(
       publishHandler_->subscribeNamespace(subNs, publishHandle));

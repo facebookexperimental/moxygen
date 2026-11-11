@@ -1617,6 +1617,8 @@ struct NamespaceDone {
 
 struct Namespace {
   TrackNamespace trackNamespaceSuffix;
+  // On the wire only when a negotiated extension allows NAMESPACE parameters.
+  TrackRequestParameters params{FrameType::NAMESPACE};
 };
 
 // SubscribeNamespaceError is now an alias for RequestError - see below
