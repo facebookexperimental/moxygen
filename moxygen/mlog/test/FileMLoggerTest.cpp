@@ -115,10 +115,14 @@ void logObjectEvent(MLogger& logger, ObjectEvent event, Payload payload) {
   }
 }
 
-folly::dynamic parseSingleEvent(const std::string& path) {
+folly::dynamic parseLogFile(const std::string& path) {
   std::ifstream input(path);
   return folly::parseJson(
       std::string(std::istreambuf_iterator<char>(input), {}));
+}
+
+folly::dynamic parseSingleEvent(const std::string& path) {
+  return parseLogFile(path)["traces"][0]["events"][0];
 }
 
 void expectEventControls(
@@ -240,6 +244,55 @@ TEST_F(FileMLoggerTest, SyncWrite_CreatesFile) {
   logger.outputLogs();
 
   EXPECT_TRUE(fs::exists(path));
+}
+
+TEST_F(FileMLoggerTest, EmptyLogIsAJsonDocument) {
+  const auto path = (dir_ / "empty.mlog").string();
+  FileMLogger logger(VantagePoint::SERVER, path);
+  logger.outputLogs();
+
+  const auto document = parseLogFile(path);
+  ASSERT_EQ(document["traces"].size(), 1);
+  EXPECT_TRUE(document["traces"][0]["events"].empty());
+}
+
+TEST_F(FileMLoggerTest, MultipleEventsAreAJsonDocument) {
+  const auto path = (dir_ / "multiple.mlog").string();
+  FileMLogger logger(VantagePoint::SERVER, path);
+  logger.logPaddingDatagramCreated(17);
+  logger.logPaddingDatagramParsed(19);
+  logger.outputLogs();
+
+  const auto document = parseLogFile(path);
+  ASSERT_EQ(document["traces"].size(), 1);
+  const auto& events = document["traces"][0]["events"];
+  std::vector<std::pair<std::string, int64_t>> observed;
+  for (const auto& event : events) {
+    observed.emplace_back(
+        event["name"].asString(), event["data"]["padding_length"].asInt());
+  }
+  const std::vector<std::pair<std::string, int64_t>> expected{
+      {"moqt:padding_datagram_created", 17},
+      {"moqt:padding_datagram_parsed", 19}};
+  EXPECT_EQ(observed, expected);
+}
+
+TEST_F(FileMLoggerTest, OutputLogsWritesTheLatestSnapshot) {
+  const auto path = (dir_ / "snapshot.mlog").string();
+  FileMLogger logger(VantagePoint::SERVER, path);
+  logger.logPaddingDatagramCreated(17);
+  logger.outputLogs();
+  ASSERT_EQ(parseLogFile(path)["traces"][0]["events"].size(), 1);
+
+  logger.logPaddingDatagramParsed(19);
+  logger.outputLogs();
+  const auto events = parseLogFile(path)["traces"][0]["events"];
+  std::vector<int64_t> observed;
+  for (const auto& event : events) {
+    observed.push_back(event["data"]["padding_length"].asInt());
+  }
+  const std::vector<int64_t> expected{17, 19};
+  EXPECT_EQ(observed, expected);
 }
 
 TEST_F(FileMLoggerTest, SyncWrite_ErrorOnBadPath) {

@@ -40,21 +40,23 @@ void FileMLogger::outputLogs() {
 
   // Pre-format logs on the calling thread (where formatLog() is safe to
   // call), then execute the write lambda either inline or via the executor.
-  std::vector<std::string> serialized;
-  serialized.reserve(logs_.size());
+  folly::dynamic events = folly::dynamic::array;
   for (const auto& log : logs_) {
-    serialized.push_back(folly::toPrettyJson(formatLog(log)));
+    events.push_back(formatLog(log));
   }
+  folly::dynamic document = folly::dynamic::object(
+      "traces",
+      folly::dynamic::array(
+          folly::dynamic::object("events", std::move(events))));
+  auto serialized = folly::toPrettyJson(document);
 
-  auto write = [p = std::move(*path), lines = std::move(serialized)]() {
+  auto write = [p = std::move(*path), contents = std::move(serialized)]() {
     std::ofstream fileObj(p);
     if (!fileObj.is_open()) {
       XLOG(WARN) << "Failed to open mlog output file: " << p;
       return;
     }
-    for (const auto& line : lines) {
-      fileObj << line << '\n';
-    }
+    fileObj << contents << '\n';
   };
 
   if (writeExecutor_) {

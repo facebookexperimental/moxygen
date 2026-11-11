@@ -65,7 +65,7 @@ class FileMLogger : public MLogger {
 
   /**
    * Outputs all accumulated logs to the configured destination.
-   * Logs are formatted as pretty-printed JSON.
+   * Writes a single JSON document containing a trace and its events.
    */
   void outputLogs() override;
 
