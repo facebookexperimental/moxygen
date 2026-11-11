@@ -64,6 +64,7 @@ folly::dynamic locationFilter(const LocationFilter& filter) {
   folly::dynamic value = folly::dynamic::object;
   const auto fields = filter.fields();
   const auto count = filter.fieldCount();
+  value["type"] = filter.type();
   if (count >= 1) {
     value["start_group"] = fields[0];
   }
