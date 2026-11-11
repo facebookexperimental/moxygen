@@ -9,7 +9,9 @@
 #include <folly/coro/Task.h>
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 
+#include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "moxygen/MoQSession.h"
@@ -33,10 +35,12 @@ class MoQWtSessionFactory {
       std::string authority,
       std::string path);
 
-  // Waits for the peer's SETUP. Throws std::runtime_error if the WebTransport
-  // never started or CLIENT_SETUP could not be sent. Releasing the returned
-  // session closes it.
-  folly::coro::Task<std::shared_ptr<MoQSession>> establish();
+  // Waits for the peer's SETUP, for at most setupTimeout if it is set and for
+  // the session's setupTimeout otherwise. Throws std::runtime_error if the
+  // WebTransport never started or CLIENT_SETUP could not be sent. Releasing the
+  // returned session closes it.
+  folly::coro::Task<std::shared_ptr<MoQSession>> establish(
+      std::optional<std::chrono::milliseconds> setupTimeout = std::nullopt);
 
  private:
   std::shared_ptr<MoQExecutor> executor_;

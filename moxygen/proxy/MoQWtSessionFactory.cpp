@@ -80,11 +80,16 @@ proxygen::WebTransportHandler::Ptr MoQWtSessionFactory::makeHandler(
       });
 }
 
-folly::coro::Task<std::shared_ptr<MoQSession>>
-MoQWtSessionFactory::establish() {
+folly::coro::Task<std::shared_ptr<MoQSession>> MoQWtSessionFactory::establish(
+    std::optional<std::chrono::milliseconds> setupTimeout) {
   auto session = std::exchange(session_, nullptr);
   if (!session) {
     throw std::runtime_error("failed to start the MoQ session");
+  }
+  if (setupTimeout) {
+    auto settings = session->getMoqSettings();
+    settings.setupTimeout = *setupTimeout;
+    session->setMoqSettings(settings);
   }
 
   try {

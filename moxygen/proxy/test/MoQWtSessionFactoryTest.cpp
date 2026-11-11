@@ -8,9 +8,12 @@
 
 #include <folly/coro/BlockingWait.h>
 #include <folly/io/async/EventBase.h>
+#include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/webtransport/test/FakeSharedWebTransport.h>
+#include <proxygen/lib/http/webtransport/test/Mocks.h>
 
+#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -130,6 +133,31 @@ TEST_F(MoQWtSessionFactoryTest, ServerSetupBeforeClientSetup) {
 
   ASSERT_NE(session, nullptr);
   EXPECT_EQ(session->getNegotiatedVersion(), kVersionDraft18);
+}
+
+TEST_F(MoQWtSessionFactoryTest, EstablishFailsAtTheGivenSetupTimeout) {
+  MoQWtSessionFactory factory(executor_);
+  // takes the client's control stream but never sends SETUP
+  testing::NiceMock<proxygen::test::MockWebTransportHandler> peer;
+  EXPECT_CALL(
+      peer,
+      onSessionEnd(
+          folly::Optional<uint32_t>(folly::to_underlying(
+              SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED))));
+  clientTransport_->setPeerHandler(&peer);
+  auto handler =
+      factory.makeHandler(std::string(kAlpnMoqtDraft18Latest), "", "");
+  handler->onWebTransportSession(clientTransport_);
+  constexpr std::chrono::milliseconds kSetupTimeout{50};
+
+  const auto start = std::chrono::steady_clock::now();
+  auto result = folly::coro::blockingWait(
+      folly::coro::co_awaitTry(factory.establish(kSetupTimeout)), &eventBase_);
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+
+  EXPECT_TRUE(result.hasException<folly::FutureTimeout>());
+  EXPECT_GE(elapsed, kSetupTimeout);
+  EXPECT_LT(elapsed, std::chrono::milliseconds(500));
 }
 
 TEST_F(MoQWtSessionFactoryTest, EstablishWithoutWebTransportThrows) {
