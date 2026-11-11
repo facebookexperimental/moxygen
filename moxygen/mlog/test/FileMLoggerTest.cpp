@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -208,6 +209,15 @@ class InspectableMLogger final : public MLogger {
   }
 };
 
+class InspectableFileMLogger final : public FileMLogger {
+ public:
+  using FileMLogger::FileMLogger;
+
+  void setEventTime(size_t index, std::chrono::system_clock::duration elapsed) {
+    logs_.at(index).time_ = static_cast<uint64_t>(elapsed.count());
+  }
+};
+
 } // namespace
 
 class FileMLoggerTest : public ::testing::Test {
@@ -311,6 +321,21 @@ TEST_F(FileMLoggerTest, MultipleEventsAreAJsonDocument) {
       {"moqt:padding_datagram_created", 17},
       {"moqt:padding_datagram_parsed", 19}};
   EXPECT_EQ(observed, expected);
+}
+
+TEST_F(FileMLoggerTest, EventTimeIsNumericMilliseconds) {
+  const auto path = (dir_ / "time.mlog").string();
+  InspectableFileMLogger logger(VantagePoint::SERVER, path);
+  logger.logPaddingDatagramCreated(17);
+  logger.setEventTime(
+      0,
+      std::chrono::duration_cast<std::chrono::system_clock::duration>(
+          std::chrono::microseconds(12345)));
+  logger.outputLogs();
+
+  const auto event = parseSingleEvent(path);
+  ASSERT_TRUE(event["time"].isDouble());
+  EXPECT_DOUBLE_EQ(event["time"].asDouble(), 12.345);
 }
 
 TEST_F(FileMLoggerTest, OutputLogsWritesTheLatestSnapshot) {

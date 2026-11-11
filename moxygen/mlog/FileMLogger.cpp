@@ -9,6 +9,7 @@
 #include <folly/futures/Future.h>
 #include <folly/json/json.h>
 #include <folly/logging/xlog.h>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 
@@ -42,7 +43,12 @@ void FileMLogger::outputLogs() {
   // call), then execute the write lambda either inline or via the executor.
   folly::dynamic events = folly::dynamic::array;
   for (const auto& log : logs_) {
-    events.push_back(formatLog(log));
+    auto event = formatLog(log);
+    const auto elapsed =
+        std::chrono::duration<double, std::chrono::system_clock::period>(
+            static_cast<double>(log.time_));
+    event["time"] = std::chrono::duration<double, std::milli>(elapsed).count();
+    events.push_back(std::move(event));
   }
   folly::dynamic trace = folly::dynamic::object("events", std::move(events));
   trace["event_schemas"] =
