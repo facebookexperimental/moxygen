@@ -44,6 +44,9 @@ folly::coro::Task<void> MoQServerBase::handleClientSession(
   if (clientSession->isClosed()) {
     co_return;
   }
+  for (const auto& extension : extensions_) {
+    clientSession->addExtension(extension);
+  }
   onNewSession(clientSession);
   if (clientSession->isClosed()) {
     terminateClientSession(std::move(clientSession));

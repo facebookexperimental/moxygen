@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace moxygen {
 
@@ -75,6 +76,14 @@ class MoQServerBase : public MoQSession::ServerSetupCallback,
     authTokenCacheEnabled_ = enabled;
   }
 
+  /**
+   * Add an extension to every session this server accepts. Sessions on
+   * different threads share it. Configure before accepting sessions.
+   */
+  void addExtension(std::shared_ptr<MoQExtension> extension) {
+    extensions_.push_back(std::move(extension));
+  }
+
   // ServerSetupCallback overrides
   folly::Try<Setup> onClientSetup(
       Setup clientSetup,
@@ -112,6 +121,7 @@ class MoQServerBase : public MoQSession::ServerSetupCallback,
 
   std::unordered_set<std::string> endpoints_;
   std::shared_ptr<MLoggerFactory> mLoggerFactory_;
+  std::vector<std::shared_ptr<MoQExtension>> extensions_;
   bool authTokenCacheEnabled_{true};
 };
 

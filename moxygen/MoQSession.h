@@ -25,6 +25,7 @@
 #include <quic/mvfst-config.h>
 #include <moxygen/EgressAckTracker.h>
 #include <moxygen/MoQConsumers.h>
+#include <moxygen/MoQExtension.h>
 #include <moxygen/Publisher.h>
 #include <moxygen/Subscriber.h>
 #include <moxygen/UniStreamQueue.h>
@@ -298,11 +299,21 @@ class MoQSession : public Subscriber,
 
   void setVersion(uint64_t version);
   void setMoqSettings(MoQSettings settings);
-  using MessageParameterNegotiator = folly::Function<MessageParameterExtensions(
-      uint64_t /* version */,
-      const SetupParameters& /* localParams */,
-      const SetupParameters& /* peerParams */)>;
-  void setMessageParameterNegotiator(MessageParameterNegotiator negotiator);
+  // Must be called before sendSetup().
+  void addExtension(std::shared_ptr<MoQExtension> extension);
+
+  // The SETUP this endpoint sent / the peer sent; empty until then.
+  const std::optional<SetupParameters>& getLocalSetupParams() const {
+    return localSetupParams_;
+  }
+  const std::optional<SetupParameters>& getPeerSetupParams() const {
+    return peerSetupParams_;
+  }
+  // The message parameters negotiated for this session; empty until both
+  // SETUPs are known.
+  const MessageParameterExtensions& getMessageParameterExtensions() const {
+    return *messageParameterExtensions_;
+  }
   // Accessor used by PublisherImpl and others
   const MoQSettings& getMoqSettings() const {
     return moqSettings_;
@@ -1703,7 +1714,8 @@ class MoQSession : public Subscriber,
 
   // Private implementation methods
   void initializeNegotiatedVersion(uint64_t negotiatedVersion);
-  void negotiateMessageParameters();
+  // Returns false if an extension rejected the SETUPs and closed the session.
+  bool negotiateMessageParameters();
   void markSetupComplete();
   void pruneBufferedSubgroups(TrackAlias alias);
   void scheduleGoawayTimeout(uint64_t timeoutMs);
@@ -1751,7 +1763,7 @@ class MoQSession : public Subscriber,
   std::optional<SetupParameters> peerSetupParams_;
   std::shared_ptr<MessageParameterExtensions> messageParameterExtensions_{
       std::make_shared<MessageParameterExtensions>()};
-  MessageParameterNegotiator messageParameterNegotiator_;
+  std::vector<std::shared_ptr<MoQExtension>> extensions_;
   bool setupComplete_{false};
   using SetupWaiters = folly::F14FastMap<uint64_t, folly::coro::Promise<void>>;
   std::shared_ptr<SetupWaiters> setupWaiters_;

@@ -20,6 +20,7 @@
 #include <moxygen/mlog/MLogger.h>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace moxygen {
 
@@ -162,6 +163,11 @@ class MoQClientBase {
     earlyDataHandler_ = handler;
   }
 
+  // Added to every session this client creates. Call before setupMoQSession().
+  void addExtension(std::shared_ptr<MoQExtension> extension) {
+    extensions_.push_back(std::move(extension));
+  }
+
   void goaway(const Goaway& goaway);
   std::shared_ptr<MLogger> logger_ = nullptr;
 
@@ -197,6 +203,7 @@ class MoQClientBase {
   // Non-null when the caller supplied a connected transport; consumed by the
   // first session setup.
   std::shared_ptr<quic::QuicClientTransport> adoptedTransport_;
+  std::vector<std::shared_ptr<MoQExtension>> extensions_;
   bool useQuicWtSession_{false};
   std::chrono::milliseconds transportConnectTime_{0};
   std::chrono::milliseconds moqHandshakeTime_{0};

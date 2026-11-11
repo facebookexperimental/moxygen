@@ -7,6 +7,7 @@
 #include "moxygen/MoQSession.h"
 #include <folly/Chrono.h>
 #include <folly/concurrency/ProcessLocalUniqueId.h>
+#include <folly/container/F14Set.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/Collect.h>
 #include <folly/coro/DetachOnCancel.h>
@@ -3954,11 +3955,29 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
   std::tie(setupPromise_, setupFuture_) =
       folly::coro::makePromiseContract<Setup>();
 
-  auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
-
   setup.params.insertParam(SetupParameter(
       {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
        getMoQTImplementationString()}));
+  folly::F14FastSet<uint64_t> extensionOptionKeys;
+  for (const auto& extension : extensions_) {
+    auto options = extension->getSetupOptions(*negotiatedVersion_);
+    folly::F14FastSet<uint64_t> keys;
+    for (const auto& option : options) {
+      keys.insert(option.key);
+    }
+    for (auto key : keys) {
+      if (!extensionOptionKeys.insert(key).second) {
+        XLOG(DFATAL) << "SETUP option supplied by two extensions, key=" << key
+                     << " sess=" << this;
+      }
+      setup.params.eraseAllParamsOfType(key);
+    }
+    for (auto& option : options) {
+      setup.params.insertParam(std::move(option));
+    }
+  }
+
+  auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
 
   uint64_t setupSerializationVersion = *negotiatedVersion_;
 
@@ -4000,17 +4019,40 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
     }
   }
   localSetupParams_ = setup.params;
-  negotiateMessageParameters();
+  if (!negotiateMessageParameters()) {
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
   initLocalMaxRequestID(maxRequestID);
   controlWriteEvent_.signal();
   return folly::unit;
 }
 
-void MoQSession::negotiateMessageParameters() {
-  if (messageParameterNegotiator_ && localSetupParams_ && peerSetupParams_) {
-    *messageParameterExtensions_ = messageParameterNegotiator_(
-        *negotiatedVersion_, *localSetupParams_, *peerSetupParams_);
+bool MoQSession::negotiateMessageParameters() {
+  if (!localSetupParams_ || !peerSetupParams_) {
+    return true;
   }
+  const auto version = *negotiatedVersion_;
+  auto& negotiated = *messageParameterExtensions_;
+  for (const auto& extension : extensions_) {
+    auto result =
+        extension->negotiate(version, *localSetupParams_, *peerSetupParams_);
+    if (result.hasError()) {
+      XLOG(ERR) << "Extension rejected SETUP err="
+                << folly::to_underlying(result.error()) << " sess=" << this;
+      close(result.error());
+      return false;
+    }
+    for (auto& [key, rule] : result.value()) {
+      if (Parameters::isKnownParamKey(key, getDraftMajorVersion(version)) ||
+          negotiated.count(key) > 0) {
+        XLOG(DFATAL) << "Message parameter key already in use, key=" << key
+                     << " sess=" << this;
+        continue;
+      }
+      negotiated.emplace(key, std::move(rule));
+    }
+  }
+  return true;
 }
 
 void MoQSession::initLocalMaxRequestID(uint64_t fromParam) {
@@ -4118,7 +4160,9 @@ void MoQSession::onServerSetup(Setup serverSetup) {
           : 0,
       /*evict=*/true);
   peerSetupParams_ = serverSetup.params;
-  negotiateMessageParameters();
+  if (!negotiateMessageParameters()) {
+    return;
+  }
   setupPromise_.setValue(std::move(serverSetup));
 }
 
@@ -4200,7 +4244,9 @@ void MoQSession::onClientSetup(Setup clientSetup) {
   }
 
   peerSetupParams_ = clientSetup.params;
-  negotiateMessageParameters();
+  if (!negotiateMessageParameters()) {
+    return;
+  }
 
   {
     auto negotiatedVersion = *getNegotiatedVersion();
@@ -9784,11 +9830,9 @@ void MoQSession::setMoqSettings(MoQSettings settings) {
   moqSettings_ = settings;
 }
 
-void MoQSession::setMessageParameterNegotiator(
-    MessageParameterNegotiator negotiator) {
-  XCHECK(!setupComplete_);
-  messageParameterNegotiator_ = std::move(negotiator);
-  negotiateMessageParameters();
+void MoQSession::addExtension(std::shared_ptr<MoQExtension> extension) {
+  XCHECK(!localSetupParams_) << "addExtension after sendSetup sess=" << this;
+  extensions_.push_back(std::move(extension));
 }
 
 void SessionScoped::bind(const std::shared_ptr<MoQSession>& session) {

@@ -158,6 +158,9 @@ void MoQClientBase::completeSetupMoQSession(
 
   //  Create MoQSession and Setup MoQSession parameters
   moqSession_ = createSession(std::move(wt));
+  for (const auto& extension : extensions_) {
+    moqSession_->addExtension(extension);
+  }
   if (quicWebTransport_) {
     quicWebTransport_->setHandler(moqSession_.get());
   } else if (quicWtSession_) {
