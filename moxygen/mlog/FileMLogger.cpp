@@ -44,6 +44,7 @@ void FileMLogger::outputLogs() {
   folly::dynamic events = folly::dynamic::array;
   for (const auto& log : logs_) {
     auto event = formatLog(log);
+    event.erase("vantagePoint");
     const auto elapsed =
         std::chrono::duration<double, std::chrono::system_clock::period>(
             static_cast<double>(log.time_));
@@ -53,6 +54,8 @@ void FileMLogger::outputLogs() {
   folly::dynamic trace = folly::dynamic::object("events", std::move(events));
   trace["event_schemas"] =
       folly::dynamic::array("urn:ietf:params:qlog:events:moqt-08");
+  trace["vantage_point"] = folly::dynamic::object(
+      "type", vantagePoint_ == VantagePoint::CLIENT ? "client" : "server");
   trace["common_fields"] =
       folly::dynamic::object("time_format", "relative_to_epoch")(
           "reference_time",

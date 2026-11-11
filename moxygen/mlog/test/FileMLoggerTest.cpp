@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -129,12 +130,27 @@ folly::dynamic parseSingleEvent(const std::string& path) {
   return parseLogFile(path)["traces"][0]["events"][0];
 }
 
+void expectLowercaseKeys(const folly::dynamic& value) {
+  if (value.isObject()) {
+    for (const auto& [key, child] : value.items()) {
+      EXPECT_EQ(
+          key.asString().find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+          std::string::npos)
+          << key.asString();
+      expectLowercaseKeys(child);
+    }
+  } else if (value.isArray()) {
+    for (const auto& child : value) {
+      expectLowercaseKeys(child);
+    }
+  }
+}
+
 void expectEventControls(
     const folly::dynamic& event,
     const ObjectEventCase& testCase) {
   ASSERT_TRUE(event.isObject());
   EXPECT_EQ(event["name"].asString(), testCase.name);
-  EXPECT_EQ(event["vantagePoint"].asString(), "server");
   const auto* data = event.get_ptr("data");
   ASSERT_NE(data, nullptr);
   const auto* objectId =
@@ -300,6 +316,46 @@ TEST_F(FileMLoggerTest, QlogSchemaMetadata) {
         "application/qlog+json"}) {
     EXPECT_NE(header.find(field), std::string::npos) << field;
   }
+}
+
+TEST_F(FileMLoggerTest, VantagePointIsTraceMetadata) {
+  for (const auto& [vantagePoint, type] :
+       {std::pair{VantagePoint::CLIENT, "client"},
+        std::pair{VantagePoint::SERVER, "server"}}) {
+    SCOPED_TRACE(type);
+    const auto path = (dir_ / (std::string(type) + ".mlog")).string();
+    FileMLogger logger(vantagePoint, path);
+    logger.logPaddingDatagramCreated(17);
+    logger.logPaddingDatagramParsed(19);
+    logger.outputLogs();
+
+    const auto document = parseLogFile(path);
+    const auto& trace = document["traces"][0];
+    const folly::dynamic expectedPoint = folly::dynamic::object("type", type);
+    EXPECT_EQ(trace["vantage_point"], expectedPoint);
+    for (const auto& event : trace["events"]) {
+      EXPECT_EQ(event.count("vantagePoint"), 0);
+      EXPECT_EQ(event.count("vantage_point"), 0);
+    }
+    expectLowercaseKeys(document);
+  }
+}
+
+TEST_F(FileMLoggerTest, LegacyUnsubscribeUsesLowercaseJsonKeys) {
+  const auto path = (dir_ / "unsubscribe.mlog").string();
+  FileMLogger logger(VantagePoint::CLIENT, path);
+  MOQTControlMessageCreated created;
+  created.streamId = 17;
+  auto unsubscribe = std::make_unique<MOQTUnsubscribe>();
+  unsubscribe->subscribeId = 23;
+  created.message = std::move(unsubscribe);
+  logger.addControlMessageCreatedLog(std::move(created));
+  logger.outputLogs();
+
+  const auto document = parseLogFile(path);
+  const auto& message = document["traces"][0]["events"][0]["data"]["message"];
+  EXPECT_EQ(message["subscribe_id"], "23");
+  expectLowercaseKeys(document);
 }
 
 TEST_F(FileMLoggerTest, MultipleEventsAreAJsonDocument) {

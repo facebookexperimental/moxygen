@@ -168,7 +168,7 @@ folly::dynamic MOQTPublishStateNotify::toDynamic() const {
 folly::dynamic MOQTUnsubscribe::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["type"] = type;
-  obj["subscribeId"] = std::to_string(subscribeId);
+  obj["subscribe_id"] = std::to_string(subscribeId);
   return obj;
 }
 
