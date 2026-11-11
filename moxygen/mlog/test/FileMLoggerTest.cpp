@@ -115,10 +115,13 @@ void logObjectEvent(MLogger& logger, ObjectEvent event, Payload payload) {
   }
 }
 
-folly::dynamic parseLogFile(const std::string& path) {
+std::string readLogFile(const std::string& path) {
   std::ifstream input(path);
-  return folly::parseJson(
-      std::string(std::istreambuf_iterator<char>(input), {}));
+  return std::string(std::istreambuf_iterator<char>(input), {});
+}
+
+folly::dynamic parseLogFile(const std::string& path) {
+  return folly::parseJson(readLogFile(path));
 }
 
 folly::dynamic parseSingleEvent(const std::string& path) {
@@ -254,6 +257,39 @@ TEST_F(FileMLoggerTest, EmptyLogIsAJsonDocument) {
   const auto document = parseLogFile(path);
   ASSERT_EQ(document["traces"].size(), 1);
   EXPECT_TRUE(document["traces"][0]["events"].empty());
+}
+
+TEST_F(FileMLoggerTest, QlogSchemaMetadata) {
+  const auto path = (dir_ / "metadata.mlog").string();
+  FileMLogger logger(VantagePoint::SERVER, path);
+  logger.logPaddingDatagramCreated(17);
+  logger.outputLogs();
+
+  const auto serialized = readLogFile(path);
+  const auto document = folly::parseJson(serialized);
+  EXPECT_EQ(
+      document["file_schema"].asString(),
+      "urn:ietf:params:qlog:file:contained");
+  EXPECT_EQ(
+      document["serialization_format"].asString(), "application/qlog+json");
+  const auto& trace = document["traces"][0];
+  EXPECT_EQ(
+      trace["event_schemas"],
+      folly::dynamic::array("urn:ietf:params:qlog:events:moqt-08"));
+  const folly::dynamic expectedTimeContext =
+      folly::dynamic::object("time_format", "relative_to_epoch")(
+          "reference_time",
+          folly::dynamic::object("clock_type", "system")("epoch", "unknown"));
+  EXPECT_EQ(trace["common_fields"], expectedTimeContext);
+
+  const auto header = serialized.substr(0, 256);
+  for (const auto* field :
+       {"file_schema",
+        "urn:ietf:params:qlog:file:contained",
+        "serialization_format",
+        "application/qlog+json"}) {
+    EXPECT_NE(header.find(field), std::string::npos) << field;
+  }
 }
 
 TEST_F(FileMLoggerTest, MultipleEventsAreAJsonDocument) {

@@ -44,10 +44,17 @@ void FileMLogger::outputLogs() {
   for (const auto& log : logs_) {
     events.push_back(formatLog(log));
   }
+  folly::dynamic trace = folly::dynamic::object("events", std::move(events));
+  trace["event_schemas"] =
+      folly::dynamic::array("urn:ietf:params:qlog:events:moqt-08");
+  trace["common_fields"] =
+      folly::dynamic::object("time_format", "relative_to_epoch")(
+          "reference_time",
+          folly::dynamic::object("clock_type", "system")("epoch", "unknown"));
   folly::dynamic document = folly::dynamic::object(
-      "traces",
-      folly::dynamic::array(
-          folly::dynamic::object("events", std::move(events))));
+      "file_schema", "urn:ietf:params:qlog:file:contained")(
+      "serialization_format", "application/qlog+json")(
+      "traces", folly::dynamic::array(std::move(trace)));
   auto serialized = folly::toPrettyJson(document);
 
   auto write = [p = std::move(*path), contents = std::move(serialized)]() {
