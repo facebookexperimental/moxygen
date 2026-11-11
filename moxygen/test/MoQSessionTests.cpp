@@ -2635,6 +2635,233 @@ CO_TEST_P_X(MoQSessionTest, ControlStreamFailureWaitsForTheSetupTimeout) {
   EXPECT_TRUE(setup.hasException<folly::FutureTimeout>());
 }
 
+// Holds back the first uni stream (the peer's control stream) so that setup
+// cannot complete. onSessionEnd can be delayed, because a peer that closes the
+// session resets its streams before the close arrives.
+class WithholdFirstUniStreamHandler : public proxygen::WebTransportHandler {
+ public:
+  WithholdFirstUniStreamHandler(
+      MoQSession& session,
+      folly::EventBase& evb,
+      std::chrono::milliseconds sessionEndDelay = std::chrono::milliseconds(0))
+      : session_(session), evb_(evb), sessionEndDelay_(sessionEndDelay) {}
+
+  void onNewUniStream(
+      proxygen::WebTransport::StreamReadHandle* readHandle) noexcept override {
+    if (!withheld_) {
+      withheld_ = readHandle;
+      return;
+    }
+    session_.onNewUniStream(readHandle);
+  }
+  void onNewBidiStream(
+      proxygen::WebTransport::BidiStreamHandle bidiHandle) noexcept override {
+    session_.onNewBidiStream(bidiHandle);
+  }
+  void onDatagrams(
+      std::vector<std::unique_ptr<folly::IOBuf>> datagrams) noexcept override {
+    session_.onDatagrams(std::move(datagrams));
+  }
+  void onSessionEnd(folly::Optional<uint32_t> error) noexcept override {
+    evb_.timer().scheduleTimeoutFn(
+        [weakSession = session_.weak_from_this(), error] {
+          if (auto session = weakSession.lock()) {
+            session->onSessionEnd(error);
+          }
+        },
+        sessionEndDelay_);
+  }
+  void onSessionDrain() noexcept override {
+    session_.onSessionDrain();
+  }
+
+  proxygen::WebTransport::StreamReadHandle* withheld() const {
+    return withheld_;
+  }
+
+ private:
+  MoQSession& session_;
+  folly::EventBase& evb_;
+  std::chrono::milliseconds sessionEndDelay_;
+  proxygen::WebTransport::StreamReadHandle* withheld_{nullptr};
+};
+
+CO_TEST_P_X(MoQUniControlTest, StoppedServerControlStreamFailsSetupAtOnce) {
+  WithholdFirstUniStreamHandler clientHandler(*clientSession_, eventBase_);
+  serverWt_->setPeerHandler(&clientHandler);
+  auto peerHandlerGuard =
+      folly::makeGuard([this] { serverWt_->setPeerHandler(nullptr); });
+  clientSession_->start();
+  serverSession_->start();
+  serverSession_->sendSetup(moxygen::Setup{});
+  co_await rescheduleN(1);
+  CO_ASSERT_NE(clientHandler.withheld(), nullptr);
+  // as an H3 session does with a peer stream it rejects
+  clientHandler.withheld()->stopSending(/*error=*/0);
+
+  const auto start = std::chrono::steady_clock::now();
+  auto setup = co_await folly::coro::co_awaitTry(
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)));
+  EXPECT_TRUE(setup.hasException<folly::OperationCancelled>());
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+  CO_ASSERT_TRUE(serverSession_->getCloseResult().has_value());
+  EXPECT_EQ(
+      serverSession_->getCloseResult()->error,
+      SessionCloseErrorCode::PROTOCOL_VIOLATION);
+}
+
+// The server has the client's SETUP, so it considers setup complete, but the
+// client never got the server's SETUP.
+CO_TEST_P_X(MoQUniControlTest, ServerControlStreamStoppedAfterClientSetup) {
+  WithholdFirstUniStreamHandler clientHandler(*clientSession_, eventBase_);
+  serverWt_->setPeerHandler(&clientHandler);
+  auto peerHandlerGuard =
+      folly::makeGuard([this] { serverWt_->setPeerHandler(nullptr); });
+  clientSession_->start();
+  serverSession_->start();
+  serverSession_->sendSetup(moxygen::Setup{});
+
+  const auto start = std::chrono::steady_clock::now();
+  folly::coro::Baton clientSetupDone;
+  folly::Try<moxygen::Setup> clientSetupResult;
+  co_withExecutor(
+      MoQExecutor_.get(),
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)))
+      .start([&](folly::Try<moxygen::Setup>&& result) {
+        clientSetupResult = std::move(result);
+        clientSetupDone.post();
+      });
+  co_await serverSession_->awaitPeerSetup();
+  CO_ASSERT_NE(clientHandler.withheld(), nullptr);
+  clientHandler.withheld()->stopSending(/*error=*/0);
+
+  co_await clientSetupDone;
+  EXPECT_TRUE(clientSetupResult.hasException<folly::OperationCancelled>());
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+  CO_ASSERT_TRUE(serverSession_->getCloseResult().has_value());
+  EXPECT_EQ(
+      serverSession_->getCloseResult()->error,
+      SessionCloseErrorCode::PROTOCOL_VIOLATION);
+}
+
+// A server that rejects or drains a session mid-setup resets its streams
+// before its CLOSE_WEBTRANSPORT_SESSION arrives; the client keeps its reason.
+CO_TEST_P_X(MoQUniControlTest, ServerCloseDuringSetupKeepsItsReason) {
+  WithholdFirstUniStreamHandler clientHandler(
+      *clientSession_, eventBase_, std::chrono::milliseconds(20));
+  serverWt_->setPeerHandler(&clientHandler);
+  auto peerHandlerGuard =
+      folly::makeGuard([this] { serverWt_->setPeerHandler(nullptr); });
+  clientSession_->start();
+  serverSession_->start();
+  serverSession_->sendSetup(moxygen::Setup{});
+
+  folly::coro::Baton clientSetupDone;
+  folly::Try<moxygen::Setup> clientSetupResult;
+  co_withExecutor(
+      MoQExecutor_.get(),
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)))
+      .start([&](folly::Try<moxygen::Setup>&& result) {
+        clientSetupResult = std::move(result);
+        clientSetupDone.post();
+      });
+  co_await serverSession_->awaitPeerSetup();
+  serverSession_->close(SessionCloseErrorCode::UNAUTHORIZED);
+
+  co_await clientSetupDone;
+  EXPECT_TRUE(clientSetupResult.hasException());
+  CO_ASSERT_TRUE(clientSession_->getCloseResult().has_value());
+  EXPECT_EQ(
+      clientSession_->getCloseResult()->error, SessionCloseErrorCode::NO_ERROR);
+  EXPECT_EQ(
+      clientSession_->getCloseResult()->wtError,
+      folly::to_underlying(SessionCloseErrorCode::UNAUTHORIZED));
+}
+
+// The client's wait for the server's close grows with the RTT, so that a slow
+// close still keeps the server's reason.
+CO_TEST_P_X(
+    MoQUniControlTest,
+    ServerCloseDuringSetupOnHighRttPathKeepsItsReason) {
+  quic::TransportInfo transportInfo;
+  transportInfo.srtt = std::chrono::milliseconds(300);
+  clientWt_->setTransportInfo(transportInfo);
+  WithholdFirstUniStreamHandler clientHandler(
+      *clientSession_, eventBase_, std::chrono::milliseconds(500));
+  serverWt_->setPeerHandler(&clientHandler);
+  auto peerHandlerGuard =
+      folly::makeGuard([this] { serverWt_->setPeerHandler(nullptr); });
+  clientSession_->start();
+  serverSession_->start();
+  serverSession_->sendSetup(moxygen::Setup{});
+
+  folly::coro::Baton clientSetupDone;
+  folly::Try<moxygen::Setup> clientSetupResult;
+  co_withExecutor(
+      MoQExecutor_.get(),
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)))
+      .start([&](folly::Try<moxygen::Setup>&& result) {
+        clientSetupResult = std::move(result);
+        clientSetupDone.post();
+      });
+  co_await serverSession_->awaitPeerSetup();
+  serverSession_->close(SessionCloseErrorCode::UNAUTHORIZED);
+
+  co_await clientSetupDone;
+  EXPECT_TRUE(clientSetupResult.hasException());
+  CO_ASSERT_TRUE(clientSession_->getCloseResult().has_value());
+  EXPECT_EQ(
+      clientSession_->getCloseResult()->error, SessionCloseErrorCode::NO_ERROR);
+  EXPECT_EQ(
+      clientSession_->getCloseResult()->wtError,
+      folly::to_underlying(SessionCloseErrorCode::UNAUTHORIZED));
+}
+
+CO_TEST_P_X(
+    MoQUniControlTest,
+    ServerControlStreamResetAfterSetupClosesSession) {
+  co_await setupMoQSession();
+  // the server's control stream, reset as the client sees it
+  serverWt_->writeHandles.at(3)->deliverPeerReset(/*err=*/0);
+
+  const auto start = std::chrono::steady_clock::now();
+  while (!clientSession_->isClosed() &&
+         std::chrono::steady_clock::now() - start < std::chrono::seconds(1)) {
+    co_await folly::coro::sleep(std::chrono::milliseconds(10));
+  }
+  CO_ASSERT_TRUE(clientSession_->getCloseResult().has_value());
+  EXPECT_EQ(
+      clientSession_->getCloseResult()->error,
+      SessionCloseErrorCode::PROTOCOL_VIOLATION);
+}
+
+CO_TEST_P_X(MoQUniControlTest, ResetServerControlStreamFailsSetupAtOnce) {
+  NullWebTransportHandler nullHandler;
+  clientWt_->setPeerHandler(&nullHandler);
+  auto peerHandlerGuard =
+      folly::makeGuard([this] { clientWt_->setPeerHandler(nullptr); });
+  clientSession_->start();
+
+  // all of SETUP but its last byte, then a reset
+  auto* wh = CHECK_NOTNULL(serverWt_->createUniStream().value_or(nullptr));
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  writeServerSetup(writeBuf, moxygen::Setup{}, getServerSelectedVersion());
+  writeBuf.trimEnd(1);
+  wh->writeStreamData(writeBuf.move(), /*fin=*/false, nullptr);
+  co_await rescheduleN(2);
+  wh->resetStream(/*error=*/0);
+
+  const auto start = std::chrono::steady_clock::now();
+  auto setup = co_await folly::coro::co_awaitTry(
+      clientSession_->setup(getClientSetup(initialMaxRequestID_)));
+  EXPECT_TRUE(setup.hasException<folly::OperationCancelled>());
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+  CO_ASSERT_TRUE(clientSession_->getCloseResult().has_value());
+  EXPECT_EQ(
+      clientSession_->getCloseResult()->error,
+      SessionCloseErrorCode::PROTOCOL_VIOLATION);
+}
+
 CO_TEST_P_X(MoQUniControlTest, ClosedServerSessionIsNotStarted) {
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 

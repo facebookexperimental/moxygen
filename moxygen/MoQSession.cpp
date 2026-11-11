@@ -32,6 +32,9 @@ constexpr size_t kGroupRankWindow = 64;
 
 // Draft-18 §10.4: GOAWAY newSessionUri MUST NOT exceed 8192 bytes.
 constexpr uint64_t kMaxGoawayUriLength(8192);
+// how long to wait for the peer's close after the control stream is lost
+constexpr std::chrono::milliseconds kMinControlStreamLossGrace{200};
+constexpr std::chrono::milliseconds kMaxControlStreamLossGrace{1000};
 
 // Bit allocations for 32-bit order: sub=5, pub=8, group=14, subgroup=5
 constexpr uint32_t kSubPriBits = 5;
@@ -3281,6 +3284,32 @@ class MoQSession::GoawayTimeoutCallback : public quic::QuicTimerCallback {
   MoQSession& session_;
 };
 
+class MoQSession::ControlStreamLossTimeoutCallback
+    : public quic::QuicTimerCallback {
+ public:
+  explicit ControlStreamLossTimeoutCallback(MoQSession& session)
+      : session_(session), lostAt_(std::chrono::steady_clock::now()) {}
+
+  void timeoutExpired() noexcept override {
+    auto weakSession = session_.weak_from_this();
+    session_.exec_->add([weakSession = std::move(weakSession)]() mutable {
+      if (auto session = weakSession.lock()) {
+        session->onControlStreamLossTimeoutExpired();
+      }
+    });
+  }
+
+  void callbackCanceled() noexcept override {}
+
+  std::chrono::steady_clock::time_point lostAt() const {
+    return lostAt_;
+  }
+
+ private:
+  MoQSession& session_;
+  const std::chrono::steady_clock::time_point lostAt_;
+};
+
 // Constructors
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
@@ -3328,6 +3357,9 @@ MoQSession::~MoQSession() {
 
 void MoQSession::cleanup() {
   cancelGoawayTimeout();
+  if (auto timeout = std::exchange(controlStreamLossTimeout_, nullptr)) {
+    timeout->cancelTimerCallback();
+  }
   egressTracker_->setOnIdle(nullptr);
   for (auto& waiter : std::exchange(uniStreamCreditWaiters_, {})) {
     waiter.setException(std::runtime_error("session closed"));
@@ -3469,12 +3501,60 @@ void MoQSession::startControlWriteLoop(
     logger_->logStreamTypeSet(
         writeHandle->getID(), MOQTStreamType::CONTROL, Owner::LOCAL);
   }
+  launchControlWriteLoop(writeHandle);
+}
+
+void MoQSession::launchControlWriteLoop(
+    proxygen::WebTransport::StreamWriteHandle* writeHandle) {
   auto mergeToken = folly::cancellation_token_merge(
       cancellationSource_.getToken(), writeHandle->getCancelToken());
   co_withExecutor(
       exec_.get(),
       co_withCancellation(std::move(mergeToken), controlWriteLoop(writeHandle)))
-      .start();
+      // Weak, as the loop can end after the session is gone.
+      .start([weakSelf = weak_from_this()](folly::Try<void>&&) {
+        // the loop ends when the session closes, the peer stops the stream or
+        // a write fails
+        if (auto self = weakSelf.lock()) {
+          self->onControlStreamLost();
+        }
+      });
+}
+
+void MoQSession::onControlStreamLost() {
+  if (closed_ || cancellationSource_.isCancellationRequested() ||
+      controlStreamLossTimeout_) {
+    return;
+  }
+  // Must not call into the transport: the stream can be lost while the
+  // transport is being torn down.
+  controlStreamLossTimeout_ =
+      std::make_unique<ControlStreamLossTimeoutCallback>(*this);
+  // the timer keeps the current request context, which can hold this session
+  folly::RequestContextScopeGuard guard;
+  exec_->scheduleTimeout(
+      controlStreamLossTimeout_.get(), kMinControlStreamLossGrace);
+}
+
+void MoQSession::onControlStreamLossTimeoutExpired() {
+  if (closed_ || !controlStreamLossTimeout_) {
+    return;
+  }
+  // the peer's close takes longer to arrive on a high-RTT path
+  const auto grace = std::clamp(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          3 * getTransportInfo().srtt),
+      kMinControlStreamLossGrace,
+      kMaxControlStreamLossGrace);
+  const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - controlStreamLossTimeout_->lostAt());
+  if (waited < grace) {
+    folly::RequestContextScopeGuard guard;
+    exec_->scheduleTimeout(controlStreamLossTimeout_.get(), grace - waited);
+    return;
+  }
+  XLOG(ERR) << "Control stream lost sess=" << this;
+  close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
 }
 
 void MoQSession::start() {
@@ -4309,6 +4389,7 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   }
 
   bool exceptionalExit = false;
+  bool peerReset = false;
   std::optional<ResetStreamErrorCode> peerTerminationError;
   auto token = co_await folly::coro::co_current_cancellation_token;
   while (readHandle) {
@@ -4320,10 +4401,10 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
       XLOG(DBG4) << folly::exceptionStr(streamData.exception())
                  << " id=" << streamId << " sess=" << this;
       exceptionalExit = true;
-      if (auto* wtEx =
-              streamData
-                  .tryGetExceptionObject<proxygen::WebTransport::Exception>();
-          negotiatedVersion && wtEx) {
+      auto* wtEx =
+          streamData.tryGetExceptionObject<proxygen::WebTransport::Exception>();
+      peerReset = wtEx != nullptr;
+      if (negotiatedVersion && wtEx) {
         peerTerminationError =
             fromWireResetStreamErrorCode(wtEx->error, *negotiatedVersion);
       }
@@ -4343,8 +4424,12 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
   // before the fail-pending block below so both close paths agree.
   if (control) {
     control->markReadLoopExited();
+  } else if (
+      !token.isCancellationRequested() && (peerReset || !peerSetupParams_)) {
+    // MoQT forbids ending the control stream, but a FIN after the peer's
+    // SETUP is tolerated
+    onControlStreamLost();
   }
-  // TODO: close session on control exit.
   // On read-loop exit, fire responder close (RST always; FIN when
   // finIsCancellation) and fail any still-pending sender request. Both
   // suppressed during shutdown — cleanup() delivers the canonical error.
@@ -8823,13 +8908,7 @@ void MoQSession::handleClientSetup(
             cancellationSource_.getToken(),
             controlReadLoop(std::move(readHandle), std::move(initialData))))
         .start();
-    auto mergeToken = folly::cancellation_token_merge(
-        cancellationSource_.getToken(), writeHandle->getCancelToken());
-    co_withExecutor(
-        exec_.get(),
-        co_withCancellation(
-            std::move(mergeToken), controlWriteLoop(writeHandle)))
-        .start();
+    launchControlWriteLoop(writeHandle);
   }
 }
 

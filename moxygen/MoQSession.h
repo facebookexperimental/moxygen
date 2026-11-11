@@ -1027,6 +1027,12 @@ class MoQSession : public Subscriber,
 
   void startControlWriteLoop(
       proxygen::WebTransport::StreamWriteHandle* writeHandle);
+  void launchControlWriteLoop(
+      proxygen::WebTransport::StreamWriteHandle* writeHandle);
+  // Closes the session with PROTOCOL_VIOLATION after a grace period, since a
+  // peer that closes the session resets its streams before the close arrives.
+  void onControlStreamLost();
+  void onControlStreamLossTimeoutExpired();
 
   void replayBufferedUniStreams();
 
@@ -1675,6 +1681,7 @@ class MoQSession : public Subscriber,
 
  private:
   class GoawayTimeoutCallback;
+  class ControlStreamLossTimeoutCallback;
 
   // A data stream read loop that is waiting for an unknown track alias.  The
   // waiting coroutine frame owns it, so any unwind deregisters it.
@@ -1779,6 +1786,7 @@ class MoQSession : public Subscriber,
   mutable quic::TransportInfo cachedTransportInfo_;
   mutable std::chrono::steady_clock::time_point lastTransportInfoUpdate_{};
   std::unique_ptr<GoawayTimeoutCallback> goawayTimeout_;
+  std::unique_ptr<ControlStreamLossTimeoutCallback> controlStreamLossTimeout_;
   std::optional<CloseResult> closeResult_;
   bool closed_{false};
   std::string authority_;
