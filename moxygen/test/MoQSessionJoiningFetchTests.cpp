@@ -173,8 +173,8 @@ CO_TEST_P_X(Draft18Test, JoiningFetchArrivesBeforeItsSubscribe) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// The joining FETCH can also be read just ahead of its SUBSCRIBE, before the
-// FETCH's handler first runs. The Publisher still sees the SUBSCRIBE first.
+// A joining FETCH read just ahead of its SUBSCRIBE, before the FETCH's handler
+// first runs, still reaches the Publisher after the SUBSCRIBE.
 CO_TEST_P_X(Draft18Test, JoiningFetchReadJustAheadOfItsSubscribe) {
   if (useFillFetch(getServerSelectedVersion())) {
     // Draft 22 retires Joining FETCH.
@@ -233,8 +233,7 @@ CO_TEST_P_X(Draft18Test, JoiningFetchReadJustAheadOfItsSubscribe) {
 }
 
 // A FETCH read ahead of its SUBSCRIBE stops counting toward the deferred limit
-// once the SUBSCRIBE is read, even though both requests still wait to be
-// handled.
+// once the SUBSCRIBE is read, before either handler runs.
 CO_TEST_P_X(Draft18Test, FetchFirstJoinsReadTogetherShareTheDeferredLimit) {
   if (useFillFetch(getServerSelectedVersion())) {
     // Draft 22 retires Joining FETCH.
@@ -245,8 +244,8 @@ CO_TEST_P_X(Draft18Test, FetchFirstJoinsReadTogetherShareTheDeferredLimit) {
   initialMaxRequestID_ = 4 * getRequestIDMultiplier();
   co_await setupMoQSession();
   const FullTrackName otherTrackName{kTestTrackName.trackNamespace, "other"};
-  // The actions run their bodies eagerly: gmock does not keep a capturing
-  // coroutine lambda alive across its suspension.
+  // These actions return ready tasks, because gmock does not keep a capturing
+  // coroutine lambda alive across a suspension.
   std::vector<FullTrackName> subscribed;
   EXPECT_CALL(*serverPublisher, subscribe(_, _))
       .Times(2)
@@ -301,8 +300,8 @@ CO_TEST_P_X(Draft18Test, FetchFirstJoinsReadTogetherShareTheDeferredLimit) {
   co_await rescheduleN(3);
   clientWt_->setDeferNewStreamData(false);
   EXPECT_EQ(clientWt_->writeHandles.count(16), 0);
-  // Each join opened its SUBSCRIBE request stream, then its FETCH one. All
-  // four are read before any of their handlers runs.
+  // Streams 0 and 8 carry the SUBSCRIBEs, 4 and 12 the FETCHes. All four are
+  // read, each FETCH first, before any handler runs.
   for (auto id : {4, 0, 12, 8}) {
     auto stream = clientWt_->writeHandles.at(id);
     stream->setImmediateDelivery(true);
@@ -320,22 +319,21 @@ CO_TEST_P_X(Draft18Test, FetchFirstJoinsReadTogetherShareTheDeferredLimit) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-// A FETCH held for a SUBSCRIBE whose stream is reset before the SUBSCRIBE's
-// handler runs fails at once without reaching the Publisher, and leaves its
-// place under the deferred limit free.
+// When the SUBSCRIBE stream is reset before its handler runs, the held FETCH
+// fails at once without reaching the Publisher, and frees its deferred slot.
 CO_TEST_P_X(Draft18Test, HeldFetchFailsWhenItsSubscribeIsResetBeforeItRuns) {
   if (useFillFetch(getServerSelectedVersion())) {
     // Draft 22 retires Joining FETCH.
     co_return;
   }
-  // Long enough that the unseen-ID timeout can't be what fails the FETCH.
+  // Long enough that the unseen-ID timeout cannot fail the FETCH.
   serverSession_->setMoqSettings(joiningSettings(10s, /*maxDeferred=*/1));
   // Two joins issue four requests.
   initialMaxRequestID_ = 4 * getRequestIDMultiplier();
   co_await setupMoQSession();
   const FullTrackName otherTrackName{kTestTrackName.trackNamespace, "other"};
-  // The first join's SUBSCRIBE gets no answer, so that join completes only when
-  // the session closes; its FETCH's failure shows first.
+  // The first join's SUBSCRIBE is never answered, so the join completes only at
+  // session close. Its FETCH failure reaches the stats callback earlier.
   folly::coro::Baton fetchFailed;
   EXPECT_CALL(
       *clientSubscriberStatsCallback_,

@@ -1097,7 +1097,7 @@ class MoQSession : public Subscriber,
   void beginSubscriptionStat(PublisherImpl& pubTrack);
   void endSubscriptionStat(PublisherImpl& pubTrack);
 
-  // A joining FETCH waiting for the subscription it references.
+  // A joining FETCH held for the SUBSCRIBE it references.
   struct JoiningDependency;
   class JoiningDependencyTimeout;
   using JoiningDependencyResult = folly::Expected<FullTrackName, FetchError>;

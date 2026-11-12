@@ -438,9 +438,8 @@ TEST_P(ProxyJoinIntegrationTest, PassThroughSharedFetchPopulatesTheCache) {
   }));
 }
 
-// Draft 18 request streams can hand the proxy a viewer's joining FETCH just
-// ahead of its SUBSCRIBE, as a relay sending both upstream at once does. The
-// join of the cold track still succeeds.
+// With draft 18 request streams, a viewer's joining FETCH can reach a cold
+// proxy just ahead of its SUBSCRIBE. The join still succeeds.
 TEST_P(ProxyJoinIntegrationTest, JoiningFetchAheadOfItsSubscribeJoins) {
   if (getDraftMajorVersion(GetParam()) < 18) {
     GTEST_SKIP() << "Before draft 18 requests share the control stream";
@@ -460,7 +459,7 @@ TEST_P(ProxyJoinIntegrationTest, JoiningFetchAheadOfItsSubscribeJoins) {
         1,
         GroupOrder::OldestFirst,
         FetchType::RELATIVE_JOINING);
-    // Lets the proxy wait to read both request streams.
+    // Settles first so that the proxy reads the streams in delivery order.
     co_await settle();
     viewer->clientWt->setDeferNewStreamData(false);
     // The join opened the SUBSCRIBE request stream first, then the FETCH one.

@@ -3142,11 +3142,10 @@ class MoQSession::FetchTrackReceiveState
   RequestID owningSubscribeID_{0};
 };
 
-// Links a held joining FETCH to the SUBSCRIBE it references.
-// `future` completes when that subscription is handed to the publisher, with
-// its track, or with the error the FETCH fails with. Once the SUBSCRIBE has
-// been read, the dependency is bound: it stops counting toward
-// maxDeferredJoiningFetches and no longer times out.
+// Links a held joining FETCH to the SUBSCRIBE it references. `future`
+// completes with the track when that SUBSCRIBE is handed to the publisher, or
+// with the FETCH's error. A dependency is bound once the SUBSCRIBE is read,
+// and is then not counted in maxDeferredJoiningFetches or timed out.
 struct MoQSession::JoiningDependency {
   JoiningDependency(RequestID subscription, RequestID fetch)
       : subscriptionID(subscription), fetchID(fetch) {
@@ -5696,10 +5695,9 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
   params.eraseAllParamsOfType(TrackRequestParamKey::DELIVERY_TIMEOUT);
 
   auto token = co_await folly::coro::co_current_cancellation_token;
-  // Must stay ahead of subscribe(). A joining FETCH held for this SUBSCRIBE is
-  // parked on its dependency's future, so it resumes through the executor,
-  // behind this handler, not inline: the publisher enters subscribe() before
-  // fetch() even when the FETCH was read first.
+  // Must run before subscribe(). The handler of a FETCH held for this
+  // SUBSCRIBE is suspended on the dependency's future, so it resumes through
+  // the executor after subscribe() is entered.
   resolveJoiningDependencies(requestID, trackPublisher->fullTrackName());
   auto subscribeResult = co_await co_awaitTry(publishHandler_->subscribe(
       std::move(sub), std::static_pointer_cast<TrackConsumer>(trackPublisher)));
