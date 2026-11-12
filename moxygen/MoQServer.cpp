@@ -5,6 +5,8 @@
  */
 
 #include "moxygen/MoQServer.h"
+#include <folly/ExceptionString.h>
+#include <folly/Function.h>
 #include <folly/Portability.h>
 #include <folly/String.h>
 #include <folly/logging/xlog.h>
@@ -84,7 +86,8 @@ MoQServer::MoQServer(
     Options options)
     : MoQServerBase(std::move(endpoint)),
       fizzContext_(std::move(fizzContext)),
-      useQuicWtSession_(std::move(options.useQuicWtSession)) {
+      useQuicWtSession_(std::move(options.useQuicWtSession)),
+      useHqWtSession_(std::move(options.useHqWtSession)) {
   params_.serverThreads = 1;
   params_.txnTimeout = options.txnTimeout;
   params_.transportSettings = options.transportSettings
@@ -316,6 +319,67 @@ void MoQServer::setFizzContext(
   hqServer_->setFizzContext(evb, std::move(ctx));
 }
 
+namespace {
+// HqWtSession owns this handler and the MoQ session owns the HqWtSession, so
+// the handler holds the session weakly.
+class WtSessionHandler final : public proxygen::WebTransportHandler {
+ public:
+  using Factory =
+      folly::Function<std::shared_ptr<proxygen::WebTransportHandler>(
+          std::shared_ptr<proxygen::WebTransport>)>;
+
+  explicit WtSessionHandler(Factory factory) : factory_(std::move(factory)) {}
+
+  void onWebTransportSession(
+      std::shared_ptr<proxygen::WebTransport> wt) noexcept override {
+    if (!wt) {
+      return;
+    }
+    try {
+      session_ = std::exchange(factory_, nullptr)(wt);
+    } catch (...) {
+      XLOG(ERR) << "Failed to start MoQ WebTransport session: "
+                << folly::exceptionStr(std::current_exception());
+      (void)wt->closeSession(proxygen::WebTransport::kInternalError);
+    }
+  }
+  void onNewUniStream(
+      proxygen::WebTransport::StreamReadHandle* handle) noexcept override {
+    if (auto session = session_.lock()) {
+      session->onNewUniStream(handle);
+    }
+  }
+  void onNewBidiStream(
+      proxygen::WebTransport::BidiStreamHandle handle) noexcept override {
+    if (auto session = session_.lock()) {
+      session->onNewBidiStream(handle);
+    }
+  }
+  void onDatagrams(
+      std::vector<std::unique_ptr<folly::IOBuf>> datagrams) noexcept override {
+    if (auto session = session_.lock()) {
+      session->onDatagrams(std::move(datagrams));
+    }
+  }
+  void onSessionEnd(folly::Optional<uint32_t> error) noexcept override {
+    auto session = session_.lock();
+    session_.reset();
+    if (session) {
+      session->onSessionEnd(std::move(error));
+    }
+  }
+  void onSessionDrain() noexcept override {
+    if (auto session = session_.lock()) {
+      session->onSessionDrain();
+    }
+  }
+
+ private:
+  Factory factory_;
+  std::weak_ptr<proxygen::WebTransportHandler> session_;
+};
+} // namespace
+
 void MoQServer::Handler::onHeadersComplete(
     std::unique_ptr<HTTPMessage> req) noexcept {
   HTTPMessage resp;
@@ -359,17 +423,6 @@ void MoQServer::Handler::onHeadersComplete(
   }
   HTTPWebTransport::setWTProtocol(resp, *negotiatedProtocol);
   XLOG(DBG1) << "WebTransport: Negotiated protocol: " << *negotiatedProtocol;
-  txn_->sendHeaders(resp);
-  auto wt = txn_->getWebTransport();
-  if (!wt) {
-    XLOG(ERR) << "Failed to get WebTransport";
-    txn_->sendAbort();
-    return;
-  }
-  auto evb = folly::EventBaseManager::get()->getEventBase();
-  clientSession_ = server_.createSession(
-      folly::MaybeManagedPtr<proxygen::WebTransport>(wt),
-      server_.getOrCreateExecutor(evb));
   quic::QuicSocket* quicSocket = nullptr;
   auto& transport = txn_->getTransport();
   if (transport.getSessionType() ==
@@ -378,10 +431,55 @@ void MoQServer::Handler::onHeadersComplete(
         static_cast<proxygen::HQSession*>(transport.getHTTPSessionBase());
     quicSocket = hqSession->getQuicSocket();
   }
-  clientSession_->setAuthority(
-      std::string(req->getHeaders().getSingleOrEmpty(HTTP_HEADER_HOST)));
-  clientSession_->setPath(std::string(req->getPathAsStringPiece()));
-  if (auto logger = server_.createLogger()) {
+  std::string authority(req->getHeaders().getSingleOrEmpty(HTTP_HEADER_HOST));
+  std::string path(req->getPathAsStringPiece());
+  if (server_.useHqWtSession_ && server_.useHqWtSession_()) {
+    // Detaches and deletes this handler, so return right after.
+    txn_->sendWtHeaders(
+        resp,
+        std::make_unique<WtSessionHandler>(
+            [&server = server_,
+             // HqWtSession holds this socket too, so it outlives the handler.
+             quicSocket,
+             authority = std::move(authority),
+             path = std::move(path),
+             protocol = *negotiatedProtocol](
+                std::shared_ptr<proxygen::WebTransport> wt) mutable {
+              return server.startWebTransportSession(
+                  folly::MaybeManagedPtr<proxygen::WebTransport>(wt),
+                  quicSocket,
+                  std::move(authority),
+                  std::move(path),
+                  protocol);
+            }));
+    return;
+  }
+  txn_->sendHeaders(resp);
+  auto wt = txn_->getWebTransport();
+  if (!wt) {
+    XLOG(ERR) << "Failed to get WebTransport";
+    txn_->sendAbort();
+    return;
+  }
+  clientSession_ = server_.startWebTransportSession(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(wt),
+      quicSocket,
+      std::move(authority),
+      std::move(path),
+      *negotiatedProtocol);
+}
+
+std::shared_ptr<MoQSession> MoQServer::startWebTransportSession(
+    folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+    quic::QuicSocket* quicSocket,
+    std::string authority,
+    std::string path,
+    const std::string& protocol) {
+  auto evb = folly::EventBaseManager::get()->getEventBase();
+  auto session = createSession(std::move(wt), getOrCreateExecutor(evb));
+  session->setAuthority(std::move(authority));
+  session->setPath(std::move(path));
+  if (auto logger = createLogger()) {
     if (quicSocket) {
       if (auto clientCid = quicSocket->getClientConnectionId()) {
         logger->setDcid(*clientCid);
@@ -394,16 +492,17 @@ void MoQServer::Handler::onHeadersComplete(
       logger->setLocalAddress(
           quic::toFollySocketAddress(quicSocket->getLocalAddress()));
     }
-    clientSession_->setLogger(logger);
+    session->setLogger(logger);
   }
 
-  clientSession_->validateAndSetVersionFromAlpn(*negotiatedProtocol);
+  session->validateAndSetVersionFromAlpn(protocol);
 
   if (quicSocket) {
     QuicTransportObservers observers(*quicSocket);
-    server_.onSessionTransportReady(clientSession_, observers);
+    onSessionTransportReady(session, observers);
   }
-  co_withExecutor(evb, server_.handleClientSession(clientSession_)).start();
+  co_withExecutor(evb, handleClientSession(session)).start();
+  return session;
 }
 
 void MoQServer::setQuicStatsFactory(

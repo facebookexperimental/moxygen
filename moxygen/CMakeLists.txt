@@ -162,6 +162,8 @@ moxygen_add_library(moxygen_moq_server
     proxygen::proxygen_http_webtransport_quic_wt_session
     proxygen::proxygen_http_webtransport_quicwebtransport
     mvfst::mvfst_common_address_quic_socket_address_bridge
+    Folly::folly_exception_string
+    Folly::folly_function
     Folly::folly_logging_logging
     Folly::folly_net_net_ops
     Folly::folly_portability

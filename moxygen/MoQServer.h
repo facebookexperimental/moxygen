@@ -60,6 +60,7 @@ class MoQServer : public MoQServerBase {
     // defaultTransportSettings().
     std::optional<quic::TransportSettings> transportSettings;
     std::function<bool()> useQuicWtSession;
+    std::function<bool()> useHqWtSession;
     size_t udpSendBufferBytes{0};
     size_t udpRecvBufferBytes{0};
     // Idle timeout per HTTP/3 transaction, WebTransport CONNECT included. > 0.
@@ -205,6 +206,13 @@ class MoQServer : public MoQServerBase {
  private:
   void createMoQQuicSession(std::shared_ptr<quic::QuicSocket> quicSocket);
 
+  std::shared_ptr<MoQSession> startWebTransportSession(
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+      quic::QuicSocket* quicSocket,
+      std::string authority,
+      std::string path,
+      const std::string& protocol);
+
   std::shared_ptr<MoQExecutor> getOrCreateExecutor(folly::EventBase* evb);
 
   class Handler : public proxygen::HTTPTransactionHandler {
@@ -277,6 +285,7 @@ class MoQServer : public MoQServerBase {
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   folly::EventBaseLocal<std::shared_ptr<MoQExecutor>> executorLocal_;
   std::function<bool()> useQuicWtSession_;
+  std::function<bool()> useHqWtSession_;
 
   friend class Handler;
 };
