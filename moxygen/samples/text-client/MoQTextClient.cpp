@@ -59,6 +59,11 @@ DEFINE_string(
     versions,
     "",
     "Comma-separated MoQ draft versions (e.g. \"16,18\"). Empty = all supported.");
+DEFINE_string(
+    auth_token,
+    "",
+    "If non-empty, sent as the AUTHORIZATION_TOKEN parameter (type 0, not "
+    "registered as an alias) of the subscribe or fetch");
 DEFINE_uint64(
     delivery_timeout,
     0,
@@ -137,6 +142,15 @@ void addRendezvousTimeoutParamIfSupported(
       folly::to_underlying(TrackRequestParamKey::RENDEZVOUS_TIMEOUT),
       FLAGS_rendezvous_timeout));
   XCHECK(insertResult.hasValue());
+}
+
+std::vector<Parameter> authTokenParams() {
+  if (FLAGS_auth_token.empty()) {
+    return {};
+  }
+  return {Parameter(
+      folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+      AuthToken{0, FLAGS_auth_token, AuthToken::DontRegister})};
 }
 
 class TextHandler : public ObjectReceiverCallback {
@@ -366,7 +380,8 @@ class MoQTextClient : public Subscriber,
                 subStart.value_or(kLocationMin),
                 fetchEnd,
                 sub.priority,
-                sub.groupOrder.value_or(GroupOrder::OldestFirst)),
+                sub.groupOrder.value_or(GroupOrder::OldestFirst),
+                authTokenParams()),
             fetchTextReceiver_);
         if (fetchTrack.hasError()) {
           XLOG(ERR) << "Fetch failed err="
@@ -504,7 +519,7 @@ int main(int argc, char* argv[]) {
   });
 
   auto subFilter = flags2filter();
-  std::vector<Parameter> params{};
+  auto params = authTokenParams();
   if (FLAGS_delivery_timeout > 0) {
     params.emplace_back(
         folly::to_underlying(TrackRequestParamKey::DELIVERY_TIMEOUT),
