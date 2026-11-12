@@ -1274,7 +1274,7 @@ MessageParameterExtension filterRule() {
 TEST(MoQFramerMessageParameterExtensionTest, StructuredValueRoundTrips) {
   auto rule = filterRule();
   rule.repeatable = false;
-  rule.validate = [](uint64_t, const Parameter& param) {
+  rule.validate = [](uint64_t, const Parameter& param, ParameterDirection) {
     return param.asString.size() == 2;
   };
   auto extensions = makeFilterExtensions(rule);
@@ -1330,11 +1330,12 @@ TEST(MoQFramerMessageParameterExtensionTest, RulesAreEnforcedBothWays) {
   auto permissive = makeFilterExtensions(filterRule());
 
   auto validated = filterRule();
-  validated.validate = [](uint64_t, const Parameter& param) {
-    return param.asString.size() == 2;
-  };
+  validated.validate =
+      [](uint64_t, const Parameter& param, ParameterDirection) {
+        return param.asString.size() == 2;
+      };
   auto throwing = filterRule();
-  throwing.validate = [](uint64_t, const Parameter& param) {
+  throwing.validate = [](uint64_t, const Parameter& param, ParameterDirection) {
     if (param.asString.size() < 2) {
       throw std::out_of_range("short value");
     }
@@ -1378,6 +1379,37 @@ TEST(MoQFramerMessageParameterExtensionTest, RulesAreEnforcedBothWays) {
       ASSERT_TRUE(parsed.hasError());
       EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
     }
+  }
+}
+
+TEST(MoQFramerMessageParameterExtensionTest, ValidateSeesDirection) {
+  // Each side caps the value at the limit it was given for that direction.
+  auto capped = [](uint64_t sentLimit, uint64_t receivedLimit) {
+    auto rule = filterRule();
+    rule.validate =
+        [sentLimit, receivedLimit](
+            uint64_t, const Parameter& param, ParameterDirection direction) {
+          auto limit =
+              direction == ParameterDirection::Sent ? sentLimit : receivedLimit;
+          return param.asString.size() <= limit;
+        };
+    return makeFilterExtensions(rule);
+  };
+  const std::vector<Parameter> params{
+      Parameter(kFilterParameter, std::string("abc"))};
+  for (auto version : {kVersionDraft16, kVersionDraft18, kVersionDraft22}) {
+    SCOPED_TRACE(version);
+    auto sendOnly = capped(3, 0);
+    auto receiveOnly = capped(0, 3);
+    EXPECT_EQ(
+        writeSubscribeNamespaceWith(version, receiveOnly, params), nullptr);
+    auto serialized = writeSubscribeNamespaceWith(version, sendOnly, params);
+    ASSERT_NE(serialized, nullptr);
+    EXPECT_TRUE(parseSubscribeNamespaceWith(version, receiveOnly, *serialized)
+                    .hasValue());
+    auto parsed = parseSubscribeNamespaceWith(version, sendOnly, *serialized);
+    ASSERT_TRUE(parsed.hasError());
+    EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
   }
 }
 
