@@ -24,6 +24,7 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
     std::chrono::milliseconds connect_timeout,
     std::chrono::milliseconds transaction_timeout,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
+    std::shared_ptr<fizz::client::CertManager> clientCertificates,
     const quic::TransportSettings& transportSettings) {
   // Establish an H3 connection
   class ConnectCallback : public proxygen::HQConnector::Callback {
@@ -58,6 +59,9 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
   hqConnector.setSupportedQuicVersions({quic::QuicVersion::QUIC_V1});
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
   fizzContext->setSupportedAlpns({"h3"});
+  if (clientCertificates) {
+    fizzContext->setClientCertManager(std::move(clientCertificates));
+  }
   hqConnector.setH3Settings(
       {{proxygen::SettingsId::ENABLE_CONNECT_PROTOCOL, 1},
        {proxygen::SettingsId::_HQ_DATAGRAM, 1},
@@ -108,6 +112,7 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
       connect_timeout,
       transaction_timeout,
       verifier_,
+      clientCertificates_,
       transportSettings);
 
   if (logger_) {

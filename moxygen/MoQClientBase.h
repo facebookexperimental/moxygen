@@ -22,6 +22,10 @@
 #include <memory>
 #include <vector>
 
+namespace fizz::client {
+class CertManager;
+} // namespace fizz::client
+
 namespace moxygen {
 
 const std::string kDefaultClientFilePath = "./mlog_client.txt";
@@ -163,6 +167,13 @@ class MoQClientBase {
     earlyDataHandler_ = handler;
   }
 
+  // The certificates offered to a server that asks for one, over QUIC or
+  // WebTransport. Call before setupMoQSession().
+  void setClientCertificates(
+      std::shared_ptr<fizz::client::CertManager> certificates) {
+    clientCertificates_ = std::move(certificates);
+  }
+
   // Added to every session this client creates. Call before setupMoQSession().
   void addExtension(std::shared_ptr<MoQExtension> extension) {
     extensions_.push_back(std::move(extension));
@@ -200,6 +211,7 @@ class MoQClientBase {
   std::shared_ptr<fizz::CertificateVerifier> verifier_;
   std::shared_ptr<quic::QuicPskCache> pskCache_;
   MoQEarlyDataHandler* earlyDataHandler_{nullptr};
+  std::shared_ptr<fizz::client::CertManager> clientCertificates_;
   // Non-null when the caller supplied a connected transport; consumed by the
   // first session setup.
   std::shared_ptr<quic::QuicClientTransport> adoptedTransport_;

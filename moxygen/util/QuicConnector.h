@@ -13,6 +13,10 @@
 #include <folly/io/async/EventBase.h>
 #include <quic/state/TransportSettings.h>
 
+namespace fizz::client {
+class CertManager;
+} // namespace fizz::client
+
 namespace quic {
 class QuicClientTransport;
 class QuicPskCache;
@@ -34,7 +38,8 @@ class QuicConnector {
       const quic::TransportSettings& transportSettings,
       std::shared_ptr<quic::QuicPskCache> pskCache = nullptr,
       const std::string& hostname = "",
-      quic::EarlyDataAppParamsHandler* earlyDataHandler = nullptr);
+      quic::EarlyDataAppParamsHandler* earlyDataHandler = nullptr,
+      std::shared_ptr<fizz::client::CertManager> clientCertificates = nullptr);
 
   // The supplied context owns certificate verification, ALPN and PSK policy.
   static folly::coro::Task<std::shared_ptr<quic::QuicClientTransport>>

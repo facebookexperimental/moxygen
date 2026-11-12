@@ -122,9 +122,13 @@ makeDefaultHandshakeContext(
     std::shared_ptr<quic::QuicPskCache> pskCache,
     const folly::SocketAddress& connectAddr,
     const std::string& hostname,
-    quic::EarlyDataAppParamsHandler* earlyDataHandler) {
+    quic::EarlyDataAppParamsHandler* earlyDataHandler,
+    std::shared_ptr<fizz::client::CertManager> clientCertificates) {
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
   fizzContext->setSupportedAlpns(alpns);
+  if (clientCertificates) {
+    fizzContext->setClientCertManager(std::move(clientCertificates));
+  }
   if (earlyDataHandler) {
     fizzContext->setSendEarlyData(true);
   }
@@ -219,14 +223,16 @@ QuicConnector::connectQuic(
     const quic::TransportSettings& transportSettings,
     std::shared_ptr<quic::QuicPskCache> pskCache,
     const std::string& hostname,
-    quic::EarlyDataAppParamsHandler* earlyDataHandler) {
+    quic::EarlyDataAppParamsHandler* earlyDataHandler,
+    std::shared_ptr<fizz::client::CertManager> clientCertificates) {
   auto handshakeContext = makeDefaultHandshakeContext(
       alpns,
       std::move(verifier),
       std::move(pskCache),
       connectAddr,
       hostname,
-      earlyDataHandler);
+      earlyDataHandler,
+      std::move(clientCertificates));
   co_return co_await connectQuicImpl(
       eventBase,
       std::move(connectAddr),

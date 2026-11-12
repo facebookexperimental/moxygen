@@ -16,7 +16,10 @@
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 #include "moxygen/util/SignalHandler.h"
 
+#include <fizz/backend/openssl/certificate/CertUtils.h>
+#include <fizz/client/CertManager.h>
 #include <fmt/format.h>
+#include <folly/FileUtil.h>
 #include <folly/String.h>
 #include <folly/coro/SharedPromise.h>
 #include <folly/init/Init.h>
@@ -52,6 +55,15 @@ DEFINE_string(
     upstream_transport,
     "h3wt",
     "Upstream transport: 'quic', 'h3wt' or 'qmux'");
+DEFINE_string(
+    upstream_cert,
+    "",
+    "Certificate chain (PEM) presented to upstream servers that ask for a "
+    "client certificate; needs --upstream_key and a quic or h3wt upstream");
+DEFINE_string(
+    upstream_key,
+    "",
+    "Private key (PEM) of --upstream_cert; may name the same file");
 DEFINE_int32(upstream_connect_timeout_ms, 1000, "Upstream connect timeout");
 DEFINE_int32(
     upstream_retry_ms,
@@ -103,10 +115,12 @@ class ClientUpstreamProvider : public MoQUpstreamProvider {
   ClientUpstreamProvider(
       std::shared_ptr<MoQFollyExecutorImpl> executor,
       proxygen::URL url,
-      samples::TransportType transport)
+      samples::TransportType transport,
+      std::shared_ptr<fizz::client::CertManager> certificates)
       : executor_(std::move(executor)),
         url_(std::move(url)),
-        transport_(transport) {}
+        transport_(transport),
+        certificates_(std::move(certificates)) {}
 
   folly::coro::Task<MoQUpstreamSessionResult> getSession(
       const FullTrackName&,
@@ -186,6 +200,9 @@ class ClientUpstreamProvider : public MoQUpstreamProvider {
     if (!client) {
       co_return nullptr;
     }
+    if (certificates_) {
+      client->setClientCertificates(certificates_);
+    }
     auto setup = co_await folly::coro::co_awaitTry(client->setupMoQSession(
         std::chrono::milliseconds(FLAGS_upstream_connect_timeout_ms),
         std::chrono::milliseconds(FLAGS_upstream_transaction_timeout_ms),
@@ -205,6 +222,7 @@ class ClientUpstreamProvider : public MoQUpstreamProvider {
   std::shared_ptr<MoQFollyExecutorImpl> executor_;
   proxygen::URL url_;
   samples::TransportType transport_;
+  std::shared_ptr<fizz::client::CertManager> certificates_;
   std::unique_ptr<MoQClientBase> client_;
   std::optional<folly::coro::SharedPromise<void>> connecting_;
   std::chrono::steady_clock::time_point retryAt_;
@@ -361,6 +379,33 @@ std::vector<proxygen::URL> parseUpstreamUrls(const std::string& urls) {
   return parsed;
 }
 
+// Null without --upstream_cert.
+std::shared_ptr<fizz::client::CertManager> upstreamCertificates(
+    samples::TransportType transport) {
+  if (FLAGS_upstream_cert.empty() && FLAGS_upstream_key.empty()) {
+    return nullptr;
+  }
+  XLOG_IF(FATAL, FLAGS_upstream_cert.empty() || FLAGS_upstream_key.empty())
+      << "--upstream_cert and --upstream_key go together";
+  XLOG_IF(FATAL, transport == samples::TransportType::QMUX)
+      << "--upstream_cert needs --upstream_transport=quic or h3wt";
+  std::string chain;
+  XLOG_IF(FATAL, !folly::readFile(FLAGS_upstream_cert.c_str(), chain))
+      << "Can't read --upstream_cert " << FLAGS_upstream_cert;
+  std::string key;
+  XLOG_IF(FATAL, !folly::readFile(FLAGS_upstream_key.c_str(), key))
+      << "Can't read --upstream_key " << FLAGS_upstream_key;
+  std::unique_ptr<fizz::SelfCert> certificate;
+  fizz::Error err;
+  FIZZ_THROW_ON_ERROR(
+      fizz::openssl::CertUtils::makeSelfCert(
+          certificate, err, std::move(chain), std::move(key)),
+      err);
+  auto certificates = std::make_shared<fizz::client::CertManager>();
+  certificates->addCert(std::move(certificate));
+  return certificates;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -375,6 +420,7 @@ int main(int argc, char* argv[]) {
   auto upstreamTransport =
       samples::parseTransportType(FLAGS_upstream_transport);
   XLOG_IF(FATAL, !upstreamTransport) << "Invalid --upstream_transport";
+  const auto certificates = upstreamCertificates(*upstreamTransport);
 
   // MoQProxy is single-threaded, so one worker serves every session.
   folly::ScopedEventBaseThread worker("MoQProxyWorker");
@@ -386,7 +432,7 @@ int main(int argc, char* argv[]) {
   for (auto& url : upstreamUrls) {
     providers.push_back(
         std::make_shared<ClientUpstreamProvider>(
-            executor, std::move(url), *upstreamTransport));
+            executor, std::move(url), *upstreamTransport, certificates));
   }
   auto proxy = MoQProxy::create(
       std::vector<std::shared_ptr<MoQUpstreamProvider>>(

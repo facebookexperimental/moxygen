@@ -31,7 +31,8 @@ MoQClient::connectQuic(
       ts,
       pskCache_,
       url_.getHost(),
-      earlyDataHandler_);
+      earlyDataHandler_,
+      clientCertificates_);
 
   co_return quicClient;
 }

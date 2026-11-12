@@ -4,9 +4,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <fizz/backend/openssl/certificate/CertUtils.h>
+#include <fizz/client/CertManager.h>
 #include <fizz/client/FizzClientContext.h>
 #include <fizz/protocol/DefaultCertificateVerifier.h>
 #include <fizz/protocol/test/CertUtil.h>
+#include <folly/CancellationToken.h>
 #include <folly/FileUtil.h>
 #include <folly/ScopeGuard.h>
 #include <folly/Singleton.h>
@@ -600,28 +603,62 @@ proxygen::HTTPMessage makeWebTransportConnect(
   return req;
 }
 
+// Accepts any client certificate and records the identity of each.
+class RecordingClientCertVerifier : public fizz::InsecureCertificateVerifier {
+ public:
+  RecordingClientCertVerifier()
+      : fizz::InsecureCertificateVerifier(fizz::VerificationContext::Server) {}
+
+  fizz::Status verify(
+      std::shared_ptr<const fizz::Cert>& ret,
+      fizz::Error& err,
+      const std::vector<std::shared_ptr<const fizz::PeerCert>>& certs)
+      const override {
+    if (!certs.empty()) {
+      identities.wlock()->push_back(certs.front()->getIdentity());
+      presented.post();
+    }
+    return fizz::InsecureCertificateVerifier::verify(ret, err, certs);
+  }
+
+  mutable folly::Synchronized<std::vector<std::string>> identities;
+  mutable folly::coro::Baton presented;
+};
+
 class TestServer : public MoQServer {
  public:
+  // With a `clientVerifier`, clients must present a certificate it accepts.
   TestServer(
       std::shared_ptr<TestPublisher> publisher,
       std::shared_ptr<TestSubscriber> subscriber,
       bool rejectSetup = false,
       const std::string& certPath = "",
       const std::string& keyPath = "",
-      MoQServer::Options options = {})
+      MoQServer::Options options = {},
+      std::shared_ptr<fizz::CertificateVerifier> clientVerifier = nullptr)
       : MoQServer(
-            [&] {
+            [&]() -> std::shared_ptr<const fizz::server::FizzServerContext> {
               std::vector<std::string> alpns = {"h3"};
               auto moqt = getDefaultMoqtProtocols(true);
               alpns.insert(alpns.end(), moqt.begin(), moqt.end());
               alpns.emplace_back(kAlpnMoqtDraft18Latest);
-              if (certPath.empty()) {
-                return quic::samples::
-                    createFizzServerContextWithInsecureDefault(
-                        alpns, fizz::server::ClientAuthMode::None, "", "");
+              auto context = certPath.empty()
+                  ? quic::samples::createFizzServerContextWithInsecureDefault(
+                        alpns, fizz::server::ClientAuthMode::None, "", "")
+                  : quic::samples::createFizzServerContext(
+                        alpns,
+                        fizz::server::ClientAuthMode::None,
+                        certPath,
+                        keyPath);
+              if (!clientVerifier) {
+                return context;
               }
-              return quic::samples::createFizzServerContext(
-                  alpns, fizz::server::ClientAuthMode::None, certPath, keyPath);
+              auto requiring =
+                  std::make_shared<fizz::server::FizzServerContext>(*context);
+              requiring->setClientAuthMode(
+                  fizz::server::ClientAuthMode::Required);
+              requiring->setClientCertVerifier(std::move(clientVerifier));
+              return requiring;
             }(),
             kTestEndpoint,
             std::move(options)),
@@ -874,6 +911,9 @@ class MoQIntegrationTest : public ::testing::TestWithParam<uint64_t> {
       client_ = std::make_unique<MoQClient>(
           exec, std::move(url), std::move(verifier));
     }
+    if (clientCertificates_) {
+      client_->setClientCertificates(clientCertificates_);
+    }
 
     quic::TransportSettings ts;
     ts.advertisedInitialConnectionFlowControlWindow = 1024 * 1024;
@@ -1019,11 +1059,18 @@ class MoQIntegrationTest : public ::testing::TestWithParam<uint64_t> {
 
   void restartServerWithCertificate(
       const std::string& certPath,
-      const std::string& keyPath) {
+      const std::string& keyPath,
+      std::shared_ptr<fizz::CertificateVerifier> clientVerifier = nullptr) {
     server_->stop();
     server_.reset();
     server_ = std::make_shared<TestServer>(
-        publisher_, subscriber_, /*rejectSetup=*/false, certPath, keyPath);
+        publisher_,
+        subscriber_,
+        /*rejectSetup=*/false,
+        certPath,
+        keyPath,
+        serverOptions(),
+        std::move(clientVerifier));
     server_->start(folly::SocketAddress("::", 0));
     server_->waitUntilInitialized();
 
@@ -1086,10 +1133,34 @@ class MoQIntegrationTest : public ::testing::TestWithParam<uint64_t> {
     return verifier;
   }
 
+  // Restarts the server requiring a client certificate, and returns what
+  // records the identities of those presented.
+  std::shared_ptr<RecordingClientCertVerifier> requireClientCertificate() {
+    auto verifier = std::make_shared<RecordingClientCertVerifier>();
+    restartServerWithCertificate("", "", verifier);
+    return verifier;
+  }
+
+  void presentClientCertificate(const std::string& identity) {
+    auto [cert, key] = fizz::test::createCert(
+        identity, /*ca=*/false, /*issuer=*/nullptr, fizz::KeyType::P256);
+    std::vector<folly::ssl::X509UniquePtr> chain;
+    chain.push_back(std::move(cert));
+    std::unique_ptr<fizz::SelfCert> self;
+    fizz::Error err;
+    ASSERT_EQ(
+        fizz::openssl::CertUtils::makeSelfCert(
+            self, err, std::move(chain), std::move(key)),
+        fizz::Status::Success);
+    clientCertificates_ = std::make_shared<fizz::client::CertManager>();
+    clientCertificates_->addCert(std::move(self));
+  }
+
   std::shared_ptr<TestPublisher> publisher_;
   std::shared_ptr<TestSubscriber> subscriber_;
   std::shared_ptr<TestServer> server_;
   std::unique_ptr<MoQClient> client_;
+  std::shared_ptr<fizz::client::CertManager> clientCertificates_;
   std::unique_ptr<folly::test::TemporaryDirectory> certificateDir_;
   uint16_t serverPort_{0};
   folly::ScopedEventBaseThread clientEvbThread_{"MoQIntegrationTestClient"};
@@ -1160,6 +1231,55 @@ TEST_P(MoQIntegrationTest, RejectsWrongIpTlsIdentity) {
                 connectClientWithVerifier(std::move(verifier), "127.0.0.1"));
             EXPECT_TRUE(result.hasException());
           }));
+}
+
+// From draft 18 the server sends SERVER_SETUP before it has the client's
+// certificate, so a client can complete setup before the server checks it.
+// These tests therefore wait for the server's verdict rather than for setup.
+
+TEST_P(MoQIntegrationTest, PresentsClientCertificateOverQuic) {
+  const auto verifier = requireClientCertificate();
+  presentClientCertificate("moq-test-client");
+
+  runTest(folly::coro::co_invoke([this, verifier]() -> folly::coro::Task<void> {
+    co_await connectClient();
+    co_await verifier->presented;
+  }));
+
+  EXPECT_EQ(
+      *verifier->identities.rlock(),
+      std::vector<std::string>{"moq-test-client"});
+}
+
+TEST_P(MoQIntegrationTest, PresentsClientCertificateOverWebTransport) {
+  const auto verifier = requireClientCertificate();
+  presentClientCertificate("moq-test-client");
+
+  runTest(folly::coro::co_invoke([this, verifier]() -> folly::coro::Task<void> {
+    co_await connectClient(/*webTransport=*/true);
+    co_await verifier->presented;
+  }));
+
+  EXPECT_EQ(
+      *verifier->identities.rlock(),
+      std::vector<std::string>{"moq-test-client"});
+}
+
+TEST_P(MoQIntegrationTest, ClosedWithoutARequiredClientCertificate) {
+  const auto verifier = requireClientCertificate();
+
+  runTest(folly::coro::co_invoke([this]() -> folly::coro::Task<void> {
+    auto connected = co_await folly::coro::co_awaitTry(connectClient());
+    if (connected.hasException()) {
+      co_return;
+    }
+    folly::coro::Baton closed;
+    folly::CancellationCallback onClose(
+        client_->moqSession_->getCancelToken(), [&] { closed.post(); });
+    co_await closed;
+  }));
+
+  EXPECT_TRUE(verifier->identities.rlock()->empty());
 }
 
 // ============================================================================
