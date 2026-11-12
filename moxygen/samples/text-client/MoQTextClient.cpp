@@ -11,12 +11,14 @@
 #include <folly/logging/xlog.h>
 #include <folly/portability/GFlags.h>
 #include <signal.h>
+#include <moxygen/MoQVersions.h>
 #include <moxygen/ObjectReceiver.h>
 #include <moxygen/mlog/FileMLogger.h>
 #include <moxygen/mlog/MLogger.h>
 #include <moxygen/relay/MoQRelayClient.h>
 #include <moxygen/samples/util/Utils.h>
 #include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
+#include <algorithm>
 #include <iostream>
 
 DEFINE_string(connect_url, "", "URL for webtransport server");
@@ -81,6 +83,20 @@ DEFINE_bool(
 
 namespace {
 using namespace moxygen;
+
+// Draft 18's Meta ALPN ahead of moqt-18, so the client reaches servers built
+// with either name.
+std::vector<std::string> clientAlpns() {
+  auto alpns = getMoqtProtocols(FLAGS_versions, /*useStandard=*/true);
+  auto standard18 = std::find(
+      alpns.begin(),
+      alpns.end(),
+      getAlpnFromVersion(kVersionDraft18, /*useStandard=*/true).value());
+  if (standard18 != alpns.end()) {
+    alpns.insert(standard18, std::string(kAlpnMoqtDraft18Latest));
+  }
+  return alpns;
+}
 
 LocationFilter flags2filter() {
   std::string soStr(FLAGS_so);
@@ -248,7 +264,7 @@ class MoQTextClient : public Subscriber,
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     try {
-      auto alpns = getMoqtProtocols(FLAGS_versions, true);
+      auto alpns = clientAlpns();
       co_await moqClient_.setup(
           /*publisher=*/nullptr,
           /*subscriber=*/shared_from_this(),

@@ -11,6 +11,7 @@
 #include <folly/init/Init.h>
 #include <folly/logging/xlog.h>
 #include <folly/portability/GFlags.h>
+#include <algorithm>
 #include <iostream>
 
 // The following macros are defined both in 'libev' and 'libevent'.
@@ -22,6 +23,7 @@
 
 #include <quic/common/address/QuicSocketAddressBridge.h>
 #include <moxygen/MoQClientMobile.h>
+#include <moxygen/MoQVersions.h>
 #include <moxygen/ObjectReceiver.h>
 #include <moxygen/events/MoQLibevExecutorImpl.h>
 #include <moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h>
@@ -68,6 +70,20 @@ DEFINE_bool(
 
 namespace {
 using namespace moxygen;
+
+// Draft 18's Meta ALPN ahead of moqt-18, so the client reaches servers built
+// with either name.
+std::vector<std::string> clientAlpns() {
+  auto alpns = getMoqtProtocols(FLAGS_versions, /*useStandard=*/true);
+  auto standard18 = std::find(
+      alpns.begin(),
+      alpns.end(),
+      getAlpnFromVersion(kVersionDraft18, /*useStandard=*/true).value());
+  if (standard18 != alpns.end()) {
+    alpns.insert(standard18, std::string(kAlpnMoqtDraft18Latest));
+  }
+  return alpns;
+}
 
 class PreResolvedAddressResolver final : public MoQQuicAddressResolver {
  public:
@@ -217,7 +233,7 @@ class MoQTextClientMobile
     auto g =
         folly::makeGuard([func = __func__] { XLOG(INFO) << "exit " << func; });
     try {
-      auto alpns = getMoqtProtocols(FLAGS_versions, true);
+      auto alpns = clientAlpns();
       co_await moqClient_->setupMoQSession(
           std::chrono::milliseconds(FLAGS_connect_timeout),
           std::chrono::seconds(FLAGS_transaction_timeout),
