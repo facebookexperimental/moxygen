@@ -230,8 +230,7 @@ void MoQServer::createMoQQuicSession(
   auto evb = qevb->getTypedEventBase<quic::FollyQuicEventBase>()
                  ->getBackingEventBase();
   auto moqSession = createSession(std::move(wt), getOrCreateExecutor(evb));
-  if (mLoggerFactory_) {
-    auto logger = createLogger();
+  if (auto logger = createLogger()) {
     // Set QUIC connection IDs and addresses on the logger
     if (clientCid) {
       logger->setDcid(*clientCid);
@@ -382,8 +381,7 @@ void MoQServer::Handler::onHeadersComplete(
   clientSession_->setAuthority(
       std::string(req->getHeaders().getSingleOrEmpty(HTTP_HEADER_HOST)));
   clientSession_->setPath(std::string(req->getPathAsStringPiece()));
-  if (server_.mLoggerFactory_) {
-    auto logger = server_.createLogger();
+  if (auto logger = server_.createLogger()) {
     if (quicSocket) {
       if (auto clientCid = quicSocket->getClientConnectionId()) {
         logger->setDcid(*clientCid);
