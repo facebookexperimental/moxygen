@@ -1201,6 +1201,223 @@ CO_TEST_P_X(Draft18Test, FetchSurvivesPeerFinAfterFetchOk) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// The publisher closes its half of the FETCH request stream once FETCH_OK is
+// sent and the data stream is done, whichever comes last.
+CO_TEST_P_X(Draft18Test, FetchClosesRequestStreamWhenDataEndsFirst) {
+  co_await setupMoQSession();
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    fetchPub->object(
+        0,
+        0,
+        0,
+        moxygen::test::makeBuf(100),
+        noExtensions(),
+        /*finFetch=*/true);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+  });
+  folly::coro::Baton objBaton;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true, _))
+      .WillOnce([&] {
+        objBaton.post();
+        return folly::unit;
+      });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await objBaton;
+  co_await rescheduleN(4);
+
+  EXPECT_TRUE(serverWt_->writeHandles.at(0)->fin_);
+  EXPECT_EQ(serverWt_->writeHandles.at(0)->resetCount_, 0);
+  EXPECT_TRUE(clientWt_->openLocalBidiStreams().empty());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(Draft18Test, FetchClosesRequestStreamWhenDataEndsAfterFetchOk) {
+  co_await setupMoQSession();
+  std::shared_ptr<FetchConsumer> fetchPub;
+  expectFetch([&fetchPub](Fetch fetch, auto pub) -> TaskFetchResult {
+    fetchPub = std::move(pub);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+  });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  EXPECT_NE(fetchPub, nullptr);
+  if (!fetchPub) {
+    co_return;
+  }
+  co_await rescheduleN(4);
+  EXPECT_FALSE(serverWt_->writeHandles.at(0)->fin_);
+
+  folly::coro::Baton objBaton;
+  EXPECT_CALL(
+      *fetchCallback_, object(0, 0, 0, HasChainDataLengthOf(100), _, true, _))
+      .WillOnce([&] {
+        objBaton.post();
+        return folly::unit;
+      });
+  fetchPub->object(
+      0, 0, 0, moxygen::test::makeBuf(100), noExtensions(), /*finFetch=*/true);
+  co_await objBaton;
+  co_await rescheduleN(4);
+
+  EXPECT_TRUE(serverWt_->writeHandles.at(0)->fin_);
+  EXPECT_EQ(serverWt_->writeHandles.at(0)->resetCount_, 0);
+  EXPECT_TRUE(clientWt_->openLocalBidiStreams().empty());
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A requester cancel resets the request stream rather than closing it.
+CO_TEST_P_X(Draft18Test, FetchCancelResetsRequestStream) {
+  co_await setupMoQSession();
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    fetchPub->object(0, 0, 0, moxygen::test::makeBuf(100));
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+  folly::coro::Baton objectReceived;
+  EXPECT_CALL(*fetchCallback_, object(_, _, _, _, _, false, _)).WillOnce([&] {
+    objectReceived.post();
+    return folly::unit;
+  });
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_TRUE(res.hasValue());
+  if (!res.hasValue()) {
+    co_return;
+  }
+  co_await objectReceived;
+
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
+  res.value()->fetchCancel();
+  co_await rescheduleN(4);
+
+  EXPECT_FALSE(serverWt_->writeHandles.at(0)->fin_);
+  EXPECT_EQ(serverWt_->writeHandles.at(0)->resetCount_, 1);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A completed FETCH has to close both halves of its request stream, or the
+// peer's bidi stream limit caps how many FETCHes a session can ever send.
+CO_TEST_P_X(Draft18Test, CompletedFetchReleasesBidiStream) {
+  constexpr uint64_t kLimit = 2;
+  constexpr uint64_t kFetches = kLimit + 1;
+  clientWt_->setMaxLocalBidiStreams(kLimit);
+  co_await setupMoQSession();
+
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchSuccess())
+      .Times(kFetches);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_))
+      .Times(testing::AnyNumber());
+  for (uint64_t i = 0; i < kFetches; ++i) {
+    expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+      fetchPub->object(
+          0,
+          0,
+          0,
+          moxygen::test::makeBuf(100),
+          noExtensions(),
+          /*finFetch=*/true);
+      co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 1});
+    });
+    auto fetchCb = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+    folly::coro::Baton objBaton;
+    EXPECT_CALL(*fetchCb, object(0, 0, 0, _, _, true, _)).WillOnce([&] {
+      objBaton.post();
+      return folly::unit;
+    });
+    auto res =
+        co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCb);
+    if (res.hasError()) {
+      ADD_FAILURE() << "fetch " << i << ": " << res.error().reasonPhrase;
+      break;
+    }
+    co_await objBaton;
+    // The FIN exchange trails the last object by a few loop turns.
+    for (int j = 0; j < 100 && !clientWt_->openLocalBidiStreams().empty();
+         ++j) {
+      co_await folly::coro::co_reschedule_on_current_executor;
+    }
+    EXPECT_TRUE(clientWt_->openLocalBidiStreams().empty()) << "fetch " << i;
+  }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+namespace {
+// Holds the REQUEST_UPDATE reply until the test releases it.
+class PendingUpdateFetchHandle : public Publisher::FetchHandle {
+ public:
+  explicit PendingUpdateFetchHandle(FetchOk ok)
+      : Publisher::FetchHandle(std::move(ok)) {}
+
+  void fetchCancel() override {}
+
+  folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
+      RequestUpdate update) override {
+    updateArrived.post();
+    co_await releaseReply;
+    co_return RequestOk{.requestID = update.requestID};
+  }
+
+  folly::coro::Baton updateArrived;
+  folly::coro::Baton releaseReply;
+};
+} // namespace
+
+// A subscriber can FIN right after a REQUEST_UPDATE. The publisher's FIN has
+// to wait for the reply, or the subscriber never receives it.
+CO_TEST_P_X(Draft18Test, FetchFinWaitsForRequestUpdateReply) {
+  co_await setupMoQSession();
+  std::shared_ptr<PendingUpdateFetchHandle> pubHandle;
+  std::shared_ptr<FetchConsumer> fetchPub;
+  expectFetch([&](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
+    fetchPub = std::move(inFetchPub);
+    pubHandle = std::make_shared<PendingUpdateFetchHandle>(
+        makeFetchOkResult(fetch, AbsoluteLocation{0, 10})->fetchOk());
+    co_return pubHandle;
+  });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 10}), fetchCallback_);
+  if (res.hasError()) {
+    ADD_FAILURE() << res.error().reasonPhrase;
+    co_return;
+  }
+
+  // moxygen's client does not send FETCH REQUEST_UPDATE, so deliver one
+  // straight to the server. Draft 18's first client bidi is stream 0. Hold
+  // the server's writes on it so the client does not parse the reply.
+  auto serverStream = serverWt_->writeHandles.at(0);
+  serverStream->setImmediateDelivery(false);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+  RequestUpdate update;
+  update.existingRequestID = res.value()->fetchOk().requestID;
+  update.requestID = RequestID(getRequestIDMultiplier());
+  update.priority = kDefaultPriority + 1;
+  static_cast<MoQControlCodec::ControlCallback*>(serverSession_.get())
+      ->onRequestUpdate(std::move(update));
+  co_await rescheduleN(5);
+  EXPECT_TRUE(pubHandle->updateArrived.ready());
+
+  // The subscriber is done updating.
+  clientWt_->writeHandles.at(0)->writeStreamData(nullptr, true, nullptr);
+  co_await rescheduleN(5);
+  EXPECT_TRUE(serverStream->open()) << "FIN sent before the REQUEST_OK";
+
+  pubHandle->releaseReply.post();
+  co_await rescheduleN(5);
+  EXPECT_FALSE(serverStream->open()) << "no FIN after the REQUEST_OK";
+
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::SESSION_CLOSED));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Failing a request because its bidi closed early must run the drain check:
 // if it was the last open request on a draining session, the session closes.
 CO_TEST_P_X(Draft18Test, DrainClosesSessionWhenEarlyCloseEndsLastFetch) {
