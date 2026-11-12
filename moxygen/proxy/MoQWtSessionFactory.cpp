@@ -30,8 +30,11 @@ Setup makeClientSetup() {
 
 MoQWtSessionFactory::MoQWtSessionFactory(
     std::shared_ptr<MoQExecutor> executor,
-    std::shared_ptr<void> keepalive)
-    : executor_(std::move(executor)), keepalive_(std::move(keepalive)) {
+    std::shared_ptr<void> keepalive,
+    StatsCallbacks statsCallbacks)
+    : executor_(std::move(executor)),
+      keepalive_(std::move(keepalive)),
+      statsCallbacks_(std::move(statsCallbacks)) {
   if (!executor_) {
     throw std::invalid_argument("executor must not be null");
   }
@@ -54,6 +57,8 @@ proxygen::WebTransportHandler::Ptr MoQWtSessionFactory::makeHandler(
         auto session = std::make_shared<MoQSession>(
             folly::MaybeManagedPtr<proxygen::WebTransport>(webTransport.get()),
             executor_);
+        session->setPublisherStatsCallback(statsCallbacks_.publisher);
+        session->setSubscriberStatsCallback(statsCallbacks_.subscriber);
         if (!session->validateAndSetVersionFromAlpn(negotiatedProtocol)) {
           return nullptr;
         }

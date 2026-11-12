@@ -21,6 +21,7 @@
 
 #include "moxygen/MoQVersions.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
+#include "moxygen/test/Mocks.h"
 
 namespace moxygen::test {
 
@@ -133,6 +134,72 @@ TEST_F(MoQWtSessionFactoryTest, ServerSetupBeforeClientSetup) {
 
   ASSERT_NE(session, nullptr);
   EXPECT_EQ(session->getNegotiatedVersion(), kVersionDraft18);
+}
+
+TEST_F(MoQWtSessionFactoryTest, StatsCallbacksOutliveFactoryAndRecordRequests) {
+  auto publisher = std::make_shared<testing::StrictMock<MockPublisherStats>>();
+  auto subscriber =
+      std::make_shared<testing::StrictMock<MockSubscriberStats>>();
+  std::weak_ptr<MoQPublisherStatsCallback> publisherObserver = publisher;
+  std::weak_ptr<MoQSubscriberStatsCallback> subscriberObserver = subscriber;
+  EXPECT_CALL(*publisher, onSubscribeError(SubscribeErrorCode::INTERNAL_ERROR));
+  EXPECT_CALL(*publisher, onFetchError(FetchErrorCode::INTERNAL_ERROR));
+  EXPECT_CALL(
+      *subscriber, onSubscribeError(SubscribeErrorCode::INTERNAL_ERROR));
+  EXPECT_CALL(*subscriber, recordSubscribeLatency(testing::_));
+  EXPECT_CALL(*subscriber, onFetchError(FetchErrorCode::INTERNAL_ERROR));
+  EXPECT_CALL(*subscriber, recordFetchLatency(testing::_));
+
+  makeServerSession(kAlpnMoqtDraft16Latest);
+  serverSession_->start();
+  proxygen::WebTransportHandler::Ptr handler;
+  std::shared_ptr<MoQSession> session;
+  {
+    MoQWtSessionFactory factory(
+        executor_,
+        nullptr,
+        {.publisher = std::move(publisher),
+         .subscriber = std::move(subscriber)});
+    handler = startWebTransport(factory, kAlpnMoqtDraft16Latest);
+    session = folly::coro::blockingWait(factory.establish(), &eventBase_);
+  }
+  ASSERT_FALSE(publisherObserver.expired());
+  ASSERT_FALSE(subscriberObserver.expired());
+
+  const FullTrackName track{TrackNamespace({"test"}), "track"};
+  auto subscribeRequest = [&] {
+    return SubscribeRequest::make(
+        track, 0, GroupOrder::OldestFirst, true, LocationFilter::nextObject());
+  };
+  auto fetchRequest = [&] {
+    return Fetch(
+        RequestID(0),
+        track,
+        AbsoluteLocation{0, 0},
+        AbsoluteLocation{1, 0},
+        0,
+        GroupOrder::OldestFirst);
+  };
+
+  auto clientSubscribe = folly::coro::blockingWait(
+      session->subscribe(
+          subscribeRequest(), std::make_shared<MockTrackConsumer>()),
+      &eventBase_);
+  EXPECT_TRUE(clientSubscribe.hasError());
+  auto serverSubscribe = folly::coro::blockingWait(
+      serverSession_->subscribe(
+          subscribeRequest(), std::make_shared<MockTrackConsumer>()),
+      &eventBase_);
+  EXPECT_TRUE(serverSubscribe.hasError());
+  auto clientFetch = folly::coro::blockingWait(
+      session->fetch(fetchRequest(), std::make_shared<MockFetchConsumer>()),
+      &eventBase_);
+  EXPECT_TRUE(clientFetch.hasError());
+  auto serverFetch = folly::coro::blockingWait(
+      serverSession_->fetch(
+          fetchRequest(), std::make_shared<MockFetchConsumer>()),
+      &eventBase_);
+  EXPECT_TRUE(serverFetch.hasError());
 }
 
 TEST_F(MoQWtSessionFactoryTest, EstablishFailsAtTheGivenSetupTimeout) {

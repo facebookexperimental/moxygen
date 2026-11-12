@@ -23,9 +23,15 @@ namespace moxygen {
 // sendWtReq returns.
 class MoQWtSessionFactory {
  public:
+  struct StatsCallbacks {
+    std::shared_ptr<MoQPublisherStatsCallback> publisher;
+    std::shared_ptr<MoQSubscriberStatsCallback> subscriber;
+  };
+
   explicit MoQWtSessionFactory(
       std::shared_ptr<MoQExecutor> executor,
-      std::shared_ptr<void> keepalive = nullptr);
+      std::shared_ptr<void> keepalive = nullptr,
+      StatsCallbacks statsCallbacks = {});
 
   // The handler creates and starts a session and sends CLIENT_SETUP when the
   // WebTransport starts. negotiatedProtocol must map to a supported MoQT
@@ -45,6 +51,7 @@ class MoQWtSessionFactory {
  private:
   std::shared_ptr<MoQExecutor> executor_;
   std::shared_ptr<void> keepalive_;
+  StatsCallbacks statsCallbacks_;
   std::shared_ptr<MoQSession> session_;
 };
 
