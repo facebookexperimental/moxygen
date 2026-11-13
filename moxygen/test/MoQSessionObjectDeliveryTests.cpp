@@ -610,6 +610,11 @@ CO_TEST_P_X(MoQSessionTest, DrainWaitsForInflightSubgroup) {
 // A draining session stays open until the subgroup's FIN is acked.
 CO_TEST_P_X(MoQSessionTest, DrainWaitsForSubgroupAck) {
   co_await setupMoQSession();
+  ON_CALL(*serverPublisherStatsCallback_, getObjectAckStatsCallback())
+      .WillByDefault(testing::Return(nullptr));
+  EXPECT_CALL(
+      serverPublisherStatsCallback_->objectAckStats, recordObjectAckLatency(_))
+      .Times(0);
   std::shared_ptr<TrackConsumer> pub;
   RequestID requestID;
   expectSubscribe([&](auto sub, auto p) -> TaskSubscribeResult {
@@ -1069,6 +1074,11 @@ CO_TEST_P_X(MoQSessionTest, ObjectPayloadStatusMismatchResetsStream) {
 
 CO_TEST_P_X(MoQSessionTest, DeliveryCallbackBasic) {
   co_await setupMoQSession();
+  ON_CALL(*serverPublisherStatsCallback_, getObjectAckStatsCallback())
+      .WillByDefault(testing::Return(nullptr));
+  EXPECT_CALL(
+      serverPublisherStatsCallback_->objectAckStats, recordObjectAckLatency(_))
+      .Times(0);
   auto deliveryCallback =
       std::make_shared<testing::StrictMock<MockDeliveryCallback>>();
 
@@ -1136,9 +1146,55 @@ CO_TEST_P_X(MoQSessionTest, ObjectAckLatencyReported) {
       EXPECT_TRUE(objectResult.hasValue());
 
       // The ack (byte event) for this object records one latency sample.
-      EXPECT_CALL(*serverPublisherStatsCallback_, recordObjectAckLatency(_))
+      EXPECT_CALL(
+          serverPublisherStatsCallback_->objectAckStats,
+          recordObjectAckLatency(_))
           .Times(1);
       serverWt->writeHandles[objStreamId]->deliverInflightData();
+
+      sgp->endOfSubgroup();
+      serverWt->writeHandles[objStreamId]->deliverInflightData();
+      pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+    });
+    co_return makeSubscribeOkResult(sub);
+  });
+
+  auto sg = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg));
+  EXPECT_CALL(*sg, object(0, _, _, _)).WillOnce(testing::Return(folly::unit));
+  expectPublishDone();
+
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+CO_TEST_P_X(MoQSessionTest, ObjectAckLatencyDisabled) {
+  co_await setupMoQSession();
+  ON_CALL(*serverPublisherStatsCallback_, getObjectAckStatsCallback())
+      .WillByDefault(testing::Return(nullptr));
+  EXPECT_CALL(
+      serverPublisherStatsCallback_->objectAckStats, recordObjectAckLatency(_))
+      .Times(0);
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    auto objStreamId = serverObjectStreamId();
+    eventBase_.add([this, pub, sub, serverWt = serverWt_.get(), objStreamId] {
+      EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionStreamOpened());
+      EXPECT_CALL(
+          *clientSubscriberStatsCallback_, onSubscriptionStreamOpened());
+      auto sgp = pub->beginSubgroup(0, 0, 0).value();
+
+      serverWt->writeHandles[objStreamId]->setImmediateDelivery(false);
+      auto objectResult = sgp->object(0, moxygen::test::makeBuf(10));
+      EXPECT_TRUE(objectResult.hasValue());
+
+      ON_CALL(*serverPublisherStatsCallback_, getObjectAckStatsCallback())
+          .WillByDefault(
+              testing::Return(&serverPublisherStatsCallback_->objectAckStats));
+      serverWt->writeHandles[objStreamId]->deliverInflightData();
+      ON_CALL(*serverPublisherStatsCallback_, getObjectAckStatsCallback())
+          .WillByDefault(testing::Return(nullptr));
 
       sgp->endOfSubgroup();
       serverWt->writeHandles[objStreamId]->deliverInflightData();

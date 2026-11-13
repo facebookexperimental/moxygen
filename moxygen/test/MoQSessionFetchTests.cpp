@@ -71,6 +71,10 @@ CO_TEST_P_X(Draft18Test, FetchSerializationErrorDoesNotSendRequest) {
 
 CO_TEST_P_X(MoQSessionTest, Fetch) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(1);
   // Usage
   expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
     auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
@@ -479,6 +483,30 @@ CO_TEST_P_X(MoQSessionTest, FillAbsoluteRangeIsAStandaloneFetch) {
 
 CO_TEST_P_X(MoQSessionTest, FetchCleanupFromStreamFin) {
   co_await setupMoQSession();
+  int publisherActive = 0;
+  int subscriberActive = 0;
+  folly::coro::Baton publisherEnded;
+  folly::coro::Baton subscriberEnded;
+  testing::Sequence publisherSequence;
+  testing::Sequence subscriberSequence;
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin())
+      .InSequence(publisherSequence)
+      .WillOnce([&] { ++publisherActive; });
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd())
+      .InSequence(publisherSequence)
+      .WillOnce([&] {
+        --publisherActive;
+        publisherEnded.post();
+      });
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin())
+      .InSequence(subscriberSequence)
+      .WillOnce([&] { ++subscriberActive; });
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd())
+      .InSequence(subscriberSequence)
+      .WillOnce([&] {
+        --subscriberActive;
+        subscriberEnded.post();
+      });
 
   std::shared_ptr<FetchConsumer> fetchPub;
   expectFetch([&fetchPub](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
@@ -491,6 +519,12 @@ CO_TEST_P_X(MoQSessionTest, FetchCleanupFromStreamFin) {
   auto res =
       co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
   EXPECT_FALSE(res.hasError());
+  if (res.hasError()) {
+    clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+    co_return;
+  }
+  EXPECT_EQ(publisherActive, 1);
+  EXPECT_EQ(subscriberActive, 1);
   // publish here now we know FETCH_OK has been received at client
   XCHECK(fetchPub);
   fetchPub->object(
@@ -508,6 +542,10 @@ CO_TEST_P_X(MoQSessionTest, FetchCleanupFromStreamFin) {
         return folly::unit;
       });
   co_await baton;
+  co_await publisherEnded;
+  co_await subscriberEnded;
+  EXPECT_EQ(publisherActive, 0);
+  EXPECT_EQ(subscriberActive, 0);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, FetchError) {
@@ -526,6 +564,10 @@ CO_TEST_P_X(MoQSessionTest, FetchError) {
 }
 CO_TEST_P_X(MoQSessionTest, FetchPublisherError) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(0);
   expectFetch(
       [](Fetch fetch, auto) -> TaskFetchResult {
         co_return folly::makeUnexpected(
@@ -543,6 +585,10 @@ CO_TEST_P_X(MoQSessionTest, FetchPublisherError) {
 }
 CO_TEST_P_X(MoQSessionTest, FetchPublisherThrow) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(0);
   expectFetch(
       [](Fetch fetch, auto) -> TaskFetchResult {
         throw std::runtime_error("panic!");
@@ -557,6 +603,10 @@ CO_TEST_P_X(MoQSessionTest, FetchPublisherThrow) {
 }
 CO_TEST_P_X(MoQSessionTest, FetchCancel) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(1);
   std::shared_ptr<FetchConsumer> fetchPub;
   expectFetch([&fetchPub](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
     auto standalone = std::get_if<StandaloneFetch>(&fetch.args);
@@ -598,6 +648,10 @@ CO_TEST_P_X(MoQSessionTest, FetchCancel) {
 }
 CO_TEST_P_X(MoQSessionTest, FetchEarlyCancel) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(1);
   expectFetch([](Fetch fetch, auto) -> TaskFetchResult {
     EXPECT_EQ(fetch.fullTrackName, kTestTrackName);
     co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
@@ -1012,6 +1066,10 @@ CO_TEST_P_X(Draft18Test, FetchBidiStreamFetchCancel) {
 
 CO_TEST_P_X(Draft18Test, FetchSessionCleanupBeforeDataStreamOpens) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(1);
 
   expectFetch([](Fetch fetch, auto /*fetchPub*/) -> TaskFetchResult {
     co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
@@ -1032,6 +1090,10 @@ CO_TEST_P_X(Draft18Test, FetchSessionCleanupBeforeDataStreamOpens) {
 
 CO_TEST_P_X(MoQSessionTest, FetchSessionCleanupWithOpenDataStream) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(1);
 
   expectFetch([this](Fetch fetch, auto fetchPub) -> TaskFetchResult {
     eventBase_.add([fetchPub = std::move(fetchPub)] {
@@ -1483,6 +1545,10 @@ CO_TEST_P_X(Draft22Test, JoiningFetchRefused) {
 // A publisher that cannot serve a fill opens the stream and resets it.
 CO_TEST_P_X(Draft22Test, FailedFillOpensAndResetsItsStream) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(0);
   expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
     serveFill(sub.requestID, sub.fill, pub, AbsoluteLocation{4, 0});
     co_return makeSubscribeOkResult(sub, AbsoluteLocation{4, 0});
@@ -1871,6 +1937,10 @@ CO_TEST_P_X(Draft22Test, PublishDoneStreamCountIncludesTheFill) {
 // request stream, and the fill is still delivered.
 CO_TEST_P_X(Draft22Test, FillArrivesBeforeSubscribeOk) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(0);
   std::shared_ptr<proxygen::test::FakeStreamHandle> subscribeReplyStream;
   expectSubscribe([&](auto sub, auto pub) -> TaskSubscribeResult {
     // The client sent the SUBSCRIBE on its first bidi stream.
@@ -1996,6 +2066,10 @@ TEST(MakeFillFetch, NothingToFill) {
 // onSubscriptionBegin, so session close must not decrement the active gauge.
 CO_TEST_P_X(MoQSessionTest, NoSubscriptionEndForInFlightFetchAtClose) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(0);
 
   folly::coro::Baton serverSawFetch;
   folly::coro::Baton releaseHandler;
@@ -2033,6 +2107,10 @@ CO_TEST_P_X(MoQSessionTest, NoSubscriptionEndForInFlightFetchAtClose) {
 // consumer, and call fetchCancel() on the publisher's handle.
 CO_TEST_P_X(MoQSessionTest, FetchCallerCancelledBeforeFetchOk) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(0);
 
   folly::coro::Baton serverSawFetch;
   folly::coro::Baton releaseHandler;
@@ -2078,6 +2156,19 @@ CO_TEST_P_X(MoQSessionTest, FetchCallerCancelledBeforeFetchOk) {
 
 CO_TEST_P_X(MoQSessionTest, FetchTimesOutBeforeFetchOk) {
   co_await setupMoQSession();
+  int publisherBegins = 0;
+  int publisherEnds = 0;
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin())
+      .Times(testing::AtMost(1))
+      .WillOnce([&] { ++publisherBegins; });
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd())
+      .Times(testing::AtMost(1))
+      .WillOnce([&] {
+        ++publisherEnds;
+        EXPECT_LE(publisherEnds, publisherBegins);
+      });
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(0);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(0);
   MoQSettings moqSettings;
   moqSettings.requestTimeout = std::chrono::milliseconds(50);
   clientSession_->setMoqSettings(moqSettings);
@@ -2110,6 +2201,7 @@ CO_TEST_P_X(MoQSessionTest, FetchTimesOutBeforeFetchOk) {
 
   EXPECT_TRUE(weakConsumer.expired());
   EXPECT_TRUE(serverSawFetchCancel);
+  EXPECT_EQ(publisherEnds, publisherBegins);
   EXPECT_FALSE(clientSession_->isClosed());
   if (serverHandle) {
     testing::Mock::VerifyAndClearExpectations(serverHandle.get());
@@ -2119,6 +2211,10 @@ CO_TEST_P_X(MoQSessionTest, FetchTimesOutBeforeFetchOk) {
 
 CO_TEST_P_X(MoQSessionTest, FetchThatStallsAfterFetchOkIsReset) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(1);
   MoQSettings moqSettings;
   moqSettings.requestTimeout = std::chrono::milliseconds(100);
   clientSession_->setMoqSettings(moqSettings);
@@ -2462,6 +2558,10 @@ CO_TEST_P_X(MoQSessionTest, FetchConsumerBlockedThenSessionClose) {
 // consumer's readiness future, even if that future never completes.
 CO_TEST_P_X(MoQSessionTest, FetchConsumerBlockedSessionCloseExitsReadLoop) {
   co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(1);
   std::shared_ptr<FetchConsumer> fetchPub;
   expectFetch([&fetchPub](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
     fetchPub = std::move(inFetchPub);

@@ -142,6 +142,8 @@ TEST_F(MoQWtSessionFactoryTest, StatsCallbacksOutliveFactoryAndRecordRequests) {
       std::make_shared<testing::StrictMock<MockSubscriberStats>>();
   std::weak_ptr<MoQPublisherStatsCallback> publisherObserver = publisher;
   std::weak_ptr<MoQSubscriberStatsCallback> subscriberObserver = subscriber;
+  EXPECT_CALL(*publisher, getObjectAckStatsCallback())
+      .WillRepeatedly(testing::Return(nullptr));
   EXPECT_CALL(*publisher, onSubscribeError(SubscribeErrorCode::INTERNAL_ERROR));
   EXPECT_CALL(*publisher, onFetchError(FetchErrorCode::INTERNAL_ERROR));
   EXPECT_CALL(
@@ -165,6 +167,7 @@ TEST_F(MoQWtSessionFactoryTest, StatsCallbacksOutliveFactoryAndRecordRequests) {
   }
   ASSERT_FALSE(publisherObserver.expired());
   ASSERT_FALSE(subscriberObserver.expired());
+  EXPECT_EQ(publisherObserver.lock()->getObjectAckStatsCallback(), nullptr);
 
   const FullTrackName track{TrackNamespace({"test"}), "track"};
   auto subscribeRequest = [&] {

@@ -440,9 +440,25 @@ class MockSubscriber : public Subscriber {
       (override));
 };
 
+class MockObjectAckStats
+    : public MoQPublisherStatsCallback::ObjectAckStatsCallback {
+ public:
+  MOCK_METHOD(void, recordObjectAckLatency, (uint64_t), (override));
+};
+
 class MockPublisherStats : public MoQPublisherStatsCallback {
  public:
-  MockPublisherStats() = default;
+  MockPublisherStats() {
+    ON_CALL(*this, getObjectAckStatsCallback())
+        .WillByDefault(testing::Return(&objectAckStats));
+  }
+
+  MOCK_METHOD(
+      ObjectAckStatsCallback*,
+      getObjectAckStatsCallback,
+      (),
+      (override));
+  testing::NiceMock<MockObjectAckStats> objectAckStats;
 
   MOCK_METHOD(void, onSubscribeSuccess, (), (override));
 
@@ -498,6 +514,10 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
 
   MOCK_METHOD(void, onSubscriptionEnd, (), (override));
 
+  MOCK_METHOD(void, onFetchBegin, (), (override));
+
+  MOCK_METHOD(void, onFetchEnd, (), (override));
+
   MOCK_METHOD(void, recordPublishNamespaceLatency, (uint64_t), (override));
 
   MOCK_METHOD(void, recordPublishLatency, (uint64_t), (override));
@@ -507,8 +527,6 @@ class MockPublisherStats : public MoQPublisherStatsCallback {
   MOCK_METHOD(void, onPublishSuccess, (), (override));
 
   MOCK_METHOD(void, onSubgroupReset, (ResetStreamErrorCode), (override));
-
-  MOCK_METHOD(void, recordObjectAckLatency, (uint64_t), (override));
 };
 
 class MockSubscriberStats : public MoQSubscriberStatsCallback {
@@ -568,6 +586,10 @@ class MockSubscriberStats : public MoQSubscriberStatsCallback {
   MOCK_METHOD(void, onSubscriptionBegin, (), (override));
 
   MOCK_METHOD(void, onSubscriptionEnd, (), (override));
+
+  MOCK_METHOD(void, onFetchBegin, (), (override));
+
+  MOCK_METHOD(void, onFetchEnd, (), (override));
 
   MOCK_METHOD(void, recordSubscribeLatency, (uint64_t), (override));
 

@@ -1589,6 +1589,11 @@ CO_TEST_P_X(
 // with CANCELLED, not API_ERROR.
 CO_TEST_P_X(MoQSessionTest, DeliveryTimeoutResetCancelsLaterObjects) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
+  ON_CALL(*clientPublisherStatsCallback_, getObjectAckStatsCallback())
+      .WillByDefault(testing::Return(nullptr));
+  EXPECT_CALL(
+      clientPublisherStatsCallback_->objectAckStats, recordObjectAckLatency(_))
+      .Times(0);
 
   PublishRequest pub{
       RequestID(0),

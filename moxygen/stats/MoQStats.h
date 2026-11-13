@@ -46,6 +46,19 @@ class MoQStatsCallback {
   virtual void onFetchError(FetchErrorCode errorCode) = 0;
 
   /*
+   * Publisher: Accepted a FETCH with FETCH_OK
+   * Subscriber: Received FETCH_OK
+   */
+  virtual void onFetchBegin() {}
+
+  /*
+   * An accepted FETCH completed, was reset or cancelled, or its session closed.
+   * Fires exactly once per onFetchBegin, including when data finished before
+   * FETCH_OK. Subscription fills do not fire these callbacks.
+   */
+  virtual void onFetchEnd() {}
+
+  /*
    * Publisher: Received an PUBLISH_NAMESPACE_OK from the subscriber
    * Subscriber: Responded to an PUBLISH_NAMESPACE request with a
    * PUBLISH_NAMESPACE_OK
@@ -172,6 +185,19 @@ class MoQStatsCallback {
 
 class MoQPublisherStatsCallback : public MoQStatsCallback {
  public:
+  class ObjectAckStatsCallback {
+   public:
+    virtual ~ObjectAckStatsCallback() = default;
+
+    // Time from enqueue (handed to QUIC) until the object's bytes are acked.
+    // Subgroup/stream path only; datagrams have no ack mechanism.
+    virtual void recordObjectAckLatency(uint64_t latencyUsec) = 0;
+  };
+
+  // The returned object is owned by this callback and lives as long as it does.
+  // Return nullptr to disable object ACK latency stats.
+  virtual ObjectAckStatsCallback* getObjectAckStatsCallback() = 0;
+
   // Record the time it takes from request to response for an PUBLISH_NAMESPACE
   virtual void recordPublishNamespaceLatency(uint64_t latencyMsec) = 0;
 
@@ -183,10 +209,6 @@ class MoQPublisherStatsCallback : public MoQStatsCallback {
 
   // Called when PUBLISH receives PUBLISH_OK response
   virtual void onPublishSuccess() = 0;
-
-  // Time from enqueue (handed to QUIC) until the object's bytes are acked.
-  // Subgroup/stream path only; datagrams have no ack mechanism.
-  virtual void recordObjectAckLatency(uint64_t latencyUsec) = 0;
 };
 
 class MoQSubscriberStatsCallback : public MoQStatsCallback {
