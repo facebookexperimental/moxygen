@@ -3967,6 +3967,11 @@ folly::coro::Task<void> MoQSession::controlWriteLoop(
       }
     }
     co_await folly::coro::co_safe_point;
+    // WebTransport refuses an empty write without FIN, and a reply context's
+    // final flush can wake this loop with nothing queued.
+    if (controlWriteBuf_.empty()) {
+      continue;
+    }
     auto writeRes = egressTracker_->write(
         *controlStream, controlWriteBuf_.move(), /*fin=*/false);
     if (!writeRes) {

@@ -1692,6 +1692,59 @@ TEST_P(MoQIntegrationTest, Fetch_EmptyResult) {
   }));
 }
 
+// The session stays usable after a FETCH completes. Up to draft 16 the FETCH
+// reply shares the control stream, which WebTransport loses on an empty write.
+TEST_P(MoQIntegrationTest, Fetch_WebTransportSessionOutlivesCompletedFetch) {
+  publisher_->setFetchHandler(
+      [](Fetch fetch, std::shared_ptr<FetchConsumer> fetchCallback)
+          -> folly::coro::Task<Publisher::FetchResult> {
+        FetchOk ok;
+        ok.requestID = fetch.requestID;
+        ok.groupOrder = GroupOrder::OldestFirst;
+        ok.endOfTrack = 0;
+        ok.endLocation = AbsoluteLocation{0, 0};
+        auto handle = std::make_shared<TestFetchHandle>(ok);
+        // The fetch ends after FETCH_OK has gone out on its own.
+        folly::EventBaseManager::get()->getEventBase()->runAfterDelay(
+            [fetchCallback = std::move(fetchCallback)]() {
+              fetchCallback->object(0, 0, 0, makePayload(kTestPayload));
+              fetchCallback->endOfFetch();
+            },
+            50);
+        co_return handle;
+      });
+
+  runTest(folly::coro::co_invoke([this]() -> folly::coro::Task<void> {
+    co_await connectClient(/*webTransport=*/true);
+
+    auto fetchCallback = std::make_shared<TestObjectCallback>();
+    auto receiver =
+        std::make_shared<ObjectReceiver>(ObjectReceiver::FETCH, fetchCallback);
+    Fetch fetch(
+        RequestID(0),
+        kIntegrationTestTrackName,
+        AbsoluteLocation{0, 0},
+        AbsoluteLocation{0, 1},
+        kDefaultPriority,
+        GroupOrder::OldestFirst);
+    auto result =
+        co_await client_->moqSession_->fetch(std::move(fetch), receiver);
+    EXPECT_FALSE(result.hasError());
+    if (result.hasError()) {
+      co_return;
+    }
+    co_await fetchCallback->waitForAllDataReceived();
+    EXPECT_EQ(fetchCallback->getObjects().size(), 1u);
+
+    auto callback = co_await subscribeAndReceive();
+    if (!callback) {
+      co_return;
+    }
+    co_await callback->waitForObjects(kDefaultObjectCount);
+    EXPECT_EQ(callback->getObjects().size(), kDefaultObjectCount);
+  }));
+}
+
 // ============================================================================
 // Session Setup Tests
 // ============================================================================
