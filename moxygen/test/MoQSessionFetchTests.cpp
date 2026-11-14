@@ -110,7 +110,9 @@ CO_TEST_P_X(MoQSessionTest, Fetch) {
 // subscriber would read those bytes as the next object and desync.
 CO_TEST_P_X(MoQSessionTest, FetchEndOfGroupBetweenObjects) {
   co_await setupMoQSession();
-  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+  std::shared_ptr<FetchConsumer> publisher;
+  expectFetch([&publisher](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    publisher = fetchPub;
     EXPECT_TRUE(
         fetchPub->object(0, 0, 0, moxygen::test::makeBuf(100), noExtensions())
             .hasValue());
@@ -147,6 +149,19 @@ CO_TEST_P_X(MoQSessionTest, FetchEndOfGroupBetweenObjects) {
       co_await clientSession_->fetch(getFetch({0, 0}, {1, 1}), fetchCallback_);
   EXPECT_FALSE(res.hasError());
   co_await baton;
+  // One stream carries both groups. The end of group is not written, so
+  // neither side counts it.
+  for (const auto& stats :
+       {trackStatsOf(*publisher), trackStatsOf(*res.value())}) {
+    EXPECT_NE(stats, nullptr);
+    if (!stats) {
+      continue;
+    }
+    EXPECT_EQ(stats->objects, 2);
+    EXPECT_EQ(stats->bytes, 200);
+    EXPECT_EQ(stats->groups, 2);
+    EXPECT_EQ(stats->statusObjects, 0);
+  }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

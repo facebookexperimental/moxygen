@@ -15,6 +15,7 @@ moxygen_add_library(moxygen_moq_versions
 
 moxygen_add_library(moxygen_moq_types
   SRCS
+    MoQTrackStats.cpp
     MoQTypes.cpp
   DEPS
     moxygen_moq_versions

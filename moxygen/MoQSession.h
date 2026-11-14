@@ -26,6 +26,7 @@
 #include <moxygen/EgressAckTracker.h>
 #include <moxygen/MoQConsumers.h>
 #include <moxygen/MoQExtension.h>
+#include <moxygen/MoQTrackStats.h>
 #include <moxygen/Publisher.h>
 #include <moxygen/Subscriber.h>
 #include <moxygen/UniStreamQueue.h>
@@ -344,9 +345,10 @@ class MoQSession : public Subscriber,
     return folly::SocketAddress();
   }
 
+  // After close(), the last info read while the session was open.
   [[nodiscard]] quic::TransportInfo getTransportInfo() const {
     if (!wt_) {
-      return {};
+      return cachedTransportInfo_;
     }
 
     // Rate limit getTransportInfo calls to at most once per second
@@ -630,6 +632,14 @@ class MoQSession : public Subscriber,
       return session_ ? session_->publisherStatsCallback_.get() : nullptr;
     }
 
+    // A fill shares its subscription's stats.
+    const std::shared_ptr<MoQTrackStats>& trackStats() const {
+      return trackStats_;
+    }
+    void setTrackStats(std::shared_ptr<MoQTrackStats> stats) {
+      trackStats_ = std::move(stats);
+    }
+
     void setReplyContext(std::shared_ptr<ReplyContext> ctx) {
       replyContext_ = std::move(ctx);
     }
@@ -709,6 +719,8 @@ class MoQSession : public Subscriber,
     bool publishDoneSent_{false};
     bool requestStreamGoawaySent_{false};
     bool goawayResetPending_{false};
+    std::shared_ptr<MoQTrackStats> trackStats_{
+        std::make_shared<MoQTrackStats>()};
 
    private:
     class GoawayResetTimeoutCallback;
@@ -1157,7 +1169,8 @@ class MoQSession : public Subscriber,
       RequestID requestID,
       TrackAlias alias,
       std::optional<uint64_t> publisherPriority,
-      const std::shared_ptr<TrackConsumer>& consumer);
+      const std::shared_ptr<TrackConsumer>& consumer,
+      std::shared_ptr<MoQTrackStats> trackStats);
   void publishOk(const PublishOk& pubOk, ReplyContext& replyContext);
   void publishError(
       const PublishError& publishError,

@@ -8,6 +8,15 @@ if(NOT BUILD_TESTS)
     return()
 endif()
 
+moxygen_add_test(TARGET RecentGroupWindowTests
+  PREFIX "RecentGroupWindow"
+  SOURCES
+    RecentGroupWindowTest.cpp
+  DEPENDS
+    moxygen_util_recent_group_window
+    testmain
+)
+
 moxygen_add_test(TARGET LocationIntervalSetTests
   PREFIX "LocationIntervalSet"
   SOURCES

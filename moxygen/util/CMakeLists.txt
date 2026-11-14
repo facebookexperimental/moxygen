@@ -34,6 +34,8 @@ moxygen_add_library(moxygen_util_insecure_verifier_dangerous_do_not_use_in_produ
     fizz::fizz
 )
 
+moxygen_add_library(moxygen_util_recent_group_window)
+
 moxygen_add_library(moxygen_util_signal_handler
   EXPORTED_DEPS
     Folly::folly_io_async_async_signal_handler

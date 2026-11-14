@@ -142,6 +142,17 @@ CO_TEST_P_X(MoQSessionTest, PublisherResetAfterBeginObject) {
         sgp->objectPayload(folly::IOBuf::copyBuffer(std::string(20, 'x')));
     EXPECT_EQ(payloadFail.error().code, MoQPublishError::CANCELLED);
 
+    auto stats = trackStatsOf(*pub);
+    EXPECT_NE(stats, nullptr);
+    if (stats) {
+      EXPECT_EQ(stats->resets, 1);
+      EXPECT_EQ(
+          stats->lastResetCode,
+          folly::to_underlying(ResetStreamErrorCode::INTERNAL_ERROR));
+      EXPECT_EQ(stats->openSubgroups, 0);
+      EXPECT_EQ(stats->bytesAcked, 0);
+    }
+
     pub->publishDone(getTrackEndedPublishDone(sub.requestID));
   });
 }
@@ -191,9 +202,91 @@ CO_TEST_P_X(MoQSessionTest, ObjectStatus) {
   co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+CO_TEST_P_X(MoQSessionTest, TrackStatsCountDataObjects) {
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  expectSubscribe(
+      [this, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        eventBase_.add([pub] {
+          auto sgp1 = pub->beginSubgroup(0, 0, 0).value();
+          sgp1->object(0, moxygen::test::makeBuf(10));
+          sgp1->beginObject(2, 11, moxygen::test::makeBuf(5));
+          sgp1->objectPayload(moxygen::test::makeBuf(6));
+          sgp1->endOfGroup(3);
+          auto sgp2 = pub->beginSubgroup(2, 0, 0).value();
+          sgp2->object(0, moxygen::test::makeBuf(10));
+          sgp2->endOfTrackAndGroup(2);
+        });
+        co_return makeSubscribeOkResult(sub);
+      });
+  auto sg1 = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  ON_CALL(*sg1, object(_, _, _, _)).WillByDefault(testing::Return(folly::unit));
+  ON_CALL(*sg1, beginObject(_, _, _, _))
+      .WillByDefault(testing::Return(folly::unit));
+  ON_CALL(*sg1, objectPayload(_, _))
+      .WillByDefault(testing::Return(ObjectPublishStatus::DONE));
+  ON_CALL(*sg1, endOfGroup(_)).WillByDefault(testing::Return(folly::unit));
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(sg1));
+  auto sg2 = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  ON_CALL(*sg2, object(_, _, _, _)).WillByDefault(testing::Return(folly::unit));
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(2, 0, 0, _))
+      .WillOnce(testing::Return(sg2));
+  folly::coro::Baton endOfTrackAndGroupBaton;
+  EXPECT_CALL(*sg2, endOfTrackAndGroup(2)).WillOnce([&]() {
+    endOfTrackAndGroupBaton.post();
+    return folly::unit;
+  });
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await endOfTrackAndGroupBaton;
+
+  // objects and bytes do not include the status objects.
+  for (const auto& stats :
+       {trackStatsOf(*trackConsumer), trackStatsOf(*res.value())}) {
+    EXPECT_NE(stats, nullptr);
+    if (!stats) {
+      continue;
+    }
+    EXPECT_EQ(stats->objects, 3);
+    EXPECT_EQ(stats->bytes, 31);
+    EXPECT_EQ(stats->groups, 2);
+    EXPECT_EQ(stats->subgroups, 2);
+    EXPECT_EQ(stats->statusObjects, 2);
+    EXPECT_EQ(stats->resets, 0);
+    EXPECT_TRUE(stats->firstObject.has_value());
+  }
+  EXPECT_EQ(trackStatsOf(*trackConsumer)->openSubgroups, 0);
+  EXPECT_LE(
+      trackStatsOf(*trackConsumer)->ackLatencyUsMax,
+      trackStatsOf(*trackConsumer)->ackLatencyUsSum);
+  EXPECT_GT(trackStatsOf(*trackConsumer)->bytesWritten, 31);
+  EXPECT_EQ(trackStatsOf(*trackConsumer)->payloadBytesQueued, 31);
+  // Every queued byte reached the transport.
+  EXPECT_EQ(
+      trackStatsOf(*trackConsumer)->bytesQueued,
+      trackStatsOf(*trackConsumer)->bytesWritten);
+  EXPECT_EQ(trackStatsOf(*trackConsumer)->objectsWritten, 3);
+  EXPECT_LE(trackStatsOf(*trackConsumer)->objectsAcked, 3);
+  EXPECT_LE(
+      trackStatsOf(*trackConsumer)->bytesAcked,
+      trackStatsOf(*trackConsumer)->bytesWritten);
+  EXPECT_EQ(trackStatsOf(*res.value())->bytesWritten, 0);
+
+  expectPublishDone();
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, Datagrams) {
   co_await setupMoQSession();
-  expectSubscribe([](auto sub, auto pub) -> TaskSubscribeResult {
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  expectSubscribe([&trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+    trackConsumer = pub;
     pub->datagram(
         ObjectHeader(0, 0, 1, 0, 11), folly::IOBuf::copyBuffer("hello world"));
     pub->datagram(
@@ -219,6 +312,23 @@ CO_TEST_P_X(MoQSessionTest, Datagrams) {
       getSubscribe(kTestTrackName), subscribeCallback_);
   EXPECT_FALSE(res.hasError());
   co_await publishDone_;
+  // The END_OF_TRACK datagram counts only as a status object.
+  auto stats = trackStatsOf(*res.value());
+  EXPECT_NE(stats, nullptr);
+  if (stats) {
+    EXPECT_EQ(stats->datagrams, 1);
+    EXPECT_EQ(stats->objects, 1);
+    EXPECT_EQ(stats->bytes, 11);
+    EXPECT_EQ(stats->statusObjects, 1);
+  }
+  auto sent = trackStatsOf(*trackConsumer);
+  EXPECT_NE(sent, nullptr);
+  if (sent) {
+    EXPECT_GT(sent->datagramBytes, 11);
+    EXPECT_EQ(sent->bytesQueued, 0);
+    EXPECT_EQ(sent->bytesWritten, 0);
+    EXPECT_EQ(sent->objectsWritten, 1);
+  }
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, SubgroupWireFormatHintsRoundTrip) {
