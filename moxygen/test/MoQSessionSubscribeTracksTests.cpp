@@ -19,10 +19,16 @@ namespace {
 
 class CapturingReplyContext : public ReplyContext {
  public:
-  CapturingReplyContext() : ReplyContext(folly::CancellationToken()) {}
+  CapturingReplyContext() : ReplyContext(folly::CancellationToken()) {
+    writer_.initializeVersion(kVersionDraft18);
+  }
 
   folly::IOBufQueue& writeBuf() override {
     return writeBuf_;
+  }
+
+  const MoQFrameWriter& writer() const override {
+    return writer_;
   }
 
   void flush(bool fin = false) override {
@@ -46,6 +52,7 @@ class CapturingReplyContext : public ReplyContext {
   folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
   folly::IOBufQueue flushedBuf_{folly::IOBufQueue::cacheChainLength()};
   bool fin_{false};
+  MoQFrameWriter writer_;
 };
 
 class RecordingControlCallback : public MoQControlCodec::ControlCallback {
@@ -75,10 +82,8 @@ class RecordingControlCallback : public MoQControlCodec::ControlCallback {
 } // namespace
 
 TEST(SubscribeTracksReplyTest, PublishBlockedBeforeOkIsSentAfterOk) {
-  MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft18);
   auto replyContext = std::make_shared<CapturingReplyContext>();
-  SubscribeTracksReply reply(writer, replyContext);
+  SubscribeTracksReply reply(replyContext);
   const TrackNamespace suffix(std::vector<std::string>{"sports"});
 
   reply.publishBlocked(suffix, "highlights");
@@ -116,10 +121,8 @@ TEST(SubscribeTracksReplyTest, PublishBlockedBeforeOkIsSentAfterOk) {
 }
 
 TEST(SubscribeTracksReplyTest, ErrorAfterErrorIsRejected) {
-  MoQFrameWriter writer;
-  writer.initializeVersion(kVersionDraft18);
   auto replyContext = std::make_shared<CapturingReplyContext>();
-  SubscribeTracksReply reply(writer, replyContext);
+  SubscribeTracksReply reply(replyContext);
   const SubscribeTracksError error{
       RequestID(7), SubscribeTracksErrorCode::INTERNAL_ERROR, "boom"};
 

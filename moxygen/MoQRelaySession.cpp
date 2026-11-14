@@ -588,8 +588,9 @@ MoQRelaySession::sendRequestUpdateOnBidi(
   reqUpdate.existingRequestID = existingRequestID;
   reqUpdate.requestID = getNextRequestID();
 
+  const auto& writer = onBidi ? control->writer() : moqFrameWriter_;
   folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
-  auto writeRes = moqFrameWriter_.writeRequestUpdate(buf, reqUpdate);
+  auto writeRes = writer.writeRequestUpdate(buf, reqUpdate);
   if (!writeRes) {
     XLOG(ERR) << "writeRequestUpdate failed sess=" << this;
     co_return folly::makeUnexpected(
@@ -599,9 +600,6 @@ MoQRelaySession::sendRequestUpdateOnBidi(
             "writeRequestUpdate failed"});
   }
 
-  if (logger_) {
-    logger_->logSubscribeUpdate(reqUpdate);
-  }
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onRequestUpdate);
 
   // Register the pending state before writing so the REQUEST_OK / REQUEST_ERROR
@@ -786,10 +784,6 @@ MoQRelaySession::publishNamespace(
     std::shared_ptr<PublishNamespaceCallback> publishNamespaceCallback) {
   XLOG(DBG1) << __func__ << " ns=" << pubNs.trackNamespace << " sess=" << this;
 
-  if (logger_) {
-    logger_->logPublishNamespace(pubNs);
-  }
-
   auto publishNamespaceStartTime = std::chrono::steady_clock::now();
   SCOPE_EXIT {
     auto duration =
@@ -807,18 +801,10 @@ MoQRelaySession::publishNamespace(
   aliasifyAuthTokens(pubNs.params);
   pubNs.requestID = getNextRequestID();
 
-  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
-  auto writeResult = moqFrameWriter_.writePublishNamespace(writeBuf, pubNs);
-  if (!writeResult) {
-    XLOG(ERR) << "writePublishNamespace failed sess=" << this;
-    co_return folly::makeUnexpected(
-        PublishNamespaceError{
-            pubNs.requestID,
-            PublishNamespaceErrorCode::INTERNAL_ERROR,
-            "local write failed"});
-  }
   auto sendResult = sendRequest(
-      writeBuf,
+      [&](const MoQFrameWriter& writer, folly::IOBufQueue& buf) {
+        return writer.writePublishNamespace(buf, pubNs);
+      },
       FrameType::REQUEST_OK,
       /*postTerminal=*/{FrameType::REQUEST_OK, FrameType::REQUEST_ERROR},
       pubNs.requestID,
@@ -947,13 +933,6 @@ void MoQRelaySession::onPublishNamespaceCancel(
     PublishNamespaceCancel publishNamespaceCancel) {
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onPublishNamespaceCancel);
 
-  if (logger_) {
-    logger_->logPublishNamespaceCancel(
-        publishNamespaceCancel,
-        MOQTByteStringType::STRING_VALUE,
-        ControlMessageType::PARSED);
-  }
-
   std::shared_ptr<Subscriber::PublishNamespaceCallback> cb;
 
   XCHECK(publishNamespaceCancel.requestID.has_value());
@@ -1000,10 +979,6 @@ void MoQRelaySession::publishNamespaceDone(
     std::shared_ptr<ReplyContext> replyCtx) {
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onPublishNamespaceDone);
 
-  if (logger_) {
-    logger_->logPublishNamespaceDone(pubNsDone);
-  }
-
   // Lambda helper to fail a pending publishNamespace and erase it
   auto failPendingPublishNamespace = [this](auto pendingIt, RequestID reqId) {
     if (auto* publishNamespacePtr =
@@ -1046,7 +1021,7 @@ void MoQRelaySession::publishNamespaceDone(
     return;
   }
   if (getDraftMajorVersion(*negotiatedVersion_) < 18) {
-    auto res = moqFrameWriter_.writePublishNamespaceDone(
+    auto res = replyCtx->writer().writePublishNamespaceDone(
         replyCtx->writeBuf(), pubNsDone);
     if (!res) {
       XLOG(ERR) << "writePublishNamespaceDone failed sess=" << this;
@@ -1068,11 +1043,6 @@ void MoQRelaySession::onPublishNamespaceImpl(
     PublishNamespace pubNs,
     std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " ns=" << pubNs.trackNamespace << " sess=" << this;
-
-  if (logger_) {
-    logger_->logPublishNamespace(
-        pubNs, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
-  }
 
   if (closeSessionIfRequestIDInvalid(pubNs.requestID, false, true)) {
     return;
@@ -1160,13 +1130,9 @@ void MoQRelaySession::publishNamespaceOk(
     ReplyContext& replyContext) {
   XLOG(DBG1) << __func__ << " reqID=" << pubNsOk.requestID << " sess=" << this;
 
-  if (logger_) {
-    logger_->logPublishNamespaceOk(pubNsOk);
-  }
-
   MOQ_SUBSCRIBER_STATS(subscriberStatsCallback_, onPublishNamespaceSuccess);
-  auto res =
-      moqFrameWriter_.writePublishNamespaceOk(replyContext.writeBuf(), pubNsOk);
+  auto res = replyContext.writer().writePublishNamespaceOk(
+      replyContext.writeBuf(), pubNsOk);
   if (!res) {
     XLOG(ERR) << "writePublishNamespaceOk failed sess=" << this;
     return;
@@ -1198,10 +1164,6 @@ void MoQRelaySession::publishNamespaceCancel(
     requestUpdateReplyContexts_.erase(*pubNsCancel.requestID);
   }
   retireRequestID(/*signalWriteLoop=*/false);
-
-  if (logger_) {
-    logger_->logPublishNamespaceCancel(pubNsCancel);
-  }
 }
 
 void MoQRelaySession::onPublishNamespaceDone(PublishNamespaceDone pubNsDone) {
@@ -1212,13 +1174,6 @@ void MoQRelaySession::onPublishNamespaceDone(PublishNamespaceDone pubNsDone) {
   // getRequestSession() to verify ownership.
   folly::RequestContextScopeGuard guard;
   setRequestSession();
-
-  if (logger_) {
-    logger_->logPublishNamespaceDone(
-        pubNsDone,
-        MOQTByteStringType::STRING_VALUE,
-        ControlMessageType::PARSED);
-  }
 
   std::shared_ptr<Subscriber::PublishNamespaceHandle> handle;
 
@@ -1347,17 +1302,10 @@ MoQRelaySession::subscribeNamespace(
   // The read loop that owns it only starts once this coroutine suspends.
   auto* streamCallbackPtr = streamCallback.get();
 
-  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
-  auto res = moqFrameWriter_.writeSubscribeNamespace(buf, sa);
-  if (!res) {
-    XLOG(ERR) << "writeSubscribeNamespace failed sess=" << this;
-    co_return folly::makeUnexpected(SubscribeNamespaceError(
-        {RequestID(0),
-         SubscribeNamespaceErrorCode::INTERNAL_ERROR,
-         "local write failed"}));
-  }
   auto sendResult = sendRequest(
-      buf,
+      [&](const MoQFrameWriter& writer, folly::IOBufQueue& buf) {
+        return writer.writeSubscribeNamespace(buf, sa);
+      },
       FrameType::REQUEST_OK,
       /*postTerminal=*/
       {FrameType::NAMESPACE,
@@ -1377,9 +1325,6 @@ MoQRelaySession::subscribeNamespace(
     streamCallbackPtr->releaseHandleOnCancel(control->getReadCancelToken());
   }
 
-  if (logger_) {
-    logger_->logSubscribeNamespace(sa);
-  }
   auto contract = folly::coro::makePromiseContract<
       folly::Expected<SubscribeNamespaceOk, SubscribeNamespaceError>>();
   auto pending = MoQRelayPendingRequestState::makeSubscribeNamespace(
@@ -1411,10 +1356,6 @@ void MoQRelaySession::onSubscribeNamespaceImpl(
     std::shared_ptr<SubNSReply> subNsReply) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
-  if (logger_) {
-    logger_->logSubscribeNamespace(
-        sa, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
-  }
   if (closeSessionIfRequestIDInvalid(sa.requestID, false, true)) {
     return;
   }
@@ -1555,16 +1496,9 @@ void MoQRelaySession::subscribeNamespaceOk(
     XLOG(ERR) << "writeSubscribeNamespaceOk failed sess=" << this;
     return;
   }
-  if (logger_) {
-    logger_->logSubscribeNamespaceOk(saOk);
-  }
 }
 
 void MoQRelaySession::onUnsubscribeNamespace(UnsubscribeNamespace unsub) {
-  if (logger_) {
-    logger_->logUnsubscribeNamespace(
-        unsub, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
-  }
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribeNamespace);
   if (!publishHandler_) {
     XLOG(DBG1) << __func__ << "No publisher callback set";
@@ -1674,17 +1608,10 @@ MoQRelaySession::subscribeTracks(
   // The read loop that owns it only starts once this coroutine suspends.
   auto* streamCallbackPtr = streamCallback.get();
 
-  folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
-  auto res = moqFrameWriter_.writeSubscribeTracks(buf, subTracks);
-  if (!res) {
-    XLOG(ERR) << "writeSubscribeTracks failed sess=" << this;
-    co_return folly::makeUnexpected(SubscribeTracksError(
-        {RequestID(0),
-         SubscribeTracksErrorCode::INTERNAL_ERROR,
-         "local write failed"}));
-  }
   auto sendResult = sendRequest(
-      buf,
+      [&](const MoQFrameWriter& writer, folly::IOBufQueue& buf) {
+        return writer.writeSubscribeTracks(buf, subTracks);
+      },
       FrameType::REQUEST_OK,
       /*postTerminal=*/
       {FrameType::REQUEST_OK,
@@ -1852,10 +1779,6 @@ bool MoQRelaySession::handlePublishNamespaceOkFromRequestOk(
   XLOG(DBG1) << __func__ << " reqID=" << requestOk.requestID
              << " sess=" << this;
 
-  if (logger_) {
-    logger_->logPublishNamespaceOk(requestOk, ControlMessageType::PARSED);
-  }
-
   auto* publishNamespacePtr =
       MoQRelayPendingRequestState::tryGetPublishNamespace(reqIt->second.get());
   if (!publishNamespacePtr) {
@@ -1878,10 +1801,6 @@ bool MoQRelaySession::handleSubscribeNamespaceOkFromRequestOk(
     PendingRequestIterator reqIt) {
   XLOG(DBG1) << __func__ << " reqID=" << requestOk.requestID
              << " sess=" << this;
-
-  if (logger_) {
-    logger_->logSubscribeNamespaceOk(requestOk, ControlMessageType::PARSED);
-  }
 
   auto* subscribeNamespacePtr =
       MoQRelayPendingRequestState::tryGetSubscribeNamespace(
@@ -1917,7 +1836,7 @@ WriteResult SeparateStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {
     // We already sent an ERROR; protocol doesn't allow OK after that.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
   }
-  auto res = moqFrameWriter_.writeSubscribeNamespaceOk(
+  auto res = replyContext_->writer().writeSubscribeNamespaceOk(
       replyContext_->writeBuf(), subNsOk);
   if (!res) {
     return res;
@@ -1939,7 +1858,7 @@ WriteResult SeparateStreamSubNsReply::error(
     // We already sent at least one NAMESPACE frame.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
   }
-  auto res = moqFrameWriter_.writeRequestError(
+  auto res = replyContext_->writer().writeRequestError(
       replyContext_->writeBuf(),
       subNsError,
       FrameType::SUBSCRIBE_NAMESPACE_ERROR);
@@ -1953,7 +1872,8 @@ WriteResult SeparateStreamSubNsReply::namespaceMsg(const Namespace& msg) {
     // No NAMESPACE frames allowed after we send an ERROR on this stream.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
   }
-  auto res = moqFrameWriter_.writeNamespace(replyContext_->writeBuf(), msg);
+  auto res =
+      replyContext_->writer().writeNamespace(replyContext_->writeBuf(), msg);
   namespaceFrameSent_ = true;
   if (okSent_) {
     replyContext_->flush();
@@ -1969,7 +1889,8 @@ WriteResult SeparateStreamSubNsReply::namespaceDoneMsg(
     // No NAMESPACE_DONE frames allowed after we send an ERROR on this stream.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
   }
-  auto res = moqFrameWriter_.writeNamespaceDone(replyContext_->writeBuf(), msg);
+  auto res = replyContext_->writer().writeNamespaceDone(
+      replyContext_->writeBuf(), msg);
   if (okSent_) {
     replyContext_->flush(/*fin=*/false);
   } else {

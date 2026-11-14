@@ -10,6 +10,7 @@
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBufQueue.h>
 #include <folly/logging/xlog.h>
+#include <moxygen/MoQFrameObserver.h>
 #include <moxygen/MoQTokenCache.h>
 #include <moxygen/MoQTypes.h>
 #include <moxygen/MoQVarint.h>
@@ -633,8 +634,6 @@ WriteResult writeServerSetup(
     const Setup& serverSetup,
     uint64_t version) noexcept;
 
-// writeSetup, writeClientSetup and writeServerSetup are the only functions that
-// are version-agnostic, so we are leaving them out of the MoQFrameWriter.
 class MoQFrameWriter {
  public:
   // options.priorityPresent is ignored; objectHeader.priority decides whether
@@ -828,6 +827,23 @@ class MoQFrameWriter {
     messageParameterExtensions_ = std::move(extensions);
   }
 
+  // Setup is version-agnostic. This wraps the free writeSetup so the frame is
+  // reported like any other.
+  WriteResult writeSetup(
+      folly::IOBufQueue& writeBuf,
+      const Setup& setup,
+      uint64_t version,
+      bool isClient) const noexcept;
+
+  void setFrameObserver(std::shared_ptr<MoQFrameObserver> observer) noexcept {
+    frameObserver_ = std::move(observer);
+  }
+
+  // Frames serialized from here on are reported as sent on streamID.
+  void bindStream(uint64_t streamID) noexcept {
+    frameStreamID_ = streamID;
+  }
+
   // Encode a TrackNamespace as a TRACK_NAMESPACE_PREFIX parameter (a Track
   // Namespace tuple value, §2.4.1) for the given negotiated version. The
   // resulting parameter can be added to a REQUEST_UPDATE's parameter list to
@@ -991,8 +1007,21 @@ class MoQFrameWriter {
 
   void resetWriterFetchContext() const noexcept;
 
+  template <typename Msg>
+  void notifySent(
+      void (MoQFrameObserver::*
+                hook)(MoQFrameObserver::Direction, uint64_t, const Msg&),
+      const Msg& msg) const noexcept {
+    if (frameObserver_) {
+      ((*frameObserver_).*hook)(
+          MoQFrameObserver::Direction::Sent, frameStreamID_, msg);
+    }
+  }
+
   std::optional<uint64_t> version_;
   bool useMoQVarint_{false};
+  std::shared_ptr<MoQFrameObserver> frameObserver_;
+  uint64_t frameStreamID_{0};
   std::shared_ptr<const MessageParameterExtensions> messageParameterExtensions_;
   mutable std::optional<uint64_t> previousObjectID_;
   // Context for FETCH object delta encoding

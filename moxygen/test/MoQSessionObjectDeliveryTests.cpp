@@ -2000,3 +2000,114 @@ CO_TEST_P_X(MoQSessionTest, NullPayloadWithLogger) {
   co_await publishDone_;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+namespace {
+// Counts object-tier mlog records. The control-message equivalent is in
+// MoQSessionMLogTests.
+class ObjectRecordingMLogger : public MLogger {
+ public:
+  explicit ObjectRecordingMLogger(VantagePoint vp) : MLogger(vp) {}
+  void outputLogs() override {}
+
+  struct Counts {
+    size_t subgroupHeadersCreated{0};
+    size_t subgroupHeadersParsed{0};
+    size_t subgroupObjectsCreated{0};
+    size_t subgroupObjectsParsed{0};
+    size_t datagramsParsed{0};
+    size_t dataStreamTypesSet{0};
+  };
+
+  Counts counts() const {
+    Counts c;
+    for (const auto& event : logs_) {
+      if (std::get_if<MOQTSubgroupHeaderCreated>(&event.data_)) {
+        c.subgroupHeadersCreated++;
+      } else if (std::get_if<MOQTSubgroupHeaderParsed>(&event.data_)) {
+        c.subgroupHeadersParsed++;
+      } else if (std::get_if<MOQTSubgroupObjectCreated>(&event.data_)) {
+        c.subgroupObjectsCreated++;
+      } else if (std::get_if<MOQTSubgroupObjectParsed>(&event.data_)) {
+        c.subgroupObjectsParsed++;
+      } else if (std::get_if<MOQTObjectDatagramParsed>(&event.data_)) {
+        c.datagramsParsed++;
+      } else if (const auto* rec = std::get_if<MOQTStreamTypeSet>(&event.data_);
+                 rec && rec->streamType != MOQTStreamType::CONTROL) {
+        c.dataStreamTypesSet++;
+      }
+    }
+    return c;
+  }
+
+  std::optional<uint64_t> parsedObjectPayloadLength(size_t index) const {
+    size_t seen = 0;
+    for (const auto& event : logs_) {
+      if (const auto* parsed =
+              std::get_if<MOQTSubgroupObjectParsed>(&event.data_)) {
+        if (seen++ == index) {
+          return parsed->objectPayloadLength;
+        }
+      }
+    }
+    return std::nullopt;
+  }
+};
+} // namespace
+
+CO_TEST_P_X(MoQSessionTest, MLogRecordsObjectTier) {
+  auto clientLogger =
+      std::make_shared<ObjectRecordingMLogger>(VantagePoint::CLIENT);
+  auto serverLogger =
+      std::make_shared<ObjectRecordingMLogger>(VantagePoint::SERVER);
+
+  co_await setupMoQSession();
+  clientSession_->setLogger(clientLogger);
+  serverSession_->setLogger(serverLogger);
+
+  // Two subgroups in one group. The second subgroup's object arrives in two
+  // payload frames, written from separate turns of the loop.
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    auto sg0 = pub->beginSubgroup(0, 0, 0).value();
+    sg0->object(0, folly::IOBuf::copyBuffer("abcdef"), noExtensions(), false);
+    auto sg1 = pub->beginSubgroup(0, 1, 0).value();
+    sg1->beginObject(0, 6, folly::IOBuf::copyBuffer("abc"), noExtensions());
+    eventBase_.add([sub, pub, sg0, sg1] {
+      sg1->objectPayload(folly::IOBuf::copyBuffer("def"), true);
+      sg0->endOfSubgroup();
+      pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+    });
+    co_return makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+  });
+
+  auto rsg0 = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  auto rsg1 = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(rsg0));
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 1, 0, _))
+      .WillOnce(testing::Return(rsg1));
+
+  expectPublishDone();
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await publishDone_;
+
+  auto sent = serverLogger->counts();
+  auto received = clientLogger->counts();
+
+  // The publisher records each subgroup header it writes. The subscriber
+  // records each one it parses.
+  EXPECT_EQ(sent.subgroupHeadersCreated, 2u);
+  EXPECT_EQ(received.subgroupHeadersParsed, 2u);
+  // An object split across payload frames is delivered but not recorded.
+  // TODO: record the split object and expect 2.
+  EXPECT_EQ(received.subgroupObjectsParsed, 1u);
+  EXPECT_EQ(received.datagramsParsed, 0u);
+  // Each subgroup stream gets a stream type, on both sides.
+  EXPECT_EQ(sent.dataStreamTypesSet, 2u);
+  EXPECT_EQ(received.dataStreamTypesSet, 2u);
+  // The parsed record carries the full payload length.
+  EXPECT_EQ(clientLogger->parsedObjectPayloadLength(0), 6u);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}

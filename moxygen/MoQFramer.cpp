@@ -4910,6 +4910,21 @@ WriteResult MoQFrameWriter::writeStreamObject(
   return size;
 }
 
+WriteResult MoQFrameWriter::writeSetup(
+    folly::IOBufQueue& writeBuf,
+    const Setup& setup,
+    uint64_t version,
+    bool isClient) const noexcept {
+  auto res = ::moxygen::writeSetup(writeBuf, setup, version, isClient);
+  if (res) {
+    notifySent(
+        isClient ? &MoQFrameObserver::onClientSetup
+                 : &MoQFrameObserver::onServerSetup,
+        setup);
+  }
+  return res;
+}
+
 WriteResult MoQFrameWriter::writeSubscribeRequest(
     folly::IOBufQueue& writeBuf,
     const SubscribeRequest& subscribeRequest) const noexcept {
@@ -4927,6 +4942,7 @@ WriteResult MoQFrameWriter::writeSubscribeRequest(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onSubscribe, subscribeRequest);
   return size;
 }
 
@@ -5086,6 +5102,7 @@ WriteResult MoQFrameWriter::writeRequestUpdate(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onRequestUpdate, update);
   return size;
 }
 
@@ -5108,6 +5125,7 @@ WriteResult MoQFrameWriter::writeSubscribeOk(
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
   writeBuf.append(frameBuf.move());
+  notifySent(&MoQFrameObserver::onSubscribeOk, subscribeOk);
   return size;
 }
 
@@ -5166,6 +5184,7 @@ WriteResult MoQFrameWriter::writeMaxRequestID(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onMaxRequestID, maxRequestID);
   return size;
 }
 
@@ -5182,6 +5201,7 @@ WriteResult MoQFrameWriter::writeRequestsBlocked(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onRequestsBlocked, subscribesBlocked);
   return size;
 }
 
@@ -5198,6 +5218,7 @@ WriteResult MoQFrameWriter::writeUnsubscribe(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onUnsubscribe, unsubscribe);
   return size;
 }
 
@@ -5224,6 +5245,7 @@ WriteResult MoQFrameWriter::writePublishDone(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onPublishDone, publishDone);
   return size;
 }
 
@@ -5283,6 +5305,7 @@ WriteResult MoQFrameWriter::writePublish(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onPublish, publish);
   return size;
 }
 
@@ -5313,6 +5336,7 @@ WriteResult MoQFrameWriter::writePublishOk(
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
   writeBuf.append(frameBuf.move());
+  notifySent(&MoQFrameObserver::onPublishOk, publishOk);
   return size;
 }
 
@@ -5332,6 +5356,7 @@ WriteResult MoQFrameWriter::writePublishNamespace(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onPublishNamespace, publishNamespace);
   return size;
 }
 
@@ -5387,6 +5412,7 @@ WriteResult MoQFrameWriter::writeRequestOk(
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
   writeBuf.append(frameBuf.move());
+  notifySent(&MoQFrameObserver::onRequestOk, requestOk);
   return size;
 }
 
@@ -5408,6 +5434,7 @@ WriteResult MoQFrameWriter::writePublishNamespaceDone(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onPublishNamespaceDone, publishNamespaceDone);
   return size;
 }
 
@@ -5435,6 +5462,8 @@ WriteResult MoQFrameWriter::writePublishNamespaceCancel(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(
+      &MoQFrameObserver::onPublishNamespaceCancel, publishNamespaceCancel);
   return size;
 }
 
@@ -5457,6 +5486,7 @@ WriteResult MoQFrameWriter::writeTrackStatus(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onTrackStatus, trackStatus);
   return size;
 }
 
@@ -5503,6 +5533,7 @@ WriteResult MoQFrameWriter::writeGoaway(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onGoaway, goaway);
   return size;
 }
 
@@ -5549,6 +5580,7 @@ WriteResult MoQFrameWriter::writeSubscribeNamespace(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onSubscribeNamespace, subscribeNamespace);
   return size;
 }
 
@@ -5591,6 +5623,7 @@ WriteResult MoQFrameWriter::writeSubscribeTracks(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onSubscribeTracks, subscribeTracks);
   return size;
 }
 
@@ -5611,6 +5644,7 @@ WriteResult MoQFrameWriter::writePublishBlocked(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onPublishBlocked, publishBlocked);
   return size;
 }
 
@@ -5643,6 +5677,7 @@ WriteResult MoQFrameWriter::writeNamespace(
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
   writeBuf.append(frameBuf.move());
+  notifySent(&MoQFrameObserver::onNamespace, ns);
   return size;
 }
 
@@ -5660,6 +5695,7 @@ WriteResult MoQFrameWriter::writeNamespaceDone(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onNamespaceDone, namespaceDone);
   return size;
 }
 
@@ -5736,6 +5772,7 @@ WriteResult MoQFrameWriter::writeFetch(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onFetch, fetch);
   return size;
 }
 
@@ -5752,6 +5789,7 @@ WriteResult MoQFrameWriter::writeFetchCancel(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onFetchCancel, fetchCancel);
   return size;
 }
 
@@ -5781,6 +5819,7 @@ WriteResult MoQFrameWriter::writeFetchOk(
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
   writeBuf.append(frameBuf.move());
+  notifySent(&MoQFrameObserver::onFetchOk, fetchOk);
   return size;
 }
 
@@ -5846,6 +5885,7 @@ WriteResult MoQFrameWriter::writeRequestError(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  notifySent(&MoQFrameObserver::onRequestError, requestError);
   return size;
 }
 

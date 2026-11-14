@@ -398,10 +398,9 @@ folly::dynamic MLogger::formatLog(const MLogEvent& log) {
 }
 
 void MLogger::logClientSetup(
+    uint64_t streamId,
     const Setup& setup,
-    uint64_t version,
     ControlMessageType controlType) {
-  negotiatedMoQVersion_ = version;
   // Add Params to params vector
   std::vector<MOQTSetupParameter> params =
       convertSetupParamsToMoQTSetupParams(setup.params);
@@ -409,15 +408,13 @@ void MLogger::logClientSetup(
   auto msg = std::make_unique<MOQTSetupMessage>("client_setup");
   msg->setupOptions = std::move(params);
 
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(msg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(msg));
 }
 
 void MLogger::logServerSetup(
+    uint64_t streamId,
     const Setup& setup,
-    uint64_t version,
     ControlMessageType controlType) {
-  negotiatedMoQVersion_ = version;
   // Add Params to params vector
   std::vector<MOQTSetupParameter> params =
       convertSetupParamsToMoQTSetupParams(setup.params);
@@ -425,26 +422,29 @@ void MLogger::logServerSetup(
   auto msg = std::make_unique<MOQTSetupMessage>("server_setup");
   msg->setupOptions = std::move(params);
 
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(msg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(msg));
 }
 
-void MLogger::logGoaway(const Goaway& goaway, ControlMessageType controlType) {
+void MLogger::logGoaway(
+    uint64_t streamId,
+    const Goaway& goaway,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTGoaway>();
   baseMsg->newSessionUri.length = goaway.newSessionUri.length();
   baseMsg->timeout = goaway.timeout;
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logSubscribe(
+    uint64_t streamId,
     const SubscribeRequest& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
-  logSubscribe(req, std::vector<Parameter>{}, type, controlType);
+  logSubscribe(streamId, req, std::vector<Parameter>{}, type, controlType);
 }
 
 void MLogger::logSubscribe(
+    uint64_t streamId,
     const SubscribeRequest& req,
     const std::vector<Parameter>& fillRangeFilters,
     const MOQTByteStringType& type,
@@ -492,20 +492,18 @@ void MLogger::logSubscribe(
   }
   baseMsg->numberOfParameters = baseMsg->subscribeParameters.size();
 
-  logControlMessage(
-      controlType,
-      requestStreamId(req.requestID),
-      std::nullopt,
-      std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logSubscribeUpdate(
+    uint64_t streamId,
     const SubscribeUpdate& req,
     ControlMessageType controlType) {
-  logSubscribeUpdate(req, std::vector<Parameter>{}, controlType);
+  logSubscribeUpdate(streamId, req, std::vector<Parameter>{}, controlType);
 }
 
 void MLogger::logSubscribeUpdate(
+    uint64_t streamId,
     const SubscribeUpdate& req,
     const std::vector<Parameter>& fillRangeFilters,
     ControlMessageType controlType) {
@@ -546,14 +544,11 @@ void MLogger::logSubscribeUpdate(
   }
   baseMsg->numberOfParameters = baseMsg->parameters.size();
 
-  logControlMessage(
-      controlType,
-      requestStreamId(req.requestID),
-      std::nullopt,
-      std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logRequestOk(
+    uint64_t streamId,
     const RequestOk& req,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTRequestOk>();
@@ -577,14 +572,11 @@ void MLogger::logRequestOk(
   }
   baseMsg->numberOfParameters = baseMsg->parameters.size();
   baseMsg->trackProperties = convertExtensionsToProperties(req.trackProperties);
-  logControlMessage(
-      controlType,
-      requestStreamId(req.requestID),
-      std::nullopt,
-      std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logRequestError(
+    uint64_t streamId,
     const RequestError& req,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTRequestError>();
@@ -604,38 +596,31 @@ void MLogger::logRequestError(
         req.redirect->fullTrackName.trackName);
     baseMsg->redirect = std::move(redirect);
   }
-  logControlMessage(
-      controlType,
-      requestStreamId(req.requestID),
-      std::nullopt,
-      std::move(baseMsg));
-  clearRequestStreamId(req.requestID);
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logPublishStateNotify(
+    uint64_t streamId,
     const TrackRequestParameters& params,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTPublishStateNotify>();
   baseMsg->parameters = convertTrackParamsToMoQTParams(params);
   baseMsg->numberOfParameters = baseMsg->parameters.size();
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logUnsubscribe(
+    uint64_t streamId,
     const Unsubscribe& req,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTUnsubscribe>();
   baseMsg->subscribeId = req.requestID.value;
 
-  logControlMessage(
-      controlType,
-      requestStreamId(req.requestID),
-      std::nullopt,
-      std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logFetch(
+    uint64_t streamId,
     const Fetch& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
@@ -701,39 +686,35 @@ void MLogger::logFetch(
   }
   baseMsg->numberOfParameters = baseMsg->parameters.size();
 
-  logControlMessage(
-      controlType,
-      requestStreamId(req.requestID),
-      std::nullopt,
-      std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logFetchCancel(
+    uint64_t streamId,
     const FetchCancel& req,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTFetchCancel>();
   baseMsg->requestId = req.requestID.value;
 
-  logControlMessage(
-      controlType,
-      requestStreamId(req.requestID),
-      std::nullopt,
-      std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logPublishNamespaceOk(
+    uint64_t streamId,
     const PublishNamespaceOk& req,
     ControlMessageType controlType) {
-  logRequestOk(req, controlType);
+  logRequestOk(streamId, req, controlType);
 }
 
 void MLogger::logPublishNamespaceError(
+    uint64_t streamId,
     const PublishNamespaceError& req,
     ControlMessageType controlType) {
-  logRequestError(req, controlType);
+  logRequestError(streamId, req, controlType);
 }
 
 void MLogger::logPublishNamespaceCancel(
+    uint64_t streamId,
     const PublishNamespaceCancel& req,
     const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
@@ -749,11 +730,11 @@ void MLogger::logPublishNamespaceCancel(
     baseMsg->reason = req.reasonPhrase;
   }
 
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logTrackStatus(
+    uint64_t streamId,
     const TrackStatus& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
@@ -779,11 +760,11 @@ void MLogger::logTrackStatus(
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logSubscribeNamespace(
+    uint64_t streamId,
     const SubscribeNamespace& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
@@ -794,11 +775,11 @@ void MLogger::logSubscribeNamespace(
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logSubscribeTracks(
+    uint64_t streamId,
     const SubscribeTracks& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
@@ -811,33 +792,33 @@ void MLogger::logSubscribeTracks(
     baseMsg->parameters.emplace_back(namedValue("include_properties", 0));
   }
   baseMsg->numberOfParameters = baseMsg->parameters.size();
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logNamespace(
+    uint64_t streamId,
     const Namespace& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTNamespace>();
   baseMsg->trackNamespaceSuffix = convertTrackNamespaceToByteStringFormat(
       req.trackNamespaceSuffix.trackNamespace, type);
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logNamespaceDone(
+    uint64_t streamId,
     const NamespaceDone& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTNamespaceDone>();
   baseMsg->trackNamespaceSuffix = convertTrackNamespaceToByteStringFormat(
       req.trackNamespaceSuffix.trackNamespace, type);
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logPublishSkipped(
+    uint64_t streamId,
     const PublishBlocked& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
@@ -845,11 +826,11 @@ void MLogger::logPublishSkipped(
   baseMsg->trackNamespaceSuffix = convertTrackNamespaceToByteStringFormat(
       req.trackNamespaceSuffix.trackNamespace, type);
   baseMsg->trackName = convertTrackNameToByteStringFormat(req.trackName, type);
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logUnsubscribeNamespace(
+    uint64_t streamId,
     const UnsubscribeNamespace& req,
     const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
@@ -858,11 +839,11 @@ void MLogger::logUnsubscribeNamespace(
     baseMsg->requestId = req.requestID->value;
   }
 
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logSubscribeOk(
+    uint64_t streamId,
     const SubscribeOk& req,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTSubscribeOk>();
@@ -896,20 +877,20 @@ void MLogger::logSubscribeOk(
   baseMsg->numberOfParameters = baseMsg->parameters.size();
   baseMsg->trackProperties = convertExtensionsToProperties(req.extensions);
 
-  logControlMessage(
-      controlType,
-      requestStreamId(req.requestID),
-      std::nullopt,
-      std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logSubscribeError(
+    uint64_t streamId,
     const SubscribeError& req,
     ControlMessageType controlType) {
-  logRequestError(req, controlType);
+  logRequestError(streamId, req, controlType);
 }
 
-void MLogger::logFetchOk(const FetchOk& req, ControlMessageType controlType) {
+void MLogger::logFetchOk(
+    uint64_t streamId,
+    const FetchOk& req,
+    ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTFetchOk>();
   baseMsg->requestId = req.requestID.value;
   baseMsg->groupOrder = static_cast<uint8_t>(req.groupOrder);
@@ -920,20 +901,18 @@ void MLogger::logFetchOk(const FetchOk& req, ControlMessageType controlType) {
   baseMsg->numberOfParameters = baseMsg->parameters.size();
   baseMsg->trackProperties = convertExtensionsToProperties(req.extensions);
 
-  logControlMessage(
-      controlType,
-      requestStreamId(req.requestID),
-      std::nullopt,
-      std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logFetchError(
+    uint64_t streamId,
     const FetchError& req,
     ControlMessageType controlType) {
-  logRequestError(req, controlType);
+  logRequestError(streamId, req, controlType);
 }
 
 void MLogger::logPublishDone(
+    uint64_t streamId,
     const PublishDone& req,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTPublishDone>();
@@ -944,15 +923,11 @@ void MLogger::logPublishDone(
     baseMsg->reason = req.reasonPhrase;
   }
 
-  logControlMessage(
-      controlType,
-      requestStreamId(req.requestID),
-      std::nullopt,
-      std::move(baseMsg));
-  clearRequestStream(req.requestID);
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logPublishNamespaceDone(
+    uint64_t streamId,
     const PublishNamespaceDone& req,
     const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
@@ -961,46 +936,47 @@ void MLogger::logPublishNamespaceDone(
     baseMsg->requestId = req.requestID->value;
   }
 
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logTrackStatusOk(
+    uint64_t streamId,
     const TrackStatusOk& req,
     const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
-  logRequestOk(RequestOk::fromTrackStatusOk(req), controlType);
-  clearRequestStream(req.requestID);
+  logRequestOk(streamId, RequestOk::fromTrackStatusOk(req), controlType);
 }
 
 void MLogger::logTrackStatusError(
+    uint64_t streamId,
     const TrackStatusError& req,
     const MOQTByteStringType& /*type*/,
     ControlMessageType controlType) {
-  logRequestError(req, controlType);
+  logRequestError(streamId, req, controlType);
 }
 
 void MLogger::logMaxRequestId(
+    uint64_t streamId,
     const uint64_t requestId,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTMaxRequestId>();
   baseMsg->requestId = requestId;
 
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logRequestsBlocked(
+    uint64_t streamId,
     const uint64_t maximumRequestId,
     ControlMessageType controlType) {
   auto baseMsg = std::make_unique<MOQTRequestsBlocked>();
   baseMsg->maximumRequestId = maximumRequestId;
 
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logPublishNamespace(
+    uint64_t streamId,
     const PublishNamespace& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
@@ -1011,23 +987,25 @@ void MLogger::logPublishNamespace(
   baseMsg->numberOfParameters = req.params.size();
   baseMsg->parameters = convertTrackParamsToMoQTParams(req.params);
 
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logSubscribeNamespaceOk(
+    uint64_t streamId,
     const SubscribeNamespaceOk& req,
     ControlMessageType controlType) {
-  logRequestOk(req, controlType);
+  logRequestOk(streamId, req, controlType);
 }
 
 void MLogger::logSubscribeNamespaceError(
+    uint64_t streamId,
     const SubscribeNamespaceError& req,
     ControlMessageType controlType) {
-  logRequestError(req, controlType);
+  logRequestError(streamId, req, controlType);
 }
 
 void MLogger::logPublish(
+    uint64_t streamId,
     const PublishRequest& req,
     const MOQTByteStringType& type,
     ControlMessageType controlType) {
@@ -1061,23 +1039,25 @@ void MLogger::logPublish(
   baseMsg->numberOfParameters = baseMsg->parameters.size();
   baseMsg->trackProperties = convertExtensionsToProperties(req.extensions);
 
-  logControlMessage(
-      controlType, kFirstBidiStreamId, std::nullopt, std::move(baseMsg));
+  logControlMessage(controlType, streamId, std::nullopt, std::move(baseMsg));
 }
 
 void MLogger::logPublishOk(
+    uint64_t streamId,
     const PublishOk& req,
     ControlMessageType controlType) {
   const auto version = negotiatedMoQVersion_.value_or(kVersionDraftCurrent);
   logRequestOk(
+      streamId,
       RequestOk::fromPublishOk(req, getDraftMajorVersion(version)),
       controlType);
 }
 
 void MLogger::logPublishError(
+    uint64_t streamId,
     const PublishError& req,
     ControlMessageType controlType) {
-  logRequestError(req, controlType);
+  logRequestError(streamId, req, controlType);
 }
 
 std::vector<MOQTSetupParameter> MLogger::convertSetupParamsToMoQTSetupParams(
@@ -1291,37 +1271,6 @@ void MLogger::logStreamTypeSet(
   baseMsg.streamType = type;
   baseMsg.owner = owner;
   addStreamTypeSetLog(std::move(baseMsg));
-}
-
-void MLogger::setRequestStreamId(RequestID requestId, uint64_t streamId) {
-  requestStreamIds_[requestId.value] = streamId;
-}
-
-void MLogger::clearRequestStreamId(RequestID requestId) {
-  requestStreamIds_.erase(requestId.value);
-}
-
-void MLogger::clearRequestStream(RequestID requestId) {
-  auto request = requestStreamIds_.find(requestId.value);
-  if (request == requestStreamIds_.end()) {
-    return;
-  }
-  clearRequestStream(request->second);
-}
-
-void MLogger::clearRequestStream(uint64_t streamId) {
-  for (auto it = requestStreamIds_.begin(); it != requestStreamIds_.end();) {
-    if (it->second == streamId) {
-      it = requestStreamIds_.erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
-uint64_t MLogger::requestStreamId(RequestID requestId) const {
-  auto it = requestStreamIds_.find(requestId.value);
-  return it == requestStreamIds_.end() ? kFirstBidiStreamId : it->second;
 }
 
 void MLogger::logObjectDatagramCreated(
@@ -1690,6 +1639,215 @@ void MLogger::logControlMessage(
       break;
     }
   }
+}
+
+namespace {
+ControlMessageType toControlMessageType(MoQFrameObserver::Direction dir) {
+  return dir == MoQFrameObserver::Direction::Sent ? ControlMessageType::CREATED
+                                                  : ControlMessageType::PARSED;
+}
+constexpr auto kStr = MOQTByteStringType::STRING_VALUE;
+} // namespace
+
+void MLogger::logStreamOpen(Direction dir, uint64_t streamID, bool opens) {
+  if (opens) {
+    logStreamTypeSet(
+        streamID,
+        MOQTStreamType::CONTROL,
+        dir == Direction::Sent ? Owner::LOCAL : Owner::REMOTE);
+  }
+}
+
+bool MLogger::bidiRequests() const {
+  return negotiatedMoQVersion_ && useBidiRequestStreams(*negotiatedMoQVersion_);
+}
+
+void MLogger::onClientSetup(
+    Direction dir,
+    uint64_t streamID,
+    const ClientSetup& setup) {
+  logStreamOpen(dir, streamID, true);
+  logClientSetup(streamID, setup, toControlMessageType(dir));
+}
+
+void MLogger::onServerSetup(
+    Direction dir,
+    uint64_t streamID,
+    const ServerSetup& setup) {
+  // Before uni control streams, SERVER_SETUP answers on the client's stream.
+  logStreamOpen(
+      dir,
+      streamID,
+      negotiatedMoQVersion_ && useUniControlStreams(*negotiatedMoQVersion_));
+  logServerSetup(streamID, setup, toControlMessageType(dir));
+}
+
+void MLogger::onSubscribe(
+    Direction dir,
+    uint64_t streamID,
+    const SubscribeRequest& req) {
+  logStreamOpen(dir, streamID, bidiRequests());
+  logSubscribe(streamID, req, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onSubscribeOk(
+    Direction dir,
+    uint64_t streamID,
+    const SubscribeOk& ok) {
+  logSubscribeOk(streamID, ok, toControlMessageType(dir));
+}
+
+void MLogger::onRequestUpdate(
+    Direction dir,
+    uint64_t streamID,
+    const RequestUpdate& update) {
+  logSubscribeUpdate(streamID, update, toControlMessageType(dir));
+}
+
+void MLogger::onUnsubscribe(
+    Direction dir,
+    uint64_t streamID,
+    const Unsubscribe& unsub) {
+  logUnsubscribe(streamID, unsub, toControlMessageType(dir));
+}
+
+void MLogger::onPublishDone(
+    Direction dir,
+    uint64_t streamID,
+    const PublishDone& done) {
+  logPublishDone(streamID, done, toControlMessageType(dir));
+}
+
+void MLogger::onPublish(
+    Direction dir,
+    uint64_t streamID,
+    const PublishRequest& pub) {
+  logStreamOpen(dir, streamID, bidiRequests());
+  logPublish(streamID, pub, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onPublishOk(
+    Direction dir,
+    uint64_t streamID,
+    const PublishOk& ok) {
+  logPublishOk(streamID, ok, toControlMessageType(dir));
+}
+
+void MLogger::onFetch(Direction dir, uint64_t streamID, const Fetch& fetch) {
+  logStreamOpen(dir, streamID, bidiRequests());
+  logFetch(streamID, fetch, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onFetchOk(Direction dir, uint64_t streamID, const FetchOk& ok) {
+  logFetchOk(streamID, ok, toControlMessageType(dir));
+}
+
+void MLogger::onFetchCancel(
+    Direction dir,
+    uint64_t streamID,
+    const FetchCancel& cancel) {
+  logFetchCancel(streamID, cancel, toControlMessageType(dir));
+}
+
+void MLogger::onRequestOk(
+    Direction dir,
+    uint64_t streamID,
+    const RequestOk& ok) {
+  logRequestOk(streamID, ok, toControlMessageType(dir));
+}
+
+void MLogger::onRequestError(
+    Direction dir,
+    uint64_t streamID,
+    const RequestError& err) {
+  logRequestError(streamID, err, toControlMessageType(dir));
+}
+
+void MLogger::onTrackStatus(
+    Direction dir,
+    uint64_t streamID,
+    const TrackStatus& req) {
+  logStreamOpen(dir, streamID, bidiRequests());
+  logTrackStatus(streamID, req, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onPublishNamespace(
+    Direction dir,
+    uint64_t streamID,
+    const PublishNamespace& req) {
+  logStreamOpen(dir, streamID, bidiRequests());
+  logPublishNamespace(streamID, req, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onPublishNamespaceDone(
+    Direction dir,
+    uint64_t streamID,
+    const PublishNamespaceDone& req) {
+  logPublishNamespaceDone(streamID, req, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onPublishNamespaceCancel(
+    Direction dir,
+    uint64_t streamID,
+    const PublishNamespaceCancel& req) {
+  logPublishNamespaceCancel(streamID, req, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onSubscribeNamespace(
+    Direction dir,
+    uint64_t streamID,
+    const SubscribeNamespace& req) {
+  // SUBSCRIBE_NAMESPACE has its own stream from draft 16.
+  logStreamOpen(dir, streamID, true);
+  logSubscribeNamespace(streamID, req, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onNamespace(
+    Direction dir,
+    uint64_t streamID,
+    const Namespace& ns) {
+  logNamespace(streamID, ns, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onNamespaceDone(
+    Direction dir,
+    uint64_t streamID,
+    const NamespaceDone& done) {
+  logNamespaceDone(streamID, done, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onSubscribeTracks(
+    Direction dir,
+    uint64_t streamID,
+    const SubscribeTracks& req) {
+  logStreamOpen(dir, streamID, bidiRequests());
+  logSubscribeTracks(streamID, req, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onPublishBlocked(
+    Direction dir,
+    uint64_t streamID,
+    const PublishBlocked& req) {
+  logPublishSkipped(streamID, req, kStr, toControlMessageType(dir));
+}
+
+void MLogger::onGoaway(Direction dir, uint64_t streamID, const Goaway& goaway) {
+  logGoaway(streamID, goaway, toControlMessageType(dir));
+}
+
+void MLogger::onMaxRequestID(
+    Direction dir,
+    uint64_t streamID,
+    const MaxRequestID& max) {
+  logMaxRequestId(streamID, max.requestID.value, toControlMessageType(dir));
+}
+
+void MLogger::onRequestsBlocked(
+    Direction dir,
+    uint64_t streamID,
+    const RequestsBlocked& req) {
+  logRequestsBlocked(
+      streamID, req.maxRequestID.value, toControlMessageType(dir));
 }
 
 } // namespace moxygen

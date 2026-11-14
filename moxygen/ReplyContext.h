@@ -12,6 +12,8 @@
 
 namespace moxygen {
 
+class MoQFrameWriter;
+
 // Generic write destination for request responses.
 // Abstracts control stream vs bidi stream writing.
 class ReplyContext {
@@ -22,6 +24,9 @@ class ReplyContext {
 
   // Get the buffer to serialize frames into
   virtual folly::IOBufQueue& writeBuf() = 0;
+
+  // Serializes frames for the stream this context writes to.
+  virtual const MoQFrameWriter& writer() const = 0;
 
   // Flush serialized data to the transport, optionally with FIN
   virtual void flush(bool fin = false) = 0;

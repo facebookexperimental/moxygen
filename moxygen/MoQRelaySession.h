@@ -13,10 +13,8 @@ namespace moxygen {
 
 class SeparateStreamSubNsReply : public SubNSReply {
  public:
-  SeparateStreamSubNsReply(
-      MoQFrameWriter& moqFrameWriter,
-      std::shared_ptr<ReplyContext> replyContext)
-      : SubNSReply(moqFrameWriter, std::move(replyContext)) {}
+  explicit SeparateStreamSubNsReply(std::shared_ptr<ReplyContext> replyContext)
+      : SubNSReply(std::move(replyContext)) {}
 
   ~SeparateStreamSubNsReply() = default;
 
@@ -101,14 +99,12 @@ class MoQRelaySession : public MoQSession {
 
   std::shared_ptr<SubNSReply> getSubNsReply(
       std::shared_ptr<ReplyContext> replyContext) override {
-    return std::make_shared<SeparateStreamSubNsReply>(
-        moqFrameWriter_, std::move(replyContext));
+    return std::make_shared<SeparateStreamSubNsReply>(std::move(replyContext));
   }
 
   std::shared_ptr<SubscribeTracksReply> getSubTracksReply(
       std::shared_ptr<ReplyContext> replyContext) override {
-    return std::make_shared<SubscribeTracksReply>(
-        moqFrameWriter_, std::move(replyContext));
+    return std::make_shared<SubscribeTracksReply>(std::move(replyContext));
   }
 
  private:

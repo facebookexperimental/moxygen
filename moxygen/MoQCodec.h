@@ -126,6 +126,10 @@ class MoQControlCodec : public MoQCodec {
     callback_ = callback;
   }
 
+  void setFrameObserver(std::shared_ptr<MoQFrameObserver> observer) {
+    frameObserver_ = std::move(observer);
+  }
+
   // If ParseResult::BLOCKED is returned, must call onIngress again to restart
   ParseResult onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) override;
 
@@ -213,8 +217,20 @@ class MoQControlCodec : public MoQCodec {
 
   folly::Expected<folly::Unit, ErrorCode> parseFrame(folly::io::Cursor& cursor);
 
+  template <typename Msg>
+  void notifyReceived(
+      void (MoQFrameObserver::*
+                hook)(MoQFrameObserver::Direction, uint64_t, const Msg&),
+      const Msg& msg) {
+    if (frameObserver_) {
+      ((*frameObserver_).*hook)(
+          MoQFrameObserver::Direction::Received, streamId_, msg);
+    }
+  }
+
   Direction dir_;
   ControlCallback* callback_{nullptr};
+  std::shared_ptr<MoQFrameObserver> frameObserver_;
   FrameType curFrameType_;
   size_t curFrameLength_{0};
   enum class ParseState {

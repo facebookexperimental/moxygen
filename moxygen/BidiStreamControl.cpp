@@ -16,13 +16,14 @@ BidiStreamControl::BidiStreamControl(
     folly::CancellationToken sessionShutdownToken,
     uint64_t negotiatedVersion,
     bool finIsCancellation,
-    std::shared_ptr<EgressAckTracker> egressTracker)
+    std::shared_ptr<EgressAckTracker> egressTracker,
+    MoQFrameWriter writer)
     : writeHandle_(writeHandle),
-      streamId_(writeHandle ? writeHandle->getID() : 0),
       sessionShutdownToken_(std::move(sessionShutdownToken)),
       negotiatedVersion_(negotiatedVersion),
       finIsCancellation_(finIsCancellation),
-      egressTracker_(std::move(egressTracker)) {
+      egressTracker_(std::move(egressTracker)),
+      writer_(std::move(writer)) {
   if (writeHandle_) {
     writeCancelCb_.emplace(
         writeHandle_->getCancelToken(), [this] { onPeerStopSending(); });

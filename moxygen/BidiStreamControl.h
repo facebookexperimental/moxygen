@@ -11,6 +11,7 @@
 #include <folly/io/IOBufQueue.h>
 #include <proxygen/lib/http/webtransport/WebTransport.h>
 #include <moxygen/EgressAckTracker.h>
+#include <moxygen/MoQFramer.h>
 #include <moxygen/MoQTypes.h>
 #include <moxygen/ReplyContext.h>
 #include <cstdint>
@@ -34,7 +35,8 @@ class BidiStreamControl {
       folly::CancellationToken sessionShutdownToken,
       uint64_t negotiatedVersion,
       bool finIsCancellation,
-      std::shared_ptr<EgressAckTracker> egressTracker);
+      std::shared_ptr<EgressAckTracker> egressTracker,
+      MoQFrameWriter writer);
 
   ~BidiStreamControl() = default;
   BidiStreamControl(const BidiStreamControl&) = delete;
@@ -42,13 +44,14 @@ class BidiStreamControl {
   BidiStreamControl(BidiStreamControl&&) = delete;
   BidiStreamControl& operator=(BidiStreamControl&&) = delete;
 
+  // Serializes control frames for this stream.
+  const MoQFrameWriter& writer() const {
+    return writer_;
+  }
+
   // null after peer STOP_SENDING or local cancel(); callers must null-check.
   proxygen::WebTransport::StreamWriteHandle* writeHandle() const {
     return writeHandle_;
-  }
-
-  uint64_t streamId() const {
-    return streamId_;
   }
 
   folly::CancellationToken getReadCancelToken() const {
@@ -151,7 +154,6 @@ class BidiStreamControl {
   void onLocalWriteClose();
 
   proxygen::WebTransport::StreamWriteHandle* writeHandle_{nullptr};
-  uint64_t streamId_{0};
   folly::CancellationSource readCancelSource_;
   folly::CancellationSource peerCancelSource_;
   // Used to suppress firePeerTermination() during shutdown; cleanup() can't
@@ -168,6 +170,7 @@ class BidiStreamControl {
   bool finIsCancellation_{false};
   bool readLoopExited_{false};
   std::shared_ptr<EgressAckTracker> egressTracker_;
+  MoQFrameWriter writer_;
 };
 
 // ReplyContext that writes to the bidi reply stream wrapped by a
@@ -184,6 +187,9 @@ class BidiStreamReplyContext : public ReplyContext {
   }
   void flush(bool fin = false) override;
   void cancel(ResetStreamErrorCode code) override;
+  const MoQFrameWriter& writer() const override {
+    return control_->writer();
+  }
 
  private:
   folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};

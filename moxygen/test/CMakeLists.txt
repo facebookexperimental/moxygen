@@ -103,6 +103,7 @@ moxygen_add_test(TARGET MoQSessionTests
   SOURCES
     MoQSessionFetchTests.cpp
     MoQSessionGroupRankTests.cpp
+    MoQSessionMLogTests.cpp
     MoQSessionObjectDeliveryTests.cpp
     MoQSessionPublishNamespaceTests.cpp
     MoQSessionPublishTests.cpp

@@ -33,6 +33,8 @@ namespace fs = std::filesystem;
 namespace moxygen {
 namespace {
 
+constexpr uint64_t kTestControlStreamId = 2;
+
 enum class ObjectEvent {
   DATAGRAM_CREATED,
   DATAGRAM_PARSED,
@@ -630,7 +632,10 @@ TEST_F(FileMLoggerTest, PublishNamespaceDoneByRequestId) {
   PublishNamespaceDone done;
   done.requestID = RequestID(7);
   logger.logPublishNamespaceDone(
-      done, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+      kTestControlStreamId,
+      done,
+      MOQTByteStringType::STRING_VALUE,
+      ControlMessageType::PARSED);
   logger.outputLogs();
 
   const auto event = parseSingleEvent(path);
@@ -646,7 +651,10 @@ TEST_F(FileMLoggerTest, PublishNamespaceCancelByRequestId) {
   cancel.requestID = RequestID(9);
   cancel.errorCode = RequestErrorCode::INTERNAL_ERROR;
   logger.logPublishNamespaceCancel(
-      cancel, MOQTByteStringType::STRING_VALUE, ControlMessageType::PARSED);
+      kTestControlStreamId,
+      cancel,
+      MOQTByteStringType::STRING_VALUE,
+      ControlMessageType::PARSED);
   logger.outputLogs();
 
   const auto event = parseSingleEvent(path);
@@ -779,7 +787,8 @@ TEST_F(FileMLoggerTest, LatestSetupAndFillParameterSchemas) {
                   .insertParam(Parameter(
                       folly::to_underlying(SetupKey::PATH), "/meeting"))
                   .hasValue());
-  setupLogger.logClientSetup(setup, 20, ControlMessageType::CREATED);
+  setupLogger.logClientSetup(
+      kTestControlStreamId, setup, ControlMessageType::CREATED);
   setupLogger.outputLogs();
 
   const auto setupEvent = parseSingleEvent(setupPath);
@@ -812,7 +821,7 @@ TEST_F(FileMLoggerTest, LatestSetupAndFillParameterSchemas) {
                           TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT),
                       14))
                   .hasValue());
-  subscribeLogger.logSubscribe(subscribe);
+  subscribeLogger.logSubscribe(kTestControlStreamId, subscribe);
   subscribeLogger.outputLogs();
 
   const auto subscribeEvent = parseSingleEvent(subscribePath);
@@ -853,7 +862,7 @@ TEST_F(FileMLoggerTest, LatestRangeFilterParameterSchema) {
       std::string(
           "\x07\x02\x03\x02\x05\x05",
           6)); // set 7, property 2, ranges 3-5 and 10-15
-  logger.logRequestOk(ok);
+  logger.logRequestOk(kTestControlStreamId, ok);
   logger.outputLogs();
 
   const auto event = parseSingleEvent(path);
@@ -881,7 +890,7 @@ TEST_F(FileMLoggerTest, LatestFillParametersPreserveRangeFilters) {
       Parameter(0x27, std::string()),
       Parameter(0x28, std::string("\x04\x02\x05\x03", 4)),
   };
-  logger.logSubscribe(subscribe, fillRangeFilters);
+  logger.logSubscribe(kTestControlStreamId, subscribe, fillRangeFilters);
   logger.outputLogs();
 
   const auto event = parseSingleEvent(path);
@@ -914,7 +923,9 @@ TEST_F(FileMLoggerTest, LatestFillParametersPreserveRangeFilters) {
   InspectableMLogger updateLogger;
   SubscribeUpdate update;
   updateLogger.logSubscribeUpdate(
-      update, {Parameter(0x26, std::string("\x05\x0b", 2))});
+      kTestControlStreamId,
+      update,
+      {Parameter(0x26, std::string("\x05\x0b", 2))});
   const auto updateEvent = updateLogger.event(0);
   EXPECT_EQ(
       updateEvent["data"]["message"]["parameters"][0]["name"],
@@ -932,7 +943,8 @@ TEST_F(FileMLoggerTest, LatestResponseAndNamespaceControlMessages) {
   error.redirect = Redirect{
       "https://new.example/moq",
       FullTrackName{TrackNamespace({"replacement"}), "video"}};
-  errorLogger.logSubscribeError(error, ControlMessageType::PARSED);
+  errorLogger.logSubscribeError(
+      kTestControlStreamId, error, ControlMessageType::PARSED);
   errorLogger.outputLogs();
 
   const auto errorEvent = parseSingleEvent(errorPath);
@@ -951,7 +963,8 @@ TEST_F(FileMLoggerTest, LatestResponseAndNamespaceControlMessages) {
   RequestOk ok;
   ok.requestID = RequestID(19);
   ok.trackProperties.insertMutableExtension(Extension(2, 20));
-  okLogger.logPublishNamespaceOk(ok, ControlMessageType::PARSED);
+  okLogger.logPublishNamespaceOk(
+      kTestControlStreamId, ok, ControlMessageType::PARSED);
   okLogger.outputLogs();
 
   const auto okEvent = parseSingleEvent(okPath);

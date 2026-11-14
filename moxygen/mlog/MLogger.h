@@ -11,23 +11,22 @@
 #include "folly/json/dynamic.h"
 #include "folly/json/json.h"
 #include "quic/codec/QuicConnectionId.h"
+#include "moxygen/MoQFrameObserver.h"
 #include "moxygen/MoQTypes.h"
 #include "moxygen/mlog/MLogEvents.h"
 #include "moxygen/mlog/MLogTypes.h"
 
 namespace moxygen {
 
-// Client-Initiated Bidirectional Stream ID
-const uint64_t kFirstBidiStreamId = 0;
 const std::string kDefaultLoggerFilePath = "./mlog.txt";
 
 // Abstract base class for MoQ logging.
 // Subclasses implement outputLogs() to emit logs to a specific backend
 // (e.g., FileMLogger for file output, ScubaMLogger for Scuba).
-class MLogger {
+class MLogger : public MoQFrameObserver {
  public:
   explicit MLogger(VantagePoint vantagePoint) : vantagePoint_(vantagePoint) {}
-  virtual ~MLogger() = default;
+  ~MLogger() override = default;
 
   MOQTSetupMessage createSetupControlMessage(
       const std::string& setupType,
@@ -68,18 +67,53 @@ class MLogger {
   // backend
   virtual void outputLogs() = 0;
 
+  void onClientSetup(Direction, uint64_t, const ClientSetup&) override;
+  void onServerSetup(Direction, uint64_t, const ServerSetup&) override;
+  void onSubscribe(Direction, uint64_t, const SubscribeRequest&) override;
+  void onSubscribeOk(Direction, uint64_t, const SubscribeOk&) override;
+  void onRequestUpdate(Direction, uint64_t, const RequestUpdate&) override;
+  void onUnsubscribe(Direction, uint64_t, const Unsubscribe&) override;
+  void onPublishDone(Direction, uint64_t, const PublishDone&) override;
+  void onPublish(Direction, uint64_t, const PublishRequest&) override;
+  void onPublishOk(Direction, uint64_t, const PublishOk&) override;
+  void onFetch(Direction, uint64_t, const Fetch&) override;
+  void onFetchOk(Direction, uint64_t, const FetchOk&) override;
+  void onFetchCancel(Direction, uint64_t, const FetchCancel&) override;
+  void onRequestOk(Direction, uint64_t, const RequestOk&) override;
+  void onRequestError(Direction, uint64_t, const RequestError&) override;
+  void onTrackStatus(Direction, uint64_t, const TrackStatus&) override;
+  void onPublishNamespace(Direction, uint64_t, const PublishNamespace&)
+      override;
+  void onPublishNamespaceDone(Direction, uint64_t, const PublishNamespaceDone&)
+      override;
+  void onPublishNamespaceCancel(
+      Direction,
+      uint64_t,
+      const PublishNamespaceCancel&) override;
+  void onSubscribeNamespace(Direction, uint64_t, const SubscribeNamespace&)
+      override;
+  void onNamespace(Direction, uint64_t, const Namespace&) override;
+  void onNamespaceDone(Direction, uint64_t, const NamespaceDone&) override;
+  void onSubscribeTracks(Direction, uint64_t, const SubscribeTracks&) override;
+  void onPublishBlocked(Direction, uint64_t, const PublishBlocked&) override;
+  void onGoaway(Direction, uint64_t, const Goaway&) override;
+  void onMaxRequestID(Direction, uint64_t, const MaxRequestID&) override;
+  void onRequestsBlocked(Direction, uint64_t, const RequestsBlocked&) override;
+
   void logClientSetup(
+      uint64_t streamId,
       const Setup& setup,
-      uint64_t version,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logServerSetup(
+      uint64_t streamId,
       const Setup& setup,
-      uint64_t version,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logGoaway(
+      uint64_t streamId,
       const Goaway& goaway,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribe(
+      uint64_t streamId,
       const SubscribeRequest& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
@@ -87,125 +121,160 @@ class MLogger {
   // sidecar until moxygen's FillParameters model carries these draft-20
   // fields itself.
   void logSubscribe(
+      uint64_t streamId,
       const SubscribeRequest& req,
       const std::vector<Parameter>& fillRangeFilters,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeUpdate(
+      uint64_t streamId,
       const SubscribeUpdate& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeUpdate(
+      uint64_t streamId,
       const SubscribeUpdate& req,
       const std::vector<Parameter>& fillRangeFilters,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logRequestOk(
+      uint64_t streamId,
       const RequestOk& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logRequestError(
+      uint64_t streamId,
       const RequestError& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublishStateNotify(
+      uint64_t streamId,
       const TrackRequestParameters& params,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logUnsubscribe(
+      uint64_t streamId,
       const Unsubscribe& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logFetch(
+      uint64_t streamId,
       const Fetch& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logFetchCancel(
+      uint64_t streamId,
       const FetchCancel& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublishNamespaceOk(
+      uint64_t streamId,
       const PublishNamespaceOk& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublishNamespaceError(
+      uint64_t streamId,
       const PublishNamespaceError& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublishNamespaceCancel(
+      uint64_t streamId,
       const PublishNamespaceCancel& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logTrackStatus(
+      uint64_t streamId,
       const TrackStatus& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeNamespace(
+      uint64_t streamId,
       const SubscribeNamespace& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeTracks(
+      uint64_t streamId,
       const SubscribeTracks& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logNamespace(
+      uint64_t streamId,
       const Namespace& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logNamespaceDone(
+      uint64_t streamId,
       const NamespaceDone& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublishSkipped(
+      uint64_t streamId,
       const PublishBlocked& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logUnsubscribeNamespace(
+      uint64_t streamId,
       const UnsubscribeNamespace& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeOk(
+      uint64_t streamId,
       const SubscribeOk& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeError(
+      uint64_t streamId,
       const SubscribeError& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logFetchOk(
+      uint64_t streamId,
       const FetchOk& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logFetchError(
+      uint64_t streamId,
       const FetchError& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublishDone(
+      uint64_t streamId,
       const PublishDone& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logMaxRequestId(
+      uint64_t streamId,
       const uint64_t requestId,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logRequestsBlocked(
+      uint64_t streamId,
       const uint64_t maximumRequestId,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublishNamespace(
+      uint64_t streamId,
       const PublishNamespace& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublishNamespaceDone(
+      uint64_t streamId,
       const PublishNamespaceDone& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logTrackStatusOk(
+      uint64_t streamId,
       const TrackStatusOk& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logTrackStatusError(
+      uint64_t streamId,
       const TrackStatusError& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeNamespaceOk(
+      uint64_t streamId,
       const SubscribeNamespaceOk& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logSubscribeNamespaceError(
+      uint64_t streamId,
       const SubscribeNamespaceError& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublish(
+      uint64_t streamId,
       const PublishRequest& req,
       const MOQTByteStringType& type = MOQTByteStringType::STRING_VALUE,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublishOk(
+      uint64_t streamId,
       const PublishOk& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
   void logPublishError(
+      uint64_t streamId,
       const PublishError& req,
       ControlMessageType controlType = ControlMessageType::CREATED);
 
@@ -213,10 +282,6 @@ class MLogger {
       uint64_t streamId,
       MOQTStreamType type,
       std::optional<Owner> owner);
-  void setRequestStreamId(RequestID requestId, uint64_t streamId);
-  void clearRequestStreamId(RequestID requestId);
-  void clearRequestStream(RequestID requestId);
-  void clearRequestStream(uint64_t streamId);
   void logObjectDatagramCreated(
       TrackAlias trackAlias,
       const ObjectHeader& header,
@@ -326,7 +391,9 @@ class MLogger {
       uint64_t streamId,
       const std::optional<uint64_t>& length,
       std::unique_ptr<MOQTBaseControlMessage> message);
-  uint64_t requestStreamId(RequestID requestId) const;
+  // Logs stream_type_set for a frame that opens its control stream.
+  void logStreamOpen(Direction dir, uint64_t streamID, bool opens);
+  bool bidiRequests() const;
   std::vector<MOQTProperty> convertExtensionsToProperties(
       const Extensions& extensions);
 
@@ -339,7 +406,6 @@ class MLogger {
 
   std::unordered_map<uint64_t, ObjectStreamState> createdObjectStreamState_;
   std::unordered_map<uint64_t, ObjectStreamState> parsedObjectStreamState_;
-  std::unordered_map<uint64_t, uint64_t> requestStreamIds_;
 };
 
 } // namespace moxygen
