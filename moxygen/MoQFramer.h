@@ -38,6 +38,14 @@ enum class ParameterValueEncoding {
   LengthPrefixed,
 };
 
+// Whether a message is being parsed from the peer or written to it. A limit
+// that each endpoint advertises to its peer bounds the two directions
+// separately.
+enum class ParameterDirection : uint8_t {
+  Received,
+  Sent,
+};
+
 // Before draft 18 a key's parity sets its encoding: an even key is usable only
 // as Uint8 or Varint, an odd key only as LengthPrefixed, and a Uint8 is not
 // range-checked.
@@ -50,8 +58,11 @@ struct MessageParameterExtension {
   std::vector<FrameType> requiredFrames;
   // False allows at most one per message.
   bool repeatable{true};
-  // Optional check of each value. Throwing counts as invalid.
-  std::function<bool(uint64_t version, const Parameter&)> validate;
+  // Optional check of each value. Throwing counts as invalid. `direction` says
+  // whether the value was parsed from the peer or is being written to it.
+  std::function<
+      bool(uint64_t version, const Parameter&, ParameterDirection direction)>
+      validate;
 
   // True if allowedFrames or requiredFrames lists frameType; an empty
   // allowedFrames does not count.

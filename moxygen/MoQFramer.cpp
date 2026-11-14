@@ -159,7 +159,8 @@ bool satisfiesMessageParameterRules(
     uint64_t version,
     moxygen::FrameType frameType,
     const std::shared_ptr<const moxygen::MessageParameterExtensions>&
-        extensions) {
+        extensions,
+    moxygen::ParameterDirection direction) {
   if (!extensions || extensions->empty()) {
     return true;
   }
@@ -176,7 +177,7 @@ bool satisfiesMessageParameterRules(
     }
     if (rule->validate) {
       try {
-        if (!rule->validate(version, parameter)) {
+        if (!rule->validate(version, parameter, direction)) {
           return false;
         }
       } catch (const std::exception& ex) {
@@ -2017,7 +2018,8 @@ folly::Expected<folly::Unit, ErrorCode> MoQFrameParser::parseTrackRequestParams(
           params,
           version,
           params.getFrameType(),
-          messageParameterExtensions_)) {
+          messageParameterExtensions_,
+          ParameterDirection::Received)) {
     XLOG(ERR) << "parseTrackRequestParams: extension parameter rule violated";
     return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
@@ -4348,7 +4350,8 @@ void MoQFrameWriter::writeTrackRequestParams(
           allParams,
           *version_,
           params.getFrameType(),
-          messageParameterExtensions_)) {
+          messageParameterExtensions_,
+          ParameterDirection::Sent)) {
     error = true;
     return;
   }
