@@ -37,6 +37,22 @@ class MoQCodec {
     frameObserver_ = std::move(observer);
   }
 
+  // The peer finished this codec's stream.
+  void reportStreamFin() {
+    if (frameObserver_) {
+      frameObserver_->onStreamFin(
+          MoQFrameObserver::Direction::Received, streamId_);
+    }
+  }
+
+  // The peer reset this codec's stream.
+  void reportResetStream(uint64_t errorCode) {
+    if (frameObserver_) {
+      frameObserver_->onResetStream(
+          MoQFrameObserver::Direction::Received, streamId_, errorCode);
+    }
+  }
+
   void initializeVersion(uint64_t version) {
     negotiatedVersion_ = version;
     moqFrameParser_.initializeVersion(version);

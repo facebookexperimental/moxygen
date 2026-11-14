@@ -7,7 +7,10 @@
 #pragma once
 
 #include <unordered_map>
+#include <vector>
+#include "folly/Function.h"
 #include "folly/SocketAddress.h"
+#include "folly/container/F14Map.h"
 #include "folly/json/dynamic.h"
 #include "folly/json/json.h"
 #include "quic/codec/QuicConnectionId.h"
@@ -118,6 +121,11 @@ class MLogger : public MoQFrameObserver {
       uint64_t,
       uint64_t,
       FetchRangeEnd) override;
+  void onPaddingDatagram(Direction, uint64_t paddingLength) override;
+  void onDatagramObject(Direction, TrackAlias, const ObjectHeader&, bool)
+      override;
+  void onDataStreamBound(uint64_t pendingKey, uint64_t streamID) override;
+  void onDataStreamAbandoned(uint64_t pendingKey) override;
 
   void logClientSetup(
       uint64_t streamId,
@@ -371,6 +379,10 @@ class MLogger : public MoQFrameObserver {
   void setExperiments(const std::vector<std::string>& experiments);
 
  protected:
+  size_t pendingDataStreamCount() const {
+    return pendingDataStreams_.size();
+  }
+
   // Core members accessible to subclasses
   VantagePoint vantagePoint_;
   std::vector<MLogEvent> logs_;
@@ -419,6 +431,28 @@ class MLogger : public MoQFrameObserver {
 
   std::unordered_map<uint64_t, ObjectStreamState> createdObjectStreamState_;
   std::unordered_map<uint64_t, ObjectStreamState> parsedObjectStreamState_;
+  // Queues hook(dir, stream, args...) until the key is bound. Returns false
+  // when stream is a stream ID, so the caller logs it now.
+  template <typename Hook, typename... Args>
+  bool holdIfPending(
+      DataStream stream,
+      Hook hook,
+      Direction dir,
+      const Args&... args) {
+    if (stream.kind != DataStream::Kind::PendingKey) {
+      return false;
+    }
+    pendingDataStreams_[stream.value].emplace_back(
+        [this, hook, dir, args...](uint64_t streamID) {
+          (this->*hook)(dir, DataStream{streamID}, args...);
+        });
+    return true;
+  }
+
+  // Holds records for frames serialized before their stream existed, keyed by
+  // pending key. Each one is logged with the stream ID once the key is bound.
+  folly::F14FastMap<uint64_t, std::vector<folly::Function<void(uint64_t)>>>
+      pendingDataStreams_;
 };
 
 } // namespace moxygen

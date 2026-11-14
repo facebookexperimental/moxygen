@@ -22,6 +22,30 @@ class RecordingMLogger : public MLogger {
   explicit RecordingMLogger(VantagePoint vp) : MLogger(vp) {}
   void outputLogs() override {}
 
+  struct StreamSignal {
+    bool reset; // false: STOP_SENDING
+    Direction dir;
+    uint64_t streamID;
+    uint64_t errorCode;
+  };
+  std::vector<StreamSignal> signals;
+
+  void onResetStream(Direction dir, uint64_t streamID, uint64_t code) override {
+    signals.push_back({true, dir, streamID, code});
+  }
+  void onStopSending(Direction dir, uint64_t streamID, uint64_t code) override {
+    signals.push_back({false, dir, streamID, code});
+  }
+
+  std::vector<std::pair<Direction, uint64_t>> fins;
+  void onStreamFin(Direction dir, uint64_t streamID) override {
+    fins.emplace_back(dir, streamID);
+  }
+  bool hasFin(Direction dir, uint64_t streamID) const {
+    return std::find(fins.begin(), fins.end(), std::make_pair(dir, streamID)) !=
+        fins.end();
+  }
+
   std::vector<Owner> controlStreamOwners(uint64_t streamID) const {
     std::vector<Owner> owners;
     for (const auto& event : logs_) {
@@ -32,6 +56,15 @@ class RecordingMLogger : public MLogger {
       }
     }
     return owners;
+  }
+
+  const StreamSignal* findSignal(bool reset, Direction dir) const {
+    for (const auto& s : signals) {
+      if (s.reset == reset && s.dir == dir) {
+        return &s;
+      }
+    }
+    return nullptr;
   }
 
   size_t countControlMessages(const std::string& type) const {
@@ -548,6 +581,150 @@ INSTANTIATE_TEST_SUITE_P(
     MLogReplyTest,
     MLogReplyTest,
     testing::ValuesIn(getSupportedVersionParams()));
+
+// === STREAM SIGNALS ===
+
+CO_TEST_P_X(MoQSessionTest, DataStreamResetIsObservedOnBothSides) {
+  auto clientLogger = std::make_shared<RecordingMLogger>(VantagePoint::CLIENT);
+  auto serverLogger = std::make_shared<RecordingMLogger>(VantagePoint::SERVER);
+  clientSession_->setLogger(clientLogger);
+  serverSession_->setLogger(serverLogger);
+  co_await publishValidationTest(
+      [](const auto& sub, auto pub, auto sgp, auto sgc) {
+        EXPECT_CALL(*sgc, beginObject(1, 100, _, _))
+            .WillOnce(
+                testing::Return(
+                    folly::Expected<folly::Unit, MoQPublishError>(
+                        folly::unit)));
+        EXPECT_TRUE(sgp->beginObject(1, 100, test::makeBuf(10)));
+        sgp->reset(ResetStreamErrorCode::INTERNAL_ERROR);
+        pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+      });
+
+  using Dir = MoQFrameObserver::Direction;
+  const auto* sent = serverLogger->findSignal(true, Dir::Sent);
+  const auto* received = clientLogger->findSignal(true, Dir::Received);
+  CO_ASSERT_NE(sent, nullptr);
+  CO_ASSERT_NE(received, nullptr);
+  EXPECT_EQ(sent->streamID, serverObjectStreamId());
+  EXPECT_EQ(received->streamID, sent->streamID);
+  EXPECT_EQ(received->errorCode, sent->errorCode);
+}
+
+CO_TEST_P_X(Draft18Test, UnsubscribeResetsTheRequestStream) {
+  auto clientLogger = std::make_shared<RecordingMLogger>(VantagePoint::CLIENT);
+  auto serverLogger = std::make_shared<RecordingMLogger>(VantagePoint::SERVER);
+  clientSession_->setLogger(clientLogger);
+  serverSession_->setLogger(serverLogger);
+  co_await setupMoQSession();
+  std::shared_ptr<TrackConsumer> publisher;
+  expectSubscribe([&publisher](auto sub, auto pub) -> TaskSubscribeResult {
+    publisher = pub;
+    co_return makeSubscribeOkResult(sub);
+  });
+  auto handle = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  CO_ASSERT_TRUE(handle.hasValue());
+  auto requestStream = clientLogger->streamOf("subscribe", /*created=*/true);
+  CO_ASSERT_TRUE(requestStream.has_value());
+
+  handle.value()->unsubscribe();
+  co_await rescheduleN(4);
+
+  using Dir = MoQFrameObserver::Direction;
+  auto expectOnRequestStream = [&](const auto* signal, const char* what) {
+    EXPECT_NE(signal, nullptr) << what;
+    if (signal) {
+      EXPECT_EQ(signal->streamID, *requestStream) << what;
+    }
+  };
+  expectOnRequestStream(
+      clientLogger->findSignal(true, Dir::Sent), "client sent reset");
+  expectOnRequestStream(
+      serverLogger->findSignal(true, Dir::Received), "server received reset");
+  expectOnRequestStream(
+      clientLogger->findSignal(false, Dir::Sent), "client sent STOP_SENDING");
+  expectOnRequestStream(
+      serverLogger->findSignal(false, Dir::Received),
+      "server received STOP_SENDING");
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(Draft18Test, ReceivedPaddingDatagramReportsItsLength) {
+  struct PaddingLogger : RecordingMLogger {
+    using RecordingMLogger::RecordingMLogger;
+    std::vector<uint64_t> lengths;
+    void onPaddingDatagram(Direction dir, uint64_t paddingLength) override {
+      if (dir == Direction::Received) {
+        lengths.push_back(paddingLength);
+      }
+    }
+  };
+  auto observer = std::make_shared<PaddingLogger>(VantagePoint::CLIENT);
+  clientSession_->setLogger(observer);
+  co_await setupMoQSession();
+  MoQFrameWriter writer;
+  writer.initializeVersion(kVersionDraft18);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  CO_ASSERT_TRUE(writer.writePaddingDatagram(writeBuf, 8).hasValue());
+
+  clientSession_->onDatagram(writeBuf.move());
+
+  EXPECT_EQ(observer->lengths, std::vector<uint64_t>{8});
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(Draft18Test, TrackStatusFinIsObservedOnBothSides) {
+  auto clientLogger = std::make_shared<RecordingMLogger>(VantagePoint::CLIENT);
+  auto serverLogger = std::make_shared<RecordingMLogger>(VantagePoint::SERVER);
+  clientSession_->setLogger(clientLogger);
+  serverSession_->setLogger(serverLogger);
+  co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisher, trackStatus(_))
+      .WillOnce(
+          [](TrackStatus request)
+              -> folly::coro::Task<Publisher::TrackStatusResult> {
+            co_return makeTrackStatusOkResult(request, AbsoluteLocation{0, 0});
+          });
+  auto res = co_await clientSession_->trackStatus(getTrackStatus());
+  EXPECT_FALSE(res.hasError());
+  co_await rescheduleN(2);
+
+  // The client FINs after TRACK_STATUS, and the server after its reply.
+  using Dir = MoQFrameObserver::Direction;
+  auto stream = clientLogger->streamOf("track_status", /*created=*/true);
+  CO_ASSERT_TRUE(stream.has_value());
+  EXPECT_TRUE(clientLogger->hasFin(Dir::Sent, *stream));
+  EXPECT_TRUE(serverLogger->hasFin(Dir::Received, *stream));
+  EXPECT_TRUE(serverLogger->hasFin(Dir::Sent, *stream));
+  EXPECT_TRUE(clientLogger->hasFin(Dir::Received, *stream));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, FetchDataFinIsObservedOnBothSides) {
+  auto clientLogger = std::make_shared<RecordingMLogger>(VantagePoint::CLIENT);
+  auto serverLogger = std::make_shared<RecordingMLogger>(VantagePoint::SERVER);
+  clientSession_->setLogger(clientLogger);
+  serverSession_->setLogger(serverLogger);
+  co_await setupMoQSession();
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    fetchPub->object(
+        0, 0, 0, test::makeBuf(10), noExtensions(), /*finFetch=*/true);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
+  });
+  EXPECT_CALL(*fetchCallback_, object(0, 0, 0, _, _, true, _))
+      .WillOnce(testing::Return(folly::unit));
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await rescheduleN(2);
+
+  using Dir = MoQFrameObserver::Direction;
+  auto stream = serverObjectStreamId();
+  EXPECT_TRUE(serverLogger->hasFin(Dir::Sent, stream));
+  EXPECT_TRUE(clientLogger->hasFin(Dir::Received, stream));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 
 CO_TEST_P_X(Draft18Test, RequestStreamTypeIsLoggedOnceBySide) {
   auto clientLogger = std::make_shared<RecordingMLogger>(VantagePoint::CLIENT);

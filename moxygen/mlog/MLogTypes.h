@@ -42,8 +42,8 @@ enum Owner { LOCAL, REMOTE };
 
 struct MOQTRawInfo {
   std::optional<uint64_t> length;
-  std::optional<uint64_t> payloadLength;
-  std::optional<std::string> data;
+  std::optional<uint64_t> payloadLength{};
+  std::optional<std::string> data{};
 
   folly::dynamic toDynamic() const;
 };

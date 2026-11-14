@@ -40,7 +40,9 @@ void BidiStreamControl::onPeerStopSending() {
   uint32_t code = ex->error;
   XLOG(DBG1) << "STOP_SENDING received on bidi stream id="
              << writeHandle_->getID() << " code=" << code;
+  writer_.reportStopSending(MoQFrameObserver::Direction::Received, code);
   writeHandle_->resetStream(code);
+  writer_.reportResetStream(MoQFrameObserver::Direction::Sent, code);
   writeHandle_ = nullptr;
   setPeerClose(PeerClose::StopSending);
   readCancelCode_ = toWireResetStreamErrorCode(
@@ -76,6 +78,7 @@ void BidiStreamControl::write(std::unique_ptr<folly::IOBuf> data, bool fin) {
   }
   egressTracker_->write(*writeHandle_, std::move(data), fin);
   if (fin) {
+    writer_.reportStreamFin(MoQFrameObserver::Direction::Sent);
     onLocalWriteClose();
   }
 }
@@ -87,6 +90,8 @@ void BidiStreamControl::cancel(ResetStreamErrorCode code) {
     // Before resetStream: its cancellation would re-enter onPeerStopSending.
     onLocalWriteClose();
     wh->resetStream(readCancelCode_);
+    writer_.reportResetStream(
+        MoQFrameObserver::Direction::Sent, readCancelCode_);
   }
   readCancelSource_.requestCancellation();
 }

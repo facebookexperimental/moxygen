@@ -4076,6 +4076,18 @@ WriteResult MoQFrameWriter::writeSubgroupHeader(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  if (frameObserver_) {
+    observedAlias_ = trackAlias;
+    auto stream = observedDataStream();
+    frameObserver_->onSubgroupHeader(
+        FrameDirection::Sent,
+        stream,
+        trackAlias,
+        objectHeader.group,
+        objectHeader.subgroup,
+        objectHeader.priority,
+        options);
+  }
   return size;
 }
 
@@ -4096,6 +4108,10 @@ WriteResult MoQFrameWriter::writeFetchHeader(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  if (frameObserver_) {
+    frameObserver_->onFetchHeader(
+        FrameDirection::Sent, observedDataStream(), requestID.value);
+  }
   return size;
 }
 
@@ -4113,6 +4129,9 @@ WriteResult MoQFrameWriter::writePaddingStream(
   appendZeroPadding(writeBuf, paddingLength, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  if (frameObserver_) {
+    frameObserver_->onPaddingStream(FrameDirection::Sent, observedDataStream());
   }
   return size;
 }
@@ -4132,6 +4151,9 @@ WriteResult MoQFrameWriter::writePaddingDatagram(
   appendZeroPadding(writeBuf, paddingLength, size, error);
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  if (frameObserver_) {
+    frameObserver_->onPaddingDatagram(FrameDirection::Sent, paddingLength);
   }
   return size;
 }
@@ -4685,6 +4707,10 @@ WriteResult MoQFrameWriter::writeDatagramObject(
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
   }
+  if (frameObserver_) {
+    frameObserver_->onDatagramObject(
+        FrameDirection::Sent, trackAlias, objectHeader, endOfGroup);
+  }
   return size;
 }
 
@@ -4906,6 +4932,18 @@ WriteResult MoQFrameWriter::writeStreamObject(
   }
   if (error) {
     return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
+  }
+  if (frameObserver_) {
+    if (streamType == StreamType::FETCH_HEADER) {
+      frameObserver_->onFetchObject(
+          FrameDirection::Sent, observedDataStream(), objectHeader);
+    } else {
+      frameObserver_->onSubgroupObject(
+          FrameDirection::Sent,
+          observedDataStream(),
+          observedAlias_,
+          objectHeader);
+    }
   }
   return size;
 }

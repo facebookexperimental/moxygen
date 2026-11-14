@@ -21,6 +21,8 @@ moxygen_add_library(moxygen_mlog_mlogger
     moxygen_moq_framer
     moxygen_moq_types
     mvfst::mvfst_codec_types
+    Folly::folly_container_f14_hash
+    Folly::folly_function
     Folly::folly_json_dynamic
     Folly::folly_network_address
 )

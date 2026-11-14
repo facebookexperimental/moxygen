@@ -1289,6 +1289,8 @@ void MLogger::logObjectDatagramCreated(
   }
   if (payload) {
     baseMsg.objectPayload = MOQTRawInfo{payload->computeChainDataLength()};
+  } else if (header.length) {
+    baseMsg.objectPayload = MOQTRawInfo{*header.length};
   }
   baseMsg.endOfGroup = endOfGroup;
   addObjectDatagramCreatedLog(std::move(baseMsg));
@@ -1310,6 +1312,8 @@ void MLogger::logObjectDatagramParsed(
   }
   if (payload) {
     baseMsg.objectPayload = MOQTRawInfo{payload->computeChainDataLength()};
+  } else if (header.length) {
+    baseMsg.objectPayload = MOQTRawInfo{*header.length};
   }
   baseMsg.endOfGroup = endOfGroup;
   addObjectDatagramParsedLog(std::move(baseMsg));
@@ -1867,6 +1871,17 @@ void MLogger::onSubgroupHeader(
     uint64_t subgroup,
     std::optional<uint8_t> priority,
     const SubgroupOptions& options) {
+  if (holdIfPending(
+          stream,
+          &MLogger::onSubgroupHeader,
+          dir,
+          alias,
+          group,
+          subgroup,
+          priority,
+          options)) {
+    return;
+  }
   logStreamTypeSet(
       stream.value, MOQTStreamType::SUBGROUP_HEADER, streamOwner(dir));
   if (dir == Direction::Sent) {
@@ -1899,6 +1914,9 @@ void MLogger::onSubgroupObject(
     DataStream stream,
     TrackAlias alias,
     const ObjectHeader& header) {
+  if (holdIfPending(stream, &MLogger::onSubgroupObject, dir, alias, header)) {
+    return;
+  }
   if (dir == Direction::Sent) {
     logSubgroupObjectCreated(stream.value, alias, header, nullptr);
   } else {
@@ -1910,6 +1928,9 @@ void MLogger::onFetchHeader(
     Direction dir,
     DataStream stream,
     uint64_t requestID) {
+  if (holdIfPending(stream, &MLogger::onFetchHeader, dir, requestID)) {
+    return;
+  }
   logStreamTypeSet(
       stream.value, MOQTStreamType::FETCH_HEADER, streamOwner(dir));
   if (dir == Direction::Sent) {
@@ -1923,6 +1944,9 @@ void MLogger::onFetchObject(
     Direction dir,
     DataStream stream,
     const ObjectHeader& header) {
+  if (holdIfPending(stream, &MLogger::onFetchObject, dir, header)) {
+    return;
+  }
   if (dir == Direction::Sent) {
     logFetchObjectCreated(stream.value, header, nullptr);
   } else {
@@ -1936,6 +1960,10 @@ void MLogger::onFetchEndOfRange(
     uint64_t group,
     uint64_t object,
     FetchRangeEnd rangeEnd) {
+  if (holdIfPending(
+          stream, &MLogger::onFetchEndOfRange, dir, group, object, rangeEnd)) {
+    return;
+  }
   auto type = MOQTFetchRangeEndType::NONEXISTENT;
   if (rangeEnd == FetchRangeEnd::Unknown) {
     type = MOQTFetchRangeEndType::UNKNOWN;
@@ -1947,6 +1975,42 @@ void MLogger::onFetchEndOfRange(
   } else {
     logFetchObjectParsed(stream.value, group, object, type);
   }
+}
+
+void MLogger::onPaddingDatagram(Direction dir, uint64_t paddingLength) {
+  if (dir == Direction::Sent) {
+    logPaddingDatagramCreated(paddingLength);
+  } else {
+    logPaddingDatagramParsed(paddingLength);
+  }
+}
+
+void MLogger::onDatagramObject(
+    Direction dir,
+    TrackAlias alias,
+    const ObjectHeader& header,
+    bool endOfGroup) {
+  if (dir == Direction::Sent) {
+    logObjectDatagramCreated(alias, header, nullptr, endOfGroup);
+  } else {
+    logObjectDatagramParsed(alias, header, nullptr, endOfGroup);
+  }
+}
+
+void MLogger::onDataStreamBound(uint64_t pendingKey, uint64_t streamID) {
+  auto it = pendingDataStreams_.find(pendingKey);
+  if (it == pendingDataStreams_.end()) {
+    return;
+  }
+  auto records = std::move(it->second);
+  pendingDataStreams_.erase(it);
+  for (auto& record : records) {
+    record(streamID);
+  }
+}
+
+void MLogger::onDataStreamAbandoned(uint64_t pendingKey) {
+  pendingDataStreams_.erase(pendingKey);
 }
 
 } // namespace moxygen

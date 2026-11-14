@@ -721,6 +721,17 @@ TEST(MLogTypesTest, LatestTransportEventFieldNames) {
   EXPECT_EQ(MOQTPaddingDatagramParsed{55}.toDynamic()["padding_length"], 55);
 }
 
+TEST(MLogTypesTest, PaddingDatagramLoggedInBothDirections) {
+  using Direction = MoQFrameObserver::Direction;
+  InspectableMLogger logger;
+  logger.onPaddingDatagram(Direction::Sent, 5);
+  logger.onPaddingDatagram(Direction::Received, 7);
+  EXPECT_EQ(logger.event(0)["name"], "moqt:padding_datagram_created");
+  EXPECT_EQ(logger.event(0)["data"]["padding_length"], 5);
+  EXPECT_EQ(logger.event(1)["name"], "moqt:padding_datagram_parsed");
+  EXPECT_EQ(logger.event(1)["data"]["padding_length"], 7);
+}
+
 TEST(MLogTypesTest, FetchGroupDeltaFollowsObservedDirection) {
   ObjectHeader first(10, 1, 4, 12);
   ObjectHeader second(7, 1, 5, 12);
