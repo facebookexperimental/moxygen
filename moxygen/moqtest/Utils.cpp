@@ -10,6 +10,7 @@
 #include <folly/String.h>
 #include <algorithm>
 #include <chrono>
+#include <numeric>
 #include <optional>
 
 namespace moxygen {
@@ -164,9 +165,7 @@ convertTrackNamespaceToMoqTestParam(TrackNamespace* track) {
 
 std::vector<Extension> getExtensions(
     int integerExtensionId,
-    int variableExtensionId,
-    const std::optional<TrackTimestampInfo>& timestampInfo,
-    AbsoluteLocation location) {
+    int variableExtensionId) {
   std::vector<Extension> extensions;
   if (integerExtensionId >= 0) {
     uint64_t randomNumber = std::rand();
@@ -181,17 +180,93 @@ std::vector<Extension> getExtensions(
         static_cast<uint64_t>(2 * variableExtensionId + 1), {std::move(buf)}};
     extensions.push_back(ext);
   }
-  if (timestampInfo) {
-    auto now = timestampInfo->fromWallClock(std::chrono::system_clock::now());
-    if (now) {
-      auto property =
-          timestampInfo->objectProperty(location.group, location.object, *now);
-      if (property.hasValue() && property->has_value()) {
-        extensions.push_back(std::move(**property));
-      }
-    }
-  }
   return extensions;
+}
+
+std::optional<int64_t> appendSendTime(
+    std::vector<Extension>& extensions,
+    const TrackTimestampInfo& timestampInfo,
+    AbsoluteLocation location,
+    std::chrono::system_clock::time_point sendTime) {
+  auto now = timestampInfo.fromWallClock(sendTime);
+  if (!now) {
+    return std::nullopt;
+  }
+  auto property =
+      timestampInfo.objectProperty(location.group, location.object, *now);
+  if (property.hasError() || !property->has_value()) {
+    return std::nullopt;
+  }
+  extensions.push_back(std::move(**property));
+  if (!timestampInfo.mapping) {
+    return std::nullopt;
+  }
+  return zigzagDecode(extensions.back().intValue);
+}
+
+std::optional<TrackTimestampInfo> scheduleTimestampInfo(
+    const MoQTestParameters& params,
+    std::chrono::system_clock::time_point start) {
+  if (params.objectFrequency == 0 || params.objectIncrement == 0 ||
+      params.groupIncrement == 0) {
+    return std::nullopt;
+  }
+  const uint64_t objectsPerGroup =
+      (lastObjectInGroup(params) - params.startObject) /
+          params.objectIncrement +
+      1;
+  uint64_t objectMicros = 0;
+  uint64_t groupMicros = 0;
+  if (__builtin_mul_overflow(params.objectFrequency, 1000, &objectMicros) ||
+      __builtin_mul_overflow(objectsPerGroup, objectMicros, &groupMicros)) {
+    return std::nullopt;
+  }
+  // The timescale is 1MHz times the smallest k that keeps both multipliers
+  // integral.
+  auto factor = [](uint64_t micros, uint64_t increment) {
+    return increment / std::gcd(micros, increment);
+  };
+  const uint64_t objectFactor = factor(objectMicros, params.objectIncrement);
+  const uint64_t groupFactor = factor(groupMicros, params.groupIncrement);
+  uint64_t k = 0;
+  if (__builtin_mul_overflow(
+          objectFactor / std::gcd(objectFactor, groupFactor),
+          groupFactor,
+          &k)) {
+    return std::nullopt;
+  }
+
+  TrackTimestampInfo info;
+  TimestampMapping mapping;
+  uint64_t objectTicks = 0;
+  uint64_t groupTicks = 0;
+  uint64_t startOffset = 0;
+  if (__builtin_mul_overflow(uint64_t(1'000'000), k, &info.timescale) ||
+      __builtin_mul_overflow(objectMicros, k, &objectTicks) ||
+      __builtin_mul_overflow(groupMicros, k, &groupTicks)) {
+    return std::nullopt;
+  }
+  mapping.objectMultiplier = objectTicks / params.objectIncrement;
+  mapping.groupMultiplier = groupTicks / params.groupIncrement;
+  mapping.baseGroup = params.startGroup;
+  auto startTicks = info.fromWallClock(start);
+  // The base is startObject Objects earlier, because Object IDs start there.
+  if (!startTicks ||
+      __builtin_mul_overflow(
+          params.startObject, mapping.objectMultiplier, &startOffset) ||
+      *startTicks < startOffset) {
+    return std::nullopt;
+  }
+  mapping.baseTimestamp = *startTicks - startOffset;
+  // Every Object must map in range, even when a FETCH sends it at track start.
+  const auto lastObject = lastObjectInGroup(params);
+  if (mapping.timestamp(params.lastGroupInTrack, lastObject).hasError() ||
+      mapping.correction(params.lastGroupInTrack, lastObject, *startTicks)
+          .hasError()) {
+    return std::nullopt;
+  }
+  info.mapping = mapping;
+  return info;
 }
 
 std::optional<uint64_t> objectLatencyMs(

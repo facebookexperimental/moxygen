@@ -54,12 +54,23 @@ class MoQTestPublisher : public Publisher,
     std::atomic<uint64_t> behind{0};
   };
 
+  // An Object on a Mapping track carries a timestamp only when it misses its
+  // paced send time.
+  enum class TimestampMode { None, Explicit, Mapping };
+
+  // How a track's Objects are stamped. The pacer's deadlines are the mapped
+  // times from `scheduleStart`. A correction then measures only lateness.
+  struct TrackTiming {
+    std::optional<TrackTimestampInfo> info;
+    std::optional<std::chrono::steady_clock::time_point> scheduleStart;
+  };
+
+  void setTimestampMode(TimestampMode mode) {
+    timestampMode_ = mode;
+  }
+
   void setIncludeTimestampExtension(bool include) {
-    if (include) {
-      timestampInfo_ = TrackTimestampInfo::wallClockMicros();
-    } else {
-      timestampInfo_.reset();
-    }
+    timestampMode_ = include ? TimestampMode::Explicit : TimestampMode::None;
   }
 
   const SendStats& datagramStats() const {
@@ -92,7 +103,8 @@ class MoQTestPublisher : public Publisher,
   folly::coro::Task<void> sendTrackData(
       MoQTestParameters params,
       RequestID requestID,
-      std::shared_ptr<TrackConsumer> callback);
+      std::shared_ptr<TrackConsumer> callback,
+      TrackTiming timing);
 
   // Sends PUBLISH for the track on the given session and waits for PUBLISH_OK.
   // The returned task streams the objects once the peer unpauses the track, so
@@ -114,20 +126,24 @@ class MoQTestPublisher : public Publisher,
 
   folly::coro::Task<void> sendOneSubgroupPerGroup(
       MoQTestParameters params,
-      std::shared_ptr<TrackConsumer> callback);
+      std::shared_ptr<TrackConsumer> callback,
+      TrackTiming timing);
 
   folly::coro::Task<void> sendOneSubgroupPerObject(
       MoQTestParameters params,
-      std::shared_ptr<TrackConsumer> callback);
+      std::shared_ptr<TrackConsumer> callback,
+      TrackTiming timing);
 
   folly::coro::Task<void> sendTwoSubgroupsPerGroup(
       MoQTestParameters params,
-      std::shared_ptr<TrackConsumer> callback);
+      std::shared_ptr<TrackConsumer> callback,
+      TrackTiming timing);
 
   folly::coro::Task<void> sendDatagram(
       RequestID requestID,
       MoQTestParameters params,
-      std::shared_ptr<TrackConsumer> callback);
+      std::shared_ptr<TrackConsumer> callback,
+      TrackTiming timing);
 
   // Fetching Methods
   virtual folly::coro::Task<FetchResult> fetch(
@@ -137,7 +153,8 @@ class MoQTestPublisher : public Publisher,
   folly::coro::Task<void> onFetch(
       MoQTestParameters params,
       MoQTestFetchWindow window,
-      std::shared_ptr<FetchConsumer> callback);
+      std::shared_ptr<FetchConsumer> callback,
+      std::optional<TrackTimestampInfo> timestampInfo);
 
   // Emits every object the window covers and then ends the fetch.  The
   // subgroup each object lands on follows the track's fetch forwarding
@@ -145,7 +162,8 @@ class MoQTestPublisher : public Publisher,
   folly::coro::Task<void> fetchObjects(
       MoQTestParameters params,
       std::shared_ptr<FetchConsumer> callback,
-      MoQTestFetchWindow window);
+      MoQTestFetchWindow window,
+      std::optional<TrackTimestampInfo> timestampInfo);
 
  private:
   // Tracks one publishTrack that is paused waiting for the peer to ask for
@@ -204,7 +222,8 @@ class MoQTestPublisher : public Publisher,
       std::shared_ptr<PendingUnpause> unpauseCb,
       std::shared_ptr<MoQForwarder> forwarder,
       MoQTestParameters params,
-      RequestID requestID);
+      RequestID requestID,
+      TrackTiming timing);
 
   // The range a joining FETCH backfills: from the start it names up to where
   // the caller's subscription begins.  Empty when that subscription already
@@ -220,7 +239,8 @@ class MoQTestPublisher : public Publisher,
       std::shared_ptr<folly::CancellationSource> cancelSource,
       MoQTestParameters params,
       MoQTestFetchWindow window,
-      std::shared_ptr<FetchConsumer> callback);
+      std::shared_ptr<FetchConsumer> callback,
+      std::optional<TrackTimestampInfo> timestampInfo);
 
   // Sleeps to a deadline, not for a duration: sleeping objectFrequency after
   // each object would make the real period "frequency plus however long the
@@ -230,16 +250,26 @@ class MoQTestPublisher : public Publisher,
     ObjectPacer(
         std::chrono::nanoseconds period,
         folly::Timekeeper* timekeeper,
-        SendStats* stats)
+        SendStats* stats,
+        TrackTiming timing)
         : period_(period),
           timekeeper_(timekeeper),
           stats_(stats),
-          nextObject_(std::chrono::steady_clock::now()) {}
+          nextObject_(
+              timing.scheduleStart.value_or(std::chrono::steady_clock::now())),
+          timestampInfo_(std::move(timing.info)) {}
+
+    // Logs how often a mapped track needed a correction.
+    ~ObjectPacer();
 
     void recordSent(uint64_t bytes) {
       stats_->objects.fetch_add(1, std::memory_order_relaxed);
       stats_->bytes.fetch_add(bytes, std::memory_order_relaxed);
     }
+
+    void stampSendTime(
+        std::vector<Extension>& extensions,
+        AbsoluteLocation location);
 
     folly::coro::Task<void> awaitNextObject();
 
@@ -248,10 +278,18 @@ class MoQTestPublisher : public Publisher,
     folly::Timekeeper* timekeeper_;
     SendStats* stats_;
     std::chrono::steady_clock::time_point nextObject_;
+    std::optional<TrackTimestampInfo> timestampInfo_;
+    uint64_t stamped_{0};
+    uint64_t corrected_{0};
+    uint64_t correctionSum_{0};
+    uint64_t correctionMax_{0};
   };
 
   // Starts the clock, so make one immediately before the loop it paces.
-  ObjectPacer makePacer(const MoQTestParameters& params);
+  ObjectPacer makePacer(const MoQTestParameters& params, TrackTiming timing);
+
+  // Call it when the track's schedule starts, because it reads the clocks.
+  TrackTiming makeTrackTiming(const MoQTestParameters& params) const;
 
   // True when the test integer extension would reuse OBJECT_TIMESTAMP's type.
   bool collidesWithTimestamp(const MoQTestParameters& params) const;
@@ -261,14 +299,16 @@ class MoQTestPublisher : public Publisher,
   // request ID as the alias, which is what keeps aliases unique per session.
   std::shared_ptr<MoQForwarder> makeForwarder(
       const FullTrackName& ftn,
-      uint64_t version);
+      uint64_t version,
+      const TrackTiming& timing);
 
   // Generates the track and retires it from tracks_ however it ends.
   folly::coro::Task<void> runTrack(
       FullTrackName ftn,
       std::shared_ptr<MoQForwarder> forwarder,
       MoQTestParameters params,
-      RequestID requestID);
+      RequestID requestID,
+      TrackTiming timing);
 
   // Idempotent, and a no-op if the name now maps to a different forwarder.
   void retireTrack(const FullTrackName& ftn, const MoQForwarder* forwarder);
@@ -276,6 +316,7 @@ class MoQTestPublisher : public Publisher,
   struct TrackState {
     std::shared_ptr<MoQForwarder> forwarder;
     folly::CancellationSource cancelSource;
+    TrackTiming timing;
   };
 
   // One entry per moq-test track being generated.  An entry exists only while
@@ -290,7 +331,7 @@ class MoQTestPublisher : public Publisher,
   // Not the global singleton, which can crash if used during teardown, and not
   // a wheel: wheels arm through libevent, whose timeouts are jiffy granular.
   folly::HeapTimekeeper timekeeper_;
-  std::optional<TrackTimestampInfo> timestampInfo_;
+  TimestampMode timestampMode_{TimestampMode::None};
   SendStats datagramStats_;
   SendStats subgroupStats_;
 };

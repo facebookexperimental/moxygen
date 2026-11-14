@@ -52,6 +52,11 @@ DEFINE_bool(
     "Stamp each object with its send time as a microsecond OBJECT_TIMESTAMP "
     "(used by the perf client for latency measurement).");
 DEFINE_bool(
+    timestamp_mapping,
+    false,
+    "With --include_timestamp_extension, map each object to its paced send "
+    "time and send only corrections.");
+DEFINE_bool(
     quic,
     true,
     "Listen on QUIC/WebTransport (UDP). May be combined with --qmux for "
@@ -71,7 +76,12 @@ int main(int argc, char** argv) {
   // One publisher holds the track-generation state (subscriptions, etc.) and
   // is shared by whichever listeners are enabled.
   auto publisher = std::make_shared<moxygen::MoQTestPublisher>();
-  publisher->setIncludeTimestampExtension(FLAGS_include_timestamp_extension);
+  if (FLAGS_include_timestamp_extension) {
+    publisher->setTimestampMode(
+        FLAGS_timestamp_mapping
+            ? moxygen::MoQTestPublisher::TimestampMode::Mapping
+            : moxygen::MoQTestPublisher::TimestampMode::Explicit);
+  }
 
   auto server = std::make_shared<moxygen::MoQTestServer>(
       publisher, FLAGS_cert, FLAGS_key, FLAGS_versions);

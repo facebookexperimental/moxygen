@@ -37,6 +37,11 @@ DEFINE_bool(
     include_timestamp_extension,
     false,
     "Stamp each object with its send time as a microsecond OBJECT_TIMESTAMP.");
+DEFINE_bool(
+    timestamp_mapping,
+    false,
+    "With --include_timestamp_extension, map each object to its paced send "
+    "time and send only corrections.");
 
 namespace {
 
@@ -101,7 +106,12 @@ int main(int argc, char** argv) {
   folly::EventBase evb;
   auto moqEvb = std::make_shared<moxygen::MoQFollyExecutorImpl>(&evb);
   auto publisher = std::make_shared<moxygen::MoQTestPublisher>();
-  publisher->setIncludeTimestampExtension(FLAGS_include_timestamp_extension);
+  if (FLAGS_include_timestamp_extension) {
+    publisher->setTimestampMode(
+        FLAGS_timestamp_mapping
+            ? moxygen::MoQTestPublisher::TimestampMode::Mapping
+            : moxygen::MoQTestPublisher::TimestampMode::Explicit);
+  }
 
   auto relayClient = std::make_unique<moxygen::MoQRelayClient>(
       moxygen::samples::makeRelayClientTransport(
