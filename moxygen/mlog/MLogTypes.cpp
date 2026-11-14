@@ -8,19 +8,7 @@
 
 namespace moxygen {
 
-folly::dynamic MOQTControlMessageCreated::toDynamic() const {
-  folly::dynamic jsonObject = folly::dynamic::object;
-  jsonObject["stream_id"] = streamId;
-
-  if (length.has_value()) {
-    jsonObject["length"] = length.value();
-  }
-  jsonObject["message"] = message->toDynamic();
-
-  return jsonObject;
-}
-
-folly::dynamic MOQTControlMessageParsed::toDynamic() const {
+folly::dynamic MOQTControlMessage::toDynamic() const {
   folly::dynamic jsonObject = folly::dynamic::object;
   jsonObject["stream_id"] = streamId;
 
@@ -653,153 +641,106 @@ folly::dynamic propertiesToDynamic(
   return folly::dynamic::array(values);
 }
 
-template <typename Event>
-folly::dynamic objectDatagramToDynamic(const Event& event) {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["track_alias"] = event.trackAlias;
-  obj["group_id"] = event.groupId;
-  if (event.objectId.has_value()) {
-    obj["object_id"] = event.objectId.value();
-  }
-  if (event.publisherPriority.has_value()) {
-    obj["publisher_priority"] = event.publisherPriority.value();
-  }
-  if (event.propertiesLength.has_value()) {
-    obj["properties_length"] = event.propertiesLength.value();
-  }
-  if (!event.properties.empty()) {
-    obj["properties"] = propertiesToDynamic(event.properties);
-  }
-  if (event.objectStatus.has_value()) {
-    obj["object_status"] = event.objectStatus.value();
-  }
-  if (event.objectPayload.has_value()) {
-    obj["object_payload"] = event.objectPayload->toDynamic();
-  }
-  obj["end_of_group"] = event.endOfGroup;
-  return obj;
-}
-
-template <typename Event>
-folly::dynamic subgroupHeaderToDynamic(const Event& event) {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["stream_id"] = event.streamId;
-  obj["track_alias"] = event.trackAlias;
-  obj["group_id"] = event.groupId;
-  obj["subgroup_id_mode"] = event.subgroupIdMode;
-  if (event.subgroupId.has_value()) {
-    obj["subgroup_id"] = event.subgroupId.value();
-  }
-  if (event.publisherPriority.has_value()) {
-    obj["publisher_priority"] = event.publisherPriority.value();
-  }
-  obj["contains_end_of_group"] = event.containsEndOfGroup;
-  obj["properties_present"] = event.propertiesPresent;
-  obj["first_object"] = event.firstObject;
-  return obj;
-}
-
-template <typename Event>
-folly::dynamic subgroupObjectToDynamic(const Event& event) {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["stream_id"] = event.streamId;
-  obj["object_id_delta"] = event.objectIdDelta;
-  if (!event.properties.empty()) {
-    obj["properties"] = propertiesToDynamic(event.properties);
-  }
-  obj["object_payload_length"] = event.objectPayloadLength;
-  if (event.objectStatus.has_value()) {
-    obj["object_status"] = event.objectStatus.value();
-  }
-  return obj;
-}
-
-template <typename Event>
-folly::dynamic fetchObjectToDynamic(const Event& event) {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["stream_id"] = event.streamId;
-  obj["datagram"] = event.datagram;
-  obj["end_of_nonexistent_range"] = event.endOfNonexistentRange;
-  obj["end_of_unknown_range"] = event.endOfUnknownRange;
-  obj["end_of_timed_out_range"] = event.endOfTimedOutRange;
-  if (event.subgroupIdBits.has_value()) {
-    obj["subgroup_id_bits"] = event.subgroupIdBits.value();
-  }
-  if (event.groupIdDelta.has_value()) {
-    obj["group_id_delta"] = event.groupIdDelta.value();
-  }
-  if (event.subgroupId.has_value()) {
-    obj["subgroup_id"] = event.subgroupId.value();
-  }
-  if (event.objectIdDelta.has_value()) {
-    obj["object_id_delta"] = event.objectIdDelta.value();
-  }
-  if (event.publisherPriority.has_value()) {
-    obj["publisher_priority"] = event.publisherPriority.value();
-  }
-  if (event.propertiesLength.has_value()) {
-    obj["properties_length"] = event.propertiesLength.value();
-  }
-  if (!event.properties.empty()) {
-    obj["properties"] = propertiesToDynamic(event.properties);
-  }
-  obj["object_payload_length"] = event.objectPayloadLength;
-  return obj;
-}
-
 } // namespace
 
-folly::dynamic MOQTObjectDatagramCreated::toDynamic() const {
-  return objectDatagramToDynamic(*this);
+folly::dynamic MOQTObjectDatagram::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["track_alias"] = trackAlias;
+  obj["group_id"] = groupId;
+  if (objectId.has_value()) {
+    obj["object_id"] = objectId.value();
+  }
+  if (publisherPriority.has_value()) {
+    obj["publisher_priority"] = publisherPriority.value();
+  }
+  if (propertiesLength.has_value()) {
+    obj["properties_length"] = propertiesLength.value();
+  }
+  if (!properties.empty()) {
+    obj["properties"] = propertiesToDynamic(properties);
+  }
+  if (objectStatus.has_value()) {
+    obj["object_status"] = objectStatus.value();
+  }
+  if (objectPayload.has_value()) {
+    obj["object_payload"] = objectPayload->toDynamic();
+  }
+  obj["end_of_group"] = endOfGroup;
+  return obj;
 }
 
-folly::dynamic MOQTObjectDatagramParsed::toDynamic() const {
-  return objectDatagramToDynamic(*this);
+folly::dynamic MOQTSubgroupHeader::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["stream_id"] = streamId;
+  obj["track_alias"] = trackAlias;
+  obj["group_id"] = groupId;
+  obj["subgroup_id_mode"] = subgroupIdMode;
+  if (subgroupId.has_value()) {
+    obj["subgroup_id"] = subgroupId.value();
+  }
+  if (publisherPriority.has_value()) {
+    obj["publisher_priority"] = publisherPriority.value();
+  }
+  obj["contains_end_of_group"] = containsEndOfGroup;
+  obj["properties_present"] = propertiesPresent;
+  obj["first_object"] = firstObject;
+  return obj;
 }
 
-folly::dynamic MOQTSubgroupHeaderCreated::toDynamic() const {
-  return subgroupHeaderToDynamic(*this);
+folly::dynamic MOQTSubgroupObject::toDynamic() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["stream_id"] = streamId;
+  obj["object_id_delta"] = objectIdDelta;
+  if (!properties.empty()) {
+    obj["properties"] = propertiesToDynamic(properties);
+  }
+  obj["object_payload_length"] = objectPayloadLength;
+  if (objectStatus.has_value()) {
+    obj["object_status"] = objectStatus.value();
+  }
+  return obj;
 }
 
-folly::dynamic MOQTSubgroupHeaderParsed::toDynamic() const {
-  return subgroupHeaderToDynamic(*this);
-}
-
-folly::dynamic MOQTSubgroupObjectCreated::toDynamic() const {
-  return subgroupObjectToDynamic(*this);
-}
-
-folly::dynamic MOQTSubgroupObjectParsed::toDynamic() const {
-  return subgroupObjectToDynamic(*this);
-}
-
-folly::dynamic MOQTFetchHeaderCreated::toDynamic() const {
+folly::dynamic MOQTFetchHeader::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["stream_id"] = streamId;
   obj["request_id"] = requestId;
   return obj;
 }
 
-folly::dynamic MOQTFetchHeaderParsed::toDynamic() const {
+folly::dynamic MOQTFetchObject::toDynamic() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["stream_id"] = streamId;
-  obj["request_id"] = requestId;
+  obj["datagram"] = datagram;
+  obj["end_of_nonexistent_range"] = endOfNonexistentRange;
+  obj["end_of_unknown_range"] = endOfUnknownRange;
+  obj["end_of_timed_out_range"] = endOfTimedOutRange;
+  if (subgroupIdBits.has_value()) {
+    obj["subgroup_id_bits"] = subgroupIdBits.value();
+  }
+  if (groupIdDelta.has_value()) {
+    obj["group_id_delta"] = groupIdDelta.value();
+  }
+  if (subgroupId.has_value()) {
+    obj["subgroup_id"] = subgroupId.value();
+  }
+  if (objectIdDelta.has_value()) {
+    obj["object_id_delta"] = objectIdDelta.value();
+  }
+  if (publisherPriority.has_value()) {
+    obj["publisher_priority"] = publisherPriority.value();
+  }
+  if (propertiesLength.has_value()) {
+    obj["properties_length"] = propertiesLength.value();
+  }
+  if (!properties.empty()) {
+    obj["properties"] = propertiesToDynamic(properties);
+  }
+  obj["object_payload_length"] = objectPayloadLength;
   return obj;
 }
 
-folly::dynamic MOQTFetchObjectCreated::toDynamic() const {
-  return fetchObjectToDynamic(*this);
-}
-
-folly::dynamic MOQTFetchObjectParsed::toDynamic() const {
-  return fetchObjectToDynamic(*this);
-}
-
-folly::dynamic MOQTPaddingDatagramCreated::toDynamic() const {
-  return folly::dynamic::object("padding_length", paddingLength);
-}
-
-folly::dynamic MOQTPaddingDatagramParsed::toDynamic() const {
+folly::dynamic MOQTPaddingDatagram::toDynamic() const {
   return folly::dynamic::object("padding_length", paddingLength);
 }
 

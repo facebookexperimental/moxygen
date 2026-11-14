@@ -70,16 +70,8 @@ class RecordingMLogger : public MLogger {
   size_t countControlMessages(const std::string& type) const {
     size_t count = 0;
     for (const auto& event : logs_) {
-      const MOQTBaseControlMessage* msg = nullptr;
-      if (const auto* created =
-              std::get_if<MOQTControlMessageCreated>(&event.data_)) {
-        msg = created->message.get();
-      } else if (
-          const auto* parsed =
-              std::get_if<MOQTControlMessageParsed>(&event.data_)) {
-        msg = parsed->message.get();
-      }
-      if (msg && msg->type == type) {
+      const auto* rec = std::get_if<MOQTControlMessage>(&event.data_);
+      if (rec && rec->message && rec->message->type == type) {
         count++;
       }
     }
@@ -88,18 +80,13 @@ class RecordingMLogger : public MLogger {
 
   std::optional<uint64_t> streamOf(const std::string& type, bool created)
       const {
+    const auto name =
+        created ? kControlMessageCreatedName : kControlMessageParsedName;
     for (const auto& event : logs_) {
-      if (const auto* rec =
-              std::get_if<MOQTControlMessageCreated>(&event.data_)) {
-        if (created && rec->message && rec->message->type == type) {
-          return rec->streamId;
-        }
-      } else if (
-          const auto* parsed =
-              std::get_if<MOQTControlMessageParsed>(&event.data_)) {
-        if (!created && parsed->message && parsed->message->type == type) {
-          return parsed->streamId;
-        }
+      const auto* rec = std::get_if<MOQTControlMessage>(&event.data_);
+      if (rec && event.name_ == name && rec->message &&
+          rec->message->type == type) {
+        return rec->streamId;
       }
     }
     return std::nullopt;

@@ -35,110 +35,53 @@ inline constexpr std::string_view kSubgroupObjectCreatedName =
     "moqt:subgroup_object_created";
 inline constexpr std::string_view kSubgroupObjectParsedName =
     "moqt:subgroup_object_parsed";
-inline constexpr const char* kFetchHeaderCreatedName =
+inline constexpr std::string_view kFetchHeaderCreatedName =
     "moqt:fetch_header_created";
-inline constexpr const char* kFetchHeaderParsedName =
+inline constexpr std::string_view kFetchHeaderParsedName =
     "moqt:fetch_header_parsed";
-inline constexpr const char* kFetchObjectCreatedName =
+inline constexpr std::string_view kFetchObjectCreatedName =
     "moqt:fetch_object_created";
-inline constexpr const char* kFetchObjectParsedName =
+inline constexpr std::string_view kFetchObjectParsedName =
     "moqt:fetch_object_parsed";
+
+using MLogEventData = std::variant<
+    MOQTControlMessage,
+    MOQTStreamTypeSet,
+    MOQTObjectDatagram,
+    MOQTPaddingDatagram,
+    MOQTSubgroupHeader,
+    MOQTSubgroupObject,
+    MOQTFetchHeader,
+    MOQTFetchObject>;
 
 // Basic Log Event Class
 class MLogEvent {
  public:
-  MLogEvent(VantagePoint vantagePoint, uint64_t time, std::string_view name)
-      : vantagePoint_(vantagePoint), time_(time), name_(std::move(name)) {}
+  MLogEvent(
+      VantagePoint vantagePoint,
+      uint64_t time,
+      std::string_view name,
+      MLogEventData data)
+      : vantagePoint_(vantagePoint),
+        time_(time),
+        name_(name),
+        data_(std::move(data)) {}
 
   VantagePoint vantagePoint_;
   uint64_t time_{0};
   std::string name_;
-  std::variant<
-      MOQTControlMessageCreated,
-      MOQTControlMessageParsed,
-      MOQTStreamTypeSet,
-      MOQTObjectDatagramCreated,
-      MOQTObjectDatagramParsed,
-      MOQTPaddingDatagramCreated,
-      MOQTPaddingDatagramParsed,
-      MOQTSubgroupHeaderCreated,
-      MOQTSubgroupHeaderParsed,
-      MOQTSubgroupObjectCreated,
-      MOQTSubgroupObjectParsed,
-      MOQTFetchHeaderCreated,
-      MOQTFetchHeaderParsed,
-      MOQTFetchObjectCreated,
-      MOQTFetchObjectParsed>
-      data_; // Add more events to variant as implemented
+  MLogEventData data_;
 };
 
-// Class to Create Log Events - Going to be Used by MLogger to add logs to final
-// JSON Output
+// Stamps MLogger's records with the time since the creator was constructed.
 class MLogEventCreator {
  public:
   MLogEventCreator();
 
-  // Creates an MLogEvent in which MLogger will write
-  // to a txt file as a JSON
-  MLogEvent createControlMessageCreatedEvent(
+  MLogEvent createEvent(
       VantagePoint vantagePoint,
-      MOQTControlMessageCreated req);
-
-  MLogEvent createControlMessageParsedEvent(
-      VantagePoint vantagePoint,
-      MOQTControlMessageParsed req);
-
-  MLogEvent createStreamTypeSetEvent(
-      VantagePoint vantagePoint,
-      MOQTStreamTypeSet req);
-
-  MLogEvent createObjectDatagramCreatedEvent(
-      VantagePoint vantagePoint,
-      MOQTObjectDatagramCreated req);
-
-  MLogEvent createObjectDatagramParsedEvent(
-      VantagePoint vantagePoint,
-      MOQTObjectDatagramParsed req);
-
-  MLogEvent createPaddingDatagramCreatedEvent(
-      VantagePoint vantagePoint,
-      MOQTPaddingDatagramCreated req);
-
-  MLogEvent createPaddingDatagramParsedEvent(
-      VantagePoint vantagePoint,
-      MOQTPaddingDatagramParsed req);
-
-  MLogEvent createSubgroupHeaderCreatedEvent(
-      VantagePoint vantagePoint,
-      MOQTSubgroupHeaderCreated req);
-
-  MLogEvent createSubgroupHeaderParsedEvent(
-      VantagePoint vantagePoint,
-      MOQTSubgroupHeaderParsed req);
-
-  MLogEvent createSubgroupObjectCreatedEvent(
-      VantagePoint vantagePoint,
-      MOQTSubgroupObjectCreated req);
-
-  MLogEvent createSubgroupObjectParsedEvent(
-      VantagePoint vantagePoint,
-      MOQTSubgroupObjectParsed req);
-
-  MLogEvent createFetchHeaderCreatedEvent(
-      VantagePoint vantagePoint,
-      MOQTFetchHeaderCreated req);
-
-  MLogEvent createFetchHeaderParsedEvent(
-      VantagePoint vantagePoint,
-      MOQTFetchHeaderParsed req);
-
-  MLogEvent createFetchObjectCreatedEvent(
-      VantagePoint vantagePoint,
-      MOQTFetchObjectCreated req);
-
-  MLogEvent createFetchObjectParsedEvent(
-      VantagePoint vantagePoint,
-      MOQTFetchObjectParsed req);
+      std::string_view name,
+      MLogEventData data);
 
  private:
   uint64_t startTime_;

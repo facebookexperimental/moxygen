@@ -50,21 +50,7 @@ class MLogger : public MoQFrameObserver {
         "server_setup", numberOfParameters, std::move(params));
   }
 
-  void addControlMessageCreatedLog(MOQTControlMessageCreated req);
-  void addControlMessageParsedLog(MOQTControlMessageParsed req);
-  void addStreamTypeSetLog(MOQTStreamTypeSet req);
-  void addObjectDatagramCreatedLog(MOQTObjectDatagramCreated req);
-  void addObjectDatagramParsedLog(MOQTObjectDatagramParsed req);
-  void addPaddingDatagramCreatedLog(MOQTPaddingDatagramCreated req);
-  void addPaddingDatagramParsedLog(MOQTPaddingDatagramParsed req);
-  void addSubgroupHeaderCreatedLog(MOQTSubgroupHeaderCreated req);
-  void addSubgroupHeaderParsedLog(MOQTSubgroupHeaderParsed req);
-  void addSubgroupObjectCreatedLog(MOQTSubgroupObjectCreated req);
-  void addSubgroupObjectParsedLog(MOQTSubgroupObjectParsed req);
-  void addFetchHeaderCreatedLog(MOQTFetchHeaderCreated req);
-  void addFetchHeaderParsedLog(MOQTFetchHeaderParsed req);
-  void addFetchObjectCreatedLog(MOQTFetchObjectCreated req);
-  void addFetchObjectParsedLog(MOQTFetchObjectParsed req);
+  void addLog(std::string_view name, MLogEventData data);
 
   // Pure virtual method - subclasses must implement to emit logs to their
   // backend
@@ -309,67 +295,6 @@ class MLogger : public MoQFrameObserver {
       uint64_t streamId,
       MOQTStreamType type,
       std::optional<Owner> owner);
-  void logObjectDatagramCreated(
-      TrackAlias trackAlias,
-      const ObjectHeader& header,
-      const Payload& payload,
-      bool endOfGroup = false);
-  void logObjectDatagramParsed(
-      TrackAlias trackAlias,
-      const ObjectHeader& header,
-      const Payload& payload,
-      bool endOfGroup = false);
-  void logPaddingDatagramCreated(uint64_t paddingLength);
-  void logPaddingDatagramParsed(uint64_t paddingLength);
-  void logSubgroupHeaderCreated(
-      uint64_t streamId,
-      TrackAlias trackAlias,
-      uint64_t groupId,
-      uint64_t sugroupId,
-      uint8_t publisherPriority,
-      SubgroupIDFormat format,
-      bool includeExtensions,
-      bool endOfGroup,
-      bool firstObject = false,
-      bool publisherPriorityPresent = true);
-  void logSubgroupHeaderParsed(
-      uint64_t streamId,
-      TrackAlias trackAlias,
-      uint64_t groupId,
-      uint64_t sugroupId,
-      uint8_t publisherPriority,
-      const SubgroupOptions& options);
-  void logSubgroupObjectCreated(
-      uint64_t streamId,
-      TrackAlias trackAlias,
-      const ObjectHeader& objHeader,
-      Payload payload);
-  void logSubgroupObjectParsed(
-      uint64_t streamId,
-      TrackAlias trackAlias,
-      const ObjectHeader& objHeader,
-      Payload payload);
-  void logFetchHeaderCreated(const uint64_t streamId, const uint64_t requestId);
-  void logFetchHeaderParsed(const uint64_t streamId, const uint64_t requestId);
-  void logFetchObjectCreated(
-      const uint64_t streamId,
-      const ObjectHeader& header,
-      Payload payload);
-  void logFetchObjectCreated(
-      uint64_t streamId,
-      uint64_t endGroup,
-      uint64_t endObject,
-      MOQTFetchRangeEndType rangeEndType);
-  void logFetchObjectParsed(
-      const uint64_t streamId,
-      const ObjectHeader& header,
-      Payload payload);
-  void logFetchObjectParsed(
-      uint64_t streamId,
-      uint64_t endGroup,
-      uint64_t endObject,
-      MOQTFetchRangeEndType rangeEndType);
-
   // Setter APIs for connection metadata (used by ScubaMLogger)
   void setDcid(const quic::ConnectionId& dcid);
   void setSrcCid(const quic::ConnectionId& srcCid);
@@ -431,6 +356,9 @@ class MLogger : public MoQFrameObserver {
 
   std::unordered_map<uint64_t, ObjectStreamState> createdObjectStreamState_;
   std::unordered_map<uint64_t, ObjectStreamState> parsedObjectStreamState_;
+  std::unordered_map<uint64_t, ObjectStreamState>& objectStreamState(
+      Direction dir);
+
   // Queues hook(dir, stream, args...) until the key is bound. Returns false
   // when stream is a stream ID, so the caller logs it now.
   template <typename Hook, typename... Args>

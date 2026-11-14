@@ -28,12 +28,6 @@ enum ControlMessageType : int {
   PARSED = 1,
 };
 
-enum class MOQTFetchRangeEndType : uint8_t {
-  NONEXISTENT,
-  UNKNOWN,
-  TIMED_OUT,
-};
-
 // Data Type Structs
 
 enum MOQTStreamType { CONTROL, SUBGROUP_HEADER, FETCH_HEADER, PADDING };
@@ -592,15 +586,7 @@ class MOQTPublishError : public MOQTBaseControlMessage {
 };
 
 // MOQTEvents Structs
-struct MOQTControlMessageCreated {
-  uint64_t streamId{0};
-  std::optional<uint64_t> length;
-  std::unique_ptr<MOQTBaseControlMessage> message;
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTControlMessageParsed {
+struct MOQTControlMessage {
   uint64_t streamId{0};
   std::optional<uint64_t> length;
   std::unique_ptr<MOQTBaseControlMessage> message;
@@ -616,7 +602,7 @@ struct MOQTStreamTypeSet {
   folly::dynamic toDynamic() const;
 };
 
-struct MOQTObjectDatagramCreated {
+struct MOQTObjectDatagram {
   uint64_t trackAlias{0};
   uint64_t groupId{0};
   std::optional<uint64_t> objectId;
@@ -630,21 +616,7 @@ struct MOQTObjectDatagramCreated {
   folly::dynamic toDynamic() const;
 };
 
-struct MOQTObjectDatagramParsed {
-  uint64_t trackAlias{0};
-  uint64_t groupId{0};
-  std::optional<uint64_t> objectId;
-  std::optional<uint8_t> publisherPriority;
-  std::optional<uint64_t> propertiesLength;
-  std::vector<MOQTProperty> properties;
-  std::optional<uint64_t> objectStatus;
-  std::optional<MOQTRawInfo> objectPayload;
-  bool endOfGroup{false};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTSubgroupHeaderCreated {
+struct MOQTSubgroupHeader {
   uint64_t streamId{0};
   uint64_t trackAlias{0};
   uint64_t groupId{0};
@@ -658,21 +630,7 @@ struct MOQTSubgroupHeaderCreated {
   folly::dynamic toDynamic() const;
 };
 
-struct MOQTSubgroupHeaderParsed {
-  uint64_t streamId{0};
-  uint64_t trackAlias{0};
-  uint64_t groupId{0};
-  uint8_t subgroupIdMode{0};
-  std::optional<uint64_t> subgroupId;
-  std::optional<uint8_t> publisherPriority;
-  bool containsEndOfGroup{false};
-  bool propertiesPresent{false};
-  bool firstObject{false};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTSubgroupObjectCreated {
+struct MOQTSubgroupObject {
   uint64_t streamId{0};
   uint64_t objectIdDelta{0};
   std::vector<MOQTProperty> properties;
@@ -682,31 +640,14 @@ struct MOQTSubgroupObjectCreated {
   folly::dynamic toDynamic() const;
 };
 
-struct MOQTSubgroupObjectParsed {
-  uint64_t streamId{0};
-  uint64_t objectIdDelta{0};
-  std::vector<MOQTProperty> properties;
-  uint64_t objectPayloadLength{0};
-  std::optional<uint64_t> objectStatus;
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTFetchHeaderCreated {
+struct MOQTFetchHeader {
   uint64_t streamId{0};
   uint64_t requestId{0};
 
   folly::dynamic toDynamic() const;
 };
 
-struct MOQTFetchHeaderParsed {
-  uint64_t streamId{0};
-  uint64_t requestId{0};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTFetchObjectCreated {
+struct MOQTFetchObject {
   uint64_t streamId{0};
   bool datagram{false};
   bool endOfNonexistentRange{false};
@@ -724,31 +665,7 @@ struct MOQTFetchObjectCreated {
   folly::dynamic toDynamic() const;
 };
 
-struct MOQTFetchObjectParsed {
-  uint64_t streamId{0};
-  bool datagram{false};
-  bool endOfNonexistentRange{false};
-  bool endOfUnknownRange{false};
-  bool endOfTimedOutRange{false};
-  std::optional<uint8_t> subgroupIdBits;
-  std::optional<uint64_t> groupIdDelta;
-  std::optional<uint64_t> subgroupId;
-  std::optional<uint64_t> objectIdDelta;
-  std::optional<uint8_t> publisherPriority;
-  std::optional<uint64_t> propertiesLength;
-  std::vector<MOQTProperty> properties;
-  uint64_t objectPayloadLength{0};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTPaddingDatagramCreated {
-  uint64_t paddingLength{0};
-
-  folly::dynamic toDynamic() const;
-};
-
-struct MOQTPaddingDatagramParsed {
+struct MOQTPaddingDatagram {
   uint64_t paddingLength{0};
 
   folly::dynamic toDynamic() const;
