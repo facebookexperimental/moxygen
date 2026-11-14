@@ -4,12 +4,15 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/Expected.h>
 #include <folly/String.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -31,8 +34,9 @@ DEFINE_bool(verbose, false, "Enable verbose output (env: VERBOSE=1)");
 DEFINE_string(
     versions,
     "",
-    "Comma-separated MoQ draft versions (e.g. '16,18'). Empty = all "
-    "supported. (env: MOQT_VERSIONS)");
+    "Comma-separated MoQ draft versions (e.g. '16,18'). If empty, "
+    "MOQ_CLIENT_VERSION (draft-NN or NN, comma-separated) is used, then "
+    "MOQT_VERSIONS; if all are empty, every supported draft is offered.");
 DEFINE_int32(connect_timeout, 2000, "Connect timeout in milliseconds");
 DEFINE_int32(transaction_timeout, 2000, "Transaction timeout in milliseconds");
 
@@ -67,13 +71,54 @@ void applyEnvVarDefaults() {
       FLAGS_verbose = true;
     }
   }
+}
 
-  if (FLAGS_versions.empty()) {
-    const char* versionsEnv = std::getenv("MOQT_VERSIONS");
-    if (versionsEnv && versionsEnv[0] != '\0') {
-      FLAGS_versions = versionsEnv;
+// An entry other than draft-NN or NN is an error, because getMoqtProtocols
+// would drop it silently.
+folly::Expected<std::string, std::runtime_error> normalizeClientVersion(
+    const std::string& value) {
+  std::vector<folly::StringPiece> parts;
+  folly::split(',', value, parts);
+  std::vector<std::string> drafts;
+  for (auto part : parts) {
+    auto entry = folly::trimWhitespace(part);
+    auto number = entry;
+    number.removePrefix("draft-");
+    if (number.empty() ||
+        !std::all_of(number.begin(), number.end(), [](char c) {
+          return c >= '0' && c <= '9';
+        })) {
+      return folly::makeUnexpected(
+          std::runtime_error(
+              "MOQ_CLIENT_VERSION entry '" + entry.str() + "' in '" + value +
+              "' is not draft-NN or NN"));
     }
+    drafts.push_back(number.str());
   }
+  return folly::join(",", drafts);
+}
+
+// MOQ_CLIENT_VERSION goes before MOQT_VERSIONS because the runner pins with
+// it, and client images set MOQT_VERSIONS as their default.
+folly::Expected<std::string, std::runtime_error> applyVersionsDefault() {
+  if (!FLAGS_versions.empty()) {
+    return std::string("--versions");
+  }
+  const char* clientVersion = std::getenv("MOQ_CLIENT_VERSION");
+  if (clientVersion && clientVersion[0] != '\0') {
+    auto normalized = normalizeClientVersion(clientVersion);
+    if (normalized.hasError()) {
+      return folly::makeUnexpected(normalized.error());
+    }
+    FLAGS_versions = normalized.value();
+    return std::string("MOQ_CLIENT_VERSION");
+  }
+  const char* moqtVersions = std::getenv("MOQT_VERSIONS");
+  if (moqtVersions && moqtVersions[0] != '\0') {
+    FLAGS_versions = moqtVersions;
+    return std::string("MOQT_VERSIONS");
+  }
+  return std::string("default");
 }
 
 // All available test case names
@@ -178,6 +223,20 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  auto versionsSource = applyVersionsDefault();
+  if (versionsSource.hasError()) {
+    std::cerr << "Error: " << versionsSource.error().what() << std::endl;
+    return 1;
+  }
+  std::vector<std::string> alpns;
+  try {
+    alpns = moxygen::getMoqtProtocols(FLAGS_versions, /*useStandard=*/true);
+  } catch (const std::invalid_argument&) {
+    std::cerr << "Error: no supported MoQT draft in " << versionsSource.value()
+              << "='" << FLAGS_versions << "'" << std::endl;
+    return 1;
+  }
+
   auto url = proxygen::URL(FLAGS_relay);
   bool useQuic = isUseQuicTransport(FLAGS_relay);
 
@@ -208,10 +267,8 @@ int main(int argc, char** argv) {
   std::cout << "# Relay: " << FLAGS_relay << std::endl;
   std::cout << "# Transport: " << (useQuic ? "QUIC" : "WebTransport")
             << std::endl;
-  std::cout << "# Offered ALPNs: "
-            << folly::join(
-                   ", ", moxygen::getMoqtProtocols(FLAGS_versions, true))
-            << std::endl;
+  std::cout << "# Offered ALPNs: " << folly::join(", ", alpns) << " (from "
+            << versionsSource.value() << ")" << std::endl;
   std::cout << "1.." << testsToRun.size() << std::endl;
 
   folly::EventBase evb;
