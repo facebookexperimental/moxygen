@@ -456,10 +456,10 @@ TEST_F(MoQTrackTest, ScheduleTimestampsDefaultIncrements) {
       std::chrono::system_clock::time_point(std::chrono::seconds(1767225600));
   auto info = moxygen::scheduleTimestampInfo(params_, start);
   ASSERT_TRUE(info.has_value());
-  EXPECT_EQ(info->timescale, 1'000'000);
+  EXPECT_EQ(info->timescale, 10'000);
   ASSERT_TRUE(info->mapping.has_value());
-  EXPECT_EQ(info->mapping->objectMultiplier, 50'000);
-  EXPECT_EQ(info->mapping->groupMultiplier, 500'000);
+  EXPECT_EQ(info->mapping->objectMultiplier, 500);
+  EXPECT_EQ(info->mapping->groupMultiplier, 5'000);
   EXPECT_EQ(
       info->toWallClock(info->mapping->timestamp(2, 3).value()),
       start + std::chrono::milliseconds(23 * 50));
@@ -478,7 +478,7 @@ TEST_F(MoQTrackTest, ScheduleTimestampsUnevenIncrements) {
       std::chrono::system_clock::time_point(std::chrono::seconds(1767225600));
   auto info = moxygen::scheduleTimestampInfo(params_, start);
   ASSERT_TRUE(info.has_value());
-  EXPECT_EQ(info->timescale, 21'000'000);
+  EXPECT_EQ(info->timescale, 210'000);
   uint64_t index = 0;
   for (uint64_t group = 5; group <= 19; group += 7) {
     for (uint64_t object = 1; object <= 10; object += 3) {
@@ -489,6 +489,24 @@ TEST_F(MoQTrackTest, ScheduleTimestampsUnevenIncrements) {
           start + std::chrono::milliseconds(10 * index++));
     }
   }
+}
+
+TEST_F(MoQTrackTest, ScheduleTimestampsTickFactor) {
+  // Object IDs 0 and 16 every 1ms. 10 ticks per Object over an increment of 16
+  // needs k = 8.
+  CreateDefaultMoQTestParameters();
+  params_.objectIncrement = 16;
+  params_.lastObjectInTrack = 16;
+  params_.objectFrequency = 1;
+  const auto start =
+      std::chrono::system_clock::time_point(std::chrono::seconds(1767225600));
+  auto info = moxygen::scheduleTimestampInfo(params_, start);
+  ASSERT_TRUE(info.has_value());
+  EXPECT_EQ(info->timescale, 80'000);
+  EXPECT_EQ(info->mapping->objectMultiplier, 5);
+  EXPECT_EQ(
+      info->toWallClock(info->mapping->timestamp(0, 16).value()),
+      start + std::chrono::milliseconds(1));
 }
 
 TEST_F(MoQTrackTest, ScheduleTimestampsUnpaced) {
@@ -505,7 +523,8 @@ TEST_F(MoQTrackTest, ScheduleTimestampsOverflow) {
   // Each would wrap a 64-bit product. The track then falls back to explicit
   // timestamps.
   CreateDefaultMoQTestParameters();
-  params_.objectFrequency = 18446744073709552;
+  // This frequency times 10 ticks per ms wraps to 4.
+  params_.objectFrequency = 1844674407370955162;
   EXPECT_FALSE(moxygen::scheduleTimestampInfo(params_, start).has_value());
 
   CreateDefaultMoQTestParameters();
@@ -550,7 +569,6 @@ TEST_F(MoQTrackTest, AppendSendTime) {
       std::chrono::system_clock::time_point(std::chrono::seconds(1767225600));
   auto info = moxygen::scheduleTimestampInfo(params_, start);
   ASSERT_TRUE(info.has_value());
-  const auto ticksPerMs = static_cast<int64_t>(info->timescale / 1000);
 
   // An Object on schedule does not carry the property.
   extensions.clear();
@@ -558,13 +576,15 @@ TEST_F(MoQTrackTest, AppendSendTime) {
       moxygen::appendSendTime(extensions, *info, {0, 0}, start), std::nullopt);
   EXPECT_TRUE(extensions.empty());
 
-  for (auto offset :
-       {std::chrono::milliseconds(1000), std::chrono::milliseconds(-3)}) {
+  // Corrections count 100us ticks.
+  for (auto [offset, expected] :
+       {std::pair{std::chrono::milliseconds(1000), int64_t(10'000)},
+        std::pair{std::chrono::milliseconds(-3), int64_t(-30)}}) {
     extensions.clear();
     auto correction =
         moxygen::appendSendTime(extensions, *info, {0, 0}, start + offset);
     ASSERT_TRUE(correction.has_value());
-    EXPECT_EQ(*correction, offset.count() * ticksPerMs);
+    EXPECT_EQ(*correction, expected);
     ASSERT_EQ(extensions.size(), 1);
     moxygen::ObjectHeader header;
     header.group = 0;

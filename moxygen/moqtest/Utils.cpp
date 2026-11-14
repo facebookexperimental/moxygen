@@ -215,19 +215,23 @@ std::optional<TrackTimestampInfo> scheduleTimestampInfo(
       (lastObjectInGroup(params) - params.startObject) /
           params.objectIncrement +
       1;
-  uint64_t objectMicros = 0;
-  uint64_t groupMicros = 0;
-  if (__builtin_mul_overflow(params.objectFrequency, 1000, &objectMicros) ||
-      __builtin_mul_overflow(objectsPerGroup, objectMicros, &groupMicros)) {
+  // 100us ticks keep the usual pacing jitter within a 1-byte correction.
+  constexpr uint64_t kBaseTimescale = 10'000;
+  constexpr uint64_t kTicksPerMs = kBaseTimescale / 1000;
+  uint64_t objectUnits = 0;
+  uint64_t groupUnits = 0;
+  if (__builtin_mul_overflow(
+          params.objectFrequency, kTicksPerMs, &objectUnits) ||
+      __builtin_mul_overflow(objectsPerGroup, objectUnits, &groupUnits)) {
     return std::nullopt;
   }
-  // The timescale is 1MHz times the smallest k that keeps both multipliers
-  // integral.
-  auto factor = [](uint64_t micros, uint64_t increment) {
-    return increment / std::gcd(micros, increment);
+  // The timescale is kBaseTimescale times the smallest k that keeps both
+  // multipliers integral.
+  auto factor = [](uint64_t units, uint64_t increment) {
+    return increment / std::gcd(units, increment);
   };
-  const uint64_t objectFactor = factor(objectMicros, params.objectIncrement);
-  const uint64_t groupFactor = factor(groupMicros, params.groupIncrement);
+  const uint64_t objectFactor = factor(objectUnits, params.objectIncrement);
+  const uint64_t groupFactor = factor(groupUnits, params.groupIncrement);
   uint64_t k = 0;
   if (__builtin_mul_overflow(
           objectFactor / std::gcd(objectFactor, groupFactor),
@@ -241,9 +245,9 @@ std::optional<TrackTimestampInfo> scheduleTimestampInfo(
   uint64_t objectTicks = 0;
   uint64_t groupTicks = 0;
   uint64_t startOffset = 0;
-  if (__builtin_mul_overflow(uint64_t(1'000'000), k, &info.timescale) ||
-      __builtin_mul_overflow(objectMicros, k, &objectTicks) ||
-      __builtin_mul_overflow(groupMicros, k, &groupTicks)) {
+  if (__builtin_mul_overflow(kBaseTimescale, k, &info.timescale) ||
+      __builtin_mul_overflow(objectUnits, k, &objectTicks) ||
+      __builtin_mul_overflow(groupUnits, k, &groupTicks)) {
     return std::nullopt;
   }
   mapping.objectMultiplier = objectTicks / params.objectIncrement;
