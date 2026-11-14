@@ -15,6 +15,7 @@ target_compile_options(
 target_link_libraries(
   moqtest_utils PUBLIC
   moxygen_moq
+  moxygen_moq_timestamp
 )
 
 install(

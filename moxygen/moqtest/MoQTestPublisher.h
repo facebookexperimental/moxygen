@@ -55,7 +55,11 @@ class MoQTestPublisher : public Publisher,
   };
 
   void setIncludeTimestampExtension(bool include) {
-    includeTimestampExtension_ = include;
+    if (include) {
+      timestampInfo_ = TrackTimestampInfo::wallClockMicros();
+    } else {
+      timestampInfo_.reset();
+    }
   }
 
   const SendStats& datagramStats() const {
@@ -249,6 +253,9 @@ class MoQTestPublisher : public Publisher,
   // Starts the clock, so make one immediately before the loop it paces.
   ObjectPacer makePacer(const MoQTestParameters& params);
 
+  // True when the test integer extension would reuse OBJECT_TIMESTAMP's type.
+  bool collidesWithTimestamp(const MoQTestParameters& params) const;
+
   // The forwarder every subscriber to `ftn` attaches to.  Deliberately leaves
   // the track alias unset: addSubscriber then gives each subscriber its own
   // request ID as the alias, which is what keeps aliases unique per session.
@@ -283,7 +290,7 @@ class MoQTestPublisher : public Publisher,
   // Not the global singleton, which can crash if used during teardown, and not
   // a wheel: wheels arm through libevent, whose timeouts are jiffy granular.
   folly::HeapTimekeeper timekeeper_;
-  bool includeTimestampExtension_{false};
+  std::optional<TrackTimestampInfo> timestampInfo_;
   SendStats datagramStats_;
   SendStats subgroupStats_;
 };

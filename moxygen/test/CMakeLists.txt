@@ -149,6 +149,15 @@ moxygen_add_test(TARGET MoQTokenCacheTests
     testmain
 )
 
+moxygen_add_test(TARGET MoQTimestampTests
+  PREFIX "MoQTimestamp"
+  SOURCES
+    MoQTimestampTest.cpp
+  DEPENDS
+    moxygen_moq_timestamp
+    testmain
+)
+
 moxygen_add_test(TARGET ObjectReceiverTests
   PREFIX "ObjectReceiver"
   SOURCES

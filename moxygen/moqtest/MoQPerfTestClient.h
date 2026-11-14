@@ -14,6 +14,7 @@
 #include <proxygen/lib/utils/URL.h>
 
 #include "moxygen/MoQClientBase.h"
+#include "moxygen/MoQTimestamp.h"
 #include "moxygen/ObjectReceiver.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
 #include "moxygen/moqtest/Types.h"
@@ -94,6 +95,8 @@ class SubscriberState {
   std::unique_ptr<MoQClientBase> moqClient_;
   std::shared_ptr<ObjectReceiver> receiver_;
   std::shared_ptr<Publisher::SubscriptionHandle> subHandle_;
+  // Objects that arrive before SUBSCRIBE_OK sets this are not timed.
+  std::optional<TrackTimestampInfo> timestampInfo_;
 };
 
 // Main performance test client that manages multiple subscribers

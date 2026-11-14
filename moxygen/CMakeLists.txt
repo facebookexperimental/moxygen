@@ -39,6 +39,18 @@ moxygen_add_library(moxygen_moq_varint
     Folly::folly_io_iobuf
 )
 
+moxygen_add_library(moxygen_moq_timestamp
+  SRCS
+    MoQTimestamp.cpp
+  DEPS
+    moxygen_moq_varint
+    Folly::folly_cpp_attributes
+  EXPORTED_DEPS
+    moxygen_moq_types
+    Folly::folly_expected
+    Folly::folly_io_iobuf
+)
+
 moxygen_add_library(moxygen_moq_framer
   SRCS
     MoQFramer.cpp

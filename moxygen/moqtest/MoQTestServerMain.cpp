@@ -49,7 +49,7 @@ DEFINE_string(
 DEFINE_bool(
     include_timestamp_extension,
     false,
-    "Stamp each object with a send-time millisecond timestamp extension "
+    "Stamp each object with its send time as a microsecond OBJECT_TIMESTAMP "
     "(used by the perf client for latency measurement).");
 DEFINE_bool(
     quic,

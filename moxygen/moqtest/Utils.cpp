@@ -165,7 +165,8 @@ convertTrackNamespaceToMoqTestParam(TrackNamespace* track) {
 std::vector<Extension> getExtensions(
     int integerExtensionId,
     int variableExtensionId,
-    bool includeTimestamp) {
+    const std::optional<TrackTimestampInfo>& timestampInfo,
+    AbsoluteLocation location) {
   std::vector<Extension> extensions;
   if (integerExtensionId >= 0) {
     uint64_t randomNumber = std::rand();
@@ -180,14 +181,33 @@ std::vector<Extension> getExtensions(
         static_cast<uint64_t>(2 * variableExtensionId + 1), {std::move(buf)}};
     extensions.push_back(ext);
   }
-  if (includeTimestamp) {
-    uint64_t timestampMs =
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count();
-    extensions.emplace_back(kTimestampExtensionType, timestampMs);
+  if (timestampInfo) {
+    auto now = timestampInfo->fromWallClock(std::chrono::system_clock::now());
+    if (now) {
+      auto property =
+          timestampInfo->objectProperty(location.group, location.object, *now);
+      if (property.hasValue() && property->has_value()) {
+        extensions.push_back(std::move(**property));
+      }
+    }
   }
   return extensions;
+}
+
+std::optional<uint64_t> objectLatencyMs(
+    const TrackTimestampInfo& timestampInfo,
+    const ObjectHeader& header) {
+  auto timestamp = timestampInfo.objectTimestamp(header);
+  if (timestamp.hasError() || !timestamp->has_value()) {
+    return std::nullopt;
+  }
+  auto sent = timestampInfo.toWallClock(**timestamp);
+  auto now = std::chrono::system_clock::now();
+  if (!sent || *sent > now) {
+    return std::nullopt;
+  }
+  return std::chrono::duration_cast<std::chrono::milliseconds>(now - *sent)
+      .count();
 }
 
 uint8_t publisherPriorityForGroup(uint64_t groupNumber) {

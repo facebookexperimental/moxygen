@@ -160,6 +160,22 @@ TEST_F(
   EXPECT_EQ(error.errorCode, moxygen::SubscribeErrorCode::NOT_SUPPORTED);
   EXPECT_EQ(error.reasonPhrase, "Invalid Parameters");
 }
+TEST_F(MoQTrackServerTest, SubscribeRejectsExtensionThatCollidesWithTimestamp) {
+  CreateDefaultMoQTestParameters();
+  // Integer extension types are 2 * id. 2 * 5773 is OBJECT_TIMESTAMP.
+  params_.testIntegerExtension = 5773;
+  auto ns = moxygen::convertMoqTestParamToTrackNamespace(params_);
+  ASSERT_TRUE(ns.hasValue());
+  track_ = ns.value();
+  publisher_->setIncludeTimestampExtension(true);
+
+  auto result = folly::coro::blockingWait(
+      publisher_->subscribe(MakeSubscribe(0), nullptr));
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(
+      result.error().errorCode, moxygen::SubscribeErrorCode::NOT_SUPPORTED);
+}
+
 TEST_F(MoQTrackServerTest, ValidateSubscribeWithForwardPreferenceZero) {
   MoQTrackServerTest::CreateDefaultMoQTestParameters();
 

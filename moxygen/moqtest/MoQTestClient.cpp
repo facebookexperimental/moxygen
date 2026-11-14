@@ -1126,8 +1126,18 @@ AdjustedExpectedResult MoQTestClient::adjustExpectedForDatagram(
 }
 
 folly::Expected<folly::Unit, ExtensionError> MoQTestClient::validateExtensions(
-    const std::vector<Extension>& extensions,
+    const std::vector<Extension>& allExtensions,
     MoQTestParameters* params) {
+  // The publisher adds OBJECT_TIMESTAMP outside the test extensions.
+  std::vector<Extension> extensions;
+  std::copy_if(
+      allExtensions.begin(),
+      allExtensions.end(),
+      std::back_inserter(extensions),
+      [](const Extension& ext) {
+        return ext.type != kObjectTimestampPropertyType;
+      });
+
   // validate extension size
   if (!validateExtensionSize(extensions, params)) {
     int expectedAmount = (int)(params->testIntegerExtension >= 0) +

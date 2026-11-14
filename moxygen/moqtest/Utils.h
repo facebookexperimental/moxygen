@@ -12,14 +12,10 @@
 #include <utility>
 #include "moxygen/MoQConsumers.h"
 #include "moxygen/MoQFramer.h"
+#include "moxygen/MoQTimestamp.h"
 #include "moxygen/moqtest/Types.h"
 
 namespace moxygen {
-
-// Fixed extension type for the send timestamp (milliseconds since epoch).
-// Even type => integer extension. Value is large enough to avoid collision with
-// test integer extensions (which use 2 * testIntegerExtension).
-constexpr uint64_t kTimestampExtensionType = 0xC000;
 
 // The priority the server advertises as the track's publisher priority.  It is
 // deliberately not kDefaultPriority, so a subscriber that mishandles the
@@ -36,10 +32,19 @@ convertMoqTestParamToTrackNamespace(const MoQTestParameters& params);
 folly::Expected<moxygen::MoQTestParameters, std::runtime_error>
 convertTrackNamespaceToMoqTestParam(TrackNamespace* track);
 
+// Stamps the Object at `location` with the current wall-clock time when
+// `timestampInfo` is set.
 std::vector<Extension> getExtensions(
     int integerExtensionId,
     int variableExtensionId,
-    bool includeTimestamp = false);
+    const std::optional<TrackTimestampInfo>& timestampInfo = std::nullopt,
+    AbsoluteLocation location = {});
+
+// Milliseconds from the Object's wall-clock timestamp to now. nullopt when the
+// timestamp is missing, malformed, or in the future.
+std::optional<uint64_t> objectLatencyMs(
+    const TrackTimestampInfo& timestampInfo,
+    const ObjectHeader& header);
 
 int getObjectSize(uint64_t objectId, MoQTestParameters* params);
 
