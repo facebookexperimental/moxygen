@@ -779,6 +779,28 @@ TEST(MLogTypesTest, FetchRangeEndLoggerApis) {
   }
 }
 
+TEST(MLogTypesTest, FetchEndOfRangeHookLogsEachKind) {
+  for (auto rangeEnd :
+       {FetchRangeEnd::NonExistent,
+        FetchRangeEnd::Unknown,
+        FetchRangeEnd::TimedOut}) {
+    InspectableMLogger logger;
+    logger.onFetchEndOfRange(
+        MoQFrameObserver::Direction::Received,
+        MoQFrameObserver::DataStream{40},
+        50,
+        60,
+        rangeEnd);
+    const auto data = logger.event(0)["data"];
+    EXPECT_EQ(
+        data["end_of_nonexistent_range"],
+        rangeEnd == FetchRangeEnd::NonExistent);
+    EXPECT_EQ(data["end_of_unknown_range"], rangeEnd == FetchRangeEnd::Unknown);
+    EXPECT_EQ(
+        data["end_of_timed_out_range"], rangeEnd == FetchRangeEnd::TimedOut);
+  }
+}
+
 TEST_F(FileMLoggerTest, LatestSetupAndFillParameterSchemas) {
   const auto setupPath = (dir_ / "setup.mlog").string();
   FileMLogger setupLogger(VantagePoint::CLIENT, setupPath);

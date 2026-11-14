@@ -99,6 +99,25 @@ class MLogger : public MoQFrameObserver {
   void onGoaway(Direction, uint64_t, const Goaway&) override;
   void onMaxRequestID(Direction, uint64_t, const MaxRequestID&) override;
   void onRequestsBlocked(Direction, uint64_t, const RequestsBlocked&) override;
+  void onPaddingStream(Direction, DataStream) override;
+  void onSubgroupHeader(
+      Direction,
+      DataStream,
+      TrackAlias,
+      uint64_t,
+      uint64_t,
+      std::optional<uint8_t>,
+      const SubgroupOptions&) override;
+  void onSubgroupObject(Direction, DataStream, TrackAlias, const ObjectHeader&)
+      override;
+  void onFetchHeader(Direction, DataStream, uint64_t) override;
+  void onFetchObject(Direction, DataStream, const ObjectHeader&) override;
+  void onFetchEndOfRange(
+      Direction,
+      DataStream,
+      uint64_t,
+      uint64_t,
+      FetchRangeEnd) override;
 
   void logClientSetup(
       uint64_t streamId,
@@ -322,14 +341,8 @@ class MLogger : public MoQFrameObserver {
       TrackAlias trackAlias,
       const ObjectHeader& objHeader,
       Payload payload);
-  void logFetchHeaderCreated(
-      const uint64_t streamId,
-      const uint64_t requestId,
-      bool isFill = false);
-  void logFetchHeaderParsed(
-      const uint64_t streamId,
-      const uint64_t requestId,
-      bool isFill = false);
+  void logFetchHeaderCreated(const uint64_t streamId, const uint64_t requestId);
+  void logFetchHeaderParsed(const uint64_t streamId, const uint64_t requestId);
   void logFetchObjectCreated(
       const uint64_t streamId,
       const ObjectHeader& header,

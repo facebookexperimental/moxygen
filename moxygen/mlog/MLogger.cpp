@@ -1425,8 +1425,7 @@ void MLogger::logSubgroupObjectParsed(
 
 void MLogger::logFetchHeaderCreated(
     const uint64_t streamId,
-    const uint64_t requestId,
-    bool /*isFill*/) {
+    const uint64_t requestId) {
   MOQTFetchHeaderCreated baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.requestId = requestId;
@@ -1436,8 +1435,7 @@ void MLogger::logFetchHeaderCreated(
 
 void MLogger::logFetchHeaderParsed(
     const uint64_t streamId,
-    const uint64_t requestId,
-    bool /*isFill*/) {
+    const uint64_t requestId) {
   MOQTFetchHeaderParsed baseMsg;
   baseMsg.streamId = streamId;
   baseMsg.requestId = requestId;
@@ -1848,6 +1846,107 @@ void MLogger::onRequestsBlocked(
     const RequestsBlocked& req) {
   logRequestsBlocked(
       streamID, req.maxRequestID.value, toControlMessageType(dir));
+}
+
+namespace {
+Owner streamOwner(MoQFrameObserver::Direction dir) {
+  return dir == MoQFrameObserver::Direction::Sent ? Owner::LOCAL
+                                                  : Owner::REMOTE;
+}
+} // namespace
+
+void MLogger::onPaddingStream(Direction dir, DataStream stream) {
+  logStreamTypeSet(stream.value, MOQTStreamType::PADDING, streamOwner(dir));
+}
+
+void MLogger::onSubgroupHeader(
+    Direction dir,
+    DataStream stream,
+    TrackAlias alias,
+    uint64_t group,
+    uint64_t subgroup,
+    std::optional<uint8_t> priority,
+    const SubgroupOptions& options) {
+  logStreamTypeSet(
+      stream.value, MOQTStreamType::SUBGROUP_HEADER, streamOwner(dir));
+  if (dir == Direction::Sent) {
+    logSubgroupHeaderCreated(
+        stream.value,
+        alias,
+        group,
+        subgroup,
+        priority.value_or(0),
+        options.subgroupIDFormat,
+        options.hasExtensions,
+        options.hasEndOfGroup,
+        options.beginsWithFirstObject,
+        priority.has_value());
+  } else {
+    auto parsedOptions = options;
+    parsedOptions.priorityPresent = priority.has_value();
+    logSubgroupHeaderParsed(
+        stream.value,
+        alias,
+        group,
+        subgroup,
+        priority.value_or(0),
+        parsedOptions);
+  }
+}
+
+void MLogger::onSubgroupObject(
+    Direction dir,
+    DataStream stream,
+    TrackAlias alias,
+    const ObjectHeader& header) {
+  if (dir == Direction::Sent) {
+    logSubgroupObjectCreated(stream.value, alias, header, nullptr);
+  } else {
+    logSubgroupObjectParsed(stream.value, alias, header, nullptr);
+  }
+}
+
+void MLogger::onFetchHeader(
+    Direction dir,
+    DataStream stream,
+    uint64_t requestID) {
+  logStreamTypeSet(
+      stream.value, MOQTStreamType::FETCH_HEADER, streamOwner(dir));
+  if (dir == Direction::Sent) {
+    logFetchHeaderCreated(stream.value, requestID);
+  } else {
+    logFetchHeaderParsed(stream.value, requestID);
+  }
+}
+
+void MLogger::onFetchObject(
+    Direction dir,
+    DataStream stream,
+    const ObjectHeader& header) {
+  if (dir == Direction::Sent) {
+    logFetchObjectCreated(stream.value, header, nullptr);
+  } else {
+    logFetchObjectParsed(stream.value, header, nullptr);
+  }
+}
+
+void MLogger::onFetchEndOfRange(
+    Direction dir,
+    DataStream stream,
+    uint64_t group,
+    uint64_t object,
+    FetchRangeEnd rangeEnd) {
+  auto type = MOQTFetchRangeEndType::NONEXISTENT;
+  if (rangeEnd == FetchRangeEnd::Unknown) {
+    type = MOQTFetchRangeEndType::UNKNOWN;
+  } else if (rangeEnd == FetchRangeEnd::TimedOut) {
+    type = MOQTFetchRangeEndType::TIMED_OUT;
+  }
+  if (dir == Direction::Sent) {
+    logFetchObjectCreated(stream.value, group, object, type);
+  } else {
+    logFetchObjectParsed(stream.value, group, object, type);
+  }
 }
 
 } // namespace moxygen

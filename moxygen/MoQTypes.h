@@ -43,6 +43,9 @@ constexpr uint64_t kDynamicGroupsExtensionType = 0x30;
 constexpr uint64_t kSerializationFlagEndOfNonExistentRange = 0x8C;
 constexpr uint64_t kSerializationFlagEndOfUnknownRange = 0x10C;
 
+// The kind of range that a FETCH End of Range marker closes.
+enum class FetchRangeEnd : uint8_t { NonExistent, Unknown, TimedOut };
+
 //////// Types ////////
 
 using Payload = std::unique_ptr<folly::IOBuf>;

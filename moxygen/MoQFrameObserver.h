@@ -11,7 +11,7 @@
 namespace moxygen {
 
 // Sent fires once MoQFrameWriter serializes a frame. Received fires once a
-// control codec parses a frame, before the session's callback runs.
+// codec parses a frame, before the session's callback runs.
 class MoQFrameObserver {
  public:
   enum class Direction : uint8_t { Sent, Received };
@@ -83,6 +83,41 @@ class MoQFrameObserver {
   onMaxRequestID(Direction, uint64_t /*streamID*/, const MaxRequestID&) {}
   virtual void
   onRequestsBlocked(Direction, uint64_t /*streamID*/, const RequestsBlocked&) {}
+
+  // A data-stream frame serialized before its stream exists carries a pending
+  // key instead of a stream ID. onDataStreamBound later gives the key's
+  // stream. onDataStreamAbandoned means the stream will not exist.
+  struct DataStream {
+    enum class Kind : uint8_t { StreamID, PendingKey };
+    uint64_t value{0};
+    Kind kind{Kind::StreamID};
+  };
+  virtual void onPaddingStream(Direction, DataStream) {}
+  // priority is unset when the header omits it. options.priorityPresent is
+  // not used.
+  virtual void onSubgroupHeader(
+      Direction,
+      DataStream,
+      TrackAlias,
+      uint64_t /*group*/,
+      uint64_t /*subgroup*/,
+      std::optional<uint8_t> /*priority*/,
+      const SubgroupOptions&) {}
+  // An object's header.length is its declared payload length.
+  virtual void
+  onSubgroupObject(Direction, DataStream, TrackAlias, const ObjectHeader&) {}
+  virtual void onFetchHeader(Direction, DataStream, uint64_t /*requestID*/) {}
+  virtual void onFetchObject(Direction, DataStream, const ObjectHeader&) {}
+  virtual void onFetchEndOfRange(
+      Direction,
+      DataStream,
+      uint64_t /*group*/,
+      uint64_t /*object*/,
+      FetchRangeEnd) {}
+  virtual void onDataStreamBound(
+      uint64_t /*pendingKey*/,
+      uint64_t /*streamID*/) {}
+  virtual void onDataStreamAbandoned(uint64_t /*pendingKey*/) {}
 };
 
 } // namespace moxygen

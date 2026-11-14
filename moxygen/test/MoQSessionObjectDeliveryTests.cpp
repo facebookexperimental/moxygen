@@ -2099,9 +2099,9 @@ CO_TEST_P_X(MoQSessionTest, MLogRecordsObjectTier) {
   // records each one it parses.
   EXPECT_EQ(sent.subgroupHeadersCreated, 2u);
   EXPECT_EQ(received.subgroupHeadersParsed, 2u);
-  // An object split across payload frames is delivered but not recorded.
-  // TODO: record the split object and expect 2.
-  EXPECT_EQ(received.subgroupObjectsParsed, 1u);
+  // The codec reports an object when it parses the object's header, so the
+  // object split across two payload frames is recorded once.
+  EXPECT_EQ(received.subgroupObjectsParsed, 2u);
   EXPECT_EQ(received.datagramsParsed, 0u);
   // Each subgroup stream gets a stream type, on both sides.
   EXPECT_EQ(sent.dataStreamTypesSet, 2u);
