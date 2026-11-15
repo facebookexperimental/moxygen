@@ -1993,10 +1993,13 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
     TrackStatusOk trackStatusOk;
     trackStatusOk.requestID = trackStatus.requestID;
     trackStatusOk.groupOrder = forwarder->groupOrder();
-    trackStatusOk.trackProperties.insertMutableExtension(
-        Extension{
-            kPublisherGroupOrderExtensionType,
-            folly::to_underlying(forwarder->groupOrder())});
+    trackStatusOk.trackProperties = forwarder->extensions();
+    if (!getPublisherGroupOrder(trackStatusOk.trackProperties)) {
+      trackStatusOk.trackProperties.insertMutableExtension(
+          Extension{
+              kPublisherGroupOrderExtensionType,
+              folly::to_underlying(forwarder->groupOrder())});
+    }
     trackStatusOk.largest = forwarder->largest();
 
     XLOG(DBG1) << "Returning local track status for "

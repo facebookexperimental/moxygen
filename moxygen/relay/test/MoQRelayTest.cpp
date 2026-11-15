@@ -2278,6 +2278,74 @@ TEST_F(MoQRelayTest, TrackStatusSuccessfulForward) {
   removeSession(publisherSession);
 }
 
+// A TRACK_STATUS answered from the forwarder returns the publisher's Track
+// Properties, with exactly one group order even when the publisher omits it.
+TEST_F(MoQRelayTest, TrackStatusLocalReturnsPublisherTrackProperties) {
+  auto publisherSession = createMockSession();
+  auto clientSession = createMockSession();
+  const FullTrackName kBareTrackName{kTestNamespace, "bare"};
+
+  PublishRequest pub;
+  pub.fullTrackName = kTestTrackName;
+  setPublisherDeliveryTimeout(pub, std::chrono::milliseconds(4000));
+  setPublisherMaxCacheDuration(pub, std::chrono::milliseconds(30000));
+  setPublisherPriority(pub, 64);
+  setPublisherGroupOrder(pub, GroupOrder::NewestFirst);
+  setPublisherDynamicGroups(pub, true);
+  withSessionContext(publisherSession, [&]() {
+    auto res = relay_->publish(
+        publisherSession, std::move(pub), createMockSubscriptionHandle());
+    ASSERT_TRUE(res.hasValue());
+    getOrCreateMockState(publisherSession)
+        ->publishConsumers.push_back(res->consumer);
+  });
+  doPublish(publisherSession, kBareTrackName);
+
+  subscribeToTrack(
+      clientSession, kTestTrackName, createMockConsumer(), RequestID(1));
+  subscribeToTrack(
+      clientSession, kBareTrackName, createMockConsumer(), RequestID(2));
+
+  auto getTrackStatus = [&](const FullTrackName& ftn) {
+    TrackStatus trackStatus;
+    trackStatus.fullTrackName = ftn;
+    trackStatus.requestID = RequestID(3);
+    return withSessionContext(clientSession, [&]() {
+      return folly::coro::blockingWait(
+          relay_->trackStatus(clientSession, trackStatus), exec_.get());
+    });
+  };
+  auto countGroupOrders = [](const Extensions& props) {
+    const auto& exts = props.getMutableExtensions();
+    return std::count_if(exts.begin(), exts.end(), [](const auto& ext) {
+      return ext.type == kPublisherGroupOrderExtensionType;
+    });
+  };
+
+  auto res = getTrackStatus(kTestTrackName);
+  ASSERT_TRUE(res.hasValue());
+  const auto& props = res->trackProperties;
+  EXPECT_EQ(
+      getPublisherDeliveryTimeout(props), std::chrono::milliseconds(4000));
+  EXPECT_EQ(
+      getPublisherMaxCacheDuration(props), std::chrono::milliseconds(30000));
+  EXPECT_EQ(getPublisherPriority(props), 64);
+  EXPECT_EQ(getPublisherGroupOrder(props), GroupOrder::NewestFirst);
+  EXPECT_EQ(getPublisherDynamicGroups(props), true);
+  EXPECT_EQ(countGroupOrders(props), 1);
+
+  auto bareRes = getTrackStatus(kBareTrackName);
+  ASSERT_TRUE(bareRes.hasValue());
+  EXPECT_EQ(
+      getPublisherGroupOrder(bareRes->trackProperties),
+      GroupOrder::OldestFirst);
+  EXPECT_EQ(countGroupOrders(bareRes->trackProperties), 1);
+
+  removeSession(clientSession);
+  exec_->drive();
+  removeSession(publisherSession);
+}
+
 // Test: TrackStatus using namespace prefix matching (no exact subscription)
 // Verifies that when there's no exact subscription but a publisher has
 // published a matching namespace prefix, the relay correctly routes
