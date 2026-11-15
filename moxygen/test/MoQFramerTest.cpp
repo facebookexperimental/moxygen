@@ -3138,9 +3138,9 @@ ErrorCode parseSubscribeBodyError(const std::unique_ptr<folly::IOBuf>& bytes) {
 // The nested block has its own allowlist, narrower than the message's.
 TEST(MoQFramerFillParameters, DisallowedNestedTypeIsAViolation) {
   // FORWARD is a legal SUBSCRIBE parameter but has no meaning inside a fill.
-  const std::string nested(
-      1,
-      static_cast<char>(folly::to_underlying(TrackRequestParamKey::FORWARD)));
+  const std::string nested{
+      '\x01', // one parameter
+      static_cast<char>(folly::to_underlying(TrackRequestParamKey::FORWARD))};
   EXPECT_EQ(
       parseSubscribeBodyError(
           subscribeWithRawParam(TrackRequestParamKey::FILL_PARAMETERS, nested)),
@@ -3150,8 +3150,8 @@ TEST(MoQFramerFillParameters, DisallowedNestedTypeIsAViolation) {
 // Range Filters are rejected inside FILL_PARAMETERS, as at the top level,
 // until moxygen implements them.
 TEST(MoQFramerFillParameters, RangeFilterIsAViolation) {
-  // Type 0x25 (a Range Filter) with an empty value.
-  const std::string nested("\x25\x00", 2);
+  // One parameter: type 0x25 (a Range Filter) with an empty value.
+  const std::string nested("\x01\x25\x00", 3);
   EXPECT_EQ(
       parseSubscribeBodyError(
           subscribeWithRawParam(TrackRequestParamKey::FILL_PARAMETERS, nested)),
@@ -3316,10 +3316,36 @@ TEST(MoQFramerFillParameters, AbsentWhenNotRequested) {
   EXPECT_FALSE(parseRes->fill.has_value());
 }
 
+// Length 4, one parameter: a LOCATION_FILTER of one group back.
+TEST(MoQFramerFillParameters, ParsesLengthAndCount) {
+  const std::string nested("\x01\x21\x01\x01", 4);
+  auto parseRes = parseSubscribeBody(
+      subscribeWithRawParam(TrackRequestParamKey::FILL_PARAMETERS, nested));
+  ASSERT_TRUE(parseRes.hasValue());
+  ASSERT_TRUE(parseRes->fill.has_value());
+  EXPECT_EQ(parseRes->fill->locationFilter, LocationFilter::relativeStart(1));
+}
+
+// The count and the length must agree.
+TEST(MoQFramerFillParameters, CountLengthMismatchIsAnError) {
+  // Count 1, then two parameters' worth of bytes.
+  const std::string extra("\x01\x20\xff\x02\x01", 5);
+  EXPECT_EQ(
+      parseSubscribeBodyError(
+          subscribeWithRawParam(TrackRequestParamKey::FILL_PARAMETERS, extra)),
+      ErrorCode::PROTOCOL_VIOLATION);
+  // Count 2, but only one parameter's bytes.
+  const std::string missing("\x02\x20\xff", 3);
+  EXPECT_NE(
+      parseSubscribeBodyError(subscribeWithRawParam(
+          TrackRequestParamKey::FILL_PARAMETERS, missing)),
+      ErrorCode::NO_ERROR);
+}
+
 // FILL_PARAMETERS below draft 22 is a protocol violation.
 TEST(MoQFramerFillParameters, RejectedBelowV22) {
   // A nested LOCATION_FILTER of one group back.
-  const std::string nested("\x21\x01\x01", 3);
+  const std::string nested("\x01\x21\x01\x01", 4);
   auto parseRes = parseSubscribeBody(
       subscribeWithRawParam(TrackRequestParamKey::FILL_PARAMETERS, nested),
       kVersionDraft18);
@@ -3340,7 +3366,8 @@ TEST(MoQFramerLocationFilter, FillParametersOnFetchIsAViolation) {
   writeVarintTo(body, 1); // one parameter
   writeVarintTo(
       body, folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS));
-  writeVarintTo(body, 0); // empty FILL_PARAMETERS value
+  writeVarintTo(body, 1); // FILL_PARAMETERS value: length 1,
+  writeVarintTo(body, 0); // holding a count of zero
 
   auto bytes = body.move();
   MoQFrameParser parser;

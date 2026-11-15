@@ -960,9 +960,20 @@ folly::Expected<FillParameters, ErrorCode> MoQFrameParser::parseFillParameters(
     size_t& length) const noexcept {
   FillParameters fill;
   const auto version = *version_;
+  // Draft 22: a parameter count inside the length-prefixed value.
+  auto numParams = decodeVarint(cursor, length);
+  if (!numParams) {
+    XLOG(DBG4) << "parseFillParameters: UNDERFLOW on numParams";
+    return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+  }
+  length -= numParams->second;
   // Its own duplicate scope, so a type may appear here and in the message.
   uint64_t previousKey = 0;
-  while (length > 0) {
+  for (uint64_t i = 0; i < numParams->first; i++) {
+    if (length == 0) {
+      XLOG(DBG4) << "parseFillParameters: UNDERFLOW on param " << i;
+      return folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    }
     auto key = parseParamKey(cursor, length, version, previousKey);
     if (key.hasError()) {
       return folly::makeUnexpected(key.error());
@@ -1001,6 +1012,11 @@ folly::Expected<FillParameters, ErrorCode> MoQFrameParser::parseFillParameters(
       default:
         break;
     }
+  }
+  if (length > 0) {
+    XLOG(ERR) << "parseFillParameters: " << length << " bytes left after "
+              << numParams->first << " params";
+    return folly::makeUnexpected(ErrorCode::PROTOCOL_VIOLATION);
   }
   return fill;
 }
@@ -4607,6 +4623,11 @@ void MoQFrameWriter::writeFillParameters(
     const FillParameters& fill,
     size_t& size,
     bool& error) const noexcept {
+  // Draft 22: a parameter count inside the length-prefixed value.
+  const uint64_t numParams = fill.fillTimeout.has_value() +
+      fill.subscriberPriority.has_value() + fill.locationFilter.has_value() +
+      fill.groupOrder.has_value();
+  writeVarint(writeBuf, numParams, size, error);
   // Ascending type order, delta encoded, like any other parameter block.
   uint64_t previousKey = 0;
   auto writeKey = [&](TrackRequestParamKey key) {
