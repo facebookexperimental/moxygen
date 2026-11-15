@@ -212,6 +212,11 @@ class MoQCache {
         bool complete,
         bool forwardingPreferenceIsDatagram,
         TimePoint now);
+
+    // Ends the group at lastObjectID, so later objects in it are gaps. Fails
+    // if the group already holds an object past lastObjectID.
+    folly::Expected<folly::Unit, MoQPublishError>
+    markEndOfGroup(CacheTrack& track, uint64_t groupID, uint64_t lastObjectID);
   };
 
   // Map from fetch range start to (end, writeback). Supports O(log n)

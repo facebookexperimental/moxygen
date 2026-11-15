@@ -303,15 +303,15 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
   // end-of-group/track from gap data when serving.
   if (status == ObjectStatus::END_OF_GROUP ||
       status == ObjectStatus::END_OF_TRACK) {
-    if (auto next = AbsoluteLocation{groupID, objectID}.nextInGroup()) {
-      track.insertGap(*next, {groupID, kLocationMax.object});
+    auto endRes = markEndOfGroup(track, groupID, objectID);
+    if (endRes.hasError()) {
+      return endRes;
     }
     if (status == ObjectStatus::END_OF_TRACK) {
       if (auto nextGrp = AbsoluteLocation{groupID, 0}.nextGroup()) {
         track.insertGap(*nextGrp, kLocationMax);
       }
     }
-    endOfGroup = true;
   }
 
   // Cache the object (including END_OF_GROUP/END_OF_TRACK status)
@@ -380,6 +380,24 @@ folly::Expected<folly::Unit, MoQPublishError> MoQCache::CacheGroup::cacheObject(
   if (objectID >= maxCachedObject) {
     maxCachedObject = objectID;
   }
+  return folly::unit;
+}
+
+folly::Expected<folly::Unit, MoQPublishError>
+MoQCache::CacheGroup::markEndOfGroup(
+    CacheTrack& track,
+    uint64_t groupID,
+    uint64_t lastObjectID) {
+  if (maxCachedObject > lastObjectID) {
+    XLOG(DBG4) << "End of group before a cached object; group=" << groupID
+               << " end=" << lastObjectID << " maxCached=" << maxCachedObject;
+    return folly::makeUnexpected(MoQPublishError(
+        MoQPublishError::MALFORMED_TRACK, "Object past end of group"));
+  }
+  if (auto next = AbsoluteLocation{groupID, lastObjectID}.nextInGroup()) {
+    track.insertGap(*next, {groupID, kLocationMax.object});
+  }
+  endOfGroup = true;
   return folly::unit;
 }
 
@@ -601,7 +619,8 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       std::shared_ptr<SubgroupConsumer> consumer,
       std::shared_ptr<CacheTrack> cacheTrackPtr,
       std::shared_ptr<CacheGroup> cacheGroupPtr,
-      MoQCache& cache)
+      MoQCache& cache,
+      bool containsLastInGroup)
       : group_(group),
         subgroup_(subgroup),
         consumer_(std::move(consumer)),
@@ -609,7 +628,8 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
         cacheTrack_(*cacheTrackPtr_),
         cacheGroupPtr_(std::move(cacheGroupPtr)),
         cacheGroup_(*cacheGroupPtr_),
-        cache_(cache) {
+        cache_(cache),
+        containsLastInGroup_(containsLastInGroup) {
     cache_.pinGroup(cacheGroup_, cacheTrack_);
   }
   SubgroupWriteback() = delete;
@@ -655,6 +675,13 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       consumer_->reset(ResetStreamErrorCode::INTERNAL_ERROR);
       return cacheRes;
     }
+    lastObject_ = objID;
+    if (finSub) {
+      auto endRes = endGroupIfLastInGroup();
+      if (endRes.hasError()) {
+        return endRes;
+      }
+    }
     return consumer_->object(objID, std::move(payload), std::move(ext), finSub);
   }
 
@@ -693,6 +720,7 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
       return cacheRes;
     }
     currentObject_ = objectID;
+    lastObject_ = objectID;
     currentLength_ = length;
     if (initialPayload) {
       size_t initBytes = initialPayload->computeChainDataLength();
@@ -726,6 +754,12 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
     cacheGroup_.totalBytes += addedBytes;
     cache_.totalCachedBytes_ += addedBytes;
     cache_.evictForByteLimitIfNeeded();
+    if (finSubgroup) {
+      auto endRes = endGroupIfLastInGroup();
+      if (endRes.hasError()) {
+        return folly::makeUnexpected(endRes.error());
+      }
+    }
     return consumer_->objectPayload(std::move(payload), finSubgroup);
   }
 
@@ -791,6 +825,10 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
   }
 
   folly::Expected<folly::Unit, MoQPublishError> endOfSubgroup() override {
+    auto endRes = endGroupIfLastInGroup();
+    if (endRes.hasError()) {
+      return endRes;
+    }
     return consumer_->endOfSubgroup();
   }
 
@@ -799,6 +837,19 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
   }
 
  private:
+  // Only a FIN proves the end of the group, so a malformed end resets the
+  // subgroup.
+  folly::Expected<folly::Unit, MoQPublishError> endGroupIfLastInGroup() {
+    if (!containsLastInGroup_ || !lastObject_ || cacheTrack_.evicted) {
+      return folly::unit;
+    }
+    auto res = cacheGroup_.markEndOfGroup(cacheTrack_, group_, *lastObject_);
+    if (res.hasError()) {
+      consumer_->reset(ResetStreamErrorCode::MALFORMED_TRACK);
+    }
+    return res;
+  }
+
   uint64_t group_;
   uint64_t subgroup_;
   std::shared_ptr<SubgroupConsumer> consumer_;
@@ -807,6 +858,8 @@ class MoQCache::SubgroupWriteback : public SubgroupConsumer {
   std::shared_ptr<CacheGroup> cacheGroupPtr_; // Prevent UAF if cache cleared
   CacheGroup& cacheGroup_;
   MoQCache& cache_;
+  bool containsLastInGroup_;
+  std::optional<uint64_t> lastObject_;
   uint64_t currentObject_{0};
   uint64_t currentLength_{0};
 };
@@ -853,7 +906,6 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
       uint64_t subgroupID,
       Priority priority,
       BeginSubgroupOptions options = {}) override {
-    // TODO: Handle containsLastInGroup parameter when caching
     // Check if the group is known to not exist
     if (isGroupNonExistent(track_.gaps, groupID)) {
       XLOG(ERR) << "Attempting to begin subgroup in group already marked as "
@@ -871,7 +923,8 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
           std::move(res.value()),
           trackPtr_,
           trackPtr_->groups[groupID],
-          cache_);
+          cache_,
+          options.containsLastInGroup);
     } else {
       return res;
     }
@@ -939,6 +992,15 @@ class MoQCache::SubscribeWriteback : public TrackConsumer {
         cache_.now());
     if (cacheRes.hasError()) {
       return cacheRes;
+    }
+    if (lastInGroup) {
+      // The byte limit can evict the group once the object is cached. A
+      // datagram cannot be reset, so a malformed end is only left out of the
+      // cache.
+      auto groupIt = track_.groups.find(header.group);
+      if (groupIt != track_.groups.end()) {
+        (void)groupIt->second->markEndOfGroup(track_, header.group, header.id);
+      }
     }
     return consumer_->datagram(header, std::move(payload), lastInGroup);
   }
