@@ -51,9 +51,9 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
   ConnectCallback connectCb;
   proxygen::HQConnector hqConnector(&connectCb, transaction_timeout);
-  // Make a copy of transportSettings and enable datagram support
   auto ts = transportSettings;
   ts.datagramConfig.enabled = true;
+  ts.advertisedReliableResetStreamSupport = true;
   ts.maxServerRecvPacketsPerLoop = 10;
   hqConnector.setTransportSettings(ts);
   hqConnector.setSupportedQuicVersions({quic::QuicVersion::QUIC_V1});

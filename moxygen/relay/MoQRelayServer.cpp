@@ -123,6 +123,7 @@ int main(int argc, char* argv[]) {
               FLAGS_key);
     auto ts = MoQServer::defaultTransportSettings();
     ts.orderedReadCallbacks = true;
+    ts.advertisedReliableResetStreamSupport = true;
     quicServer = std::make_shared<MoQRelayQuicServer>(
         relay,
         std::move(fizzContext),
