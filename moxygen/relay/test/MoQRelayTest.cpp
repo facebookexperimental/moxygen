@@ -3050,6 +3050,85 @@ TEST_F(MoQRelayTest, FetchAfterPublisherTermination) {
   removeSession(fetchSession);
 }
 
+// A track that arrives by PUBLISH is cached, so a FETCH for objects the
+// publisher already sent is served without going back to the publisher.
+TEST_F(MoQRelayTest, FetchOfPublishedTrackServedFromCache) {
+  relay_ = std::make_shared<MoQRelay>();
+  relay_->setAllowedNamespacePrefix(kAllowedPrefix);
+  auto publisherSession = createMockSession();
+  auto fetchSession = createMockSession();
+  EXPECT_CALL(*publisherSession, fetch(_, _))
+      .Times(AtMost(1))
+      .WillRepeatedly([](Fetch fetch, auto) {
+        return folly::coro::makeTask<Publisher::FetchResult>(
+            folly::makeUnexpected(
+                FetchError{
+                    fetch.requestID,
+                    FetchErrorCode::NOT_SUPPORTED,
+                    "Fetch not supported"}));
+      });
+
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+  ASSERT_NE(publishConsumer, nullptr);
+  auto holderSession = createMockSession();
+  auto holder = createMockConsumer();
+  auto holderSubgroup = createMockSubgroupConsumer();
+  ON_CALL(*holderSubgroup, object(_, _, _, _))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  ON_CALL(*holder, beginSubgroup(_, _, _, _))
+      .WillByDefault(Return(
+          folly::
+              makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                  holderSubgroup)));
+  subscribeToTrack(holderSession, kTestTrackName, holder, RequestID(1));
+  for (uint64_t group = 0; group < 3; group++) {
+    auto subgroup = publishConsumer->beginSubgroup(group, 0, kDefaultPriority);
+    ASSERT_TRUE(subgroup.hasValue());
+    for (uint64_t object = 0; object < 2; object++) {
+      ASSERT_TRUE((*subgroup)
+                      ->object(
+                          object,
+                          folly::IOBuf::copyBuffer("x"),
+                          Extensions(),
+                          /*finSubgroup=*/object == 1)
+                      .hasValue());
+    }
+  }
+
+  std::vector<AbsoluteLocation> received;
+  auto fetchConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  ON_CALL(*fetchConsumer, object(_, _, _, _, _, _, _))
+      .WillByDefault([&](uint64_t group,
+                         uint64_t /*subgroup*/,
+                         uint64_t object,
+                         auto&&...) {
+        received.emplace_back(group, object);
+        return folly::makeExpected<MoQPublishError>(folly::unit);
+      });
+  ON_CALL(*fetchConsumer, endOfFetch())
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+
+  Fetch fetch(
+      RequestID(0),
+      kTestTrackName,
+      AbsoluteLocation{1, 0},
+      AbsoluteLocation{1, 2});
+  withSessionContext(fetchSession, [&]() {
+    auto res = folly::coro::blockingWait(
+        relay_->fetch(fetchSession, std::move(fetch), fetchConsumer),
+        exec_.get());
+    ASSERT_TRUE(res.hasValue()) << res.error().reasonPhrase;
+  });
+  exec_->drive();
+  const std::vector<AbsoluteLocation> expected{{1, 0}, {1, 1}};
+  EXPECT_EQ(received, expected);
+
+  removeSession(fetchSession);
+  removeSession(holderSession);
+  exec_->drive();
+  removeSession(publisherSession);
+}
+
 // ============================================================
 // Publish Replaces Subscribe Tests
 // ============================================================

@@ -563,11 +563,10 @@ Subscriber::PublishResult MoQRelay::publish(
   }
   forwarder->setCallback(shared_from_this());
 
-  // Wrap forwarder in filter to intercept publishDone
-  auto filterImpl = std::make_shared<TerminationFilter>(
-      shared_from_this(), pub.fullTrackName, forwarder);
-  std::shared_ptr<TrackConsumer> filter =
-      std::static_pointer_cast<TrackConsumer>(filterImpl);
+  if (cache_) {
+    cache_->setTrackState(pub.fullTrackName, pub.largest, pub.extensions);
+  }
+  auto filter = getSubscribeWriteback(pub.fullTrackName, forwarder);
 
   wakePendingRendezvousForTrack(pub.fullTrackName);
 
