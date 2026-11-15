@@ -33,6 +33,12 @@ enum class FetchHeaderSerializationBits : uint8_t {
   EXTENSIONS_BITMASK = 0x20
 };
 
+// FetchOk::endLocation is exclusive for every version; draft 22 puts the
+// inclusive end on the wire.
+bool fetchOkEndIsInclusive(uint64_t version) {
+  return moxygen::getDraftMajorVersion(version) >= 22;
+}
+
 uint64_t getLocationTypeValue(
     moxygen::LocationType locationType,
     uint64_t /*version*/) {
@@ -3032,7 +3038,9 @@ folly::Expected<FetchOk, ErrorCode> MoQFrameParser::parseFetchOk(
   if (!res2) {
     return folly::makeUnexpected(res2.error());
   }
-  fetchOk.endLocation = std::move(res2.value());
+  fetchOk.endLocation = fetchOkEndIsInclusive(*version_)
+      ? res2->next().value_or(kLocationMax)
+      : res2.value();
 
   auto numParams = decodeVarint(cursor, length);
   if (!numParams) {
@@ -5845,8 +5853,13 @@ WriteResult MoQFrameWriter::writeFetchOk(
   }
   frameBuf.append(&fetchOk.endOfTrack, 1);
   size += 1;
-  writeVarint(frameBuf, fetchOk.endLocation.group, size, error);
-  writeVarint(frameBuf, fetchOk.endLocation.object, size, error);
+  // Draft 22 can't express an empty range: End == Start comes out below Start,
+  // which the receiver treats as a session error.
+  const auto wireEnd = fetchOkEndIsInclusive(*version_)
+      ? fetchOk.endLocation.prev().value_or(kLocationMin)
+      : fetchOk.endLocation;
+  writeVarint(frameBuf, wireEnd.group, size, error);
+  writeVarint(frameBuf, wireEnd.object, size, error);
 
   writeTrackRequestParams(frameBuf, fetchOk.params, {}, size, error);
 

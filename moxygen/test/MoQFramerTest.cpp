@@ -489,6 +489,67 @@ TEST_P(MoQFramerTest, SerializeAndParseAll) {
   parseAll(cursor, true);
 }
 
+namespace {
+
+// Writes `fetchOk` at `version` and returns the End Location as written on the
+// wire, plus the parsed FetchOk.
+std::pair<AbsoluteLocation, FetchOk> fetchOkWireAndParsed(
+    uint64_t version,
+    const FetchOk& fetchOk) {
+  MoQFrameWriter writer;
+  writer.initializeVersion(version);
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  EXPECT_TRUE(writer.writeFetchOk(writeBuf, fetchOk).hasValue());
+
+  MoQFrameParser parser;
+  parser.initializeVersion(version);
+  auto serialized = writeBuf.move();
+  folly::io::Cursor cursor(serialized.get());
+  auto frameType = parser.decodeVarint(cursor);
+  EXPECT_EQ(frameType->first, folly::to_underlying(FrameType::FETCH_OK));
+  auto bodyLen = cursor.readBE<uint16_t>();
+
+  folly::io::Cursor wire(cursor);
+  if (getDraftMajorVersion(version) < 18) {
+    parser.decodeVarint(wire); // requestID
+  }
+  wire.skip(1); // End Of Track
+  AbsoluteLocation wireEnd;
+  wireEnd.group = parser.decodeVarint(wire)->first;
+  wireEnd.object = parser.decodeVarint(wire)->first;
+
+  auto parsed = parser.parseFetchOk(cursor, bodyLen);
+  EXPECT_TRUE(parsed.hasValue());
+  return {wireEnd, parsed.value_or(FetchOk{})};
+}
+
+} // namespace
+
+TEST(MoQFramerFetchOkTest, Draft22EndLocationIsInclusiveOnTheWire) {
+  FetchOk fetchOk;
+  fetchOk.endLocation = {2, 10};
+  auto [wireEnd, parsed] = fetchOkWireAndParsed(kVersionDraft22, fetchOk);
+  EXPECT_EQ(wireEnd, (AbsoluteLocation{2, 9}));
+  EXPECT_EQ(parsed.endLocation, fetchOk.endLocation);
+}
+
+TEST(MoQFramerFetchOkTest, Draft22EndAtGroupBoundary) {
+  // Exclusive {3,0} is "through the end of group 2".
+  FetchOk fetchOk;
+  fetchOk.endLocation = {3, 0};
+  auto [wireEnd, parsed] = fetchOkWireAndParsed(kVersionDraft22, fetchOk);
+  EXPECT_EQ(wireEnd, (AbsoluteLocation{2, kEightByteLimit}));
+  EXPECT_EQ(parsed.endLocation, fetchOk.endLocation);
+}
+
+TEST(MoQFramerFetchOkTest, PreDraft22EndLocationUnchanged) {
+  FetchOk fetchOk;
+  fetchOk.endLocation = {2, 10};
+  auto [wireEnd, parsed] = fetchOkWireAndParsed(kVersionDraft21, fetchOk);
+  EXPECT_EQ(wireEnd, fetchOk.endLocation);
+  EXPECT_EQ(parsed.endLocation, fetchOk.endLocation);
+}
+
 TEST(MoQFramerGoawayTest, Draft17RemainsUriOnly) {
   MoQFrameWriter writer;
   writer.initializeVersion(kVersionDraft17);
