@@ -1062,6 +1062,19 @@ MoQFrameParser::parseVariableParam(
     }
     p.asLocationFilter = res.value();
   } else if (
+      key ==
+          folly::to_underlying(TrackRequestParamKey::TRACK_NAMESPACE_PREFIX) &&
+      getDraftMajorVersion(version) >= 22) {
+    // The tuple's field count, not a length, bounds the value. asString keeps
+    // the encoded tuple, as on earlier drafts.
+    auto tupleStart = cursor;
+    auto lengthBefore = length;
+    auto tuple = parseNamespaceTuple(cursor, length);
+    if (!tuple) {
+      return folly::makeUnexpected(tuple.error());
+    }
+    p.asString = tupleStart.readFixedString(lengthBefore - length);
+  } else if (
       key == subscriptionFilterKey ||
       (key == folly::to_underlying(TrackRequestParamKey::FILL_PARAMETERS) &&
        useFillFetch(version))) {
@@ -4450,6 +4463,15 @@ void MoQFrameWriter::writeV18ParamValue(
               folly::to_underlying(TrackRequestParamKey::LOCATION_FILTER) &&
           useLocationFilter(*version_)) {
         writeLocationFilter(writeBuf, param.asLocationFilter, size, error);
+        return;
+      }
+      if (!isExtension &&
+          param.key ==
+              folly::to_underlying(
+                  TrackRequestParamKey::TRACK_NAMESPACE_PREFIX) &&
+          getDraftMajorVersion(*version_) >= 22) {
+        writeBuf.append(param.asString.data(), param.asString.size());
+        size += param.asString.size();
         return;
       }
       if (isExtension ||

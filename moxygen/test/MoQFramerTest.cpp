@@ -2741,6 +2741,57 @@ TEST(MoQFramerTest, TrackNamespacePrefixParamRoundTrip) {
   EXPECT_EQ(*decoded, prefix);
 }
 
+// Draft 22 makes Track Namespace its own value encoding, so the prefix goes on
+// the wire as the bare tuple. Drafts 18-21 keep a length in front of it, which
+// peers on those drafts expect.
+TEST(MoQFramerTest, TrackNamespacePrefixParamWireFormat) {
+  const TrackNamespace prefix(std::vector<std::string>{"foo", "bar"});
+  const std::vector<uint8_t> tuple{
+      0x02, 0x03, 'f', 'o', 'o', 0x03, 'b', 'a', 'r'};
+  for (auto version : {kVersionDraft18, kVersionDraft22}) {
+    SCOPED_TRACE(version);
+    MoQFrameWriter writer;
+    writer.initializeVersion(version);
+    MoQFrameParser parser;
+    parser.initializeVersion(version);
+
+    RequestUpdate update;
+    update.requestID = RequestID(4);
+    update.params.setMajorVersion(getDraftMajorVersion(version));
+    ASSERT_TRUE(update.params
+                    .insertParam(
+                        MoQFrameWriter::encodeTrackNamespacePrefixParam(
+                            prefix, version))
+                    .hasValue());
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    ASSERT_TRUE(writer.writeSubscribeUpdate(writeBuf, update).hasValue());
+    auto buf = writeBuf.move();
+    buf->coalesce();
+
+    // The prefix is the only parameter, so it ends the message.
+    std::vector<uint8_t> expectedParam{0x34};
+    if (getDraftMajorVersion(version) < 22) {
+      expectedParam.push_back(tuple.size());
+    }
+    expectedParam.insert(expectedParam.end(), tuple.begin(), tuple.end());
+    std::vector<uint8_t> wire(buf->data(), buf->data() + buf->length());
+    ASSERT_GE(wire.size(), expectedParam.size());
+    EXPECT_EQ(
+        std::vector<uint8_t>(wire.end() - expectedParam.size(), wire.end()),
+        expectedParam);
+
+    folly::io::Cursor cursor(buf.get());
+    ASSERT_TRUE(parser.decodeVarint(cursor).has_value());
+    auto parsed = parser.parseRequestUpdate(cursor, cursor.readBE<uint16_t>());
+    ASSERT_TRUE(parsed.hasValue());
+    auto decoded =
+        MoQFrameParser::findTrackNamespacePrefixParam(parsed->params, version);
+    ASSERT_TRUE(decoded.hasValue());
+    ASSERT_TRUE(decoded->has_value());
+    EXPECT_EQ(**decoded, prefix);
+  }
+}
+
 // A value that is not a valid Track Namespace tuple must fail to decode (here
 // the tuple claims 5 elements but carries no element data).
 TEST(MoQFramerTest, TrackNamespacePrefixParamMalformed) {
