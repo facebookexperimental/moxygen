@@ -1975,6 +1975,62 @@ TEST_F(MoQRelayTest, RelaySubscribePreservesFirstSubscriberRequest) {
   removeSession(subscriberSession);
 }
 
+// A subscription that starts the track: upstream's SUBSCRIBE_OK has no Largest,
+// and object {0,0} arrives before the relay resumes. The subscriber gets {0,0}
+// live, so its fill is empty.
+TEST_F(MoQRelayTest, FillOmitsObjectsDeliveredBeforeUpstreamOk) {
+  auto publisherSession = createMockSession();
+  auto subscriberSession = createMockSession();
+
+  doPublishNamespace(publisherSession, kTestNamespace);
+
+  SubscribeOk upstreamOk;
+  upstreamOk.requestID = RequestID(1);
+  upstreamOk.trackAlias = TrackAlias(1);
+  upstreamOk.groupOrder = GroupOrder::OldestFirst;
+  EXPECT_CALL(*publisherSession, subscribe(_, _))
+      .WillOnce([upstreamOk](
+                    const SubscribeRequest&,
+                    std::shared_ptr<TrackConsumer> upstreamConsumer) {
+        EXPECT_TRUE(upstreamConsumer
+                        ->objectStream(
+                            ObjectHeader(0, 0, 0, 0, uint64_t(1)),
+                            folly::IOBuf::copyBuffer("a"))
+                        .hasValue());
+        auto handle =
+            std::make_shared<NiceMock<MockSubscriptionHandle>>(upstreamOk);
+        return folly::coro::makeTask<Publisher::SubscribeResult>(
+            folly::
+                Expected<std::shared_ptr<SubscriptionHandle>, SubscribeError>(
+                    handle));
+      });
+
+  auto consumer = createMockConsumer();
+  EXPECT_CALL(*consumer, objectStream(_, _, _))
+      .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  EXPECT_CALL(*consumer, beginFill(_)).Times(0);
+  EXPECT_CALL(*publisherSession, fetch(_, _)).Times(0);
+
+  SubscribeRequest sub;
+  sub.fullTrackName = kTestTrackName;
+  sub.requestID = RequestID(1);
+  sub.filter = LocationFilter::nextObject();
+  sub.fill = FillParameters{LocationFilter::relativeStart(1), {}, {}, {}};
+  std::shared_ptr<SubscriptionHandle> handle;
+  withSessionContext(subscriberSession, [&]() {
+    auto res = folly::coro::blockingWait(
+        relay_->subscribe(subscriberSession, std::move(sub), consumer),
+        exec_.get());
+    ASSERT_TRUE(res.hasValue());
+    handle = std::move(res.value());
+  });
+  getOrCreateMockState(subscriberSession)->subscribeHandles.push_back(handle);
+  exec_->drive();
+
+  removeSession(publisherSession);
+  removeSession(subscriberSession);
+}
+
 // The forwarder applies a REQUEST_UPDATE's filter and serves its fill, resolved
 // against the forwarder's Largest Object, under the update's request ID.
 TEST_F(MoQRelayTest, ForwarderRequestUpdateServesFill) {

@@ -218,7 +218,8 @@ class DatePublisher : public Publisher,
     auto subscriber =
         forwarder_.addSubscriber(reqCtx.sessionId, subReq, std::move(consumer));
     if (subscriber && subReq.fill) {
-      subscriber->requestFill(subReq.requestID, *subReq.fill);
+      subscriber->requestFill(
+          subReq.requestID, *subReq.fill, subscriber->subscribeOk().largest);
     }
     co_return subscriber;
   }

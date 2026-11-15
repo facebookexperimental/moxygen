@@ -297,7 +297,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQBroadcast::subscribe(
             "track ended"});
   }
   if (subReq.fill) {
-    sub->requestFill(subReq.requestID, *subReq.fill);
+    sub->requestFill(
+        subReq.requestID, *subReq.fill, sub->subscribeOk().largest);
   }
   XLOG(INFO) << "[MoQBroadcast] subscriber added track=" << ftn.trackName;
   // Non-static tracks produce objects through a publish loop. A source may

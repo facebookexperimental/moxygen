@@ -145,8 +145,11 @@ class MoQForwarder : public TrackConsumer {
     folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
         RequestUpdate requestUpdate) override;
 
-    // Resolves a fill against Largest Object for Callback::fillRequested.
-    void requestFill(RequestID fillRequestID, const FillParameters& fill);
+    // The fill ends at `largest`. Later objects reach the subscriber live.
+    void requestFill(
+        RequestID fillRequestID,
+        const FillParameters& fill,
+        std::optional<AbsoluteLocation> largest);
 
     void unsubscribe() override;
 

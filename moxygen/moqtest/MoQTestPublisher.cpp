@@ -272,7 +272,8 @@ folly::coro::Task<MoQSession::SubscribeResult> MoQTestPublisher::subscribe(
             "failed to add subscriber"});
   }
   if (sub.fill) {
-    subscriber->requestFill(sub.requestID, *sub.fill);
+    subscriber->requestFill(
+        sub.requestID, *sub.fill, subscriber->subscribeOk().largest);
   }
   if (!isNewTrack) {
     co_return subscriber;

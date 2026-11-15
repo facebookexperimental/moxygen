@@ -997,9 +997,10 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
     }
     // Only update new group request if provided
     forwarder->tryProcessNewGroupRequest(requestUpdate.params);
-  }
-  if (requestUpdate.fill) {
-    requestFill(requestUpdate.requestID, *requestUpdate.fill);
+    if (requestUpdate.fill) {
+      requestFill(
+          requestUpdate.requestID, *requestUpdate.fill, forwarder->largest());
+    }
   }
 
   co_return ok;
@@ -1007,7 +1008,8 @@ MoQForwarder::Subscriber::requestUpdate(RequestUpdate requestUpdate) {
 
 void MoQForwarder::Subscriber::requestFill(
     RequestID fillRequestID,
-    const FillParameters& fill) {
+    const FillParameters& fill,
+    std::optional<AbsoluteLocation> largest) {
   if (!forwarder || !forwarder->callback_ || !trackConsumer) {
     return;
   }
@@ -1016,7 +1018,7 @@ void MoQForwarder::Subscriber::requestFill(
       fillRequestID,
       filter,
       fill,
-      forwarder->largest(),
+      largest,
       priority,
       params);
   if (!fetch) {

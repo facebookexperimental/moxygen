@@ -1731,7 +1731,8 @@ MoQRelay::subscribeToExistingRelaySubscription(
   XLOG(DBG4) << "added subscriber for ftn=" << subReq.fullTrackName;
   forwarder->tryProcessNewGroupRequest(subReq.params);
   if (subReq.fill) {
-    subscriber->requestFill(subReq.requestID, *subReq.fill);
+    subscriber->requestFill(
+        subReq.requestID, *subReq.fill, subscriber->subscribeOk().largest);
   }
   co_return subscriber;
 }
@@ -1863,9 +1864,10 @@ MoQRelay::subscribeToFirstRelaySubscription(
   // Record NGR as outstanding (no fire — it rides the outgoing SUBSCRIBE).
   forwarder->tryProcessNewGroupRequest(subReq.params, /*fire=*/false);
   rsub.promise.setValue(folly::unit);
-  // Only now is upstream's Largest known, to both the forwarder and the cache.
+  // Objects past upstream's Largest reached this subscriber live during the
+  // co_await, so the fill uses upstream's Largest.
   if (subReq.fill) {
-    subscriber->requestFill(subReq.requestID, *subReq.fill);
+    subscriber->requestFill(subReq.requestID, *subReq.fill, largest);
   }
   co_return subscriber;
 }
