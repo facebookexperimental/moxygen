@@ -148,6 +148,8 @@ class CheckerRun {
       }
     }
     checker_.startWatch();
+    // A test that injects faults waits for this line before it starts.
+    std::cerr << "watching" << std::endl;
     const auto start = Clock::now();
     const auto executor = co_await folly::coro::co_current_executor;
     for (auto at : joinTimes_) {
