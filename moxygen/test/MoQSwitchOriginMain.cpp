@@ -173,7 +173,8 @@ int main(int argc, char* argv[]) {
       std::move(fizzContext),
       FLAGS_endpoint,
       MoQServer::Options{
-          .transportSettings = MoQServer::defaultTransportSettings()});
+          .transportSettings = MoQServer::defaultTransportSettings(),
+          .useHqWtSession = [] { return true; }});
   server->start(folly::SocketAddress("::", FLAGS_port), {&workerEvb});
 
   std::unique_ptr<SwitchOriginControlServer> controlServer;
