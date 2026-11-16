@@ -32,6 +32,9 @@ class MoQUpstreamGoaways
  public:
   using Callback = folly::Function<void(const Goaway&)>;
 
+  // Runs once per received session GOAWAY, before notifying its watches.
+  explicit MoQUpstreamGoaways(Callback onSessionGoaway = nullptr);
+
   // Stops its callback when reset or destroyed.
   class Watch {
    public:
@@ -66,6 +69,7 @@ class MoQUpstreamGoaways
  private:
   void forget(SessionId sessionId);
 
+  Callback onSessionGoaway_;
   folly::F14FastMap<SessionId, std::weak_ptr<SessionObserver>, SessionId::hash>
       observers_;
 };

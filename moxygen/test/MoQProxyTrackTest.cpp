@@ -756,6 +756,7 @@ TEST_F(MoQProxyTrackTest, UpstreamGoawaysAreCountedWhileTheUpstreamServes) {
   upstreamConsumer_->goaway(Goaway{});
 
   EXPECT_EQ(switchStats_->upstreamGoaways, 2);
+  EXPECT_EQ(switchStats_->requestStreamGoaways, 1);
   EXPECT_CALL(*consumer, datagram(_, _, _))
       .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
   EXPECT_TRUE(upstreamConsumer_

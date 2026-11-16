@@ -182,8 +182,7 @@ class MoQProxy : public Publisher,
   std::shared_ptr<MoQProxySwitchStats> switchStats_{
       std::make_shared<MoQProxySwitchStats>()};
   // Shared by all tracks, which may share upstream sessions.
-  std::shared_ptr<MoQUpstreamGoaways> upstreamGoaways_{
-      std::make_shared<MoQUpstreamGoaways>()};
+  std::shared_ptr<MoQUpstreamGoaways> upstreamGoaways_;
   // Jitter for every track's switches.
   std::shared_ptr<std::mt19937_64> switchRandom_;
   // Cancels cache waits and local replays when the proxy closes.

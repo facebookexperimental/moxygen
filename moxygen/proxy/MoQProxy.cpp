@@ -331,6 +331,11 @@ MoQProxy::MoQProxy(
     : upstreamProviders_(std::move(upstreamProviders)),
       options_(std::move(options)),
       budget_(std::make_shared<MoQCacheBudget>(options_.maxCacheBytes)),
+      upstreamGoaways_(
+          std::make_shared<MoQUpstreamGoaways>(
+              [stats = switchStats_](const Goaway&) {
+                ++stats->sessionGoaways;
+              })),
       switchRandom_(
           std::make_shared<std::mt19937_64>(
               options_.upstreamSwitch.randomSeed != 0

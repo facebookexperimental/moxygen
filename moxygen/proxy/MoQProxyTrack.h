@@ -125,6 +125,11 @@ struct MoQProxySwitchStats {
   // Each session or request-stream GOAWAY, once per track it reaches: a session
   // GOAWAY and a request-stream GOAWAY reaching one track count two.
   uint64_t upstreamGoaways{0};
+  // Session GOAWAYs received by the proxy's watched upstream sessions, once
+  // per session rather than once per track.
+  uint64_t sessionGoaways{0};
+  // Request-stream GOAWAYs received by the tracks' upstream subscriptions.
+  uint64_t requestStreamGoaways{0};
   // Upstream subscriptions that ended because their relay went away or their
   // session closed, rather than because the track ended.
   uint64_t upstreamsLost{0};

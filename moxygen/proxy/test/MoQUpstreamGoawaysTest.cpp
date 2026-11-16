@@ -37,6 +37,34 @@ class MoQUpstreamGoawaysTest : public testing::Test {
       std::make_shared<MoQUpstreamGoaways>()};
 };
 
+TEST_F(MoQUpstreamGoawaysTest, SessionCallbackRunsOnceBeforeTrackWatches) {
+  std::vector<std::string> calls;
+  auto goaways = std::make_shared<MoQUpstreamGoaways>(
+      [&](const Goaway& goaway) { calls.push_back(goaway.newSessionUri); });
+  auto session = makeSession();
+  auto first = goaways->watch(
+      *session, [&](const Goaway&) { calls.emplace_back("track"); });
+  auto second = goaways->watch(
+      *session, [&](const Goaway&) { calls.emplace_back("track"); });
+
+  receiveGoaway(*session, Goaway{.newSessionUri = "moqt://next"});
+
+  EXPECT_EQ(calls, (std::vector<std::string>{"moqt://next", "track", "track"}));
+}
+
+TEST_F(MoQUpstreamGoawaysTest, SessionCallbackCanStopTrackWatches) {
+  std::optional<MoQUpstreamGoaways::Watch> watch;
+  auto goaways = std::make_shared<MoQUpstreamGoaways>(
+      [&](const Goaway&) { watch.reset(); });
+  auto session = makeSession();
+  int reached = 0;
+  watch = goaways->watch(*session, [&](const Goaway&) { ++reached; });
+
+  receiveGoaway(*session, Goaway{});
+
+  EXPECT_EQ(reached, 0);
+}
+
 TEST_F(MoQUpstreamGoawaysTest, SessionGoawayReachesEveryWatcherOfThatSession) {
   auto session = makeSession();
   auto otherSession = makeSession();

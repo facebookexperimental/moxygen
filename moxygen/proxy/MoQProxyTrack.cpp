@@ -737,9 +737,15 @@ class MoQProxyTrack::Recorder final
     return forwarder_->publishDone(std::move(pubDone));
   }
 
-  // A request-stream GOAWAY for this subscription (draft 18+); the track's
-  // watch on the session passes session GOAWAYs here too.
+  // A request-stream GOAWAY for this subscription (draft 18+).
   void goaway(Goaway goaway) override {
+    if (auto track = track_.lock()) {
+      ++track->switchStats_->requestStreamGoaways;
+    }
+    receiveGoaway(goaway);
+  }
+
+  void receiveGoaway(const Goaway& goaway) {
     if (disabled_ || lost_) {
       return;
     }
@@ -1562,7 +1568,7 @@ MoQProxyTrack::establishWithProvider(
       *upstreamSession,
       [weakRecorder = std::weak_ptr<Recorder>(recorder)](const Goaway& goaway) {
         if (auto recorder = weakRecorder.lock()) {
-          recorder->goaway(goaway);
+          recorder->receiveGoaway(goaway);
         }
       });
   // Only the first subscription sends the joining FETCH saved for it, so only

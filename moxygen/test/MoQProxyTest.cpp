@@ -493,6 +493,8 @@ TEST_F(MoQProxyTest, SessionGoawayReachesEveryTrackOnThatSession) {
       .onGoaway(Goaway{});
 
   EXPECT_EQ(proxy_->switchStats().upstreamGoaways, 2);
+  EXPECT_EQ(proxy_->switchStats().sessionGoaways, 1);
+  EXPECT_EQ(proxy_->switchStats().requestStreamGoaways, 0);
   EXPECT_EQ(proxy_->switchStats().gracefulSwitches.started, 2);
   video.value()->unsubscribe();
   audio.value()->unsubscribe();

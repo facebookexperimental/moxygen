@@ -45,6 +45,10 @@ class MoQUpstreamGoaways::SessionObserver final
     // A callback may stop watches, or close the session, which releases this
     // observer.
     auto self = shared_from_this();
+    if (auto registry = registry_.lock();
+        registry && registry->onSessionGoaway_) {
+      registry->onSessionGoaway_(goaway);
+    }
     std::vector<uint64_t> ids;
     ids.reserve(callbacks_.size());
     for (const auto& entry : callbacks_) {
@@ -95,6 +99,9 @@ void MoQUpstreamGoaways::Watch::reset() {
   }
   id_ = 0;
 }
+
+MoQUpstreamGoaways::MoQUpstreamGoaways(Callback onSessionGoaway)
+    : onSessionGoaway_(std::move(onSessionGoaway)) {}
 
 MoQUpstreamGoaways::Watch MoQUpstreamGoaways::watch(
     MoQSession& session,
