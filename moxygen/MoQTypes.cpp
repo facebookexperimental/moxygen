@@ -521,10 +521,13 @@ const folly::F14FastSet<FrameType> kAllowedFramesForForward = {
     FrameType::SUBSCRIBE_NAMESPACE,
     FrameType::SUBSCRIBE_TRACKS};
 
+// REQUEST_OK is accepted at parse time because PUBLISH_OK is encoded on the
+// wire as REQUEST_OK; validateRequestOkParams rejects it on other responses.
 const folly::F14FastSet<FrameType> kAllowedFramesForNewGroupRequest = {
     FrameType::SUBSCRIBE,
     FrameType::REQUEST_UPDATE,
-    FrameType::PUBLISH_OK};
+    FrameType::PUBLISH_OK,
+    FrameType::REQUEST_OK};
 
 // v18+ SUBGROUP_DELIVERY_TIMEOUT (0x06): MAY appear in PUBLISH_OK,
 // SUBSCRIBE, or REQUEST_UPDATE.

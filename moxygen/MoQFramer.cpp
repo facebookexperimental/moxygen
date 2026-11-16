@@ -244,7 +244,6 @@ bool isRequestSpecificParam(moxygen::TrackRequestParamKey key) {
     case moxygen::TrackRequestParamKey::GROUP_ORDER:
     case moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY:
     case moxygen::TrackRequestParamKey::FORWARD:
-    case moxygen::TrackRequestParamKey::NEW_GROUP_REQUEST:
       return true;
     default:
       return false;
@@ -345,7 +344,6 @@ bool isPublishOkRequestSpecificParam(
     case moxygen::TrackRequestParamKey::GROUP_ORDER:
     case moxygen::TrackRequestParamKey::SUBSCRIBER_PRIORITY:
     case moxygen::TrackRequestParamKey::FORWARD:
-    case moxygen::TrackRequestParamKey::NEW_GROUP_REQUEST:
       return true;
     default:
       return false;
@@ -449,11 +447,6 @@ std::vector<moxygen::Parameter> getPublishOkRequestSpecificParams(
         moxygen::getFirstIntParam(
             publishOk.params, moxygen::TrackRequestParamKey::EXPIRES));
   }
-  appendIntRequestSpecificParam(
-      requestSpecificParams,
-      moxygen::TrackRequestParamKey::NEW_GROUP_REQUEST,
-      moxygen::getFirstIntParam(
-          publishOk.params, moxygen::TrackRequestParamKey::NEW_GROUP_REQUEST));
 
   return requestSpecificParams;
 }
@@ -3804,16 +3797,6 @@ static folly::Expected<PublishOk, ErrorCode> requestOkToPublishOk(
         "toPublishOk");
   }
 
-  auto maybeNewGroupRequest = getFirstIntParam(
-      requestOk.requestSpecificParams, TrackRequestParamKey::NEW_GROUP_REQUEST);
-  if (maybeNewGroupRequest.has_value()) {
-    insertPublishOkIntParamIfMissing(
-        publishOk.params,
-        TrackRequestParamKey::NEW_GROUP_REQUEST,
-        *maybeNewGroupRequest,
-        "toPublishOk");
-  }
-
   return publishOk;
 }
 
@@ -5096,16 +5079,6 @@ WriteResult MoQFrameWriter::writeSubscribeRequestHelper(
       forwardParam.asUint64 = 0;
       requestSpecificParams.push_back(forwardParam);
     }
-
-    auto newGroupRequestValue = getFirstIntParam(
-        subscribeRequest.params, TrackRequestParamKey::NEW_GROUP_REQUEST);
-    if (newGroupRequestValue.has_value()) {
-      Parameter newGroupRequestParam;
-      newGroupRequestParam.key =
-          folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST);
-      newGroupRequestParam.asUint64 = *newGroupRequestValue;
-      requestSpecificParams.push_back(newGroupRequestParam);
-    }
   }
 
   appendIncludePropertiesParam(
@@ -5174,16 +5147,6 @@ WriteResult MoQFrameWriter::writeRequestUpdate(
     forwardParam.key = folly::to_underlying(TrackRequestParamKey::FORWARD);
     forwardParam.asUint64 = *update.forward ? 1 : 0;
     requestSpecificParams.push_back(forwardParam);
-  }
-
-  auto newGroupRequestValue =
-      getFirstIntParam(update.params, TrackRequestParamKey::NEW_GROUP_REQUEST);
-  if (newGroupRequestValue.has_value()) {
-    Parameter newGroupRequestParam;
-    newGroupRequestParam.key =
-        folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST);
-    newGroupRequestParam.asUint64 = *newGroupRequestValue;
-    requestSpecificParams.push_back(newGroupRequestParam);
   }
   writeTrackRequestParams(
       writeBuf, update.params, requestSpecificParams, size, error);

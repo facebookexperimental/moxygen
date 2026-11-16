@@ -7318,19 +7318,21 @@ bool MoQSession::validateRequestOkParams(
   if (getDraftMajorVersion(*getNegotiatedVersion()) < 18) {
     return true;
   }
-  // OBJECT_DELIVERY_TIMEOUT and SUBGROUP_DELIVERY_TIMEOUT list REQUEST_OK in
-  // their parse-time allowlist so a PUBLISH_OK (encoded on the wire as
-  // REQUEST_OK) is accepted. Among REQUEST_OK responses they are valid only for
-  // PUBLISH_OK, so once the shorthand resolves reject them for anything else.
-  // This is keyed on the param (not isParamAllowed) because shorthands that
-  // share the REQUEST_OK wire type -- e.g. PUBLISH_NAMESPACE_OK (also 0x7) --
-  // are indistinguishable by frame type and would otherwise pass the superset.
+  // OBJECT_DELIVERY_TIMEOUT, SUBGROUP_DELIVERY_TIMEOUT and NEW_GROUP_REQUEST
+  // list REQUEST_OK in their parse-time allowlist so a PUBLISH_OK (encoded on
+  // the wire as REQUEST_OK) is accepted. Among REQUEST_OK responses they are
+  // valid only for PUBLISH_OK, so once the shorthand resolves reject them for
+  // anything else. This is keyed on the param (not isParamAllowed) because
+  // shorthands that share the REQUEST_OK wire type -- e.g. PUBLISH_NAMESPACE_OK
+  // (also 0x7) -- are indistinguishable by frame type and would otherwise pass
+  // the superset.
   for (const auto& param : requestOk.params) {
     auto key = static_cast<TrackRequestParamKey>(param.key);
     if ((key == TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT ||
-         key == TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT) &&
+         key == TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT ||
+         key == TrackRequestParamKey::NEW_GROUP_REQUEST) &&
         resolvedFrameType != FrameType::PUBLISH_OK) {
-      XLOG(ERR) << "Delivery timeout param key=" << param.key
+      XLOG(ERR) << "Param key=" << param.key
                 << " only valid for PUBLISH_OK among REQUEST_OK responses, got "
                 << "resolved frameType="
                 << folly::to_underlying(resolvedFrameType) << ", sess=" << this;

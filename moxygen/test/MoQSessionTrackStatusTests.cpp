@@ -399,6 +399,37 @@ TEST(
   }
 }
 
+TEST(MoQSessionRequestOkParamsValidation, NewGroupRequestOnlyForPublishOk) {
+  for (auto frameType :
+       {FrameType::PUBLISH_OK,
+        FrameType::REQUEST_OK,
+        FrameType::TRACK_STATUS_OK,
+        FrameType::SUBSCRIBE_NAMESPACE_OK,
+        FrameType::PUBLISH_NAMESPACE_OK}) {
+    SCOPED_TRACE(folly::to_underlying(frameType));
+    auto session = makeValidatorSession(kVersionDraft18);
+    CloseCallbackRecorder recorder;
+    session->setSessionCloseCallback(&recorder);
+    RequestOk requestOk;
+    requestOk.requestID = RequestID(1);
+    requestOk.params.setMajorVersion(getDraftMajorVersion(kVersionDraft18));
+    ASSERT_TRUE(
+        requestOk.params
+            .insertParam(Parameter(
+                folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST),
+                uint64_t(3)))
+            .hasValue());
+
+    const bool isPublishOk = frameType == FrameType::PUBLISH_OK;
+    EXPECT_EQ(
+        session->validateRequestOkParams(requestOk, frameType), isPublishOk);
+    EXPECT_EQ(session->isClosed(), !isPublishOk);
+    if (!isPublishOk) {
+      EXPECT_EQ(recorder.lastError, SessionCloseErrorCode::PROTOCOL_VIOLATION);
+    }
+  }
+}
+
 TEST(MoQSessionRequestOkParamsValidation, PreDraft18SkipsParamValidation) {
   // Pre-18 each shorthand had its own frame type, so there is no superset to
   // re-check; the validator is a no-op.

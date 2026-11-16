@@ -2725,6 +2725,138 @@ TEST(MoQFramerTest, SubscribeUpdateForwardUnset) {
   EXPECT_FALSE(parseResult->forward.has_value());
 }
 
+// NEW_GROUP_REQUEST is read from the parsed message's params, so it has to
+// appear there exactly once after a round trip.
+TEST(MoQFramerTest, NewGroupRequestSurvivesParsing) {
+  const auto kNewGroupRequest =
+      folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST);
+  auto countNewGroupRequests = [&](const TrackRequestParameters& params) {
+    return std::count_if(params.begin(), params.end(), [&](const auto& p) {
+      return p.key == kNewGroupRequest;
+    });
+  };
+  for (auto version : {kVersionDraft18, kVersionDraft22}) {
+    SCOPED_TRACE(version);
+    MoQFrameWriter writer;
+    writer.initializeVersion(version);
+    MoQFrameParser parser;
+    parser.initializeVersion(version);
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+
+    auto subscribe =
+        SubscribeRequest::make(FullTrackName{TrackNamespace({"ns"}), "track"});
+    ASSERT_TRUE(
+        subscribe.params.insertParam(Parameter(kNewGroupRequest, uint64_t(3)))
+            .hasValue());
+    ASSERT_TRUE(writer.writeSubscribeRequest(writeBuf, subscribe).hasValue());
+    auto buf = writeBuf.move();
+    folly::io::Cursor subscribeCursor(buf.get());
+    ASSERT_TRUE(parser.decodeVarint(subscribeCursor).has_value());
+    auto parsedSubscribe = parser.parseSubscribeRequest(
+        subscribeCursor, subscribeCursor.readBE<uint16_t>());
+    ASSERT_TRUE(parsedSubscribe.hasValue());
+    EXPECT_EQ(
+        getFirstIntParam(
+            parsedSubscribe->params, TrackRequestParamKey::NEW_GROUP_REQUEST),
+        3);
+    EXPECT_EQ(countNewGroupRequests(parsedSubscribe->params), 1);
+
+    RequestUpdate update;
+    update.requestID = RequestID(2);
+    update.forward = true;
+    update.params.setMajorVersion(getDraftMajorVersion(version));
+    ASSERT_TRUE(
+        update.params.insertParam(Parameter(kNewGroupRequest, uint64_t(4)))
+            .hasValue());
+    ASSERT_TRUE(writer.writeSubscribeUpdate(writeBuf, update).hasValue());
+    buf = writeBuf.move();
+    folly::io::Cursor updateCursor(buf.get());
+    ASSERT_TRUE(parser.decodeVarint(updateCursor).has_value());
+    auto parsedUpdate = parser.parseRequestUpdate(
+        updateCursor, updateCursor.readBE<uint16_t>());
+    ASSERT_TRUE(parsedUpdate.hasValue());
+    EXPECT_EQ(parsedUpdate->forward, true);
+    EXPECT_EQ(
+        getFirstIntParam(
+            parsedUpdate->params, TrackRequestParamKey::NEW_GROUP_REQUEST),
+        4);
+    EXPECT_EQ(countNewGroupRequests(parsedUpdate->params), 1);
+  }
+
+  // Before draft 22, PUBLISH_OK carries it too. From draft 18, PUBLISH_OK is
+  // sent as a REQUEST_OK.
+  for (auto version : {kVersionDraft16, kVersionDraft18}) {
+    SCOPED_TRACE(version);
+    const auto majorVersion = getDraftMajorVersion(version);
+    MoQFrameWriter writer;
+    writer.initializeVersion(version);
+    MoQFrameParser parser;
+    parser.initializeVersion(version);
+    PublishOk publishOk;
+    publishOk.requestID = RequestID(1);
+    publishOk.filter = LocationFilter::nextObject();
+    publishOk.params.setMajorVersion(majorVersion);
+    ASSERT_TRUE(
+        publishOk.params.insertParam(Parameter(kNewGroupRequest, uint64_t(5)))
+            .hasValue());
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    ASSERT_TRUE(writer.writePublishOk(writeBuf, publishOk).hasValue());
+    auto buf = writeBuf.move();
+    folly::io::Cursor cursor(buf.get());
+    ASSERT_TRUE(parser.decodeVarint(cursor).has_value());
+    auto length = cursor.readBE<uint16_t>();
+    folly::Expected<PublishOk, ErrorCode> parsedPublishOk =
+        folly::makeUnexpected(ErrorCode::PARSE_UNDERFLOW);
+    if (majorVersion >= 18) {
+      auto requestOk =
+          parser.parseRequestOk(cursor, length, FrameType::REQUEST_OK);
+      ASSERT_TRUE(requestOk.hasValue());
+      parsedPublishOk = requestOk->toPublishOk(majorVersion);
+    } else {
+      parsedPublishOk = parser.parsePublishOk(cursor, length);
+    }
+    ASSERT_TRUE(parsedPublishOk.hasValue());
+    EXPECT_EQ(
+        getFirstIntParam(
+            parsedPublishOk->params, TrackRequestParamKey::NEW_GROUP_REQUEST),
+        5);
+    EXPECT_EQ(countNewGroupRequests(parsedPublishOk->params), 1);
+  }
+}
+
+// From draft 18, NEW_GROUP_REQUEST on a frame that does not allow it is a
+// protocol violation. The writer serializes SUBSCRIBE_OK params without
+// checking them against the frame type, so params built for SUBSCRIBE carry it
+// onto the wire.
+TEST(MoQFramerTest, NewGroupRequestOnDisallowedFrameIsProtocolViolation) {
+  for (auto version : {kVersionDraft18, kVersionDraft22}) {
+    SCOPED_TRACE(version);
+    MoQFrameWriter writer;
+    writer.initializeVersion(version);
+    MoQFrameParser parser;
+    parser.initializeVersion(version);
+    SubscribeOk subscribeOk;
+    subscribeOk.requestID = RequestID(1);
+    subscribeOk.trackAlias = TrackAlias(1);
+    subscribeOk.params = TrackRequestParameters(FrameType::SUBSCRIBE);
+    subscribeOk.params.setMajorVersion(getDraftMajorVersion(version));
+    ASSERT_TRUE(
+        subscribeOk.params
+            .insertParam(Parameter(
+                folly::to_underlying(TrackRequestParamKey::NEW_GROUP_REQUEST),
+                uint64_t(3)))
+            .hasValue());
+    folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+    ASSERT_TRUE(writer.writeSubscribeOk(writeBuf, subscribeOk).hasValue());
+    auto buf = writeBuf.move();
+    folly::io::Cursor cursor(buf.get());
+    ASSERT_TRUE(parser.decodeVarint(cursor).has_value());
+    auto parsed = parser.parseSubscribeOk(cursor, cursor.readBE<uint16_t>());
+    ASSERT_TRUE(parsed.hasError());
+    EXPECT_EQ(parsed.error(), ErrorCode::PROTOCOL_VIOLATION);
+  }
+}
+
 // The TRACK_NAMESPACE_PREFIX parameter carries a Track Namespace tuple (§2.4.1)
 // in its value; encode and decode must round-trip (draft 18+).
 TEST(MoQFramerTest, TrackNamespacePrefixParamRoundTrip) {
@@ -6169,7 +6301,7 @@ TEST_F(MoQFramerV18Test, PublishOkUsesRequestOkWireType) {
   EXPECT_EQ(
       getFirstIntParam(
           requestOk->params, TrackRequestParamKey::NEW_GROUP_REQUEST),
-      std::nullopt);
+      uint64_t(11));
   EXPECT_EQ(
       getFirstIntParam(requestOk->params, TrackRequestParamKey::EXPIRES),
       std::nullopt);
@@ -6197,7 +6329,7 @@ TEST_F(MoQFramerV18Test, PublishOkUsesRequestOkWireType) {
       countRequestSpecificParam(
           requestOk->requestSpecificParams,
           TrackRequestParamKey::NEW_GROUP_REQUEST),
-      1);
+      0);
   EXPECT_EQ(
       countRequestSpecificParam(
           requestOk->requestSpecificParams, TrackRequestParamKey::EXPIRES),
