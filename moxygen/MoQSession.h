@@ -416,7 +416,7 @@ class MoQSession : public Subscriber,
       GroupOrder pubOrder,
       std::optional<GroupOrder> subOrder);
 
-  static std::string getMoQTImplementationString();
+  static std::string getMoQTImplementationString(uint64_t version);
 
   folly::coro::Task<TrackStatusResult> trackStatus(
       TrackStatus trackStatus) override;

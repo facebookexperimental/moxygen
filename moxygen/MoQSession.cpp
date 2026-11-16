@@ -4080,7 +4080,7 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
 
   setup.params.insertParam(SetupParameter(
       {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
-       getMoQTImplementationString()}));
+       getMoQTImplementationString(*negotiatedVersion_)}));
   folly::F14FastSet<uint64_t> extensionOptionKeys;
   for (const auto& extension : extensions_) {
     auto options = extension->getSetupOptions(*negotiatedVersion_);
@@ -9316,9 +9316,8 @@ std::optional<std::string> MoQSession::getMoQTImplementationIfPresent(
 }
 
 /*static*/
-std::string MoQSession::getMoQTImplementationString() {
-  return fmt::format(
-      "Meta MoQ C++ Draft-{}", getDraftMajorVersion(kVersionDraftCurrent));
+std::string MoQSession::getMoQTImplementationString(uint64_t version) {
+  return fmt::format("Meta moxygen draft-{}", getDraftMajorVersion(version));
 }
 
 uint64_t MoQSession::getMaxAuthTokenCacheSizeIfPresent(

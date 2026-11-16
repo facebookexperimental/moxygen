@@ -677,7 +677,7 @@ CO_TEST_P_X(MoQAuthorityPathTest, ServerSeesClientAuthorityAndImplementation) {
       getFirstStringParam(
           serverSetup.params,
           folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION)),
-      MoQSession::getMoQTImplementationString());
+      MoQSession::getMoQTImplementationString(getServerSelectedVersion()));
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
