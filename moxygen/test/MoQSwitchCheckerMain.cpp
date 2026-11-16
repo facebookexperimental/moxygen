@@ -188,7 +188,9 @@ class CheckerRun {
     // Named locals: gcc 11 mishandles temporaries in a co_await expression.
     quic::TransportSettings transportSettings;
     transportSettings.orderedReadCallbacks = true;
-    const auto alpns = getMoqtProtocols(FLAGS_versions, true);
+    // moxygen's servers and revproxy know each draft by its Meta ALPN, not
+    // the standard one.
+    const auto alpns = getMoqtProtocols(FLAGS_versions, /*useStandard=*/false);
     std::shared_ptr<fizz::CertificateVerifier> verifier;
     if (FLAGS_insecure) {
       verifier = std::make_shared<

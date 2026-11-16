@@ -154,9 +154,12 @@ int main(int argc, char* argv[]) {
           .offset = std::chrono::milliseconds(FLAGS_clock_offset_ms)});
   auto control = std::make_unique<SwitchOriginControl>(hub, *publisher);
 
+  // The Meta ALPNs, which revproxy offers, and the standard ones.
   std::vector<std::string> alpns = {"h3"};
-  auto moqt = getMoqtProtocols(FLAGS_versions, true);
-  alpns.insert(alpns.end(), moqt.begin(), moqt.end());
+  for (const bool useStandard : {false, true}) {
+    auto moqt = getMoqtProtocols(FLAGS_versions, useStandard);
+    alpns.insert(alpns.end(), moqt.begin(), moqt.end());
+  }
   auto fizzContext = FLAGS_insecure
       ? quic::samples::createFizzServerContextWithInsecureDefault(
             alpns, fizz::server::ClientAuthMode::None, "", "")
