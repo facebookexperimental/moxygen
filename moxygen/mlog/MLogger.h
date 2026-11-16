@@ -50,7 +50,7 @@ class MLogger : public MoQFrameObserver {
         "server_setup", numberOfParameters, std::move(params));
   }
 
-  void addLog(std::string_view name, MLogEventData data);
+  virtual void addLog(std::string_view name, MLogEventData data);
 
   // Pure virtual method - subclasses must implement to emit logs to their
   // backend
