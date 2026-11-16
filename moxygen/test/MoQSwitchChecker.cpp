@@ -87,6 +87,16 @@ std::vector<std::pair<uint64_t, uint64_t>> overdueSubgroups(
   return overdue;
 }
 
+void addAuthToken(
+    TrackRequestParameters& params,
+    const std::optional<std::string>& token) {
+  if (token) {
+    params.insertParam(Parameter(
+        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+        AuthToken{0, *token, AuthToken::DontRegister}));
+  }
+}
+
 } // namespace
 
 SwitchChecker::SwitchChecker(
@@ -145,6 +155,7 @@ folly::coro::Task<SwitchChecker::Viewer*> SwitchChecker::subscribe(
   const auto filter = LocationFilter::nextObject();
   auto request = SubscribeRequest::make(track);
   request.filter = filter;
+  addAuthToken(request.params, options_.authToken);
   auto reply = co_await folly::coro::co_awaitTry(
       session->subscribe(std::move(request), viewer->live));
   if (reply.hasException()) {
@@ -184,6 +195,7 @@ folly::coro::Task<void> SwitchChecker::fetchHistory(
       kDefaultPriority,
       GroupOrder::OldestFirst);
   fetch.fullTrackName = joiner.track;
+  addAuthToken(fetch.params, options_.authToken);
   auto reply = co_await folly::coro::co_awaitTry(
       session->fetch(std::move(fetch), joiner.history));
   if (reply.hasException()) {

@@ -32,6 +32,8 @@ struct SwitchCheckerOptions {
   std::optional<ResetStreamErrorCode> expectedReset;
   // The longest a viewer may go without an object.
   std::optional<std::chrono::milliseconds> maxStall;
+  // The AUTHORIZATION_TOKEN every SUBSCRIBE and FETCH carries.
+  std::optional<std::string> authToken;
   std::function<Clock::time_point()> clock{[] { return Clock::now(); }};
 };
 

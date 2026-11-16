@@ -15,6 +15,7 @@
 #include <folly/portability/GTest.h>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "moxygen/MoQVersions.h"
@@ -47,6 +48,20 @@ std::vector<std::string> strings(const folly::dynamic& array) {
   return values;
 }
 
+// The type and value of each AUTHORIZATION_TOKEN in params.
+std::vector<std::pair<uint64_t, std::string>> authTokens(
+    const TrackRequestParameters& params) {
+  std::vector<std::pair<uint64_t, std::string>> tokens;
+  for (const auto& param : params) {
+    if (param.key ==
+        folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN)) {
+      tokens.emplace_back(
+          param.asAuthToken.tokenType, param.asAuthToken.tokenValue);
+    }
+  }
+  return tokens;
+}
+
 // Answers SUBSCRIBE through a hub, and any FETCH, joining ones too, with
 // FETCH_OK and the given objects of the hub's track. FETCH_OK ends where the
 // last SUBSCRIBE started, unless okEnd says otherwise. The test ends the
@@ -62,10 +77,14 @@ class HistoryPublisher : public Publisher {
   folly::coro::Baton replyGate;
   bool gated{false};
   std::optional<AbsoluteLocation> okEnd;
+  // The AUTHORIZATION_TOKENs of each SUBSCRIBE and FETCH, in order.
+  std::vector<std::vector<std::pair<uint64_t, std::string>>> subscribeTokens;
+  std::vector<std::vector<std::pair<uint64_t, std::string>>> fetchTokens;
 
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest request,
       std::shared_ptr<TrackConsumer> consumer) override {
+    subscribeTokens.push_back(authTokens(request.params));
     auto result =
         co_await hub_->subscribe(std::move(request), std::move(consumer));
     if (result.hasValue()) {
@@ -79,6 +98,7 @@ class HistoryPublisher : public Publisher {
   folly::coro::Task<FetchResult> fetch(
       Fetch fetch,
       std::shared_ptr<FetchConsumer> consumer) override {
+    fetchTokens.push_back(authTokens(fetch.params));
     for (auto location : objects_) {
       Extensions extensions;
       extensions.insertMutableExtension(
@@ -551,6 +571,31 @@ TEST_F(SwitchCheckerTest, HistoryNoViewerSawIsUnverified) {
     EXPECT_EQ(
         summary["unverified"],
         folly::dynamic(folly::dynamic::object("from", "1/0")("until", "2/0")));
+  }));
+}
+
+TEST_F(SwitchCheckerTest, EverySubscribeAndFetchCarriesTheAuthToken) {
+  auto history = std::make_shared<HistoryPublisher>(
+      hubs_[0], std::vector<AbsoluteLocation>{});
+  options_.authToken = "viewer-token";
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await joinThrough(history);
+
+    const std::vector<std::pair<uint64_t, std::string>> token{
+        {0, "viewer-token"}};
+    EXPECT_THAT(history->subscribeTokens, ElementsAre(token));
+    EXPECT_THAT(history->fetchTokens, ElementsAre(token));
+  }));
+}
+
+TEST_F(SwitchCheckerTest, WithoutAnAuthTokenRequestsCarryNone) {
+  auto history = std::make_shared<HistoryPublisher>(
+      hubs_[0], std::vector<AbsoluteLocation>{});
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await joinThrough(history);
+
+    EXPECT_THAT(history->subscribeTokens, ElementsAre(IsEmpty()));
+    EXPECT_THAT(history->fetchTokens, ElementsAre(IsEmpty()));
   }));
 }
 

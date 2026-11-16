@@ -85,6 +85,11 @@ DEFINE_int64(
     "How long after --duration_ms to wait for replies, joiners' histories and "
     "ended tracks' streams to arrive");
 DEFINE_string(report, "", "Where to write the JSON report; empty = stdout");
+DEFINE_string(
+    auth_token,
+    "",
+    "AUTHORIZATION_TOKEN value for every SUBSCRIBE and FETCH; empty sends "
+    "none");
 
 namespace {
 using namespace moxygen;
@@ -281,6 +286,9 @@ int main(int argc, char* argv[]) {
   }
   if (FLAGS_max_stall_ms > 0) {
     options.maxStall = milliseconds(FLAGS_max_stall_ms);
+  }
+  if (!FLAGS_auth_token.empty()) {
+    options.authToken = FLAGS_auth_token;
   }
 
   // The sessions and the checker run on one worker.
