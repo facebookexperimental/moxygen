@@ -10,6 +10,7 @@
 #include <folly/container/F14Map.h>
 #include <folly/futures/Future.h>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <random>
 #include <vector>
@@ -29,6 +30,9 @@ struct MoQProxyOptions {
   // Accounted bytes shared by every track's cache and accepted replays.
   // Admission is first come, first served; overload only causes misses.
   size_t maxCacheBytes{10 * 1024 * 1024};
+  // Evaluated on UNAUTHORIZED; null preserves cached history.
+  // Runs on the event loop and must not block or throw.
+  std::function<bool()> cancelReplayOnUnauthorized;
   // Absolute extra wait for objects still arriving locally. Provisional.
   std::chrono::milliseconds cacheCompletionWait{100};
   // Longest time a local replay may go without an accepted write.

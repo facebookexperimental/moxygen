@@ -1621,6 +1621,147 @@ TEST_F(MoQProxyJoiningTest, CancellingLocalReplayStopsFurtherWrites) {
   EXPECT_EQ(proxy_->joinStats().replayStallResets, 0);
 }
 
+TEST_F(MoQProxyJoiningTest, FinalLiveObjectsArriveAfterPublishDone) {
+  auto options = makeOptions();
+  options.cancelReplayOnUnauthorized = [] {
+    ADD_FAILURE() << "Normal publication end must not evaluate the policy";
+    return true;
+  };
+  proxy_ = MoQProxy::create({provider_}, options);
+  establish();
+  auto live = makeConsumer();
+  auto downstream = std::make_shared<StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*live, beginSubgroup(41, 0, _, _)).WillOnce(Return(downstream));
+  EXPECT_CALL(*downstream, object(0, _, _, false))
+      .WillOnce(Return(folly::unit));
+  EXPECT_CALL(*downstream, object(1, _, _, true)).WillOnce(Return(folly::unit));
+  EXPECT_CALL(*downstream, reset(_)).Times(0);
+  addViewer(RequestID(5), live);
+  auto subgroup = openSubgroup(41);
+  ASSERT_TRUE(subgroup);
+  ASSERT_TRUE(
+      subgroup->object(0, payloadOf(10), noExtensions(), false).hasValue());
+  ASSERT_TRUE(
+      upstreamConsumer_
+          ->publishDone(
+              PublishDone{
+                  RequestID(0), PublishDoneStatusCode::TRACK_ENDED, 1, "ended"})
+          .hasValue());
+  EXPECT_TRUE(
+      subgroup->object(1, payloadOf(10), noExtensions(), true).hasValue());
+  EXPECT_EQ(
+      firstViewerLive_->received,
+      std::vector<AbsoluteLocation>({{41, 0}, {41, 1}}));
+}
+
+TEST_F(MoQProxyJoiningTest, EnablingPolicyCancelsExistingReplayOnUnauthorized) {
+  auto options = makeOptions();
+  auto enabled = std::make_shared<bool>(false);
+  options.cancelReplayOnUnauthorized = [enabled] { return *enabled; };
+  proxy_ = MoQProxy::create({provider_}, options);
+  establish();
+  publishGroup(41, 3);
+  auto viewer = addViewer(RequestID(5));
+  auto consumer = std::make_shared<test::RecordingFetchConsumer>();
+  consumer->readyWrites = 1;
+  auto result =
+      fetch(viewer, joiningFetch(RequestID(7), RequestID(5), 41), consumer);
+  drive();
+  ASSERT_TRUE(result.hasValue());
+  auto retained = cache();
+  ASSERT_TRUE(retained);
+  *enabled = true;
+  upstreamConsumer_->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::UNAUTHORIZED,
+          0,
+          "authorization revoked"});
+  drive();
+  EXPECT_EQ(consumer->resetCode, ResetStreamErrorCode::CANCELLED);
+  EXPECT_EQ(retained->inspect({41, 0}, {41, 3}), MoQGroupCache::Coverage::Miss);
+  consumer->makeReady();
+  drive();
+  EXPECT_EQ(consumer->log, std::vector<std::string>({"object 41/0 10"}));
+}
+
+class MoQProxyReplayEndTest : public MoQProxyJoiningTest {
+ protected:
+  void checkReplayFinishes(
+      PublishDoneStatusCode status,
+      std::optional<bool> cancelReplay) {
+    auto options = makeOptions();
+    auto enabled = std::make_shared<bool>(true);
+    if (cancelReplay.has_value()) {
+      options.cancelReplayOnUnauthorized = [enabled] { return *enabled; };
+    }
+    proxy_ = MoQProxy::create({provider_}, options);
+    establish();
+    publishGroup(41, 3);
+    auto viewer = addViewer(RequestID(5));
+    auto consumer = std::make_shared<test::RecordingFetchConsumer>();
+    consumer->readyWrites = 1;
+    auto result =
+        fetch(viewer, joiningFetch(RequestID(7), RequestID(5), 41), consumer);
+    ASSERT_TRUE(result.hasValue());
+    drive();
+    ASSERT_EQ(consumer->log.size(), 1);
+    *enabled = cancelReplay.value_or(false);
+    upstreamConsumer_->publishDone(
+        PublishDone{RequestID(0), status, 0, "ended"});
+    drive();
+    EXPECT_FALSE(consumer->resetCode.has_value());
+    consumer->makeReady();
+    drive();
+    EXPECT_EQ(
+        consumer->log,
+        expectedReplay({"object 41/0 10", "object 41/1 10", "object 41/2 10"}));
+  }
+};
+
+TEST_F(MoQProxyReplayEndTest, NormalEndPreservesAcceptedReplay) {
+  checkReplayFinishes(PublishDoneStatusCode::TRACK_ENDED, true);
+}
+
+TEST_F(MoQProxyReplayEndTest, DisablingPolicyPreservesReplayOnUnauthorized) {
+  checkReplayFinishes(PublishDoneStatusCode::UNAUTHORIZED, false);
+}
+
+TEST_F(MoQProxyReplayEndTest, UnauthorizedPreservesReplayWithNoPolicy) {
+  checkReplayFinishes(PublishDoneStatusCode::UNAUTHORIZED, std::nullopt);
+}
+
+TEST_F(MoQProxyJoiningTest, UnauthorizedEndsWaitingJoinWithoutHistoryFallback) {
+  auto options = makeOptions();
+  options.cancelReplayOnUnauthorized = [] { return true; };
+  proxy_ = MoQProxy::create({provider_}, options);
+  establish();
+  auto active = openSubgroup(41, /*containsLastInGroup=*/false);
+  ASSERT_TRUE(
+      active->beginObject(0, 20, payloadOf(5), noExtensions()).hasValue());
+  auto viewer = addViewer(RequestID(5));
+  EXPECT_CALL(*upstreamSession_, fetch(_, _)).Times(0);
+  auto pending = startFetch(
+      viewer,
+      joiningFetch(RequestID(7), RequestID(5), 41),
+      std::make_shared<test::RecordingFetchConsumer>());
+  drive();
+  ASSERT_FALSE(pending.isReady());
+  upstreamConsumer_->publishDone(
+      PublishDone{
+          RequestID(0),
+          PublishDoneStatusCode::UNAUTHORIZED,
+          1,
+          "authorization revoked"});
+  drive();
+  ASSERT_TRUE(pending.isReady());
+  auto result = std::move(pending).get();
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().errorCode, FetchErrorCode::CANCELLED);
+  auto later = fetch(viewer, joiningFetch(RequestID(9), RequestID(5), 41));
+  EXPECT_TRUE(later.hasError());
+}
+
 TEST_F(MoQProxyJoiningTest, StalledReplayIsResetWithoutAffectingLive) {
   establish();
   publishGroup(41, 3);

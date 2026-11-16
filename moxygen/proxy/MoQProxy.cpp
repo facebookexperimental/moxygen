@@ -599,6 +599,10 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::joiningFetch(
   }
 
   const auto groupOrder = fetch.groupOrder;
+  if (track->replayCancellationToken().isCancellationRequested()) {
+    co_return folly::makeUnexpected(fetchFailure(
+        requestID, FetchErrorCode::CANCELLED, "track authorization revoked"));
+  }
   auto cache = track->groupCache();
   auto coverage = cache ? cache->inspect(range->start, range->end)
                         : MoQGroupCache::Coverage::Miss;
@@ -608,7 +612,8 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::joiningFetch(
     const auto waitStart = std::chrono::steady_clock::now();
     auto token = folly::cancellation_token_merge(
         co_await folly::coro::co_current_cancellation_token,
-        shutdown_.getToken());
+        shutdown_.getToken(),
+        track->replayCancellationToken());
     coverage = co_await folly::coro::co_withCancellation(
         token,
         awaitCacheCoverage(
@@ -661,6 +666,7 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::startLocalReplay(
   // cancels it.
   auto token = folly::cancellation_token_merge(
       handle->getToken(),
+      track->replayCancellationToken(),
       shutdown_.getToken(),
       co_await folly::coro::co_current_cancellation_token);
   // Awaited separately: GCC 11 destroys a closure that shares a
@@ -922,7 +928,9 @@ std::shared_ptr<MoQProxyTrack> MoQProxy::getOrCreateTrack(
       fullTrackName,
       upstreamProviders_,
       MoQProxyTrack::CacheConfig{
-          .maxGroups = options_.maxGroupsPerTrack, .budget = budget_},
+          .maxGroups = options_.maxGroupsPerTrack,
+          .budget = budget_,
+          .cancelReplayOnUnauthorized = options_.cancelReplayOnUnauthorized},
       MoQProxyTrack::UpstreamConfig{
           .goaways = upstreamGoaways_,
           .switchStats = switchStats_,

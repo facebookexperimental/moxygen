@@ -41,6 +41,7 @@ struct MoQProxyTrackCacheConfig {
   // Newest group IDs kept, including the active group; 0 disables caching.
   size_t maxGroups{0};
   std::shared_ptr<MoQCacheBudget> budget;
+  std::function<bool()> cancelReplayOnUnauthorized;
 };
 
 // How a track moves to a replacement upstream when its upstream goes away.
@@ -266,6 +267,9 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   const std::shared_ptr<MoQGroupCache>& groupCache() const {
     return cache_;
   }
+  folly::CancellationToken replayCancellationToken() const {
+    return replayStopped_.getToken();
+  }
   folly::coro::Task<folly::Unit> awaitUpstreamSubscription();
   // Still set after the upstream ends publishing, for historical fallback.
   const std::shared_ptr<MoQSession>& upstreamSession() const {
@@ -455,6 +459,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   void onUpstreamLost(const PublishDone& publishDone);
   void notifyNoSubscribers();
   void stopCaching();
+  void shutdownCache();
   void joiningFetchAccepted(
       uint64_t attempt,
       std::shared_ptr<Publisher::FetchHandle> handle);
@@ -469,6 +474,8 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders_;
   std::shared_ptr<MoQForwarder> forwarder_;
   std::shared_ptr<MoQGroupCache> cache_;
+  const std::function<bool()> cancelReplayOnUnauthorized_;
+  folly::CancellationSource replayStopped_;
   std::shared_ptr<MoQUpstreamGoaways> goaways_;
   std::shared_ptr<MoQProxySwitchStats> switchStats_;
   MoQProxySwitchOptions switchOptions_;

@@ -999,6 +999,8 @@ MoQProxyTrack::MoQProxyTrack(
                     cacheConfig.maxGroups,
                     std::move(cacheConfig.budget))
               : nullptr),
+      cancelReplayOnUnauthorized_(
+          std::move(cacheConfig.cancelReplayOnUnauthorized)),
       goaways_(
           upstreamConfig.goaways ? std::move(upstreamConfig.goaways)
                                  : std::make_shared<MoQUpstreamGoaways>()),
@@ -1731,7 +1733,7 @@ void MoQProxyTrack::cancelEstablishment() {
 
 void MoQProxyTrack::onUpstreamPublishDone() {
   viewersEnded_ = true;
-  // Publishing ended, but already received data can still serve a joining
+  // Unless replay was cancelled, received data can still serve a joining
   // FETCH, and a miss still needs this upstream for history.
   upstream_.handle.reset();
   upstream_.goawayWatch.reset();
@@ -1786,6 +1788,12 @@ bool MoQProxyTrack::takeOverUpstreamEnd(
     // A replacement that hasn't taken over; the old upstream still serves.
     dropReplacement(recorder);
     return true;
+  }
+  if (done.statusCode == PublishDoneStatusCode::UNAUTHORIZED &&
+      cancelReplayOnUnauthorized_ && cancelReplayOnUnauthorized_()) {
+    replayStopped_.requestCancellation();
+    shutdownCache();
+    return false;
   }
   if (!loss) {
     // Once the replacement's first data froze the split, even a stream header,
@@ -2507,6 +2515,13 @@ void MoQProxyTrack::close() {
 }
 
 void MoQProxyTrack::stopCaching() {
+  shutdownCache();
+  if (auto recorder = std::move(upstream_.recorder)) {
+    recorder->disable();
+  }
+}
+
+void MoQProxyTrack::shutdownCache() {
   auto closed = FetchError{
       RequestID(0), FetchErrorCode::INTERNAL_ERROR, "proxy track closed"};
   joiningFetchRequest_.reset();
@@ -2516,9 +2531,6 @@ void MoQProxyTrack::stopCaching() {
   joiningFetchExposed_ = false;
   cancelJoiningFetchAttempt(upstreamAttempt_);
   failJoiningFetch(closed);
-  if (auto recorder = std::move(upstream_.recorder)) {
-    recorder->disable();
-  }
   if (cache_) {
     cache_->shutdown();
   }
