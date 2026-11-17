@@ -28,6 +28,100 @@
 #include "moxygen/relay/MoQForwarder.h"
 
 namespace moxygen {
+
+void MoQProxySwitchStats::recordUpstreamGoaway() {
+  ++counters_.upstreamGoaways;
+}
+
+void MoQProxySwitchStats::recordSessionGoaway() {
+  ++counters_.sessionGoaways;
+}
+
+void MoQProxySwitchStats::recordRequestStreamGoaway() {
+  ++counters_.requestStreamGoaways;
+}
+
+void MoQProxySwitchStats::recordUpstreamLost() {
+  ++counters_.upstreamsLost;
+}
+
+void MoQProxySwitchStats::recordLostSwitchStarted() {
+  ++counters_.lostSwitches.started;
+}
+
+void MoQProxySwitchStats::recordLostSwitchCompleted(
+    std::chrono::milliseconds duration) {
+  ++counters_.lostSwitches.completed;
+  counters_.lostSwitches.duration += duration;
+}
+
+void MoQProxySwitchStats::recordLostSwitchFailed() {
+  ++counters_.lostSwitches.failed;
+}
+
+void MoQProxySwitchStats::recordGracefulSwitchStarted() {
+  ++counters_.gracefulSwitches.started;
+}
+
+void MoQProxySwitchStats::recordGracefulSwitchCompleted(
+    std::chrono::milliseconds duration) {
+  ++counters_.gracefulSwitches.completed;
+  counters_.gracefulSwitches.duration += duration;
+}
+
+void MoQProxySwitchStats::recordGracefulSwitchFailed() {
+  ++counters_.gracefulSwitches.failed;
+}
+
+void MoQProxySwitchStats::recordHandoffBehind() {
+  ++counters_.handoffs.behind;
+}
+
+void MoQProxySwitchStats::recordHandoffEqual() {
+  ++counters_.handoffs.equal;
+}
+
+void MoQProxySwitchStats::recordHandoffAhead() {
+  ++counters_.handoffs.ahead;
+}
+
+void MoQProxySwitchStats::recordLostCutoff(uint64_t unfinishedGroups) {
+  ++counters_.lostCutoffs.cutoffs;
+  counters_.lostCutoffs.unfinishedGroups += unfinishedGroups;
+}
+
+void MoQProxySwitchStats::recordTailCutoff(uint64_t unfinishedGroups) {
+  ++counters_.tailCutoffs.cutoffs;
+  counters_.tailCutoffs.unfinishedGroups += unfinishedGroups;
+}
+
+void MoQProxySwitchStats::recordStreamRefused() {
+  ++counters_.refusedStreams;
+}
+
+void MoQProxySwitchStats::recordDatagramRefused() {
+  ++counters_.refusedDatagrams;
+}
+
+void MoQProxySwitchStats::recordLateReplacementGap(uint64_t groups) {
+  ++counters_.lateReplacementGaps.gaps;
+  counters_.lateReplacementGaps.groups += groups;
+}
+
+void MoQProxySwitchStats::recordLostGap(uint64_t groups) {
+  ++counters_.lostGaps.gaps;
+  counters_.lostGaps.groups += groups;
+}
+
+void MoQProxySwitchStats::recordMidSubgroupGap() {
+  ++counters_.midSubgroupGaps;
+}
+
+void MoQProxySwitchStats::recordLostResumeTime(
+    std::chrono::milliseconds duration) {
+  counters_.lostResumeTime += duration;
+}
+
 namespace {
 
 folly::Unexpected<SubscribeError> makeUpstreamFailure(
@@ -801,7 +895,7 @@ class MoQProxyTrack::Recorder final
   // A request-stream GOAWAY for this subscription (draft 18+).
   void goaway(Goaway goaway) override {
     if (auto track = track_.lock()) {
-      ++track->switchStats_->requestStreamGoaways;
+      track->switchStats_->recordRequestStreamGoaway();
     }
     receiveGoaway(goaway);
   }
@@ -1864,7 +1958,7 @@ void MoQProxyTrack::onUpstreamPublishDone() {
 void MoQProxyTrack::onUpstreamGoaway(
     const Recorder& recorder,
     const Goaway& goaway) {
-  ++switchStats_->upstreamGoaways;
+  switchStats_->recordUpstreamGoaway();
   XLOG(DBG1) << "Upstream GOAWAY for " << fullTrackName_
              << " timeout=" << goaway.timeout << "ms"
              << (goaway.newSessionUri.empty()
@@ -1876,7 +1970,7 @@ void MoQProxyTrack::onUpstreamGoaway(
 }
 
 void MoQProxyTrack::onUpstreamLost(const PublishDone& publishDone) {
-  ++switchStats_->upstreamsLost;
+  switchStats_->recordUpstreamLost();
   XLOG(DBG1) << "Upstream lost for " << fullTrackName_
              << " status=" << folly::to_underlying(publishDone.statusCode)
              << " reason=" << publishDone.reasonPhrase;
@@ -1950,7 +2044,7 @@ void MoQProxyTrack::startLostSwitch(const Recorder& lost) {
     XLOG(INFO) << "Replacement upstream lost for " << fullTrackName_
                << " before it forwarded data, switching again";
   } else {
-    ++switchStats_->lostSwitches.started;
+    switchStats_->recordLostSwitchStarted();
     XLOG(INFO) << "Upstream lost for " << fullTrackName_
                << ", switching to a replacement";
     switchStartedAt_ = std::chrono::steady_clock::now();
@@ -2090,17 +2184,15 @@ void MoQProxyTrack::completeSwitch() {
   if (!switchStartedAt_) {
     return;
   }
-  auto& counters = switchStats_->lostSwitches;
-  ++counters.completed;
-  counters.duration +=
-      millisecondsSince(*std::exchange(switchStartedAt_, std::nullopt));
+  switchStats_->recordLostSwitchCompleted(
+      millisecondsSince(*std::exchange(switchStartedAt_, std::nullopt)));
   switchDeadline_.requestCancellation();
   onSwitchProgress();
   switchIfGoingAway();
 }
 
 void MoQProxyTrack::failSwitch() {
-  ++switchStats_->lostSwitches.failed;
+  switchStats_->recordLostSwitchFailed();
   XLOG(WARN) << "No replacement upstream forwarded data for " << fullTrackName_
              << " by the switch deadline";
   switchStartedAt_.reset();
@@ -2170,7 +2262,7 @@ void MoQProxyTrack::startGracefulSwitch(
     return;
   }
   const auto delay = remaining(startDelay(timeout));
-  ++switchStats_->gracefulSwitches.started;
+  switchStats_->recordGracefulSwitchStarted();
   auto arbiter = std::make_shared<MoQUpstreamHandoffArbiter>(
       upstream_.recorder->progress(highestForwardedGroup()));
   upstream_.recorder->handOver(arbiter);
@@ -2320,9 +2412,8 @@ void MoQProxyTrack::promoteReplacement(std::optional<uint64_t> continuedGroup) {
   graceful.arbiter->onOldEnded(continuedGroup);
   upstream_ = std::move(*graceful.replacement);
   noteUpstreamExtensions();
-  auto& counters = switchStats_->gracefulSwitches;
-  ++counters.completed;
-  counters.duration += millisecondsSince(graceful.startedAt);
+  switchStats_->recordGracefulSwitchCompleted(
+      millisecondsSince(graceful.startedAt));
   countHandoff(*graceful.arbiter);
   lostSessions_.clear();
   switchDeadline_.requestCancellation();
@@ -2337,14 +2428,13 @@ void MoQProxyTrack::countHandoff(const MoQUpstreamHandoffArbiter& arbiter) {
   if (!split) {
     return;
   }
-  auto& handoffs = switchStats_->handoffs;
   if (split->oldLastGroup &&
       split->replacementFirstGroup <= *split->oldLastGroup) {
-    ++handoffs.behind;
+    switchStats_->recordHandoffBehind();
   } else if (arbiter.highestOldGroup() != split->oldLastGroup) {
-    ++handoffs.ahead;
+    switchStats_->recordHandoffAhead();
   } else {
-    ++handoffs.equal;
+    switchStats_->recordHandoffEqual();
   }
 }
 
@@ -2356,7 +2446,7 @@ void MoQProxyTrack::onGracefulDeadline() {
   if (graceful_->replacement) {
     return;
   }
-  ++switchStats_->gracefulSwitches.failed;
+  switchStats_->recordGracefulSwitchFailed();
   XLOG(WARN) << "No replacement upstream for " << fullTrackName_
              << " by the switch deadline, keeping the one going away";
   auto oldEnd = std::exchange(graceful_->oldEnd, std::nullopt);
@@ -2379,7 +2469,7 @@ bool MoQProxyTrack::takeOverOldUpstreamLoss(Recorder& old) {
   }
   old.markLost();
   if (!graceful_->arbiter->oldCaughtUp()) {
-    countCutoff(switchStats_->lostCutoffs);
+    switchStats_->recordLostCutoff(unfinishedGroupCount());
   }
   graceful_->arbiter->onOldEnded();
   if (held && held->recorder->resumed()) {
@@ -2390,7 +2480,7 @@ bool MoQProxyTrack::takeOverOldUpstreamLoss(Recorder& old) {
   }
   endGracefulSwitch();
   state_ = State::SWITCHING;
-  ++switchStats_->lostSwitches.started;
+  switchStats_->recordLostSwitchStarted();
   switchStartedAt_ = std::chrono::steady_clock::now();
   noteLostUpstream(old);
   releaseUpstream();
@@ -2409,12 +2499,11 @@ bool MoQProxyTrack::takeOverOldUpstreamLoss(Recorder& old) {
 }
 
 // Its groups still open, or cut short since the switch started.
-void MoQProxyTrack::countCutoff(MoQProxyCutoffCounters& counters) {
-  ++counters.cutoffs;
+uint64_t MoQProxyTrack::unfinishedGroupCount() const {
   auto unfinished = graceful_->arbiter->oldUnfinishedGroups();
   const auto& cut = upstream_.recorder->cutGroups();
   unfinished.insert(cut.begin(), cut.end());
-  counters.unfinishedGroups += unfinished.size();
+  return unfinished.size();
 }
 
 void MoQProxyTrack::onGroupStarted() {
@@ -2468,7 +2557,7 @@ folly::coro::Task<void> MoQProxyTrack::letGoOfOldAfterTail(
 // last streams can end the track, so that comes last.
 void MoQProxyTrack::onTailTimer() {
   XDCHECK(replacementReady());
-  countCutoff(switchStats_->tailCutoffs);
+  switchStats_->recordTailCutoff(unfinishedGroupCount());
   XLOG(INFO) << "Upstream of " << fullTrackName_
              << " didn't catch up with its replacement in time, letting it go";
   auto old = std::exchange(upstream_, {});
@@ -2494,7 +2583,7 @@ void MoQProxyTrack::dropReplacement(Recorder& replacement) {
     grace->requestCancellation();
   }
   if (graceful_->deadlinePassed) {
-    ++switchStats_->gracefulSwitches.failed;
+    switchStats_->recordGracefulSwitchFailed();
     return;
   }
   establishing_ = folly::CancellationSource();
@@ -2553,9 +2642,13 @@ std::optional<uint64_t> MoQProxyTrack::highestForwardedGroup() const {
 void MoQProxyTrack::onReplacementRefused(
     MoQUpstreamHandoffArbiter::Admit admitted,
     bool datagram) {
-  ++(datagram ? switchStats_->refusedDatagrams : switchStats_->refusedStreams);
+  if (datagram) {
+    switchStats_->recordDatagramRefused();
+  } else {
+    switchStats_->recordStreamRefused();
+  }
   if (admitted == MoQUpstreamHandoffArbiter::Admit::RefuseWithGap) {
-    ++switchStats_->midSubgroupGaps;
+    switchStats_->recordMidSubgroupGap();
   }
   if (graceful_) {
     // The track isn't quiet.
@@ -2567,13 +2660,15 @@ void MoQProxyTrack::onReplacementResumed(
     const Recorder& recorder,
     uint64_t firstGroup) {
   if (auto lost = std::exchange(lostUpstream_, std::nullopt)) {
-    switchStats_->lostResumeTime += millisecondsSince(lost->lostAt);
-    auto& gaps = lost->afterGoaway ? switchStats_->lateReplacementGaps
-                                   : switchStats_->lostGaps;
-    ++gaps.gaps;
+    switchStats_->recordLostResumeTime(millisecondsSince(lost->lostAt));
     // The replacement admits only groups after the lost upstream's last.
-    if (lost->lastGroup && firstGroup > *lost->lastGroup) {
-      gaps.groups += firstGroup - *lost->lastGroup;
+    const uint64_t groups = lost->lastGroup && firstGroup > *lost->lastGroup
+        ? firstGroup - *lost->lastGroup
+        : 0;
+    if (lost->afterGoaway) {
+      switchStats_->recordLateReplacementGap(groups);
+    } else {
+      switchStats_->recordLostGap(groups);
     }
   }
   if (&recorder == upstream_.recorder.get()) {

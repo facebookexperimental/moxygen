@@ -334,7 +334,7 @@ MoQProxy::MoQProxy(
       upstreamGoaways_(
           std::make_shared<MoQUpstreamGoaways>(
               [stats = switchStats_](const Goaway&) {
-                ++stats->sessionGoaways;
+                stats->recordSessionGoaway();
               })),
       switchRandom_(
           std::make_shared<std::mt19937_64>(

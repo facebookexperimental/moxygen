@@ -755,8 +755,8 @@ TEST_F(MoQProxyTrackTest, UpstreamGoawaysAreCountedWhileTheUpstreamServes) {
   receiveSessionGoaway();
   upstreamConsumer_->goaway(Goaway{});
 
-  EXPECT_EQ(switchStats_->upstreamGoaways, 2);
-  EXPECT_EQ(switchStats_->requestStreamGoaways, 1);
+  EXPECT_EQ(switchStats_->counters().upstreamGoaways, 2);
+  EXPECT_EQ(switchStats_->counters().requestStreamGoaways, 1);
   EXPECT_CALL(*consumer, datagram(_, _, _))
       .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
   EXPECT_TRUE(upstreamConsumer_
@@ -789,7 +789,7 @@ TEST_F(MoQProxyTrackTest, GoawayWhileTheUpstreamSubscribeIsInFlightIsCounted) {
       &eventBase_);
 
   ASSERT_TRUE(result.hasValue());
-  EXPECT_EQ(switchStats_->upstreamGoaways, 1);
+  EXPECT_EQ(switchStats_->counters().upstreamGoaways, 1);
   EXPECT_CALL(*upstreamHandle, unsubscribe());
   result.value()->unsubscribe();
 }
@@ -815,7 +815,7 @@ TEST_F(MoQProxyTrackTest, ClosingStopsTheWatchOfAnUpstreamSubscribeInFlight) {
   upstreamReply.post();
   eventBase_.loop();
 
-  EXPECT_EQ(switchStats_->upstreamGoaways, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamGoaways, 0);
   ASSERT_TRUE(result.has_value());
   EXPECT_TRUE(result->hasError());
 }
@@ -845,7 +845,7 @@ TEST_F(
   upstreamReply.post();
   eventBase_.loop();
 
-  EXPECT_EQ(switchStats_->upstreamGoaways, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamGoaways, 0);
   ASSERT_TRUE(result.has_value());
   EXPECT_TRUE(result->hasError());
 }
@@ -870,7 +870,7 @@ TEST_F(
   upstreamReply.post();
   eventBase_.loop();
 
-  EXPECT_EQ(switchStats_->upstreamGoaways, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamGoaways, 0);
   ASSERT_TRUE(result.has_value());
   EXPECT_TRUE(result->hasError());
 }
@@ -886,7 +886,7 @@ TEST_F(MoQProxyTrackTest, GoawaysAfterTheUpstreamIsReleasedAreIgnored) {
   receiveSessionGoaway();
   upstreamConsumer_->goaway(Goaway{});
 
-  EXPECT_EQ(switchStats_->upstreamGoaways, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamGoaways, 0);
 }
 
 // A viewer still finishing a subgroup keeps a closed track.
@@ -904,7 +904,7 @@ TEST_F(MoQProxyTrackTest, GoawaysAfterCloseAreIgnored) {
   receiveSessionGoaway();
   upstreamConsumer_->goaway(Goaway{});
 
-  EXPECT_EQ(switchStats_->upstreamGoaways, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamGoaways, 0);
 }
 
 // A viewer still finishing a subgroup keeps the track once its upstream ends.
@@ -922,7 +922,7 @@ TEST_F(MoQProxyTrackTest, GoawaysAfterTheUpstreamEndsAreIgnored) {
 
   receiveSessionGoaway();
 
-  EXPECT_EQ(switchStats_->upstreamGoaways, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamGoaways, 0);
 }
 
 TEST_F(MoQProxyTrackTest, GoawaysOnTheSessionOfAFailedAttemptAreIgnored) {
@@ -960,7 +960,7 @@ TEST_F(MoQProxyTrackTest, GoawaysOnTheSessionOfAFailedAttemptAreIgnored) {
 
   receiveSessionGoaway();
 
-  EXPECT_EQ(switchStats_->upstreamGoaways, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamGoaways, 0);
   EXPECT_CALL(*upstreamHandle, unsubscribe());
   result.value()->unsubscribe();
 }
@@ -989,8 +989,8 @@ TEST_P(MoQProxyTrackUpstreamEndTest, ViewersGetTheUpstreamPublishDone) {
   upstreamConsumer_->publishDone(
       PublishDone{RequestID(100), upstreamEnd.statusCode, 0, "upstream done"});
 
-  EXPECT_EQ(switchStats_->upstreamsLost, 0);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamsLost, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1031,7 +1031,7 @@ TEST_F(MoQProxyTrackTest, UpstreamLossAfterTheTrackClosedIsNotCounted) {
           0,
           "session closed"});
 
-  EXPECT_EQ(switchStats_->upstreamsLost, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamsLost, 0);
 }
 
 // A track with a second provider on its own session, and switch timers short
@@ -1237,8 +1237,8 @@ TEST_P(MoQProxyTrackLostUpstreamTest, ViewersResumeFromAReplacement) {
   loseUpstream(GetParam());
   ASSERT_TRUE(runUntilAdopted(replacementSession_));
 
-  EXPECT_EQ(switchStats_->upstreamsLost, 1);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().upstreamsLost, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 1);
   EXPECT_EQ(provider_->calls, 2);
   ASSERT_TRUE(replacementRequest_.has_value());
   EXPECT_EQ(replacementRequest_->filter, LocationFilter::nextObject());
@@ -1247,16 +1247,16 @@ TEST_P(MoQProxyTrackLostUpstreamTest, ViewersResumeFromAReplacement) {
       replacementConsumer_->beginSubgroup(11, 0, kDefaultPriority).hasError());
   auto subgroup = replacementConsumer_->beginSubgroup(12, 0, kDefaultPriority);
   ASSERT_TRUE(subgroup.hasValue());
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 0);
-  EXPECT_EQ(switchStats_->lostGaps.gaps, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().lostGaps.gaps, 0);
   EXPECT_TRUE(subgroup.value()->object(
       0, folly::IOBuf::copyBuffer("x"), noExtensions(), false));
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->refusedStreams, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().refusedStreams, 1);
   EXPECT_TRUE(viewerSubgroups_.contains(12));
-  EXPECT_EQ(switchStats_->lostGaps.gaps, 1);
-  EXPECT_EQ(switchStats_->lostGaps.groups, 1);
-  EXPECT_EQ(switchStats_->lateReplacementGaps.gaps, 0);
+  EXPECT_EQ(switchStats_->counters().lostGaps.gaps, 1);
+  EXPECT_EQ(switchStats_->counters().lostGaps.groups, 1);
+  EXPECT_EQ(switchStats_->counters().lateReplacementGaps.gaps, 0);
   Mock::VerifyAndClearExpectations(consumer.get());
 }
 
@@ -1290,7 +1290,7 @@ TEST_F(MoQProxyTrackSwitchTest, TheReplacementOwnsEveryLaterGroupInAnyOrder) {
 
   EXPECT_TRUE(viewerSubgroups_.contains(12));
   EXPECT_TRUE(viewerSubgroups_.contains(13));
-  EXPECT_EQ(switchStats_->refusedStreams, 1);
+  EXPECT_EQ(switchStats_->counters().refusedStreams, 1);
 }
 
 // The lost upstream finishes subgroup 11/0 after the replacement took over,
@@ -1309,7 +1309,7 @@ TEST_F(MoQProxyTrackSwitchTest, TheLostUpstreamsOpenSubgroupsFinish) {
   loseUpstream();
   ASSERT_TRUE(runUntilAdopted(replacementSession_));
   ASSERT_TRUE(sendFirstObject(*replacementConsumer_, 12));
-  ASSERT_EQ(switchStats_->lostSwitches.completed, 1);
+  ASSERT_EQ(switchStats_->counters().lostSwitches.completed, 1);
 
   EXPECT_CALL(*lostSubgroup, object(1, _, _, true));
   EXPECT_TRUE(subgroup.value()->object(
@@ -1333,10 +1333,10 @@ TEST_F(
   ASSERT_NE(replacementConsumer_, nullptr);
   ASSERT_TRUE(sendFirstObject(*replacementConsumer_, 12));
 
-  EXPECT_EQ(switchStats_->lateReplacementGaps.gaps, 1);
+  EXPECT_EQ(switchStats_->counters().lateReplacementGaps.gaps, 1);
   // From the SUBSCRIBE_OK's group 10 to 12.
-  EXPECT_EQ(switchStats_->lateReplacementGaps.groups, 2);
-  EXPECT_EQ(switchStats_->lostGaps.gaps, 0);
+  EXPECT_EQ(switchStats_->counters().lateReplacementGaps.groups, 2);
+  EXPECT_EQ(switchStats_->counters().lostGaps.gaps, 0);
 }
 
 // The provider keeps returning the lost upstream's session.
@@ -1355,7 +1355,7 @@ TEST_F(
   Mock::VerifyAndClearExpectations(consumer.get());
   const auto attempts = provider_->calls;
   EXPECT_GT(attempts, 3);
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 0);
   EXPECT_CALL(
       *consumer,
       publishDone(
@@ -1364,10 +1364,10 @@ TEST_F(
 
   advanceTime(std::chrono::milliseconds(1));
 
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 1);
   advanceTime(std::chrono::milliseconds(50));
   EXPECT_EQ(provider_->calls, attempts);
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 0);
 }
 
 // The replacement answered the SUBSCRIBE and opened a stream, but never
@@ -1402,8 +1402,8 @@ TEST_F(
 
   advanceTime(kDeadline);
 
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 1);
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 0);
   EXPECT_TRUE(
       replacementConsumer_->beginSubgroup(13, 0, kDefaultPriority).hasError());
 }
@@ -1427,8 +1427,8 @@ TEST_F(MoQProxyTrackSwitchTest, AQuietTracksReplacementCompletesTheSwitch) {
 
   advanceTime(kDeadline);
 
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 0);
   EXPECT_TRUE(sendFirstObject(*replacementConsumer_, 11));
   EXPECT_TRUE(viewerSubgroups_.contains(11));
   Mock::VerifyAndClearExpectations(consumer.get());
@@ -1473,8 +1473,8 @@ TEST_P(MoQProxyTrackRefusedQuietTest, AReplacementWhoseDataWasRefusedFails) {
 
   advanceTime(kDeadline);
 
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 1);
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 0);
   Mock::VerifyAndClearExpectations(consumer.get());
   Mock::VerifyAndClearExpectations(replacementHandle.get());
 }
@@ -1525,8 +1525,12 @@ TEST_P(MoQProxyTrackQuietLargestTest, OnlyTheTracksLargestGroupIsQuiet) {
 
   advanceTime(kDeadline);
 
-  EXPECT_EQ(switchStats_->lostSwitches.completed, GetParam().completes ? 1 : 0);
-  EXPECT_EQ(switchStats_->lostSwitches.failed, GetParam().completes ? 0 : 1);
+  EXPECT_EQ(
+      switchStats_->counters().lostSwitches.completed,
+      GetParam().completes ? 1 : 0);
+  EXPECT_EQ(
+      switchStats_->counters().lostSwitches.failed,
+      GetParam().completes ? 0 : 1);
   Mock::VerifyAndClearExpectations(consumer.get());
 }
 
@@ -1562,8 +1566,8 @@ TEST_F(MoQProxyTrackSwitchTest, ATrackNoViewerForwardsCompletesTheSwitch) {
 
   advanceTime(kDeadline);
 
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 0);
   Mock::VerifyAndClearExpectations(consumer.get());
 }
 
@@ -1582,8 +1586,8 @@ TEST_F(MoQProxyTrackSwitchTest, ASwitchThatCompletedOutlivesItsDeadline) {
 
   advanceTime(kDeadline);
 
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 0);
   EXPECT_TRUE(replacementConsumer_->beginSubgroup(13, 0, kDefaultPriority));
   EXPECT_TRUE(viewerSubgroups_.contains(13));
   Mock::VerifyAndClearExpectations(consumer.get());
@@ -1620,9 +1624,9 @@ TEST_F(
           RequestID(100), PublishDoneStatusCode::GOING_AWAY, 0, "going away"});
   runPending();
   ASSERT_EQ(track_->upstreamSession(), thirdSession);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 1);
   advanceTime(kDeadline - std::chrono::milliseconds(201));
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 0);
   EXPECT_CALL(
       *consumer,
       publishDone(
@@ -1631,7 +1635,7 @@ TEST_F(
 
   advanceTime(std::chrono::milliseconds(1));
 
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 1);
   EXPECT_EQ(provider_->calls, 3);
   EXPECT_EQ(replacementProvider_->calls, 2);
 }
@@ -1666,10 +1670,10 @@ TEST_F(MoQProxyTrackSwitchTest, AGapKeepsTheCauseOfTheLossThatOpenedIt) {
   ASSERT_TRUE(runUntilAdopted(thirdSession));
   ASSERT_TRUE(sendFirstObject(*thirdConsumer, 12));
 
-  EXPECT_EQ(switchStats_->lateReplacementGaps.gaps, 1);
-  EXPECT_EQ(switchStats_->lostGaps.gaps, 0);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 1);
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().lateReplacementGaps.gaps, 1);
+  EXPECT_EQ(switchStats_->counters().lostGaps.gaps, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 1);
 }
 
 TEST_F(MoQProxyTrackSwitchTest, ClosingDuringASwitchStopsIt) {
@@ -1693,8 +1697,8 @@ TEST_F(MoQProxyTrackSwitchTest, ClosingDuringASwitchStopsIt) {
   runUntil([&] { return track.expired(); });
 
   EXPECT_TRUE(track.expired());
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 0);
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 0);
 }
 
 // Every provider failed, so the switch waits out its backoff when the track
@@ -1718,7 +1722,7 @@ TEST_F(MoQProxyTrackSwitchTest, ClosingDuringTheRetryBackoffStopsTheSwitch) {
 
   EXPECT_TRUE(track.expired());
   EXPECT_EQ(provider_->calls, 2);
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 0);
 }
 
 enum class AttemptWaitsIn { Provider, Subscribe };
@@ -1774,7 +1778,7 @@ TEST_P(MoQProxyTrackSwitchStopTest, StoppingTheSwitchCancelsTheAttempt) {
 
   EXPECT_TRUE(replacementProvider_->cancelled == 1 || *subscribeCancelled);
   EXPECT_EQ(
-      switchStats_->lostSwitches.failed,
+      switchStats_->counters().lostSwitches.failed,
       stops == SwitchStops::Deadline ? 1 : 0);
 }
 
@@ -1828,8 +1832,8 @@ TEST_F(MoQProxyTrackSwitchTest, AReplacementLostBeforeItIsAdoptedIsNotRetried) {
 
   EXPECT_EQ(replacementProvider_->calls, 2);
   EXPECT_EQ(thirdProvider->calls, 2);
-  EXPECT_EQ(switchStats_->upstreamsLost, 2);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().upstreamsLost, 2);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 1);
 }
 
 TEST_F(
@@ -1907,7 +1911,7 @@ TEST_F(MoQProxyTrackSwitchTest, AnUpstreamLostWhileSubscribingIsReplaced) {
   EXPECT_TRUE(result.hasValue());
   ASSERT_TRUE(replacementRequest_.has_value());
   EXPECT_EQ(replacementRequest_->filter, LocationFilter::nextObject());
-  EXPECT_EQ(switchStats_->upstreamsLost, 1);
+  EXPECT_EQ(switchStats_->counters().upstreamsLost, 1);
   Mock::VerifyAndClearExpectations(consumer.get());
 }
 
@@ -1959,8 +1963,8 @@ TEST_F(
                       12, 1, kDefaultPriority, {.beginsWithFirstObject = false})
                   .hasError());
 
-  EXPECT_EQ(switchStats_->midSubgroupGaps, 1);
-  EXPECT_EQ(switchStats_->refusedStreams, 1);
+  EXPECT_EQ(switchStats_->counters().midSubgroupGaps, 1);
+  EXPECT_EQ(switchStats_->counters().refusedStreams, 1);
 }
 
 // Draft 16 doesn't say, so the stream is taken.
@@ -1978,7 +1982,7 @@ TEST_F(
   EXPECT_TRUE(replacementConsumer_->beginSubgroup(
       12, 1, kDefaultPriority, {.beginsWithFirstObject = false}));
 
-  EXPECT_EQ(switchStats_->midSubgroupGaps, 0);
+  EXPECT_EQ(switchStats_->counters().midSubgroupGaps, 0);
 }
 
 // A switch on a GOAWAY, on manual time, with no start delay unless a test
@@ -2055,25 +2059,25 @@ TEST_F(
   ASSERT_TRUE(finish(*oldSubgroup11_));
   advanceTime(kReorderGrace - std::chrono::milliseconds(1));
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 0);
   Mock::VerifyAndClearExpectations(oldHandle_.get());
   EXPECT_CALL(*oldHandle_, unsubscribe());
 
   advanceTime(std::chrono::milliseconds(1));
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->handoffs.equal, 1);
-  EXPECT_EQ(switchStats_->upstreamsLost, 0);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
-  EXPECT_EQ(switchStats_->refusedStreams, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().handoffs.equal, 1);
+  EXPECT_EQ(switchStats_->counters().upstreamsLost, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 0);
+  EXPECT_EQ(switchStats_->counters().refusedStreams, 0);
   EXPECT_FALSE(oldOpens(13));
   EXPECT_FALSE(viewerSubgroups_.contains(13));
   EXPECT_TRUE(replacementOpens(13));
   EXPECT_TRUE(viewerSubgroups_.contains(13));
   advanceTime(2 * switchOptions_.defaultGroupDuration);
-  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 0);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.cutoffs, 0);
   Mock::VerifyAndClearExpectations(consumer_.get());
 }
 
@@ -2164,8 +2168,8 @@ TEST_F(
   advanceTime(kReorderGrace);
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->refusedStreams, 1);
-  EXPECT_EQ(switchStats_->handoffs.behind, 1);
+  EXPECT_EQ(switchStats_->counters().refusedStreams, 1);
+  EXPECT_EQ(switchStats_->counters().handoffs.behind, 1);
 }
 
 // The replacement starts at group 13, so the old upstream still serves group
@@ -2189,10 +2193,10 @@ TEST_F(
   advanceTime(kReorderGrace);
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->refusedStreams, 0);
-  EXPECT_EQ(switchStats_->handoffs.ahead, 1);
+  EXPECT_EQ(switchStats_->counters().refusedStreams, 0);
+  EXPECT_EQ(switchStats_->counters().handoffs.ahead, 1);
   // The deadline passed while the replacement waited.
-  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 0);
 }
 
 // Draft 18+: a replacement stream that starts mid-subgroup is refused. Before
@@ -2216,14 +2220,14 @@ TEST_F(
   };
 
   EXPECT_TRUE(midSubgroup(12, 1));
-  EXPECT_EQ(switchStats_->midSubgroupGaps, 0);
+  EXPECT_EQ(switchStats_->counters().midSubgroupGaps, 0);
   EXPECT_FALSE(replacementOpens(12));
   EXPECT_TRUE(oldOpens(12));
   ASSERT_TRUE(replacementOpens(13));
   EXPECT_TRUE(midSubgroup(13, 1));
 
-  EXPECT_EQ(switchStats_->midSubgroupGaps, 1);
-  EXPECT_EQ(switchStats_->refusedStreams, 3);
+  EXPECT_EQ(switchStats_->counters().midSubgroupGaps, 1);
+  EXPECT_EQ(switchStats_->counters().refusedStreams, 3);
 }
 
 // What the old upstream had open when it went away holds the handover until
@@ -2437,12 +2441,12 @@ TEST_F(
 
   ASSERT_EQ(track_->upstreamSession(), replacementSession_);
   ASSERT_TRUE(replacementOpens(12));
-  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
-  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 0);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 1);
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->lateReplacementGaps.gaps, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().lateReplacementGaps.gaps, 1);
   Mock::VerifyAndClearExpectations(consumer_.get());
 }
 
@@ -2463,11 +2467,11 @@ TEST_F(
   loseUpstream(PublishDoneStatusCode::SESSION_CLOSED);
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
-  EXPECT_EQ(switchStats_->upstreamsLost, 1);
-  EXPECT_EQ(switchStats_->lostCutoffs.cutoffs, 1);
-  EXPECT_EQ(switchStats_->lostCutoffs.unfinishedGroups, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamsLost, 1);
+  EXPECT_EQ(switchStats_->counters().lostCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->counters().lostCutoffs.unfinishedGroups, 1);
   EXPECT_TRUE(replacementOpens(12));
   EXPECT_TRUE(viewerSubgroups_.contains(12));
   Mock::VerifyAndClearExpectations(consumer_.get());
@@ -2485,10 +2489,10 @@ TEST_F(MoQProxyTrackGracefulSwitchTest, SignalsForOneUpstreamMakeOneSwitch) {
   ASSERT_TRUE(replacementOpens(12));
   loseUpstream(PublishDoneStatusCode::SESSION_CLOSED);
 
-  EXPECT_EQ(switchStats_->upstreamGoaways, 2);
-  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamGoaways, 2);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 0);
   EXPECT_EQ(replacementProvider_->calls, 1);
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
 }
@@ -2532,10 +2536,10 @@ TEST_P(MoQProxyTrackTailCaseTest, TheTailTimerLetsGoOfAnOldUpstreamThatLags) {
 
   Mock::VerifyAndClearExpectations(viewerSubgroups_[11].get());
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
-  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 1);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.unfinishedGroups, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 0);
   EXPECT_TRUE(
       oldSubgroup11_->object(1, folly::IOBuf::copyBuffer("x"), noExtensions())
           .hasError());
@@ -2584,8 +2588,8 @@ TEST_F(
   advanceTime(std::chrono::milliseconds(5));
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
-  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 0);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.unfinishedGroups, 0);
 }
 
 // Groups 11 to 14 start 50 ms apart, so the tail is 100 ms. A second subgroup
@@ -2611,7 +2615,7 @@ TEST_F(MoQProxyTrackTailTest, TheTailTimerFollowsTheGroupDuration) {
   advanceTime(std::chrono::milliseconds(5));
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 3);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.unfinishedGroups, 3);
 }
 
 // The replacement's copy of group 12, which the old upstream has open, was
@@ -2634,8 +2638,8 @@ TEST_F(MoQProxyTrackTailTest, TheTailTimerStartsOnceTheReplacementForwards) {
   advanceTime(std::chrono::milliseconds(5));
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 2);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.unfinishedGroups, 2);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 0);
 }
 
 // The replacement delivered group 13 while still subscribing, and the deadline
@@ -2660,12 +2664,12 @@ TEST_F(MoQProxyTrackTailTest, TheTailTimerWaitsForAnAdoptedReplacement) {
   receiveSessionGoaway();
   runPending();
   advanceTime(kDeadline);
-  ASSERT_EQ(switchStats_->gracefulSwitches.failed, 1);
+  ASSERT_EQ(switchStats_->counters().gracefulSwitches.failed, 1);
 
   advanceTime(std::chrono::milliseconds(200));
 
-  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 0);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.cutoffs, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 0);
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
   reply.post();
   runPending();
@@ -2692,8 +2696,8 @@ TEST_F(
   advanceTime(std::chrono::milliseconds(5));
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 0);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.cutoffs, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
 }
 
 // The old upstream catches up half a reorder grace before the tail runs out,
@@ -2723,8 +2727,8 @@ TEST_F(
   advanceTime(std::chrono::milliseconds(5));
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
-  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 1);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.unfinishedGroups, 1);
 }
 
 // Group 11 is still open, and the old upstream's stream of group 12 was reset
@@ -2743,8 +2747,8 @@ TEST_F(
   advanceTime(switchOptions_.minTail);
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
-  EXPECT_EQ(switchStats_->tailCutoffs.unfinishedGroups, 2);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.unfinishedGroups, 2);
 }
 
 // The viewer left after the replacement finished its stream of group 12, so
@@ -2769,7 +2773,7 @@ TEST_F(MoQProxyTrackTailTest, ATailCutoffThatEndsTheLastStreamClosesTheTrack) {
   advanceTime(switchOptions_.minTail);
 
   EXPECT_EQ(callback_->calls, 1);
-  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.cutoffs, 1);
 }
 
 // The cache has group 11's first object when the tail cutoff cuts the group
@@ -2812,8 +2816,8 @@ TEST_F(
   loseUpstream();
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->lostCutoffs.cutoffs, 0);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().lostCutoffs.cutoffs, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
 }
 
 // The replacement goes away 200 ms after its first object, and the next
@@ -2850,7 +2854,7 @@ TEST_F(MoQProxyTrackTailTest, ANewSplitRestartsTheTailTimer) {
   advanceTime(std::chrono::milliseconds(100));
 
   EXPECT_EQ(track_->upstreamSession(), thirdSession);
-  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 1);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.cutoffs, 1);
 }
 
 // The old upstream is lost before the adopted replacement forwarded an object,
@@ -2868,11 +2872,11 @@ TEST_F(
   loseUpstream();
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->lostSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 1);
   ASSERT_TRUE(replacementOpens(12));
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
-  EXPECT_EQ(switchStats_->lateReplacementGaps.gaps, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().lateReplacementGaps.gaps, 1);
   Mock::VerifyAndClearExpectations(consumer_.get());
 }
 
@@ -2890,11 +2894,11 @@ TEST_F(
   runPending();
   ASSERT_NE(replacementConsumer_, nullptr);
   advanceTime(kDeadline);
-  ASSERT_EQ(switchStats_->gracefulSwitches.failed, 0);
+  ASSERT_EQ(switchStats_->counters().gracefulSwitches.failed, 0);
 
   loseUpstream();
   advanceTime(kDeadline - std::chrono::milliseconds(5));
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 0);
   Mock::VerifyAndClearExpectations(consumer_.get());
   EXPECT_CALL(
       *consumer_,
@@ -2903,7 +2907,7 @@ TEST_F(
       .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
   advanceTime(std::chrono::milliseconds(5));
 
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 1);
 }
 
 // A quiet track: old has nothing open, and the replacement answered with the
@@ -2929,7 +2933,7 @@ TEST_F(
   advanceTime(std::chrono::milliseconds(1));
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
   EXPECT_FALSE(oldOpens(11));
   EXPECT_TRUE(replacementOpens(11));
   EXPECT_TRUE(viewerSubgroups_.contains(11));
@@ -2973,7 +2977,7 @@ TEST_F(MoQProxyTrackGracefulSwitchTest, OldOpeningAGroupStopsAQuietHandover) {
   advanceTime(2 * kReorderGrace);
 
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 0);
   Mock::VerifyAndClearExpectations(oldHandle_.get());
 }
 
@@ -3012,7 +3016,7 @@ TEST_F(
   advanceTime(std::chrono::milliseconds(1));
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
   Mock::VerifyAndClearExpectations(consumer_.get());
 }
 
@@ -3209,8 +3213,8 @@ TEST_F(
       .WillOnce(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
   advanceTime(kDeadline);
 
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 0);
-  EXPECT_EQ(switchStats_->lostSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 1);
   Mock::VerifyAndClearExpectations(consumer_.get());
 }
 
@@ -3285,9 +3289,9 @@ TEST_F(
   ASSERT_TRUE(finish(*oldSubgroups_[12]));
   advanceTime(kReorderGrace);
   EXPECT_EQ(track_->upstreamSession(), thirdSession);
-  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->refusedStreams, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().refusedStreams, 0);
 }
 
 // The old upstream had datagram group 11 open, and a stream of it arrives
@@ -3327,8 +3331,8 @@ TEST_F(
                   .hasValue());
   EXPECT_FALSE(oldOpens(13));
   EXPECT_TRUE(oldOpens(14));
-  EXPECT_EQ(switchStats_->refusedStreams, 0);
-  EXPECT_EQ(switchStats_->refusedDatagrams, 0);
+  EXPECT_EQ(switchStats_->counters().refusedStreams, 0);
+  EXPECT_EQ(switchStats_->counters().refusedDatagrams, 0);
 }
 
 // The replacement ends the track before it took over: the old upstream still
@@ -3385,7 +3389,7 @@ TEST_F(
   runUntil([&] { return *subscribeReturned; });
   runPending();
 
-  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 1);
   EXPECT_FALSE(oldOpens(13));
   EXPECT_TRUE(oldOpens(14));
   EXPECT_TRUE(viewerSubgroups_.contains(14));
@@ -3424,7 +3428,7 @@ TEST_F(
       false));
   runPending();
 
-  ASSERT_EQ(switchStats_->gracefulSwitches.started, 1);
+  ASSERT_EQ(switchStats_->counters().gracefulSwitches.started, 1);
   ASSERT_NE(thirdConsumer, nullptr);
   EXPECT_FALSE(sendFirstObject(*thirdConsumer, 12));
   EXPECT_TRUE(sendFirstObject(*thirdConsumer, 13));
@@ -3456,13 +3460,13 @@ TEST_F(
 
   replacementConsumer_->goaway(Goaway{});
   runPending();
-  EXPECT_EQ(switchStats_->gracefulSwitches.started, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, 0);
   EXPECT_EQ(thirdConsumer, nullptr);
   ASSERT_TRUE(replacementOpens(12));
   runPending();
 
-  EXPECT_EQ(switchStats_->lostSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, 1);
   EXPECT_NE(thirdConsumer, nullptr);
 }
 
@@ -3492,15 +3496,15 @@ TEST_F(
 
   replacementConsumer_->goaway(Goaway{});
   runPending();
-  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, 1);
   ASSERT_TRUE(replacementOpens(12));
   EXPECT_FALSE(oldOpens(12));
   ASSERT_TRUE(finish(*oldSubgroup11_));
   advanceTime(kReorderGrace);
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
-  EXPECT_EQ(switchStats_->gracefulSwitches.started, 2);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, 2);
   EXPECT_NE(thirdConsumer, nullptr);
 }
 
@@ -3520,9 +3524,9 @@ TEST_F(MoQProxyTrackGracefulSwitchTest, ClosingDuringASwitchStopsIt) {
   EXPECT_TRUE(
       replacementConsumer_->beginSubgroup(13, 0, kDefaultPriority).hasError());
   advanceTime(2 * switchOptions_.defaultGroupDuration);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
-  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 0);
-  EXPECT_EQ(switchStats_->tailCutoffs.cutoffs, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().tailCutoffs.cutoffs, 0);
 }
 
 // The old upstream ends the track before the replacement took over.
@@ -3544,8 +3548,8 @@ TEST_F(
   loseUpstream(PublishDoneStatusCode::TRACK_ENDED);
 
   Mock::VerifyAndClearExpectations(replacementHandle.get());
-  EXPECT_EQ(switchStats_->upstreamsLost, 0);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().upstreamsLost, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 0);
 }
 
 // The old upstream finishes group 11 and ends the track while the replacement
@@ -3581,7 +3585,7 @@ TEST_P(
   loseUpstream(PublishDoneStatusCode::TRACK_ENDED);
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
   const uint64_t next = firstObject ? 1 : 0;
   EXPECT_TRUE(group12.value()
                   ->object(next, folly::IOBuf::copyBuffer("y"), noExtensions())
@@ -3646,7 +3650,7 @@ TEST_P(
   runPending();
 
   EXPECT_EQ(track_->upstreamSession(), replacementSession_);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 1);
   const uint64_t next = firstObject ? 1 : 0;
   EXPECT_TRUE(
       group12->object(next, folly::IOBuf::copyBuffer("y"), noExtensions())
@@ -3714,8 +3718,8 @@ TEST_F(
   runPending();
 
   Mock::VerifyAndClearExpectations(consumer_.get());
-  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 1);
-  EXPECT_EQ(switchStats_->gracefulSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 0);
 }
 
 // The switch deadline passed while the replacement, which already served group
@@ -3741,7 +3745,7 @@ TEST_F(
   runPending();
   ASSERT_TRUE(viewerSubgroups_.contains(13));
   advanceTime(kDeadline);
-  ASSERT_EQ(switchStats_->gracefulSwitches.failed, 1);
+  ASSERT_EQ(switchStats_->counters().gracefulSwitches.failed, 1);
   ASSERT_TRUE(finish(*oldSubgroup11_));
   EXPECT_CALL(
       *consumer_,
@@ -3808,9 +3812,9 @@ TEST_F(
   subscribeWithGroup11Open([this] { receiveSessionGoaway(); });
   runPending();
 
-  EXPECT_EQ(switchStats_->gracefulSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, 1);
   EXPECT_NE(replacementConsumer_, nullptr);
-  EXPECT_EQ(switchStats_->upstreamGoaways, 1);
+  EXPECT_EQ(switchStats_->counters().upstreamGoaways, 1);
 }
 
 // The upstream is lost before the switch on the GOAWAY it got before the track
@@ -3823,7 +3827,7 @@ TEST_F(
   expectReplacementSubscribe();
   subscribeWithGroup11Open([this] { receiveSessionGoaway(); });
   runPending();
-  ASSERT_EQ(switchStats_->gracefulSwitches.started, 1);
+  ASSERT_EQ(switchStats_->counters().gracefulSwitches.started, 1);
   // The seed's start delay isn't zero.
   ASSERT_EQ(replacementConsumer_, nullptr);
 
@@ -3831,8 +3835,8 @@ TEST_F(
   ASSERT_TRUE(runUntilAdopted(replacementSession_));
   ASSERT_TRUE(replacementOpens(12));
 
-  EXPECT_EQ(switchStats_->lateReplacementGaps.gaps, 1);
-  EXPECT_EQ(switchStats_->lostGaps.gaps, 0);
+  EXPECT_EQ(switchStats_->counters().lateReplacementGaps.gaps, 1);
+  EXPECT_EQ(switchStats_->counters().lostGaps.gaps, 0);
 }
 
 // The GOAWAY the upstream got while the track subscribed expired before the
@@ -3846,13 +3850,13 @@ TEST_F(
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
   });
   runPending();
-  EXPECT_EQ(switchStats_->gracefulSwitches.started, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, 0);
   expectReplacementSubscribe();
 
   loseUpstream();
 
   ASSERT_TRUE(runUntilAdopted(replacementSession_));
-  EXPECT_EQ(switchStats_->lostSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 1);
 }
 
 // The switch's start delay and deadline run from the GOAWAY's arrival, here
@@ -3866,11 +3870,11 @@ TEST_F(
     receiveSessionGoaway();
     std::this_thread::sleep_for(kBeforeAdopting);
   });
-  ASSERT_EQ(switchStats_->gracefulSwitches.started, 1);
+  ASSERT_EQ(switchStats_->counters().gracefulSwitches.started, 1);
 
   advanceTime(kDeadline - kBeforeAdopting);
 
-  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 1);
 }
 
 // Of a request-stream GOAWAY and a session GOAWAY, the one that expires
@@ -3887,7 +3891,7 @@ TEST_F(
 
   advanceTime(kSessionTimeout);
 
-  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 1);
 }
 
 // With no replacement, the track stops looking at the switch deadline, or at
@@ -3912,9 +3916,9 @@ TEST_P(
 
   receiveSessionGoaway(Goaway{.timeout = GetParam().goawayTimeoutMs});
   advanceTime(GetParam().stopsLookingAfter - std::chrono::milliseconds(1));
-  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 0);
   advanceTime(std::chrono::milliseconds(1));
-  EXPECT_EQ(switchStats_->gracefulSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 1);
   const auto attempts = provider_->calls;
   EXPECT_GT(attempts, 1);
   advanceTime(std::chrono::milliseconds(50));
@@ -3930,7 +3934,7 @@ TEST_P(
 
   loseUpstream();
 
-  EXPECT_EQ(switchStats_->lostSwitches.started, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -4028,7 +4032,7 @@ TEST_P(
     }
   }
 
-  EXPECT_EQ(switchStats_->gracefulSwitches.started, kTracks);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, kTracks);
   EXPECT_EQ(replacementSubscribes, kTracks);
   EXPECT_LT(atOnce, kTracks / 4);
   EXPECT_GT(lastAfter, longestDelay / 2);

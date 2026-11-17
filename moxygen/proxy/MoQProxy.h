@@ -100,8 +100,8 @@ class MoQProxy : public Publisher,
     return *joinStats_;
   }
 
-  const MoQProxySwitchStats& switchStats() const {
-    return *switchStats_;
+  const MoQProxySwitchStats::Counters& switchStats() const {
+    return switchStats_->counters();
   }
 
   std::shared_ptr<MoQProxyTrack> findTrack(

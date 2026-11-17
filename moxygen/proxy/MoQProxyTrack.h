@@ -122,7 +122,7 @@ struct MoQProxyGapCounters {
 
 // Counters for an upstream going away, summed over a proxy's tracks. Plain
 // counters: the tracks share the proxy's executor.
-struct MoQProxySwitchStats {
+struct MoQProxySwitchStatsData {
   // Each session or request-stream GOAWAY, once per track it reaches: a session
   // GOAWAY and a request-stream GOAWAY reaching one track count two.
   uint64_t upstreamGoaways{0};
@@ -174,6 +174,42 @@ struct MoQProxySwitchStats {
   // From losing an upstream to the first object forwarded from its replacement,
   // summed.
   std::chrono::milliseconds lostResumeTime{0};
+};
+
+class MoQProxySwitchStats {
+ public:
+  using Counters = MoQProxySwitchStatsData;
+
+  MoQProxySwitchStats() = default;
+
+  [[nodiscard]] const Counters& counters() const {
+    return counters_;
+  }
+
+  void recordUpstreamGoaway();
+  void recordSessionGoaway();
+  void recordRequestStreamGoaway();
+  void recordUpstreamLost();
+  void recordLostSwitchStarted();
+  void recordLostSwitchCompleted(std::chrono::milliseconds duration);
+  void recordLostSwitchFailed();
+  void recordGracefulSwitchStarted();
+  void recordGracefulSwitchCompleted(std::chrono::milliseconds duration);
+  void recordGracefulSwitchFailed();
+  void recordHandoffBehind();
+  void recordHandoffEqual();
+  void recordHandoffAhead();
+  void recordLostCutoff(uint64_t unfinishedGroups);
+  void recordTailCutoff(uint64_t unfinishedGroups);
+  void recordStreamRefused();
+  void recordDatagramRefused();
+  void recordLateReplacementGap(uint64_t groups);
+  void recordLostGap(uint64_t groups);
+  void recordMidSubgroupGap();
+  void recordLostResumeTime(std::chrono::milliseconds duration);
+
+ private:
+  Counters counters_;
 };
 
 // Shared by the tracks of one proxy; a null member gets a per-track default.
@@ -428,7 +464,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   void countHandoff(const MoQUpstreamHandoffArbiter& arbiter);
   void onGracefulDeadline();
   bool takeOverOldUpstreamLoss(Recorder& old);
-  void countCutoff(MoQProxyCutoffCounters& counters);
+  uint64_t unfinishedGroupCount() const;
   void onGroupStarted();
   void startTail();
   std::chrono::milliseconds tailDuration() const;
