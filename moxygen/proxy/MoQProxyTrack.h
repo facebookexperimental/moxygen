@@ -21,6 +21,7 @@
 
 #include "moxygen/Publisher.h"
 #include "moxygen/proxy/MoQGroupCache.h"
+#include "moxygen/proxy/MoQProxyTrackObserver.h"
 #include "moxygen/proxy/MoQUpstreamGoaways.h"
 #include "moxygen/proxy/MoQUpstreamHandoffArbiter.h"
 #include "moxygen/proxy/MoQUpstreamProvider.h"
@@ -226,7 +227,8 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       FullTrackName fullTrackName,
       std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders,
       CacheConfig cacheConfig = {},
-      UpstreamConfig upstreamConfig = {});
+      UpstreamConfig upstreamConfig = {},
+      std::shared_ptr<MoQProxyTrackObserver> observer = nullptr);
 
   ~MoQProxyTrack();
 
@@ -334,7 +336,8 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
       FullTrackName fullTrackName,
       std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders,
       CacheConfig cacheConfig,
-      UpstreamConfig upstreamConfig);
+      UpstreamConfig upstreamConfig,
+      std::shared_ptr<MoQProxyTrackObserver> observer);
 
   folly::coro::Task<Publisher::SubscribeResult> handleFirstSubscription(
       SubscribeRequest subscribeRequest,
@@ -385,6 +388,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   folly::coro::Task<void> enforceSwitchDeadline(
       std::chrono::milliseconds deadline,
       folly::CancellationToken stopped);
+  void noteUpstreamExtensions();
   void adoptReplacement(UpstreamAttempt attempt);
   void completeSwitch();
   void failSwitch();
@@ -487,6 +491,8 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   std::shared_ptr<folly::Timekeeper> timekeeper_;
   std::function<std::chrono::steady_clock::time_point()> clock_;
   std::shared_ptr<std::mt19937_64> random_;
+  // Null when the track is unobserved.
+  std::shared_ptr<MoQProxyObjectTap> objectTap_;
   UpstreamAttempt upstream_;
   // The GOAWAY watch of the upstream attempt being established, which the
   // track stops when it stops waiting for that attempt.

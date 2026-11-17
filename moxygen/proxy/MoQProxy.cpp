@@ -941,7 +941,9 @@ std::shared_ptr<MoQProxyTrack> MoQProxy::getOrCreateTrack(
           .switchStats = switchStats_,
           .switchOptions = options_.upstreamSwitch,
           .timekeeper = options_.timekeeper,
-          .random = switchRandom_});
+          .random = switchRandom_},
+      options_.trackObservers ? options_.trackObservers(fullTrackName)
+                              : nullptr);
   track->setCallback(shared_from_this());
   tracks_.emplace(fullTrackName, track);
   return track;

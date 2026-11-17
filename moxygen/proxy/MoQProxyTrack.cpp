@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <type_traits>
 #include <utility>
 
 #include "moxygen/MoQLocation.h"
@@ -208,7 +209,8 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
       uint64_t group,
       uint64_t subgroup,
       std::shared_ptr<SubgroupConsumer> leg,
-      std::shared_ptr<MoQForwarder::SubgroupForwarder> cachedLeg)
+      std::shared_ptr<MoQForwarder::SubgroupForwarder> cachedLeg,
+      std::shared_ptr<MoQProxyObjectTap> objectTap)
       : attemptActive_(std::move(attemptActive)),
         attemptObjects_(std::move(attemptObjects)),
         recorder_(std::move(recorder)),
@@ -217,6 +219,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
         subgroup_(subgroup),
         leg_(std::move(leg)),
         cachedLeg_(std::move(cachedLeg)),
+        objectTap_(std::move(objectTap)),
         caching_(cachedLeg_ != nullptr) {}
 
   // A session that drops a stream after an error calls nothing else.
@@ -246,8 +249,19 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
       return malformed();
     }
     resume();
-    auto forwarded = leg_->object(
-        objectID, std::move(payload), std::move(extensions), finSubgroup);
+    auto forward = [&] {
+      return leg_->object(
+          objectID, std::move(payload), std::move(extensions), finSubgroup);
+    };
+    auto forwarded = objectTap_ ? observeChunk(
+                                      MoQProxyObjectChunk{
+                                          .id = {group_, subgroup_, objectID},
+                                          .extensions = &extensions,
+                                          .payload = payload.get(),
+                                          .first = true,
+                                          .complete = true},
+                                      forward)
+                                : forward();
     if (finSubgroup) {
       ended(/*finished=*/true);
     }
@@ -276,8 +290,22 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
       return malformed();
     }
     resume();
-    return leg_->beginObject(
-        objectID, length, std::move(initialPayload), std::move(extensions));
+    auto forward = [&] {
+      return leg_->beginObject(
+          objectID, length, std::move(initialPayload), std::move(extensions));
+    };
+    if (!objectTap_) {
+      return forward();
+    }
+    objectId_ = {group_, subgroup_, objectID};
+    objectRemaining_ = length;
+    return observeChunk(
+        MoQProxyObjectChunk{
+            .id = objectId_,
+            .extensions = &extensions,
+            .payload = initialPayload.get(),
+            .first = true},
+        forward);
   }
 
   folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
@@ -295,7 +323,14 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     }
     // The forwarder tracks the declared length, so its IN_PROGRESS/DONE is
     // correct even when only the cache is consuming.
-    auto forwarded = leg_->objectPayload(std::move(payload), finSubgroup);
+    auto forward = [&] {
+      return leg_->objectPayload(std::move(payload), finSubgroup);
+    };
+    auto forwarded = objectTap_
+        ? observeChunk(
+              MoQProxyObjectChunk{.id = objectId_, .payload = payload.get()},
+              forward)
+        : forward();
     if (finSubgroup) {
       ended(/*finished=*/true);
     }
@@ -386,6 +421,24 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
   // being reset or dropped.
   void ended(bool finished);
 
+  // Reports the chunk, which completes its object once the bytes declared for
+  // it have arrived, and forwards it.
+  template <typename Forward>
+  std::invoke_result_t<Forward> observeChunk(
+      MoQProxyObjectChunk chunk,
+      Forward&& forward) {
+    if (!chunk.complete) {
+      const uint64_t bytes =
+          chunk.payload ? chunk.payload->computeChainDataLength() : 0;
+      objectRemaining_ -= std::min(bytes, objectRemaining_);
+      chunk.complete = objectRemaining_ == 0;
+    }
+    objectTap_->onChunk(chunk);
+    return chunk.complete
+        ? objectTap_->forwardLastByte(chunk.id, std::forward<Forward>(forward))
+        : forward();
+  }
+
   // Cache consistency failures disable caching without interrupting delivery.
   template <typename Fn>
   bool record(Fn&& fn) {
@@ -445,6 +498,10 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
   uint64_t subgroup_;
   std::shared_ptr<SubgroupConsumer> leg_;
   std::shared_ptr<MoQForwarder::SubgroupForwarder> cachedLeg_;
+  std::shared_ptr<MoQProxyObjectTap> objectTap_;
+  // The object being streamed, while an observer watches.
+  MoQProxyObjectId objectId_;
+  uint64_t objectRemaining_{0};
   bool caching_;
   bool resumed_{false};
   bool ended_{false};
@@ -463,10 +520,12 @@ class MoQProxyTrack::Recorder final
   Recorder(
       std::shared_ptr<MoQForwarder> forwarder,
       std::weak_ptr<MoQGroupCache> cache,
-      std::weak_ptr<MoQProxyTrack> track)
+      std::weak_ptr<MoQProxyTrack> track,
+      std::shared_ptr<MoQProxyObjectTap> objectTap)
       : forwarder_(std::move(forwarder)),
         cache_(std::move(cache)),
-        track_(std::move(track)) {}
+        track_(std::move(track)),
+        objectTap_(std::move(objectTap)) {}
 
   void disable() {
     disabled_ = true;
@@ -669,8 +728,9 @@ class MoQProxyTrack::Recorder final
     }
     ++*objects_;
     noteGroup(header.group);
-    auto forwarded =
-        forwarder_->objectStream(header, std::move(payload), lastInGroup);
+    auto forwarded = forwardWholeObject(header, payload, [&] {
+      return forwarder_->objectStream(header, std::move(payload), lastInGroup);
+    });
     resume(header.group);
     if (handover_) {
       // It moved the track's Largest, which a quiet handoff goes by.
@@ -709,8 +769,9 @@ class MoQProxyTrack::Recorder final
     }
     ++*objects_;
     noteGroup(header.group);
-    auto forwarded =
-        forwarder_->datagram(header, std::move(payload), lastInGroup);
+    auto forwarded = forwardWholeObject(header, payload, [&] {
+      return forwarder_->datagram(header, std::move(payload), lastInGroup);
+    });
     resume(header.group);
     if (handover_) {
       // It moved the track's Largest, which a quiet handoff goes by.
@@ -783,7 +844,8 @@ class MoQProxyTrack::Recorder final
               groupID,
               subgroupID,
               std::move(leg.value()),
-              nullptr),
+              nullptr,
+              objectTap_),
           groupID,
           subgroupID);
     }
@@ -802,9 +864,30 @@ class MoQProxyTrack::Recorder final
             groupID,
             subgroupID,
             leg.value(),
-            leg.value()),
+            leg.value(),
+            objectTap_),
         groupID,
         subgroupID);
+  }
+
+  // Reports an object stream's or a datagram's object to the observer.
+  template <typename Forward>
+  folly::Expected<folly::Unit, MoQPublishError> forwardWholeObject(
+      const ObjectHeader& header,
+      const Payload& payload,
+      Forward&& forward) {
+    if (!objectTap_ || header.status != ObjectStatus::NORMAL) {
+      return forward();
+    }
+    const MoQProxyObjectId id{header.group, header.subgroup, header.id};
+    objectTap_->onChunk(
+        MoQProxyObjectChunk{
+            .id = id,
+            .extensions = &header.extensions,
+            .payload = payload.get(),
+            .first = true,
+            .complete = true});
+    return objectTap_->forwardLastByte(id, std::forward<Forward>(forward));
   }
 
   // Counts what a replacement refuses.
@@ -929,6 +1012,7 @@ class MoQProxyTrack::Recorder final
   std::shared_ptr<MoQForwarder> forwarder_;
   std::weak_ptr<MoQGroupCache> cache_;
   std::weak_ptr<MoQProxyTrack> track_;
+  std::shared_ptr<MoQProxyObjectTap> objectTap_;
   bool disabled_{false};
   bool lost_{false};
   std::optional<ReceivedGoaway> goaway_;
@@ -981,12 +1065,14 @@ std::shared_ptr<MoQProxyTrack> MoQProxyTrack::create(
     FullTrackName fullTrackName,
     std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders,
     CacheConfig cacheConfig,
-    UpstreamConfig upstreamConfig) {
+    UpstreamConfig upstreamConfig,
+    std::shared_ptr<MoQProxyTrackObserver> observer) {
   auto track = std::shared_ptr<MoQProxyTrack>(new MoQProxyTrack(
       std::move(fullTrackName),
       std::move(upstreamProviders),
       std::move(cacheConfig),
-      std::move(upstreamConfig)));
+      std::move(upstreamConfig),
+      std::move(observer)));
   track->forwarder_->setCallback(std::make_shared<ForwarderCallback>(track));
   return track;
 }
@@ -995,7 +1081,8 @@ MoQProxyTrack::MoQProxyTrack(
     FullTrackName fullTrackName,
     std::vector<std::shared_ptr<MoQUpstreamProvider>> upstreamProviders,
     CacheConfig cacheConfig,
-    UpstreamConfig upstreamConfig)
+    UpstreamConfig upstreamConfig,
+    std::shared_ptr<MoQProxyTrackObserver> observer)
     : fullTrackName_(std::move(fullTrackName)),
       upstreamProviders_(std::move(upstreamProviders)),
       forwarder_(std::make_shared<MoQForwarder>(fullTrackName_)),
@@ -1025,7 +1112,11 @@ MoQProxyTrack::MoQProxyTrack(
               : std::make_shared<std::mt19937_64>(
                     upstreamConfig.switchOptions.randomSeed != 0
                         ? upstreamConfig.switchOptions.randomSeed
-                        : std::random_device{}())) {
+                        : std::random_device{}())),
+      objectTap_(
+          observer
+              ? std::make_shared<MoQProxyObjectTap>(std::move(observer), clock_)
+              : nullptr) {
   XCHECK(!upstreamProviders_.empty())
       << "MoQProxyTrack requires upstream providers";
   for (const auto& provider : upstreamProviders_) {
@@ -1202,7 +1293,9 @@ Publisher::SubscribeResult MoQProxyTrack::addSubscriber(
   }
 
   auto subscriber = forwarder_->addSubscriber(
-      downstream.sessionId, subscribeRequest, std::move(consumer));
+      downstream.sessionId,
+      subscribeRequest,
+      objectTap_ ? objectTap_->wrap(std::move(consumer)) : std::move(consumer));
   if (!subscriber) {
     return folly::makeUnexpected(
         SubscribeError{
@@ -1484,7 +1577,13 @@ void MoQProxyTrack::adoptFirstUpstream(UpstreamAttempt attempt) {
     forwarder_->updateLargest(
         subscribeOk.largest->group, subscribeOk.largest->object);
   }
-  forwarder_->setExtensions(subscribeOk.extensions);
+  if (objectTap_) {
+    objectTap_->onUpstreamExtensions(subscribeOk.extensions);
+    forwarder_->setExtensions(
+        objectTap_->downstreamExtensions(subscribeOk.extensions));
+  } else {
+    forwarder_->setExtensions(subscribeOk.extensions);
+  }
   upstream_ = std::move(attempt);
   const bool joiningUnavailable = joiningFetchRequest_ && !joiningFetchAttempt_;
   setLargestObjectForPendingSubscribers();
@@ -1560,8 +1659,8 @@ MoQProxyTrack::establishWithProvider(
 
   // One recorder per attempt, so a failed attempt's late callbacks can be
   // cut off without touching the next one.
-  auto recorder =
-      std::make_shared<Recorder>(forwarder_, cache_, weak_from_this());
+  auto recorder = std::make_shared<Recorder>(
+      forwarder_, cache_, weak_from_this(), objectTap_);
   // Watched before subscribing, so a GOAWAY that arrives while the SUBSCRIBE
   // is in flight still reaches the track.
   establishingGoawayWatch_ = goaways_->watch(
@@ -1960,6 +2059,15 @@ bool MoQProxyTrack::hasNothingNewer(const UpstreamAttempt& attempt) const {
   return largest ? highest == largest->group : !highest;
 }
 
+// The observer learns what the upstream that replaced the first says about the
+// track; downstream subscriptions keep what they were told.
+void MoQProxyTrack::noteUpstreamExtensions() {
+  if (objectTap_ && upstream_.handle) {
+    objectTap_->onUpstreamExtensions(
+        upstream_.handle->subscribeOk().extensions);
+  }
+}
+
 void MoQProxyTrack::adoptReplacement(UpstreamAttempt attempt) {
   if (graceful_) {
     holdReplacement(std::move(attempt));
@@ -1967,6 +2075,7 @@ void MoQProxyTrack::adoptReplacement(UpstreamAttempt attempt) {
   }
   XDCHECK(state_ == State::SWITCHING);
   upstream_ = std::move(attempt);
+  noteUpstreamExtensions();
   state_ = State::READY;
   onSwitchProgress();
   if (upstream_.recorder->resumed()) {
@@ -2210,6 +2319,7 @@ void MoQProxyTrack::promoteReplacement(std::optional<uint64_t> continuedGroup) {
   }
   graceful.arbiter->onOldEnded(continuedGroup);
   upstream_ = std::move(*graceful.replacement);
+  noteUpstreamExtensions();
   auto& counters = switchStats_->gracefulSwitches;
   ++counters.completed;
   counters.duration += millisecondsSince(graceful.startedAt);

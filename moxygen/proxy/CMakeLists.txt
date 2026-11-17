@@ -78,6 +78,7 @@ moxygen_add_library(moxygen_proxy_moq_upstream_handoff_arbiter
 
 moxygen_add_library(moxygen_proxy_moq_proxy_track
   SRCS
+    MoQProxyTrackObserver.cpp
     MoQProxyTrack.cpp
   DEPS
     moxygen_events_moq_executor
@@ -93,6 +94,8 @@ moxygen_add_library(moxygen_proxy_moq_proxy_track
     fmt::fmt
   EXPORTED_DEPS
     moxygen_moq
+    moxygen_moq_consumers
+    moxygen_moq_types
     moxygen_proxy_moq_group_cache
     moxygen_proxy_moq_upstream_goaways
     moxygen_proxy_moq_upstream_handoff_arbiter

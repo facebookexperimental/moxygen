@@ -19,6 +19,7 @@
 #include "moxygen/Subscriber.h"
 #include "moxygen/proxy/MoQGroupCache.h"
 #include "moxygen/proxy/MoQProxyTrack.h"
+#include "moxygen/proxy/MoQProxyTrackObserver.h"
 #include "moxygen/proxy/MoQUpstreamProvider.h"
 
 namespace moxygen {
@@ -43,6 +44,8 @@ struct MoQProxyOptions {
   // Times the bounded waits above and the switch retries; null uses folly's
   // default.
   std::shared_ptr<folly::Timekeeper> timekeeper;
+  // Gives each new track its object observer; empty observes no track.
+  MoQProxyTrackObserverFactory trackObservers;
 };
 
 // Counters for telling a working cache from one that only passes warm tests.
