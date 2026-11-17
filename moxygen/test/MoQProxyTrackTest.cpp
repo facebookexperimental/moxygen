@@ -248,8 +248,10 @@ class MoQProxyTrackTest : public Test {
   std::shared_ptr<MoQFollyExecutorImpl> executor_;
   std::shared_ptr<NiceMock<test::MockMoQSession>> upstreamSession_;
   std::shared_ptr<TestUpstreamProvider> provider_;
+  std::shared_ptr<NiceMock<MockMoQProxyStats>> statsCallback_{
+      std::make_shared<NiceMock<MockMoQProxyStats>>()};
   std::shared_ptr<MoQProxySwitchStats> switchStats_{
-      std::make_shared<MoQProxySwitchStats>()};
+      std::make_shared<MoQProxySwitchStats>(statsCallback_)};
   std::shared_ptr<MoQProxyTrack> track_;
   std::shared_ptr<TestTrackCallback> callback_;
   std::shared_ptr<TrackConsumer> upstreamConsumer_;
@@ -1226,6 +1228,12 @@ class MoQProxyTrackLostUpstreamTest
 // viewer. The switch completes with the first object of them, not the stream
 // header before it.
 TEST_P(MoQProxyTrackLostUpstreamTest, ViewersResumeFromAReplacement) {
+  EXPECT_CALL(*statsCallback_, onUpstreamLost());
+  EXPECT_CALL(*statsCallback_, onLostSwitchStarted());
+  EXPECT_CALL(*statsCallback_, onLostSwitchCompleted(_));
+  EXPECT_CALL(*statsCallback_, onStreamRefused());
+  EXPECT_CALL(*statsCallback_, onLostGap(1));
+  EXPECT_CALL(*statsCallback_, recordLostResumeTime(_));
   auto consumer = makeRecordingConsumer();
   EXPECT_CALL(*consumer, publishDone(_)).Times(0);
   auto downstreamHandle =
@@ -2043,6 +2051,10 @@ class MoQProxyTrackGracefulSwitchTest : public MoQProxyTrackSwitchTest {
 TEST_F(
     MoQProxyTrackGracefulSwitchTest,
     TheOldUpstreamGoesOnceItHasCaughtUpForTheReorderGrace) {
+  EXPECT_CALL(*statsCallback_, onUpstreamGoaway());
+  EXPECT_CALL(*statsCallback_, onGracefulSwitchStarted());
+  EXPECT_CALL(*statsCallback_, onGracefulSwitchCompleted(_));
+  EXPECT_CALL(*statsCallback_, onHandoffEqual());
   EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
   subscribeWithGroup11Open();
   expectReplacementSubscribe();

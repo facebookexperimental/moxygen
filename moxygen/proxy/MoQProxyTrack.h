@@ -30,6 +30,8 @@ namespace folly {
 class Timekeeper;
 } // namespace folly
 
+#include "moxygen/stats/MoQProxyStats.h"
+
 namespace moxygen {
 
 class MoQForwarder;
@@ -180,7 +182,8 @@ class MoQProxySwitchStats {
  public:
   using Counters = MoQProxySwitchStatsData;
 
-  MoQProxySwitchStats() = default;
+  explicit MoQProxySwitchStats(
+      std::shared_ptr<MoQProxyStatsCallback> statsCallback = nullptr);
 
   [[nodiscard]] const Counters& counters() const {
     return counters_;
@@ -210,6 +213,7 @@ class MoQProxySwitchStats {
 
  private:
   Counters counters_;
+  std::shared_ptr<MoQProxyStatsCallback> statsCallback_;
 };
 
 // Shared by the tracks of one proxy; a null member gets a per-track default.

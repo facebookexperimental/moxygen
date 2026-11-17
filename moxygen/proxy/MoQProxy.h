@@ -41,6 +41,8 @@ struct MoQProxyOptions {
   std::chrono::milliseconds replayStallTimeout{std::chrono::seconds(5)};
   // Moving a track to a replacement upstream when its upstream goes away.
   MoQProxySwitchOptions upstreamSwitch;
+  // Shared implementations must support callbacks from multiple executors.
+  std::shared_ptr<MoQProxyStatsCallback> statsCallback;
   // Times the bounded waits above and the switch retries; null uses folly's
   // default.
   std::shared_ptr<folly::Timekeeper> timekeeper;
@@ -182,8 +184,7 @@ class MoQProxy : public Publisher,
   // Shared with detached replays, which can outlive the proxy.
   std::shared_ptr<MoQProxyJoinStats> joinStats_{
       std::make_shared<MoQProxyJoinStats>()};
-  std::shared_ptr<MoQProxySwitchStats> switchStats_{
-      std::make_shared<MoQProxySwitchStats>()};
+  std::shared_ptr<MoQProxySwitchStats> switchStats_;
   // Shared by all tracks, which may share upstream sessions.
   std::shared_ptr<MoQUpstreamGoaways> upstreamGoaways_;
   // Jitter for every track's switches.

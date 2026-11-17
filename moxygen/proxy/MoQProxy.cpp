@@ -331,6 +331,8 @@ MoQProxy::MoQProxy(
     : upstreamProviders_(std::move(upstreamProviders)),
       options_(std::move(options)),
       budget_(std::make_shared<MoQCacheBudget>(options_.maxCacheBytes)),
+      switchStats_(
+          std::make_shared<MoQProxySwitchStats>(options_.statsCallback)),
       upstreamGoaways_(
           std::make_shared<MoQUpstreamGoaways>(
               [stats = switchStats_](const Goaway&) {

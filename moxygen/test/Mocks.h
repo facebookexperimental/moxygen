@@ -13,6 +13,8 @@
 #include <moxygen/Subscriber.h>
 #include <moxygen/stats/MoQStats.h>
 
+#include "moxygen/stats/MoQProxyStats.h"
+
 namespace moxygen {
 
 class MockMoQCodecCallback : public MoQControlCodec::ControlCallback,
@@ -444,6 +446,31 @@ class MockObjectAckStats
     : public MoQPublisherStatsCallback::ObjectAckStatsCallback {
  public:
   MOCK_METHOD(void, recordObjectAckLatency, (uint64_t), (override));
+};
+
+class MockMoQProxyStats : public MoQProxyStatsCallback {
+ public:
+  MOCK_METHOD(void, onUpstreamGoaway, (), (override));
+  MOCK_METHOD(void, onUpstreamSessionGoaway, (), (override));
+  MOCK_METHOD(void, onUpstreamRequestStreamGoaway, (), (override));
+  MOCK_METHOD(void, onUpstreamLost, (), (override));
+  MOCK_METHOD(void, onLostSwitchStarted, (), (override));
+  MOCK_METHOD(void, onLostSwitchCompleted, (uint64_t), (override));
+  MOCK_METHOD(void, onLostSwitchFailed, (), (override));
+  MOCK_METHOD(void, onGracefulSwitchStarted, (), (override));
+  MOCK_METHOD(void, onGracefulSwitchCompleted, (uint64_t), (override));
+  MOCK_METHOD(void, onGracefulSwitchFailed, (), (override));
+  MOCK_METHOD(void, onHandoffBehind, (), (override));
+  MOCK_METHOD(void, onHandoffEqual, (), (override));
+  MOCK_METHOD(void, onHandoffAhead, (), (override));
+  MOCK_METHOD(void, onLostCutoff, (uint64_t), (override));
+  MOCK_METHOD(void, onTailCutoff, (uint64_t), (override));
+  MOCK_METHOD(void, onStreamRefused, (), (override));
+  MOCK_METHOD(void, onDatagramRefused, (), (override));
+  MOCK_METHOD(void, onLateReplacementGap, (uint64_t), (override));
+  MOCK_METHOD(void, onLostGap, (uint64_t), (override));
+  MOCK_METHOD(void, onMidSubgroupGap, (), (override));
+  MOCK_METHOD(void, recordLostResumeTime, (uint64_t), (override));
 };
 
 class MockPublisherStats : public MoQPublisherStatsCallback {

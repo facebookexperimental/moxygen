@@ -468,6 +468,14 @@ TEST_F(MoQProxyTest, ViewerOfTracksFromSeparateUpstreamsGetsDistinctAliases) {
 }
 
 TEST_F(MoQProxyTest, SessionGoawayReachesEveryTrackOnThatSession) {
+  auto statsCallback = std::make_shared<NiceMock<MockMoQProxyStats>>();
+  MoQProxyOptions options;
+  options.statsCallback = statsCallback;
+  proxy_ = MoQProxy::create({provider_}, std::move(options));
+  EXPECT_CALL(*statsCallback, onUpstreamSessionGoaway()).Times(1);
+  EXPECT_CALL(*statsCallback, onUpstreamGoaway()).Times(2);
+  EXPECT_CALL(*statsCallback, onUpstreamRequestStreamGoaway()).Times(0);
+  EXPECT_CALL(*statsCallback, onGracefulSwitchStarted()).Times(2);
   auto videoHandle = makeUpstreamHandle(RequestID(100));
   auto audioHandle = makeUpstreamHandle(RequestID(101));
   EXPECT_CALL(*upstreamSession_, subscribe(_, _))

@@ -29,97 +29,164 @@
 
 namespace moxygen {
 
+MoQProxySwitchStats::MoQProxySwitchStats(
+    std::shared_ptr<MoQProxyStatsCallback> statsCallback)
+    : statsCallback_(std::move(statsCallback)) {}
+
 void MoQProxySwitchStats::recordUpstreamGoaway() {
   ++counters_.upstreamGoaways;
+  if (statsCallback_) {
+    statsCallback_->onUpstreamGoaway();
+  }
 }
 
 void MoQProxySwitchStats::recordSessionGoaway() {
   ++counters_.sessionGoaways;
+  if (statsCallback_) {
+    statsCallback_->onUpstreamSessionGoaway();
+  }
 }
 
 void MoQProxySwitchStats::recordRequestStreamGoaway() {
   ++counters_.requestStreamGoaways;
+  if (statsCallback_) {
+    statsCallback_->onUpstreamRequestStreamGoaway();
+  }
 }
 
 void MoQProxySwitchStats::recordUpstreamLost() {
   ++counters_.upstreamsLost;
+  if (statsCallback_) {
+    statsCallback_->onUpstreamLost();
+  }
 }
 
 void MoQProxySwitchStats::recordLostSwitchStarted() {
   ++counters_.lostSwitches.started;
+  if (statsCallback_) {
+    statsCallback_->onLostSwitchStarted();
+  }
 }
 
 void MoQProxySwitchStats::recordLostSwitchCompleted(
     std::chrono::milliseconds duration) {
   ++counters_.lostSwitches.completed;
   counters_.lostSwitches.duration += duration;
+  if (statsCallback_) {
+    statsCallback_->onLostSwitchCompleted(duration.count());
+  }
 }
 
 void MoQProxySwitchStats::recordLostSwitchFailed() {
   ++counters_.lostSwitches.failed;
+  if (statsCallback_) {
+    statsCallback_->onLostSwitchFailed();
+  }
 }
 
 void MoQProxySwitchStats::recordGracefulSwitchStarted() {
   ++counters_.gracefulSwitches.started;
+  if (statsCallback_) {
+    statsCallback_->onGracefulSwitchStarted();
+  }
 }
 
 void MoQProxySwitchStats::recordGracefulSwitchCompleted(
     std::chrono::milliseconds duration) {
   ++counters_.gracefulSwitches.completed;
   counters_.gracefulSwitches.duration += duration;
+  if (statsCallback_) {
+    statsCallback_->onGracefulSwitchCompleted(duration.count());
+  }
 }
 
 void MoQProxySwitchStats::recordGracefulSwitchFailed() {
   ++counters_.gracefulSwitches.failed;
+  if (statsCallback_) {
+    statsCallback_->onGracefulSwitchFailed();
+  }
 }
 
 void MoQProxySwitchStats::recordHandoffBehind() {
   ++counters_.handoffs.behind;
+  if (statsCallback_) {
+    statsCallback_->onHandoffBehind();
+  }
 }
 
 void MoQProxySwitchStats::recordHandoffEqual() {
   ++counters_.handoffs.equal;
+  if (statsCallback_) {
+    statsCallback_->onHandoffEqual();
+  }
 }
 
 void MoQProxySwitchStats::recordHandoffAhead() {
   ++counters_.handoffs.ahead;
+  if (statsCallback_) {
+    statsCallback_->onHandoffAhead();
+  }
 }
 
 void MoQProxySwitchStats::recordLostCutoff(uint64_t unfinishedGroups) {
   ++counters_.lostCutoffs.cutoffs;
   counters_.lostCutoffs.unfinishedGroups += unfinishedGroups;
+  if (statsCallback_) {
+    statsCallback_->onLostCutoff(unfinishedGroups);
+  }
 }
 
 void MoQProxySwitchStats::recordTailCutoff(uint64_t unfinishedGroups) {
   ++counters_.tailCutoffs.cutoffs;
   counters_.tailCutoffs.unfinishedGroups += unfinishedGroups;
+  if (statsCallback_) {
+    statsCallback_->onTailCutoff(unfinishedGroups);
+  }
 }
 
 void MoQProxySwitchStats::recordStreamRefused() {
   ++counters_.refusedStreams;
+  if (statsCallback_) {
+    statsCallback_->onStreamRefused();
+  }
 }
 
 void MoQProxySwitchStats::recordDatagramRefused() {
   ++counters_.refusedDatagrams;
+  if (statsCallback_) {
+    statsCallback_->onDatagramRefused();
+  }
 }
 
 void MoQProxySwitchStats::recordLateReplacementGap(uint64_t groups) {
   ++counters_.lateReplacementGaps.gaps;
   counters_.lateReplacementGaps.groups += groups;
+  if (statsCallback_) {
+    statsCallback_->onLateReplacementGap(groups);
+  }
 }
 
 void MoQProxySwitchStats::recordLostGap(uint64_t groups) {
   ++counters_.lostGaps.gaps;
   counters_.lostGaps.groups += groups;
+  if (statsCallback_) {
+    statsCallback_->onLostGap(groups);
+  }
 }
 
 void MoQProxySwitchStats::recordMidSubgroupGap() {
   ++counters_.midSubgroupGaps;
+  if (statsCallback_) {
+    statsCallback_->onMidSubgroupGap();
+  }
 }
 
 void MoQProxySwitchStats::recordLostResumeTime(
     std::chrono::milliseconds duration) {
   counters_.lostResumeTime += duration;
+  if (statsCallback_) {
+    statsCallback_->recordLostResumeTime(duration.count());
+  }
 }
 
 namespace {
