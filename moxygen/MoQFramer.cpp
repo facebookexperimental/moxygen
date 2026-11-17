@@ -4877,7 +4877,8 @@ void MoQFrameWriter::writeFetchObjectHeaderImpl(
   // Write Priority if flag set
   if (flags &
       folly::to_underlying(FetchHeaderSerializationBits::PRIORITY_BITMASK)) {
-    writeBuf.append(&objectHeader.priority, 1);
+    uint8_t priority = objectHeader.priority.value_or(kDefaultPriority);
+    writeBuf.append(&priority, 1);
     size += 1;
   }
 

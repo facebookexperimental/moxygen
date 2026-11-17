@@ -8,10 +8,27 @@
 #include "moxygen/test/MoQSessionTestCommon.h"
 
 #include "moxygen/MoQTrackProperties.h"
+#include "moxygen/mlog/MLogger.h"
 
 using namespace moxygen;
 using namespace moxygen::test;
 using testing::_;
+
+namespace {
+// Records the priority of each received FETCH object.
+class FetchPriorityLogger : public MLogger {
+ public:
+  using MLogger::MLogger;
+  void outputLogs() override {}
+  void onFetchObject(Direction dir, DataStream, const ObjectHeader& header)
+      override {
+    if (dir == Direction::Received) {
+      priorities.push_back(header.priority);
+    }
+  }
+  std::vector<std::optional<uint8_t>> priorities;
+};
+} // namespace
 
 CO_TEST_P_X(Draft22Test, FetchOmitsUnrequestedTrackProperties) {
   co_await setupMoQSession();
@@ -103,6 +120,39 @@ CO_TEST_P_X(MoQSessionTest, Fetch) {
       co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
   EXPECT_FALSE(res.hasError());
   co_await baton;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Per spec, a FETCH object carries its own publisher priority. The cache does
+// not store that yet, so this expects the default until it does.
+CO_TEST_P_X(MoQSessionTest, FetchObjectsCarryDefaultPublisherPriority) {
+  auto clientLogger =
+      std::make_shared<FetchPriorityLogger>(VantagePoint::CLIENT);
+  clientSession_->setLogger(clientLogger);
+  co_await setupMoQSession();
+  expectFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    fetchPub->object(
+        0,
+        0,
+        0,
+        moxygen::test::makeBuf(100),
+        noExtensions(),
+        /*finFetch=*/true);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+  folly::coro::Baton baton;
+  EXPECT_CALL(*fetchCallback_, object(0, 0, 0, _, _, true, _)).WillOnce([&] {
+    baton.post();
+    return folly::unit;
+  });
+  expectFetchSuccess();
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 1}), fetchCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await baton;
+  EXPECT_EQ(
+      clientLogger->priorities,
+      std::vector<std::optional<uint8_t>>{kDefaultPriority});
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
@@ -1554,6 +1604,46 @@ CO_TEST_P_X(Draft22Test, JoiningFetchRefused) {
       fetchCallback_);
   CO_ASSERT_TRUE(res.hasError());
   EXPECT_EQ(res.error().errorCode, FetchErrorCode::NOT_SUPPORTED);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// The fill opens before the subscription's priority is set by SUBSCRIBE_OK, and
+// its objects carry that priority.
+CO_TEST_P_X(Draft22Test, FillObjectsCarrySubscriptionPublisherPriority) {
+  auto clientLogger =
+      std::make_shared<FetchPriorityLogger>(VantagePoint::CLIENT);
+  clientSession_->setLogger(clientLogger);
+  co_await setupMoQSession();
+  expectSubscribe([this](auto sub, auto pub) -> TaskSubscribeResult {
+    serveFill(sub.requestID, sub.fill, pub, AbsoluteLocation{0, 0});
+    pub->publishDone(getTrackEndedPublishDone(sub.requestID));
+    co_return makeSubscribeOkResult(
+        sub, AbsoluteLocation{0, 0}, /*publisherPriority=*/7);
+  });
+  expectFillFetch([](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    fetchPub->object(
+        0,
+        0,
+        0,
+        moxygen::test::makeBuf(100),
+        noExtensions(),
+        /*finFetch=*/true);
+    co_return makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+  });
+  expectPublishDone();
+  folly::coro::Baton fillObject;
+  EXPECT_CALL(*fetchCallback_, object(0, 0, 0, _, _, true, _)).WillOnce([&] {
+    fillObject.post();
+    return folly::unit;
+  });
+  expectBeginFill();
+  auto res = co_await clientSession_->subscribe(
+      subscribeWithFill(kTestTrackName, /*joiningStart=*/1),
+      subscribeCallback_);
+  EXPECT_FALSE(res.hasError());
+  co_await publishDone_;
+  co_await fillObject;
+  EXPECT_EQ(clientLogger->priorities, std::vector<std::optional<uint8_t>>{7});
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

@@ -589,7 +589,7 @@ StreamPublisherImpl::StreamPublisherImpl(
           0,
           0,
           std::numeric_limits<uint64_t>::max(),
-          0,
+          kDefaultPriority,
           ObjectStatus::NORMAL) {
   deliveryCallback_ = std::move(deliveryCallback);
   egressTracker_ = publisher->getEgressTracker();
@@ -1238,12 +1238,12 @@ StreamPublisherImpl::ensureWriteHandle() {
     return folly::unit;
   }
 
-  // Only a FETCH gets here. Its priority comes from the first published
-  // object, or from defaults for an empty stream.
+  // Only a FETCH gets here, before its first object. FetchConsumer does not
+  // take a priority, so every object is sent at the publisher's.
+  header_.priority =
+      publisher_->getPublisherPriority().value_or(kDefaultPriority);
   auto priority = publisher_->elementPriority(
-      header_.group,
-      header_.subgroup,
-      header_.priority.value_or(kDefaultPriority));
+      header_.group, header_.subgroup, *header_.priority);
   // Streams already waiting for credit go first.
   if (publisher_->numUniStreamRequests() == 0) {
     if (auto stream = wt->createUniStream()) {
@@ -2149,6 +2149,14 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
 
   bool isFill() const override {
     return isFill_;
+  }
+
+  // The subscription's priority can be set after its fill opens.
+  std::optional<uint8_t> getPublisherPriority() const override {
+    if (auto owner = fillOwner_.lock()) {
+      return owner->getPublisherPriority();
+    }
+    return PublisherImpl::getPublisherPriority();
   }
 
   void onStreamComplete(
