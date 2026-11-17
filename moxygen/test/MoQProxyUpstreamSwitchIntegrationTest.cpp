@@ -592,6 +592,9 @@ TEST_P(MoQProxyUpstreamFaultTest, WithNoOtherHubAHubGoingAwayKeepsServing) {
     co_await settle();
 
     EXPECT_EQ(proxy_->switchStats().upstreamGoaways, requestStreams ? 2 : 1);
+    EXPECT_EQ(proxy_->switchStats().sessionGoaways, 1);
+    EXPECT_EQ(
+        proxy_->switchStats().requestStreamGoaways, requestStreams ? 1 : 0);
     EXPECT_EQ(proxy_->switchStats().gracefulSwitches.started, 1);
     EXPECT_THAT(viewer->violations(), IsEmpty());
     EXPECT_THAT(viewer->unfinishedSubgroups(), IsEmpty());
