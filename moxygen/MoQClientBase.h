@@ -124,6 +124,15 @@ class MoQClientBase {
     return std::nullopt;
   }
 
+  // Largest datagram payload the connection can send right now, or 0 when
+  // there is no QUIC transport or the peer does not support datagrams.
+  [[nodiscard]] uint16_t getDatagramSizeLimit() const {
+    if (const auto* quicSocket = getQuicSocket()) {
+      return quicSocket->getDatagramSizeLimit();
+    }
+    return 0;
+  }
+
   std::shared_ptr<MoQSession> moqSession_;
   virtual folly::coro::Task<void> setupMoQSession(
       std::chrono::milliseconds connect_timeout,
