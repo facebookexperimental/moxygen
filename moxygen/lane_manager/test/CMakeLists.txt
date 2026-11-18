@@ -26,3 +26,12 @@ moxygen_add_test(TARGET LaneManagerTest
     moqtestutils
     testmain
 )
+
+moxygen_add_test(TARGET SwitchExecutorTest
+  PREFIX "SwitchExecutor"
+  SOURCES
+    SwitchExecutorTest.cpp
+  DEPENDS
+    moxygen_lane_manager_switch_executor
+    testmain
+)

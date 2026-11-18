@@ -56,4 +56,11 @@ moxygen_add_library(moxygen_lane_manager_moq_lane_router
     Folly::folly_container_f14_hash
 )
 
+moxygen_add_library(moxygen_lane_manager_switch_executor
+  SRCS
+    SwitchExecutor.cpp
+  EXPORTED_DEPS
+    moxygen_lane_manager_switching_policy
+)
+
 add_subdirectory(test)
