@@ -40,7 +40,6 @@ quic::TransportSettings MoQServer::defaultTransportSettings() {
   ts.maxCwndInMss = quic::kLargeMaxCwndInMss;
   ts.batchingMode = quic::QuicBatchingMode::BATCHING_MODE_GSO;
   ts.maxBatchSize = 48;
-  ts.dataPathType = quic::DataPathType::ContinuousMemory;
   ts.maxServerRecvPacketsPerLoop = 10;
   ts.writeConnectionDataPacketsLimit = 48;
   ts.advertisedInitialConnectionFlowControlWindow = 1024 * 1024;
