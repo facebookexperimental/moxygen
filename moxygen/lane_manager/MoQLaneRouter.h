@@ -11,6 +11,7 @@
 
 #include <folly/container/F14Map.h>
 
+#include <chrono>
 #include <functional>
 #include <memory>
 
@@ -23,7 +24,10 @@ class MoQLaneRouter : public Publisher {
  public:
   using PolicyFactory = std::function<std::shared_ptr<SwitchingPolicy>(Role)>;
 
-  MoQLaneRouter(std::shared_ptr<Publisher> proxy, PolicyFactory policyFactory);
+  MoQLaneRouter(
+      std::shared_ptr<Publisher> proxy,
+      PolicyFactory policyFactory,
+      std::chrono::milliseconds defaultMaxWait);
 
   folly::coro::Task<SubscribeResult> subscribe(
       SubscribeRequest request,
@@ -36,6 +40,7 @@ class MoQLaneRouter : public Publisher {
  private:
   std::shared_ptr<Publisher> proxy_;
   PolicyFactory policyFactory_;
+  std::chrono::milliseconds defaultMaxWait_;
   folly::F14FastMap<
       TrackNamespace,
       std::weak_ptr<MoQLaneManager>,

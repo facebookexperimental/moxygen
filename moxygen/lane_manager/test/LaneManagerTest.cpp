@@ -7,19 +7,24 @@
 #include "moxygen/lane_manager/MoQLaneManager.h"
 #include "moxygen/lane_manager/MoQLaneRouter.h"
 
+#include "moxygen/test/MockMoQSession.h"
 #include "moxygen/test/Mocks.h"
 
 #include <folly/coro/BlockingWait.h>
+#include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 
 namespace moxygen::lane_manager { namespace {
 
+using namespace std::chrono_literals;
 using testing::_;
 using testing::NiceMock;
 using testing::Return;
+using Kind = SwitchOutcome::Kind;
 
 const TrackNamespace kBroadcast{std::vector<std::string>{"live", "1"}};
+constexpr std::chrono::milliseconds kMaxWait{100};
 
 const std::string kCatalog = R"({"tracks":[
 {"name":"video0","role":"video","altGroup":0,"width":320,"height":176,"initRef":"v0"},
@@ -35,6 +40,22 @@ class MockSwitchingPolicy : public SwitchingPolicy {
       select,
       (const SwitchingSet&, std::string_view, uint64_t, Clock::time_point),
       (override));
+  MOCK_METHOD(void, onSwitchOutcome, (const SwitchOutcome&), (override));
+};
+
+SwitchPlan planTo(std::string lane, std::chrono::milliseconds maxWait) {
+  SwitchPlan plan;
+  plan.targetLane = std::move(lane);
+  plan.maxWait = maxWait;
+  return plan;
+}
+
+// One object the client got: its group, payload and init.
+struct Sent {
+  uint64_t group;
+  std::string payload;
+  std::string init;
+  bool operator==(const Sent&) const = default;
 };
 
 std::string initOf(const Extensions& extensions) {
@@ -95,15 +116,67 @@ class LaneManagerTest : public testing::Test {
         .WillByDefault([](const SwitchingSet& set) {
           return set.lanes.front().trackName;
         });
+    ON_CALL(*policy_, onSwitchOutcome(_))
+        .WillByDefault([this](const SwitchOutcome& outcome) {
+          outcomes_.push_back(outcome.kind);
+        });
+    // The client keeps every object it gets in sent_.
+    ON_CALL(*client_, beginSubgroup(_, _, _, _))
+        .WillByDefault(
+            [this](uint64_t group, uint64_t, Priority, BeginSubgroupOptions)
+                -> folly::Expected<
+                    std::shared_ptr<SubgroupConsumer>,
+                    MoQPublishError> {
+              auto subgroup =
+                  std::make_shared<NiceMock<MockSubgroupConsumer>>();
+              ON_CALL(*subgroup, object(_, _, _, _))
+                  .WillByDefault([this, group](
+                                     uint64_t,
+                                     Payload payload,
+                                     const Extensions& extensions,
+                                     bool) {
+                    sent_.push_back(
+                        {group,
+                         payload->to<std::string>(),
+                         initOf(extensions)});
+                    return folly::unit;
+                  });
+              return subgroup;
+            });
+  }
+
+  // Runs `task` as the client session's request, then the lane SUBSCRIBEs it
+  // started.
+  template <typename T>
+  T run(folly::coro::Task<T> task) {
+    folly::RequestContextScopeGuard guard;
+    folly::RequestContext::get()->setContextData(
+        folly::RequestToken("moq_session"),
+        std::make_unique<MoQSession::MoQSessionRequestData>(session_));
+    auto result = folly::coro::blockingWait(std::move(task), &evb_);
+    evb_.loopOnce(EVLOOP_NONBLOCK);
+    return result;
   }
 
   Publisher::SubscribeResult subscribe(Role role, uint64_t requestID = 1) {
     auto request = SubscribeRequest::make(FullTrackName{kBroadcast, "r--abr"});
     request.requestID = requestID;
-    return folly::coro::blockingWait(
-        manager_->subscribe(request, client_, role, policy_));
+    return run(manager_->subscribe(request, client_, role, policy_));
   }
 
+  // `lane` sends one object of `group`, carrying the lane's name.
+  void publish(const std::string& lane, uint64_t group) {
+    auto subgroup =
+        lanes_.at(lane)->beginSubgroup(group, 0, kDefaultPriority, {});
+    ASSERT_TRUE(subgroup.hasValue());
+    subgroup.value()->object(0, folly::IOBuf::copyBuffer(lane));
+  }
+
+  folly::EventBase evb_;
+  std::shared_ptr<MoQFollyExecutorImpl> executor_{
+      std::make_shared<MoQFollyExecutorImpl>(&evb_)};
+  std::shared_ptr<test::MockMoQSession> session_{
+      std::make_shared<NiceMock<test::MockMoQSession>>(executor_)};
   std::shared_ptr<NiceMock<MockPublisher>> proxy_{
       std::make_shared<NiceMock<MockPublisher>>()};
   std::shared_ptr<NiceMock<MockTrackConsumer>> client_{
@@ -111,7 +184,7 @@ class LaneManagerTest : public testing::Test {
   std::shared_ptr<NiceMock<MockSwitchingPolicy>> policy_{
       std::make_shared<NiceMock<MockSwitchingPolicy>>()};
   std::shared_ptr<MoQLaneManager> manager_{
-      std::make_shared<MoQLaneManager>(proxy_, kBroadcast)};
+      std::make_shared<MoQLaneManager>(proxy_, kBroadcast, kMaxWait)};
   std::string failLane_;
   std::optional<TrackAlias> alias_;
   folly::F14FastMap<std::string, std::shared_ptr<TrackConsumer>> lanes_;
@@ -120,6 +193,8 @@ class LaneManagerTest : public testing::Test {
       handles_;
   std::optional<Fetch> laneFetch_;
   std::shared_ptr<FetchConsumer> laneFetchConsumer_;
+  std::vector<Sent> sent_;
+  std::vector<Kind> outcomes_;
 };
 
 TEST_F(LaneManagerTest, SubscribeOkComesFromTheLaneUnderTheClientAlias) {
@@ -135,7 +210,8 @@ TEST_F(LaneManagerTest, SubscribeOkComesFromTheLaneUnderTheClientAlias) {
 }
 
 TEST_F(LaneManagerTest, ForwardsTheLaneWithTheInitOnTheFirstObject) {
-  ASSERT_TRUE(subscribe(Role::Video).hasValue());
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
   auto clientSubgroup = std::make_shared<NiceMock<MockSubgroupConsumer>>();
   EXPECT_CALL(
       *client_,
@@ -165,7 +241,8 @@ TEST_F(LaneManagerTest, ForwardsTheLaneWithTheInitOnTheFirstObject) {
 }
 
 TEST_F(LaneManagerTest, JoiningFetchGoesToTheInitialLaneWithItsInit) {
-  ASSERT_TRUE(subscribe(Role::Video).hasValue());
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
   Fetch fetch(RequestID(3), RequestID(1), 0, FetchType::RELATIVE_JOINING);
   fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr"};
   auto client = std::make_shared<NiceMock<MockFetchConsumer>>();
@@ -234,7 +311,8 @@ TEST_F(LaneManagerTest, ACatalogTimeoutFailsWithTimeoutAndRetry) {
 }
 
 TEST_F(LaneManagerTest, RejectsASecondSubscribeForTheSameRole) {
-  ASSERT_TRUE(subscribe(Role::Video).hasValue());
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
 
   auto second = subscribe(Role::Video, 2);
   ASSERT_TRUE(second.hasError());
@@ -243,11 +321,12 @@ TEST_F(LaneManagerTest, RejectsASecondSubscribeForTheSameRole) {
 }
 
 TEST_F(LaneManagerTest, UnsubscribeReleasesLanesAndTheLastReleasesTheCatalog) {
-  EXPECT_CALL(*proxy_, subscribe(_, _)).Times(3);
+  EXPECT_CALL(*proxy_, subscribe(_, _)).Times(4);
   auto video = subscribe(Role::Video, 1).value();
   auto audio = subscribe(Role::Audio, 2).value();
 
   EXPECT_CALL(*handles_.at("video0"), unsubscribe());
+  EXPECT_CALL(*handles_.at("video1"), unsubscribe());
   video->unsubscribe();
   EXPECT_CALL(*handles_.at("audio0"), unsubscribe());
   audio->unsubscribe();
@@ -257,7 +336,8 @@ TEST_F(LaneManagerTest, UnsubscribeReleasesLanesAndTheLastReleasesTheCatalog) {
 }
 
 TEST_F(LaneManagerTest, LanePublishDoneEndsTheVirtualTrack) {
-  ASSERT_TRUE(subscribe(Role::Video).hasValue());
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
 
   EXPECT_CALL(*client_, publishDone(_)).WillOnce(Return(folly::unit));
   lanes_.at("video0")->publishDone(
@@ -266,31 +346,109 @@ TEST_F(LaneManagerTest, LanePublishDoneEndsTheVirtualTrack) {
   EXPECT_TRUE(subscribe(Role::Video, 2).hasValue());
 }
 
+TEST_F(LaneManagerTest, SwitchesAtTheNextGroupWithTheTargetsInit) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  ON_CALL(*policy_, select(_, "video0", 6, _))
+      .WillByDefault(Return(planTo("video1", 10s)));
+
+  publish("video0", 6);
+  publish("video0", 7); // held for video1's group 7
+  publish("video1", 7);
+  publish("video0", 8);
+
+  EXPECT_EQ(
+      sent_, (std::vector<Sent>{{6, "video0", "v0"}, {7, "video1", "v1"}}));
+  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Committed}));
+}
+
+TEST_F(LaneManagerTest, SendsTheHeldGroupWhenTheTargetMissesTheWait) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  ON_CALL(*policy_, select(_, "video0", 6, _))
+      .WillByDefault(Return(planTo("video1", 1ms)));
+
+  publish("video0", 6);
+  publish("video0", 7);
+  evb_.loop(); // until the wait runs out
+  publish("video1", 7);
+
+  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video0", "v0"}, {7, "video0", ""}}));
+  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
+}
+
+TEST_F(LaneManagerTest, BackgroundLaneEndOnlyRemovesTheLane) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  EXPECT_CALL(*client_, publishDone(_)).Times(0);
+  lanes_.at("video1")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
+
+  EXPECT_CALL(*policy_, select(_, _, _, _))
+      .WillOnce([](const SwitchingSet& set, auto, auto, auto) {
+        EXPECT_EQ(set.find("video1"), nullptr);
+        return std::nullopt;
+      });
+  publish("video0", 6);
+}
+
+TEST_F(LaneManagerTest, TrackEndSendsTheHeldGroupFirst) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  ON_CALL(*policy_, select(_, "video0", 6, _))
+      .WillByDefault(Return(planTo("video1", 10s)));
+  publish("video0", 6);
+  publish("video0", 7);
+
+  EXPECT_CALL(*client_, publishDone(_)).WillOnce(Return(folly::unit));
+  lanes_.at("video0")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
+
+  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video0", "v0"}, {7, "video0", ""}}));
+}
+
+TEST_F(LaneManagerTest, ALateOlderGroupIsNotPlannedFrom) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  EXPECT_CALL(*policy_, select(_, _, 8, _));
+  EXPECT_CALL(*policy_, select(_, _, 7, _)).Times(0);
+
+  publish("video0", 8);
+  publish("video0", 7);
+}
+
+TEST_F(LaneManagerTest, DroppingTheHandleEndsTheVirtualTrack) {
+  ASSERT_TRUE(subscribe(Role::Video).hasValue()); // dropped right away
+
+  EXPECT_TRUE(subscribe(Role::Video, 2).hasValue());
+}
+
 TEST_F(LaneManagerTest, RouterPassesOtherTracksToTheProxy) {
-  MoQLaneRouter router(proxy_, [this](Role) { return policy_; });
+  MoQLaneRouter router(proxy_, [this](Role) { return policy_; }, kMaxWait);
   auto request = SubscribeRequest::make(FullTrackName{kBroadcast, "video1"});
 
-  EXPECT_TRUE(
-      folly::coro::blockingWait(router.subscribe(request, client_)).hasValue());
+  EXPECT_TRUE(run(router.subscribe(request, client_)).hasValue());
   EXPECT_TRUE(lanes_.contains("video1"));
   EXPECT_FALSE(handles_.contains("catalog"));
 }
 
 TEST_F(LaneManagerTest, RouterKeepsOneManagerPerBroadcast) {
   std::vector<Role> roles;
-  MoQLaneRouter router(proxy_, [&](Role role) {
-    roles.push_back(role);
-    return policy_;
-  });
+  MoQLaneRouter router(
+      proxy_,
+      [&](Role role) {
+        roles.push_back(role);
+        return policy_;
+      },
+      kMaxWait);
   auto subscribe = [&](const std::string& name, uint64_t requestID) {
     auto request = SubscribeRequest::make(FullTrackName{kBroadcast, name});
     request.requestID = requestID;
-    return folly::coro::blockingWait(router.subscribe(request, client_))
-        .value();
+    return run(router.subscribe(request, client_)).value();
   };
 
-  // The catalog once, then video0 and audio0.
-  EXPECT_CALL(*proxy_, subscribe(_, _)).Times(3);
+  // The catalog once, then every lane.
+  EXPECT_CALL(*proxy_, subscribe(_, _)).Times(4);
   auto video = subscribe("r--abr-video", 1);
   auto audio = subscribe("r--abr-audio", 2);
   EXPECT_EQ(roles, (std::vector<Role>{Role::Video, Role::Audio}));
@@ -298,7 +456,7 @@ TEST_F(LaneManagerTest, RouterKeepsOneManagerPerBroadcast) {
   // The last UNSUBSCRIBE frees the manager; the next one reopens the catalog.
   video->unsubscribe();
   audio->unsubscribe();
-  EXPECT_CALL(*proxy_, subscribe(_, _)).Times(2);
+  EXPECT_CALL(*proxy_, subscribe(_, _)).Times(3);
   subscribe("r--abr-video", 3);
 }
 

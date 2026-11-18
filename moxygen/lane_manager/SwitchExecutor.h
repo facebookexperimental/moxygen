@@ -30,6 +30,10 @@ class SwitchExecutor {
     return live_;
   }
 
+  bool pending() const {
+    return pending_.has_value();
+  }
+
   // Set while a group is held.
   std::optional<Clock::time_point> deadline() const;
 

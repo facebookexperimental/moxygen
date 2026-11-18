@@ -30,6 +30,7 @@ using testing::NiceMock;
 
 constexpr uint64_t kVersion = kVersionDraftCurrent;
 constexpr uint64_t kMaxRequestID = 100;
+constexpr std::chrono::milliseconds kMaxWait{10000};
 const TrackNamespace kBroadcast{std::vector<std::string>{"live"}};
 
 const std::string kCatalog = R"({"tracks":[
@@ -228,11 +229,14 @@ class LaneManagerIntegrationTest : public testing::Test,
   }
 
   // A viewer session whose publish handler is a router over the proxy.
-  folly::coro::Task<Link*> connectViewer() {
+  folly::coro::Task<Link*> connectViewer(uint64_t groupsPerLane = 10) {
     co_return co_await connect(
-        std::make_shared<MoQLaneRouter>(proxy_, [](Role) {
-          return std::make_shared<samples::ScriptedPolicy>();
-        }));
+        std::make_shared<MoQLaneRouter>(
+            proxy_,
+            [groupsPerLane](Role) {
+              return std::make_shared<samples::ScriptedPolicy>(groupsPerLane);
+            },
+            kMaxWait));
   }
 
   template <typename Predicate>
@@ -326,6 +330,36 @@ TEST_F(LaneManagerIntegrationTest, JoinsTheVirtualTrackOnAWarmLane) {
     EXPECT_EQ(
         history->received, (std::vector<Received>{{41, 0, "v0"}, {41, 1, ""}}));
     EXPECT_EQ(live->received, (std::vector<Received>{{42, 0, "v0"}}));
+  }));
+}
+
+// The policy moves the viewer to video1 after two groups, so video1's group 43
+// replaces video0's.
+TEST_F(LaneManagerIntegrationTest, SwitchesLanesAtAGroupBoundary) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await startProxy();
+    auto* viewer = co_await connectViewer(/*groupsPerLane=*/2);
+    auto recorder = std::make_shared<Recorder>();
+    auto result = co_await viewer->client->subscribe(
+        liveSubscribe("r--abr-video"),
+        std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, recorder));
+    CO_ASSERT_TRUE(result.hasValue());
+    handles_.push_back(std::move(result.value()));
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return origin_->tracks.contains("video1"); }));
+
+    publishGroup("video0", 41, 1);
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return recorder->received.size() == 1; }));
+    for (uint64_t group : {42, 43}) {
+      publishGroup("video0", group, 1);
+      publishGroup("video1", group, 1);
+    }
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return recorder->received.size() == 3; }));
+    EXPECT_EQ(
+        recorder->received,
+        (std::vector<Received>{{41, 0, "v0"}, {42, 0, ""}, {43, 0, "v1"}}));
   }));
 }
 

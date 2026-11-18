@@ -46,7 +46,8 @@ struct SwitchOutcome {
   Kind kind{Kind::Prepared};
   std::string fromLane;
   std::string targetLane;
-  // Where the switch takes effect; for Retried, the group it missed.
+  // Where the switch takes effect; for Prepared, the group it was planned at;
+  // for Retried, the group it missed.
   uint64_t group{0};
   Clock::time_point at{}; // on the same clock as select()'s `now`
 };

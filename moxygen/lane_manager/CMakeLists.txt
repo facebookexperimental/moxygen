@@ -35,7 +35,9 @@ moxygen_add_library(moxygen_lane_manager_moq_lane_manager
   SRCS
     MoQLaneManager.cpp
   DEPS
-    moxygen_moq_consumers
+    moxygen_events_moq_executor
+    moxygen_lane_manager_switch_executor
+    Folly::folly_function
     Folly::folly_futures_core
     Folly::folly_logging_logging
     Folly::folly_scope_guard
@@ -43,6 +45,7 @@ moxygen_add_library(moxygen_lane_manager_moq_lane_manager
     moxygen_lane_manager_catalog_reader
     moxygen_lane_manager_switching_policy
     moxygen_moq
+    moxygen_moq_consumers
     Folly::folly_container_f14_hash
     Folly::folly_coro_task
 )

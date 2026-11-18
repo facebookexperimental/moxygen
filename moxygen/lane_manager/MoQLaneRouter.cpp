@@ -26,8 +26,11 @@ std::optional<Role> roleOf(const FullTrackName& name) {
 
 MoQLaneRouter::MoQLaneRouter(
     std::shared_ptr<Publisher> proxy,
-    PolicyFactory policyFactory)
-    : proxy_(std::move(proxy)), policyFactory_(std::move(policyFactory)) {}
+    PolicyFactory policyFactory,
+    std::chrono::milliseconds defaultMaxWait)
+    : proxy_(std::move(proxy)),
+      policyFactory_(std::move(policyFactory)),
+      defaultMaxWait_(defaultMaxWait) {}
 
 folly::coro::Task<Publisher::SubscribeResult> MoQLaneRouter::subscribe(
     SubscribeRequest request,
@@ -41,7 +44,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneRouter::subscribe(
   auto manager = weak.lock();
   if (!manager) {
     manager = std::make_shared<MoQLaneManager>(
-        proxy_, request.fullTrackName.trackNamespace);
+        proxy_, request.fullTrackName.trackNamespace, defaultMaxWait_);
     weak = manager;
   }
   co_return co_await manager->subscribe(
