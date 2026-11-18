@@ -5,6 +5,7 @@
  */
 
 #include "moxygen/lane_manager/MoQLaneManager.h"
+#include "moxygen/lane_manager/MoQLaneRouter.h"
 
 #include "moxygen/test/Mocks.h"
 
@@ -263,6 +264,42 @@ TEST_F(LaneManagerTest, LanePublishDoneEndsTheVirtualTrack) {
       PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
 
   EXPECT_TRUE(subscribe(Role::Video, 2).hasValue());
+}
+
+TEST_F(LaneManagerTest, RouterPassesOtherTracksToTheProxy) {
+  MoQLaneRouter router(proxy_, [this](Role) { return policy_; });
+  auto request = SubscribeRequest::make(FullTrackName{kBroadcast, "video1"});
+
+  EXPECT_TRUE(
+      folly::coro::blockingWait(router.subscribe(request, client_)).hasValue());
+  EXPECT_TRUE(lanes_.contains("video1"));
+  EXPECT_FALSE(handles_.contains("catalog"));
+}
+
+TEST_F(LaneManagerTest, RouterKeepsOneManagerPerBroadcast) {
+  std::vector<Role> roles;
+  MoQLaneRouter router(proxy_, [&](Role role) {
+    roles.push_back(role);
+    return policy_;
+  });
+  auto subscribe = [&](const std::string& name, uint64_t requestID) {
+    auto request = SubscribeRequest::make(FullTrackName{kBroadcast, name});
+    request.requestID = requestID;
+    return folly::coro::blockingWait(router.subscribe(request, client_))
+        .value();
+  };
+
+  // The catalog once, then video0 and audio0.
+  EXPECT_CALL(*proxy_, subscribe(_, _)).Times(3);
+  auto video = subscribe("r--abr-video", 1);
+  auto audio = subscribe("r--abr-audio", 2);
+  EXPECT_EQ(roles, (std::vector<Role>{Role::Video, Role::Audio}));
+
+  // The last UNSUBSCRIBE frees the manager; the next one reopens the catalog.
+  video->unsubscribe();
+  audio->unsubscribe();
+  EXPECT_CALL(*proxy_, subscribe(_, _)).Times(2);
+  subscribe("r--abr-video", 3);
 }
 
 }} // namespace moxygen::lane_manager

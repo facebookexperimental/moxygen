@@ -47,4 +47,13 @@ moxygen_add_library(moxygen_lane_manager_moq_lane_manager
     Folly::folly_coro_task
 )
 
+moxygen_add_library(moxygen_lane_manager_moq_lane_router
+  SRCS
+    MoQLaneRouter.cpp
+  EXPORTED_DEPS
+    moxygen_lane_manager_moq_lane_manager
+    moxygen_moq
+    Folly::folly_container_f14_hash
+)
+
 add_subdirectory(test)

@@ -22,6 +22,7 @@ moxygen_add_test(TARGET LaneManagerTest
     LaneManagerTest.cpp
   DEPENDS
     moxygen_lane_manager_moq_lane_manager
+    moxygen_lane_manager_moq_lane_router
     moqtestutils
     testmain
 )
