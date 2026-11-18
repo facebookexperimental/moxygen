@@ -366,6 +366,7 @@ moxygen_add_library(moxygen_moq_queue_callback
 add_subdirectory(dejitter)
 add_subdirectory(events)
 add_subdirectory(flv_parser)
+add_subdirectory(lane_manager)
 add_subdirectory(mlog)
 add_subdirectory(moq_mi)
 add_subdirectory(moq_mi_to_flv)
