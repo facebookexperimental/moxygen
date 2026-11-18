@@ -84,6 +84,13 @@ void MoQProxySwitchStats::recordLostSwitchFailed() {
   }
 }
 
+void MoQProxySwitchStats::recordLostSwitchStopped() {
+  ++counters_.lostSwitches.stopped;
+  if (statsCallback_) {
+    statsCallback_->onLostSwitchStopped();
+  }
+}
+
 void MoQProxySwitchStats::recordGracefulSwitchStarted() {
   ++counters_.gracefulSwitches.started;
   if (statsCallback_) {
@@ -104,6 +111,13 @@ void MoQProxySwitchStats::recordGracefulSwitchFailed() {
   ++counters_.gracefulSwitches.failed;
   if (statsCallback_) {
     statsCallback_->onGracefulSwitchFailed();
+  }
+}
+
+void MoQProxySwitchStats::recordGracefulSwitchStopped() {
+  ++counters_.gracefulSwitches.stopped;
+  if (statsCallback_) {
+    statsCallback_->onGracefulSwitchStopped();
   }
 }
 
@@ -1992,7 +2006,9 @@ void MoQProxyTrack::cancelEstablishment() {
   establishing_.requestCancellation();
   establishingGoawayWatch_.reset();
   switchDeadline_.requestCancellation();
-  switchStartedAt_.reset();
+  if (std::exchange(switchStartedAt_, std::nullopt)) {
+    switchStats_->recordLostSwitchStopped();
+  }
   endGracefulSwitch();
   onSwitchProgress();
 }
@@ -2514,6 +2530,7 @@ void MoQProxyTrack::onGracefulDeadline() {
     return;
   }
   switchStats_->recordGracefulSwitchFailed();
+  graceful_->failed = true;
   XLOG(WARN) << "No replacement upstream for " << fullTrackName_
              << " by the switch deadline, keeping the one going away";
   auto oldEnd = std::exchange(graceful_->oldEnd, std::nullopt);
@@ -2651,6 +2668,7 @@ void MoQProxyTrack::dropReplacement(Recorder& replacement) {
   }
   if (graceful_->deadlinePassed) {
     switchStats_->recordGracefulSwitchFailed();
+    graceful_->failed = true;
     return;
   }
   establishing_ = folly::CancellationSource();
@@ -2682,6 +2700,9 @@ void MoQProxyTrack::endGracefulSwitch() {
   auto graceful = std::exchange(graceful_, std::nullopt);
   if (!graceful) {
     return;
+  }
+  if (!graceful->failed) {
+    switchStats_->recordGracefulSwitchStopped();
   }
   if (graceful->grace) {
     graceful->grace->requestCancellation();

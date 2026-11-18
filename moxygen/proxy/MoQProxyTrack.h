@@ -80,10 +80,14 @@ struct MoQProxySwitchOptions {
   uint64_t randomSeed{0};
 };
 
+// Each switch that started ends exactly one way, so started is completed plus
+// failed plus stopped, plus the switches still running.
 struct MoQProxySwitchCounters {
   uint64_t started{0};
   uint64_t completed{0};
   uint64_t failed{0};
+  // Ended before it could complete or fail, as when the last viewer left.
+  uint64_t stopped{0};
   // From the switch starting to completing, summed over completed switches.
   std::chrono::milliseconds duration{0};
 };
@@ -142,7 +146,8 @@ struct MoQProxySwitchStatsData {
   // sent nothing but has nothing newer than the track's last group, or no
   // viewer forwards, as on a quiet track. It fails at the deadline otherwise,
   // which ends viewers' subscriptions with GOING_AWAY. A replacement lost
-  // before the switch completes doesn't start another.
+  // before the switch completes doesn't start another. It stops when the last
+  // viewer leaves, the track closes, or the replacement ends the track first.
   MoQProxySwitchCounters lostSwitches;
   // Switches that started because the upstream sent a GOAWAY, while it went on
   // serving. One completes once the track lets go of that upstream, which has
@@ -150,9 +155,9 @@ struct MoQProxySwitchStatsData {
   // has had nothing to send for the reorder grace, and fails when it has no
   // adopted replacement once the deadline passed; the upstream then serves
   // until it goes. One whose upstream is lost before an adopted replacement
-  // forwarded an object carries on as a lost switch, counted there. That one,
-  // and one stopped by the upstream ending the track or by the track closing,
-  // neither completes nor fails here.
+  // forwarded an object stops here and carries on as a lost switch, counted
+  // there. It also stops when the upstream ends the track, the last viewer
+  // leaves, or the track closes.
   MoQProxySwitchCounters gracefulSwitches;
   // Completed graceful switches whose replacement delivered data before the
   // old upstream ended.
@@ -196,9 +201,11 @@ class MoQProxySwitchStats {
   void recordLostSwitchStarted();
   void recordLostSwitchCompleted(std::chrono::milliseconds duration);
   void recordLostSwitchFailed();
+  void recordLostSwitchStopped();
   void recordGracefulSwitchStarted();
   void recordGracefulSwitchCompleted(std::chrono::milliseconds duration);
   void recordGracefulSwitchFailed();
+  void recordGracefulSwitchStopped();
   void recordHandoffBehind();
   void recordHandoffEqual();
   void recordHandoffAhead();
@@ -581,6 +588,8 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     // Stops the tail timer, from the replacement's first forwarded object.
     std::optional<folly::CancellationSource> tail;
     bool deadlinePassed{false};
+    // Counted as failed, while the old upstream serves until it goes.
+    bool failed{false};
     // The old upstream's end, held for a replacement still subscribing.
     std::optional<PublishDone> oldEnd;
   };

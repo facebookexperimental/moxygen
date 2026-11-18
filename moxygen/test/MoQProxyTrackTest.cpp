@@ -1707,6 +1707,31 @@ TEST_F(MoQProxyTrackSwitchTest, ClosingDuringASwitchStopsIt) {
   EXPECT_TRUE(track.expired());
   EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 0);
   EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.stopped, 1);
+}
+
+// The last viewer leaves while the replacement's provider still answers, so
+// the switch stops.
+TEST_F(MoQProxyTrackSwitchTest, TheLastViewerLeavingStopsTheSwitch) {
+  EXPECT_CALL(*statsCallback_, onLostSwitchStopped());
+  folly::coro::Baton providerGate;
+  replacementProvider_->gate = &providerGate;
+  auto downstreamHandle =
+      subscribeThroughUpstream(makeUpstreamHandle(), makeConsumer());
+  ASSERT_NE(upstreamConsumer_, nullptr);
+  EXPECT_CALL(*replacementSession_, subscribe(_, _)).Times(0);
+  loseUpstream();
+  runUntil([&] { return replacementProvider_->calls == 1; });
+
+  downstreamHandle->unsubscribe();
+  providerGate.post();
+  runPending();
+
+  EXPECT_EQ(callback_->calls, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.started, 1);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.stopped, 1);
 }
 
 // Every provider failed, so the switch waits out its backoff when the track
@@ -1731,6 +1756,7 @@ TEST_F(MoQProxyTrackSwitchTest, ClosingDuringTheRetryBackoffStopsTheSwitch) {
   EXPECT_TRUE(track.expired());
   EXPECT_EQ(provider_->calls, 2);
   EXPECT_EQ(switchStats_->counters().lostSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().lostSwitches.stopped, 1);
 }
 
 enum class AttemptWaitsIn { Provider, Subscribe };
@@ -1788,6 +1814,9 @@ TEST_P(MoQProxyTrackSwitchStopTest, StoppingTheSwitchCancelsTheAttempt) {
   EXPECT_EQ(
       switchStats_->counters().lostSwitches.failed,
       stops == SwitchStops::Deadline ? 1 : 0);
+  EXPECT_EQ(
+      switchStats_->counters().lostSwitches.stopped,
+      stops == SwitchStops::Close ? 1 : 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -2456,6 +2485,7 @@ TEST_F(
   EXPECT_EQ(switchStats_->counters().gracefulSwitches.started, 1);
   EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 0);
   EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.stopped, 1);
   EXPECT_EQ(switchStats_->counters().lostSwitches.started, 1);
   EXPECT_EQ(switchStats_->counters().lostSwitches.completed, 1);
   EXPECT_EQ(switchStats_->counters().lateReplacementGaps.gaps, 1);
@@ -3521,6 +3551,7 @@ TEST_F(
 }
 
 TEST_F(MoQProxyTrackGracefulSwitchTest, ClosingDuringASwitchStopsIt) {
+  EXPECT_CALL(*statsCallback_, onGracefulSwitchStopped());
   subscribeWithGroup11Open();
   auto replacementHandle = makeUpstreamHandle();
   expectReplacementSubscribe(replacementHandle);
@@ -3538,6 +3569,7 @@ TEST_F(MoQProxyTrackGracefulSwitchTest, ClosingDuringASwitchStopsIt) {
   advanceTime(2 * switchOptions_.defaultGroupDuration);
   EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 0);
   EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.stopped, 1);
   EXPECT_EQ(switchStats_->counters().tailCutoffs.cutoffs, 0);
 }
 
@@ -3562,6 +3594,7 @@ TEST_F(
   Mock::VerifyAndClearExpectations(replacementHandle.get());
   EXPECT_EQ(switchStats_->counters().upstreamsLost, 0);
   EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 0);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.stopped, 1);
 }
 
 // The old upstream finishes group 11 and ends the track while the replacement
@@ -3770,6 +3803,8 @@ TEST_F(
   subscribeReply.post();
   runPending();
   Mock::VerifyAndClearExpectations(lateHandle.get());
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.failed, 1);
+  EXPECT_EQ(switchStats_->counters().gracefulSwitches.stopped, 0);
 }
 
 // The viewer leaves while the old upstream's end waits for the replacement,

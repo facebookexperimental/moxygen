@@ -457,9 +457,11 @@ class MockMoQProxyStats : public MoQProxyStatsCallback {
   MOCK_METHOD(void, onLostSwitchStarted, (), (override));
   MOCK_METHOD(void, onLostSwitchCompleted, (uint64_t), (override));
   MOCK_METHOD(void, onLostSwitchFailed, (), (override));
+  MOCK_METHOD(void, onLostSwitchStopped, (), (override));
   MOCK_METHOD(void, onGracefulSwitchStarted, (), (override));
   MOCK_METHOD(void, onGracefulSwitchCompleted, (uint64_t), (override));
   MOCK_METHOD(void, onGracefulSwitchFailed, (), (override));
+  MOCK_METHOD(void, onGracefulSwitchStopped, (), (override));
   MOCK_METHOD(void, onHandoffBehind, (), (override));
   MOCK_METHOD(void, onHandoffEqual, (), (override));
   MOCK_METHOD(void, onHandoffAhead, (), (override));

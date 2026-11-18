@@ -27,9 +27,11 @@ class MoQProxyStatsCallback {
   virtual void onLostSwitchStarted() = 0;
   virtual void onLostSwitchCompleted(uint64_t durationMs) = 0;
   virtual void onLostSwitchFailed() = 0;
+  virtual void onLostSwitchStopped() = 0;
   virtual void onGracefulSwitchStarted() = 0;
   virtual void onGracefulSwitchCompleted(uint64_t durationMs) = 0;
   virtual void onGracefulSwitchFailed() = 0;
+  virtual void onGracefulSwitchStopped() = 0;
 
   virtual void onHandoffBehind() = 0;
   virtual void onHandoffEqual() = 0;
