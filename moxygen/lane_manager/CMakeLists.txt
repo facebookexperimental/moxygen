@@ -13,3 +13,22 @@ moxygen_add_library(moxygen_lane_manager_switching_policy
   EXPORTED_DEPS
     moxygen_lane_manager_switching_set
 )
+
+moxygen_add_library(moxygen_lane_manager_catalog_reader
+  SRCS
+    CatalogReader.cpp
+  DEPS
+    moxygen_moq_obj_receiver
+    moxygen_msf_media_catalog
+    Folly::folly_base64
+    Folly::folly_coro_error
+    Folly::folly_coro_timeout
+    Folly::folly_logging_logging
+  EXPORTED_DEPS
+    moxygen_lane_manager_switching_set
+    moxygen_moq
+    Folly::folly_coro_shared_promise
+    Folly::folly_coro_task
+)
+
+add_subdirectory(test)
