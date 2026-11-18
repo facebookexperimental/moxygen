@@ -15,3 +15,13 @@ moxygen_add_test(TARGET CatalogReaderTest
     moqtestutils
     testmain
 )
+
+moxygen_add_test(TARGET LaneManagerTest
+  PREFIX "LaneManager"
+  SOURCES
+    LaneManagerTest.cpp
+  DEPENDS
+    moxygen_lane_manager_moq_lane_manager
+    moqtestutils
+    testmain
+)

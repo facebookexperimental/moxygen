@@ -31,4 +31,20 @@ moxygen_add_library(moxygen_lane_manager_catalog_reader
     Folly::folly_coro_task
 )
 
+moxygen_add_library(moxygen_lane_manager_moq_lane_manager
+  SRCS
+    MoQLaneManager.cpp
+  DEPS
+    moxygen_moq_consumers
+    Folly::folly_futures_core
+    Folly::folly_logging_logging
+    Folly::folly_scope_guard
+  EXPORTED_DEPS
+    moxygen_lane_manager_catalog_reader
+    moxygen_lane_manager_switching_policy
+    moxygen_moq
+    Folly::folly_container_f14_hash
+    Folly::folly_coro_task
+)
+
 add_subdirectory(test)
