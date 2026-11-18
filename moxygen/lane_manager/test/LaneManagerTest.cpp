@@ -73,14 +73,19 @@ class LaneManagerTest : public testing::Test {
           return folly::coro::makeTask<Publisher::SubscribeResult>(
               handles_[name]);
         });
+    // The catalog FETCH returns kCatalog; lane FETCHes are kept.
     ON_CALL(*proxy_, fetch(_, _))
-        .WillByDefault(
-            [](const Fetch& /*fetch*/, std::shared_ptr<FetchConsumer> c) {
-              c->object(0, 0, 0, folly::IOBuf::copyBuffer(kCatalog));
-              c->endOfFetch();
-              return folly::coro::makeTask<Publisher::FetchResult>(
-                  std::make_shared<MockFetchHandle>(FetchOk{}));
-            });
+        .WillByDefault([this](Fetch fetch, std::shared_ptr<FetchConsumer> c) {
+          if (fetch.fullTrackName.trackName == "catalog") {
+            c->object(0, 0, 0, folly::IOBuf::copyBuffer(kCatalog));
+            c->endOfFetch();
+          } else {
+            laneFetch_ = std::move(fetch);
+            laneFetchConsumer_ = std::move(c);
+          }
+          return folly::coro::makeTask<Publisher::FetchResult>(
+              std::make_shared<MockFetchHandle>(FetchOk{}));
+        });
     ON_CALL(*client_, setTrackAlias(_)).WillByDefault([this](TrackAlias alias) {
       alias_ = alias;
       return folly::unit;
@@ -112,6 +117,8 @@ class LaneManagerTest : public testing::Test {
   folly::F14FastMap<std::string, std::optional<TrackAlias>> aliasAtSubscribe_;
   folly::F14FastMap<std::string, std::shared_ptr<MockSubscriptionHandle>>
       handles_;
+  std::optional<Fetch> laneFetch_;
+  std::shared_ptr<FetchConsumer> laneFetchConsumer_;
 };
 
 TEST_F(LaneManagerTest, SubscribeOkComesFromTheLaneUnderTheClientAlias) {
@@ -153,6 +160,36 @@ TEST_F(LaneManagerTest, ForwardsTheLaneWithTheInitOnTheFirstObject) {
   subgroup.value()->object(0, folly::IOBuf::copyBuffer("a"));
   subgroup.value()->object(1, folly::IOBuf::copyBuffer("b"));
 
+  EXPECT_EQ(inits, (std::vector<std::string>{"v0", ""}));
+}
+
+TEST_F(LaneManagerTest, JoiningFetchGoesToTheInitialLaneWithItsInit) {
+  ASSERT_TRUE(subscribe(Role::Video).hasValue());
+  Fetch fetch(RequestID(3), RequestID(1), 0, FetchType::RELATIVE_JOINING);
+  fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr"};
+  auto client = std::make_shared<NiceMock<MockFetchConsumer>>();
+  ASSERT_TRUE(
+      folly::coro::blockingWait(manager_->fetch(fetch, client, Role::Video))
+          .hasValue());
+
+  EXPECT_EQ(laneFetch_->fullTrackName.trackName, "video0");
+  EXPECT_EQ(
+      std::get<JoiningFetch>(laneFetch_->args).joiningRequestID, RequestID(1));
+  std::vector<std::string> inits;
+  EXPECT_CALL(*client, object(_, _, _, _, _, _, _))
+      .Times(2)
+      .WillRepeatedly([&](uint64_t,
+                          uint64_t,
+                          uint64_t,
+                          Payload,
+                          const Extensions& extensions,
+                          bool,
+                          bool) {
+        inits.push_back(initOf(extensions));
+        return folly::unit;
+      });
+  laneFetchConsumer_->object(5, 0, 0, folly::IOBuf::copyBuffer("a"));
+  laneFetchConsumer_->object(5, 0, 1, folly::IOBuf::copyBuffer("b"));
   EXPECT_EQ(inits, (std::vector<std::string>{"v0", ""}));
 }
 

@@ -39,12 +39,18 @@ class MoQLaneManager : public std::enable_shared_from_this<MoQLaneManager> {
       Role role,
       std::shared_ptr<SwitchingPolicy> policy);
 
+  // Serves a joining FETCH on the virtual track from the lane its SUBSCRIBE_OK
+  // came from.
+  folly::coro::Task<Publisher::FetchResult>
+  fetch(Fetch fetch, std::shared_ptr<FetchConsumer> client, Role role);
+
   void unsubscribe(Role role);
 
  private:
   class LaneConsumer;
 
   struct SubscriptionSet {
+    std::string lane; // the one the virtual SUBSCRIBE_OK came from
     folly::F14FastMap<std::string, std::shared_ptr<SubscriptionHandle>>
         laneSubs;
   };

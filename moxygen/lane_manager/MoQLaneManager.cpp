@@ -58,6 +58,94 @@ class InitSubgroupConsumer : public SubgroupConsumerFilter {
   std::shared_ptr<const folly::IOBuf> init_;
 };
 
+// Puts the lane's init on the FETCH's first object.
+class InitFetchConsumer : public FetchConsumer {
+ public:
+  InitFetchConsumer(
+      std::shared_ptr<FetchConsumer> downstream,
+      std::shared_ptr<const folly::IOBuf> init)
+      : downstream_(std::move(downstream)), init_(std::move(init)) {}
+
+  folly::Expected<folly::Unit, MoQPublishError> object(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      Payload payload,
+      Extensions extensions,
+      bool finFetch,
+      bool forwardingPreferenceIsDatagram) override {
+    addInit(extensions, init_);
+    return downstream_->object(
+        groupID,
+        subgroupID,
+        objectID,
+        std::move(payload),
+        std::move(extensions),
+        finFetch,
+        forwardingPreferenceIsDatagram);
+  }
+  void checkpoint() override {
+    downstream_->checkpoint();
+  }
+  folly::Expected<folly::Unit, MoQPublishError> beginObject(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      uint64_t length,
+      Payload initialPayload,
+      Extensions extensions) override {
+    addInit(extensions, init_);
+    return downstream_->beginObject(
+        groupID,
+        subgroupID,
+        objectID,
+        length,
+        std::move(initialPayload),
+        std::move(extensions));
+  }
+  folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
+      Payload payload,
+      bool finSubgroup) override {
+    return downstream_->objectPayload(std::move(payload), finSubgroup);
+  }
+  folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID,
+      bool finFetch) override {
+    return downstream_->endOfGroup(groupID, subgroupID, objectID, finFetch);
+  }
+  folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
+      uint64_t groupID,
+      uint64_t subgroupID,
+      uint64_t objectID) override {
+    return downstream_->endOfTrackAndGroup(groupID, subgroupID, objectID);
+  }
+  folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {
+    return downstream_->endOfFetch();
+  }
+  void reset(ResetStreamErrorCode error) override {
+    downstream_->reset(error);
+  }
+  void goaway(Goaway goaway) override {
+    downstream_->goaway(std::move(goaway));
+  }
+  folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
+  awaitReadyToConsume() override {
+    return downstream_->awaitReadyToConsume();
+  }
+  folly::Expected<folly::Unit, MoQPublishError> endOfUnknownRange(
+      uint64_t groupID,
+      uint64_t objectID,
+      bool finFetch) override {
+    return downstream_->endOfUnknownRange(groupID, objectID, finFetch);
+  }
+
+ private:
+  std::shared_ptr<FetchConsumer> downstream_;
+  std::shared_ptr<const folly::IOBuf> init_;
+};
+
 class VirtualHandle : public Publisher::SubscriptionHandle {
  public:
   VirtualHandle(
@@ -230,6 +318,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
         subscribed.value()->unsubscribe();
         co_return fail(RequestErrorCode::INTERNAL_ERROR, "ended");
       }
+      it->second.lane = lane;
       it->second.laneSubs.emplace(lane, std::move(subscribed.value()));
       release.dismiss();
       co_return std::make_shared<VirtualHandle>(self, role, std::move(ok));
@@ -242,6 +331,28 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
     });
   }
   co_return fail(RequestErrorCode::INTERNAL_ERROR, reason);
+}
+
+folly::coro::Task<Publisher::FetchResult> MoQLaneManager::fetch(
+    Fetch fetch,
+    std::shared_ptr<FetchConsumer> client,
+    Role role) {
+  if (!std::holds_alternative<JoiningFetch>(fetch.args)) {
+    co_return folly::makeUnexpected(
+        FetchError{fetch.requestID, FetchErrorCode::NOT_SUPPORTED, ""});
+  }
+  auto it = sets_.find(role);
+  const auto* lanes = catalog_.switchingSet(role);
+  const auto* lane =
+      it != sets_.end() && lanes ? lanes->find(it->second.lane) : nullptr;
+  if (!lane) {
+    co_return folly::makeUnexpected(
+        FetchError{fetch.requestID, FetchErrorCode::DOES_NOT_EXIST, ""});
+  }
+  fetch.fullTrackName = FullTrackName{broadcast_, lane->trackName};
+  co_return co_await proxy_->fetch(
+      std::move(fetch),
+      std::make_shared<InitFetchConsumer>(std::move(client), lane->init));
 }
 
 void MoQLaneManager::unsubscribe(Role role) {
