@@ -11,7 +11,9 @@
 #include "moxygen/MoQServer.h"
 #include "moxygen/MoQVersions.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
+#include "moxygen/lane_manager/MoQLaneRouter.h"
 #include "moxygen/proxy/MoQProxy.h"
+#include "moxygen/samples/lane_manager/ScriptedPolicy.h"
 #include "moxygen/samples/util/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 #include "moxygen/util/SignalHandler.h"
@@ -100,6 +102,15 @@ DEFINE_int32(
     replay_stall_timeout_ms,
     5000,
     "Reset a local replay that has no accepted write for this long");
+DEFINE_bool(
+    lane_manager,
+    false,
+    "Serve <name>--abr-video and <name>--abr-audio from the broadcast's lanes");
+DEFINE_int32(
+    lane_max_wait_ms,
+    100,
+    "How long a switch may hold the live lane's group for the target's; 0 "
+    "never holds");
 
 namespace {
 using namespace moxygen;
@@ -231,13 +242,26 @@ class ClientUpstreamProvider : public MoQUpstreamProvider {
 
 class ProxyServer : public MoQServer {
  public:
+  // A null `policies` serves no virtual tracks.
   template <typename... BaseArgs>
-  explicit ProxyServer(std::shared_ptr<MoQProxy> proxy, BaseArgs&&... baseArgs)
+  ProxyServer(
+      std::shared_ptr<MoQProxy> proxy,
+      lane_manager::MoQLaneRouter::PolicyFactory policies,
+      BaseArgs&&... baseArgs)
       : MoQServer(std::forward<BaseArgs>(baseArgs)...),
-        proxy_(std::move(proxy)) {}
+        proxy_(std::move(proxy)),
+        policies_(std::move(policies)) {}
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
-    clientSession->setPublishHandler(proxy_);
+    if (policies_) {
+      clientSession->setPublishHandler(
+          std::make_shared<lane_manager::MoQLaneRouter>(
+              proxy_,
+              policies_,
+              std::chrono::milliseconds(FLAGS_lane_max_wait_ms)));
+    } else {
+      clientSession->setPublishHandler(proxy_);
+    }
     clientSession->setSubscribeHandler(proxy_);
     std::erase_if(downstream_, [](const auto& downstream) {
       return downstream.session.expired();
@@ -323,6 +347,7 @@ class ProxyServer : public MoQServer {
   }
 
   std::shared_ptr<MoQProxy> proxy_;
+  lane_manager::MoQLaneRouter::PolicyFactory policies_;
   std::vector<Downstream> downstream_;
   std::optional<std::chrono::steady_clock::time_point> drainDeadline_;
 };
@@ -458,8 +483,15 @@ int main(int argc, char* argv[]) {
             FLAGS_key);
   auto ts = MoQServer::defaultTransportSettings();
   ts.orderedReadCallbacks = true;
+  lane_manager::MoQLaneRouter::PolicyFactory policies;
+  if (FLAGS_lane_manager) {
+    policies = [](lane_manager::Role) {
+      return std::make_shared<samples::ScriptedPolicy>();
+    };
+  }
   auto server = std::make_shared<ProxyServer>(
       proxy,
+      std::move(policies),
       std::move(fizzContext),
       FLAGS_endpoint,
       MoQServer::Options{.transportSettings = ts});
