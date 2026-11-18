@@ -65,6 +65,8 @@ class MoQForwarder : public TrackConsumer {
    public:
     virtual ~Callback() = default;
     virtual void onEmpty(MoQForwarder*) = 0;
+    // Fires after a subscriber is removed, before onEmpty.
+    virtual void onSubscriberRemoved(MoQForwarder*, SessionId, RequestID) {}
     // Fires when the forwarder's source terminates (publishDone), before its
     // subscribers are drained. Distinct from onEmpty (last subscriber left):
     // this signals the publisher/upstream is gone, which bounds the forwarder's

@@ -159,6 +159,16 @@ class MoQForwarderTest : public ::testing::Test {
 
 namespace {
 
+class MockSubscriberRemovedCallback : public MoQForwarder::Callback {
+ public:
+  MOCK_METHOD(void, onEmpty, (MoQForwarder*), (override));
+  MOCK_METHOD(
+      void,
+      onSubscriberRemoved,
+      (MoQForwarder*, SessionId, RequestID),
+      (override));
+};
+
 // Simulates the production scenario where onEmpty destroys the forwarder.
 class ForwarderDestroyingCallback : public MoQForwarder::Callback {
  public:
@@ -692,6 +702,124 @@ TEST_F(MoQForwarderTest, DuplicateSubgroupIsNotReopenedForDrainingSubscriber) {
   auto duplicate = forwarder->beginSubgroup(0, 0, 0);
   ASSERT_TRUE(duplicate.hasError());
   EXPECT_EQ(duplicate.error().code, MoQPublishError::CANCELLED);
+}
+
+TEST_F(MoQForwarderTest, RemoveSubscriberNotifiesBeforeOnEmpty) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto callback = std::make_shared<StrictMock<MockSubscriberRemovedCallback>>();
+  forwarder->setCallback(callback);
+  auto session = createMockSession();
+  auto subscriber =
+      addSubscriber(*forwarder, session, createMockConsumer(), RequestID(32));
+  ASSERT_NE(subscriber, nullptr);
+  {
+    InSequence sequence;
+    EXPECT_CALL(
+        *callback,
+        onSubscriberRemoved(
+            forwarder.get(), session->sessionId(), RequestID(32)))
+        .WillOnce([&](MoQForwarder* owner, SessionId, RequestID) {
+          EXPECT_TRUE(owner->empty());
+          EXPECT_EQ(subscriber->forwarder, nullptr);
+        });
+    EXPECT_CALL(*callback, onEmpty(forwarder.get()));
+  }
+
+  forwarder->removeSubscriber(
+      session->sessionId(), std::nullopt, "session closed");
+
+  EXPECT_EQ(forwarder->findSubscriber(session->sessionId()), nullptr);
+}
+
+TEST_F(MoQForwarderTest, UnsubscribeNotifiesOnceWhileAnotherSubscriberRemains) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto callback = std::make_shared<StrictMock<MockSubscriberRemovedCallback>>();
+  forwarder->setCallback(callback);
+  auto firstSession = createMockSession();
+  auto secondSession = createMockSession();
+  auto first = addSubscriber(
+      *forwarder, firstSession, createMockConsumer(), RequestID(32));
+  auto second = addSubscriber(
+      *forwarder, secondSession, createMockConsumer(), RequestID(36));
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_CALL(
+      *callback,
+      onSubscriberRemoved(
+          forwarder.get(), firstSession->sessionId(), RequestID(32)));
+  EXPECT_CALL(*callback, onEmpty(_)).Times(0);
+
+  first->unsubscribe();
+  first->unsubscribe();
+
+  EXPECT_EQ(forwarder->findSubscriber(firstSession->sessionId()), nullptr);
+  EXPECT_EQ(forwarder->findSubscriber(secondSession->sessionId()), second);
+  EXPECT_EQ(first->forwarder, nullptr);
+}
+
+TEST_F(MoQForwarderTest, UnsubscribeNotifiesBeforeOnEmptyDestroysForwarder) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto callback = std::make_shared<StrictMock<MockSubscriberRemovedCallback>>();
+  forwarder->setCallback(callback);
+  auto session = createMockSession();
+  auto subscriber =
+      addSubscriber(*forwarder, session, createMockConsumer(), RequestID(32));
+  ASSERT_NE(subscriber, nullptr);
+  auto* owner = forwarder.get();
+  {
+    InSequence sequence;
+    EXPECT_CALL(
+        *callback,
+        onSubscriberRemoved(owner, session->sessionId(), RequestID(32)))
+        .WillOnce([&](MoQForwarder* notified, SessionId, RequestID) {
+          EXPECT_EQ(forwarder.get(), notified);
+          EXPECT_TRUE(notified->empty());
+          EXPECT_EQ(subscriber->forwarder, nullptr);
+        });
+    EXPECT_CALL(*callback, onEmpty(owner)).WillOnce([&](MoQForwarder*) {
+      forwarder.reset();
+    });
+  }
+
+  subscriber->unsubscribe();
+
+  EXPECT_EQ(forwarder, nullptr);
+  EXPECT_EQ(subscriber->forwarder, nullptr);
+  subscriber->unsubscribe();
+}
+
+TEST_F(MoQForwarderTest, UnsubscribeNotifiesOnceWhenResetReentersTheHandle) {
+  auto forwarder = std::make_shared<MoQForwarder>(kFwdTestTrackName);
+  auto callback = std::make_shared<StrictMock<MockSubscriberRemovedCallback>>();
+  forwarder->setCallback(callback);
+  auto session = createMockSession();
+  auto consumer = createMockConsumer();
+  auto subgroupConsumer = createMockSubgroupConsumer();
+  EXPECT_CALL(*consumer, beginSubgroup(0, 0, _, _))
+      .WillOnce(Return(subgroupConsumerResult(subgroupConsumer)));
+  EXPECT_CALL(*subgroupConsumer, object(0, _, _, false))
+      .WillOnce(Return(folly::unit));
+  auto subscriber = addSubscriber(*forwarder, session, consumer, RequestID(32));
+  ASSERT_NE(subscriber, nullptr);
+  auto subgroup = forwarder->beginSubgroup(0, 0, 0);
+  ASSERT_TRUE(subgroup.hasValue());
+  ASSERT_TRUE((*subgroup)->object(0, test::makeBuf(10)).hasValue());
+  EXPECT_CALL(*subgroupConsumer, reset(ResetStreamErrorCode::CANCELLED))
+      .WillOnce([&](ResetStreamErrorCode) { subscriber->unsubscribe(); });
+  {
+    InSequence sequence;
+    EXPECT_CALL(
+        *callback,
+        onSubscriberRemoved(
+            forwarder.get(), session->sessionId(), RequestID(32)));
+    EXPECT_CALL(*callback, onEmpty(forwarder.get()));
+  }
+
+  subscriber->unsubscribe();
+
+  EXPECT_TRUE(forwarder->empty());
+  EXPECT_EQ(subscriber->forwarder, nullptr);
+  EXPECT_TRUE((*subgroup)->endOfSubgroup().hasValue());
 }
 
 // Test: removeSubscriber immediately resets all open subgroups.
