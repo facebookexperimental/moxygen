@@ -462,88 +462,122 @@ std::ostream& operator<<(std::ostream& os, const ObjectHeader& header) {
 //// Parameters ////
 
 // Frame type sets for parameter allowlist
-const folly::F14FastSet<FrameType> kAllowedFramesForAuthToken = {
-    FrameType::PUBLISH,
-    FrameType::SUBSCRIBE,
-    FrameType::SUBSCRIBE_UPDATE,
-    FrameType::SUBSCRIBE_NAMESPACE,
-    FrameType::SUBSCRIBE_TRACKS,
-    FrameType::PUBLISH_NAMESPACE,
-    FrameType::TRACK_STATUS,
-    FrameType::FETCH};
+static const folly::F14FastSet<FrameType>& allowedFramesForAuthToken() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::PUBLISH,
+      FrameType::SUBSCRIBE,
+      FrameType::SUBSCRIBE_UPDATE,
+      FrameType::SUBSCRIBE_NAMESPACE,
+      FrameType::SUBSCRIBE_TRACKS,
+      FrameType::PUBLISH_NAMESPACE,
+      FrameType::TRACK_STATUS,
+      FrameType::FETCH};
+  return value;
+}
 
-const folly::F14FastSet<FrameType> kAllowedFramesForDeliveryTimeout = {
-    FrameType::PUBLISH_OK,
-    FrameType::SUBSCRIBE,
-    FrameType::SUBSCRIBE_UPDATE};
+static const folly::F14FastSet<FrameType>& allowedFramesForDeliveryTimeout() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::PUBLISH_OK, FrameType::SUBSCRIBE, FrameType::SUBSCRIBE_UPDATE};
+  return value;
+}
 
 // In v18+, key 0x02 is OBJECT_DELIVERY_TIMEOUT. REQUEST_OK is accepted at
 // parse time because PUBLISH_OK is encoded on the wire as REQUEST_OK; the
 // PUBLISH_OK conversion validates once the pending request resolves.
-const folly::F14FastSet<FrameType> kAllowedFramesForObjectDeliveryTimeoutV18 = {
-    FrameType::PUBLISH_OK,
-    FrameType::REQUEST_OK,
-    FrameType::SUBSCRIBE,
-    FrameType::REQUEST_UPDATE};
+static const folly::F14FastSet<FrameType>&
+allowedFramesForObjectDeliveryTimeoutV18() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::PUBLISH_OK,
+      FrameType::REQUEST_OK,
+      FrameType::SUBSCRIBE,
+      FrameType::REQUEST_UPDATE};
+  return value;
+}
 
-const folly::F14FastSet<FrameType> kAllowedFramesForSubscriberPriority = {
-    FrameType::SUBSCRIBE,
-    FrameType::FETCH,
-    FrameType::SUBSCRIBE_UPDATE,
-    FrameType::PUBLISH_OK};
+static const folly::F14FastSet<FrameType>&
+allowedFramesForSubscriberPriority() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::SUBSCRIBE,
+      FrameType::FETCH,
+      FrameType::SUBSCRIBE_UPDATE,
+      FrameType::PUBLISH_OK};
+  return value;
+}
 
-const folly::F14FastSet<FrameType> kAllowedFramesForSubscriptionFilter = {
-    FrameType::SUBSCRIBE,
-    FrameType::PUBLISH_OK,
-    FrameType::SUBSCRIBE_UPDATE};
+static const folly::F14FastSet<FrameType>&
+allowedFramesForSubscriptionFilter() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::SUBSCRIBE, FrameType::PUBLISH_OK, FrameType::SUBSCRIBE_UPDATE};
+  return value;
+}
 
-const folly::F14FastSet<FrameType> kAllowedFramesForExpires = {
-    FrameType::SUBSCRIBE_OK,
-    FrameType::PUBLISH,
-    FrameType::PUBLISH_OK,
-    FrameType::REQUEST_OK};
+static const folly::F14FastSet<FrameType>& allowedFramesForExpires() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::SUBSCRIBE_OK,
+      FrameType::PUBLISH,
+      FrameType::PUBLISH_OK,
+      FrameType::REQUEST_OK};
+  return value;
+}
 
-const folly::F14FastSet<FrameType> kAllowedFramesForGroupOrder = {
-    FrameType::SUBSCRIBE,
-    FrameType::PUBLISH_OK,
-    FrameType::FETCH};
+static const folly::F14FastSet<FrameType>& allowedFramesForGroupOrder() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::SUBSCRIBE, FrameType::PUBLISH_OK, FrameType::FETCH};
+  return value;
+}
 
-const folly::F14FastSet<FrameType> kAllowedFramesForLargestObject = {
-    FrameType::SUBSCRIBE_OK,
-    FrameType::PUBLISH,
-    FrameType::REQUEST_OK};
+static const folly::F14FastSet<FrameType>& allowedFramesForLargestObject() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::SUBSCRIBE_OK, FrameType::PUBLISH, FrameType::REQUEST_OK};
+  return value;
+}
 
-const folly::F14FastSet<FrameType> kAllowedFramesForForward = {
-    FrameType::SUBSCRIBE,
-    FrameType::SUBSCRIBE_UPDATE,
-    FrameType::PUBLISH,
-    FrameType::PUBLISH_OK,
-    FrameType::SUBSCRIBE_NAMESPACE,
-    FrameType::SUBSCRIBE_TRACKS};
+static const folly::F14FastSet<FrameType>& allowedFramesForForward() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::SUBSCRIBE,
+      FrameType::SUBSCRIBE_UPDATE,
+      FrameType::PUBLISH,
+      FrameType::PUBLISH_OK,
+      FrameType::SUBSCRIBE_NAMESPACE,
+      FrameType::SUBSCRIBE_TRACKS};
+  return value;
+}
 
 // REQUEST_OK is accepted at parse time because PUBLISH_OK is encoded on the
 // wire as REQUEST_OK; validateRequestOkParams rejects it on other responses.
-const folly::F14FastSet<FrameType> kAllowedFramesForNewGroupRequest = {
-    FrameType::SUBSCRIBE,
-    FrameType::REQUEST_UPDATE,
-    FrameType::PUBLISH_OK,
-    FrameType::REQUEST_OK};
+static const folly::F14FastSet<FrameType>& allowedFramesForNewGroupRequest() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::SUBSCRIBE,
+      FrameType::REQUEST_UPDATE,
+      FrameType::PUBLISH_OK,
+      FrameType::REQUEST_OK};
+  return value;
+}
 
 // v18+ SUBGROUP_DELIVERY_TIMEOUT (0x06): MAY appear in PUBLISH_OK,
 // SUBSCRIBE, or REQUEST_UPDATE.
-const folly::F14FastSet<FrameType> kAllowedFramesForSubgroupDeliveryTimeout = {
-    FrameType::PUBLISH_OK,
-    FrameType::REQUEST_OK,
-    FrameType::SUBSCRIBE,
-    FrameType::REQUEST_UPDATE};
+static const folly::F14FastSet<FrameType>&
+allowedFramesForSubgroupDeliveryTimeout() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::PUBLISH_OK,
+      FrameType::REQUEST_OK,
+      FrameType::SUBSCRIBE,
+      FrameType::REQUEST_UPDATE};
+  return value;
+}
 
 // v18+ FILL_TIMEOUT (0x0A): MAY appear in FETCH only.
-const folly::F14FastSet<FrameType> kAllowedFramesForFillTimeout = {
-    FrameType::FETCH};
+static const folly::F14FastSet<FrameType>& allowedFramesForFillTimeout() {
+  static const folly::F14FastSet<FrameType> value = {FrameType::FETCH};
+  return value;
+}
 
 // v18+ TRACK_NAMESPACE_PREFIX (0x34): MAY appear in REQUEST_UPDATE only.
-const folly::F14FastSet<FrameType> kAllowedFramesForTrackNamespacePrefix = {
-    FrameType::REQUEST_UPDATE};
+static const folly::F14FastSet<FrameType>&
+allowedFramesForTrackNamespacePrefix() {
+  static const folly::F14FastSet<FrameType> value = {FrameType::REQUEST_UPDATE};
+  return value;
+}
 
 static bool isLegacyPublishOkSubscriptionParameter(TrackRequestParamKey key) {
   switch (key) {
@@ -589,47 +623,59 @@ bool isPublishSubscriptionParameter(TrackRequestParamKey key) {
 
 // Allowlist mapping: TrackRequestParamKey -> set of allowed FrameTypes
 // Empty set means allowed for all frame types
-const folly::F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
-    kParamAllowlist = {
-        {TrackRequestParamKey::AUTHORIZATION_TOKEN, kAllowedFramesForAuthToken},
-        {TrackRequestParamKey::DELIVERY_TIMEOUT,
-         kAllowedFramesForDeliveryTimeout},
-        {TrackRequestParamKey::MAX_CACHE_DURATION, {}},
-        {TrackRequestParamKey::PUBLISHER_PRIORITY, {}},
-        {TrackRequestParamKey::SUBSCRIBER_PRIORITY,
-         kAllowedFramesForSubscriberPriority},
-        {TrackRequestParamKey::SUBSCRIPTION_FILTER,
-         kAllowedFramesForSubscriptionFilter},
-        {TrackRequestParamKey::EXPIRES, kAllowedFramesForExpires},
-        {TrackRequestParamKey::GROUP_ORDER, kAllowedFramesForGroupOrder},
-        {TrackRequestParamKey::LARGEST_OBJECT, kAllowedFramesForLargestObject},
-        {TrackRequestParamKey::FORWARD, kAllowedFramesForForward},
-        {TrackRequestParamKey::NEW_GROUP_REQUEST,
-         kAllowedFramesForNewGroupRequest},
-        {TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT,
-         kAllowedFramesForSubgroupDeliveryTimeout},
-        {TrackRequestParamKey::FILL_TIMEOUT, kAllowedFramesForFillTimeout},
-        {TrackRequestParamKey::TRACK_NAMESPACE_PREFIX,
-         kAllowedFramesForTrackNamespacePrefix},
-        // v22+ FILL_PARAMETERS (0x23): MAY appear in SUBSCRIBE or
-        // REQUEST_UPDATE.
-        {TrackRequestParamKey::FILL_PARAMETERS,
-         {FrameType::SUBSCRIBE, FrameType::REQUEST_UPDATE}},
-        // v22+ INCLUDE_PROPERTIES (0x35): MAY appear in SUBSCRIBE,
-        // TRACK_STATUS, FETCH, or SUBSCRIBE_TRACKS.
-        {TrackRequestParamKey::INCLUDE_PROPERTIES,
-         {FrameType::SUBSCRIBE,
-          FrameType::TRACK_STATUS,
-          FrameType::FETCH,
-          FrameType::SUBSCRIBE_TRACKS}},
-};
+static const folly::
+    F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>&
+    paramAllowlist() {
+  static const folly::
+      F14FastMap<TrackRequestParamKey, folly::F14FastSet<FrameType>>
+          value = {
+              {TrackRequestParamKey::AUTHORIZATION_TOKEN,
+               allowedFramesForAuthToken()},
+              {TrackRequestParamKey::DELIVERY_TIMEOUT,
+               allowedFramesForDeliveryTimeout()},
+              {TrackRequestParamKey::MAX_CACHE_DURATION, {}},
+              {TrackRequestParamKey::PUBLISHER_PRIORITY, {}},
+              {TrackRequestParamKey::SUBSCRIBER_PRIORITY,
+               allowedFramesForSubscriberPriority()},
+              {TrackRequestParamKey::SUBSCRIPTION_FILTER,
+               allowedFramesForSubscriptionFilter()},
+              {TrackRequestParamKey::EXPIRES, allowedFramesForExpires()},
+              {TrackRequestParamKey::GROUP_ORDER, allowedFramesForGroupOrder()},
+              {TrackRequestParamKey::LARGEST_OBJECT,
+               allowedFramesForLargestObject()},
+              {TrackRequestParamKey::FORWARD, allowedFramesForForward()},
+              {TrackRequestParamKey::NEW_GROUP_REQUEST,
+               allowedFramesForNewGroupRequest()},
+              {TrackRequestParamKey::SUBGROUP_DELIVERY_TIMEOUT,
+               allowedFramesForSubgroupDeliveryTimeout()},
+              {TrackRequestParamKey::FILL_TIMEOUT,
+               allowedFramesForFillTimeout()},
+              {TrackRequestParamKey::TRACK_NAMESPACE_PREFIX,
+               allowedFramesForTrackNamespacePrefix()},
+              // v22+ FILL_PARAMETERS (0x23): MAY appear in SUBSCRIBE or
+              // REQUEST_UPDATE.
+              {TrackRequestParamKey::FILL_PARAMETERS,
+               {FrameType::SUBSCRIBE, FrameType::REQUEST_UPDATE}},
+              // v22+ INCLUDE_PROPERTIES (0x35): MAY appear in SUBSCRIBE,
+              // TRACK_STATUS, FETCH, or SUBSCRIBE_TRACKS.
+              {TrackRequestParamKey::INCLUDE_PROPERTIES,
+               {FrameType::SUBSCRIBE,
+                FrameType::TRACK_STATUS,
+                FrameType::FETCH,
+                FrameType::SUBSCRIBE_TRACKS}},
+          };
+  return value;
+}
 
 // Frame types that allow all parameters (no validation)
-const folly::F14FastSet<FrameType> kAllowAllParamsFrameTypes = {
-    FrameType::CLIENT_SETUP,
-    FrameType::SERVER_SETUP,
-    FrameType::SETUP,
-};
+static const folly::F14FastSet<FrameType>& allowAllParamsFrameTypes() {
+  static const folly::F14FastSet<FrameType> value = {
+      FrameType::CLIENT_SETUP,
+      FrameType::SERVER_SETUP,
+      FrameType::SETUP,
+  };
+  return value;
+}
 
 // Parameter keys introduced in draft 18 that reuse no earlier key value. They
 // must be treated as unknown (and therefore rejected) when the negotiated draft
@@ -658,12 +704,12 @@ bool Parameters::isKnownParamKey(uint64_t key, uint64_t majorVersion) {
   if (majorVersion < 22 && isV22OnlyParamKey(typedKey)) {
     return false;
   }
-  return kParamAllowlist.find(typedKey) != kParamAllowlist.end();
+  return paramAllowlist().find(typedKey) != paramAllowlist().end();
 }
 
 bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
   // Setup frame types allow all parameters
-  if (kAllowAllParamsFrameTypes.contains(frameType_)) {
+  if (allowAllParamsFrameTypes().contains(frameType_)) {
     return true;
   }
 
@@ -689,7 +735,7 @@ bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
   }
   if (key == TrackRequestParamKey::OBJECT_DELIVERY_TIMEOUT &&
       majorVersion_.has_value() && *majorVersion_ >= 18) {
-    return kAllowedFramesForObjectDeliveryTimeoutV18.contains(frameType_);
+    return allowedFramesForObjectDeliveryTimeoutV18().contains(frameType_);
   }
 
   // Version-specific restrictions for track property params
@@ -735,8 +781,8 @@ bool Parameters::isParamAllowed(TrackRequestParamKey key) const {
     return isLocationFilterAllowedV22(frameType_);
   }
 
-  auto it = kParamAllowlist.find(key);
-  if (it == kParamAllowlist.end()) {
+  auto it = paramAllowlist().find(key);
+  if (it == paramAllowlist().end()) {
     // The wire parser rejects unknown keys (isKnownParamKey); local callers
     // may still carry application-defined ones.
     return true;
