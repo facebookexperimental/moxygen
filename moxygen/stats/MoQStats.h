@@ -12,6 +12,16 @@
 
 namespace moxygen {
 
+// Callbacks run on each session's executor and may run concurrently.
+class MoQServerStatsCallback {
+ public:
+  virtual ~MoQServerStatsCallback() = default;
+
+  virtual void onSessionBegin() = 0;
+
+  virtual void onSessionEnd() = 0;
+};
+
 /*
  * The stats in the MoQStatsCallback are common to both the publisher
  * and subscriber. The comments above each function describe when they're

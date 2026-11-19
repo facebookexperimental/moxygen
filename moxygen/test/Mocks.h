@@ -442,6 +442,12 @@ class MockSubscriber : public Subscriber {
       (override));
 };
 
+class MockMoQServerStats : public MoQServerStatsCallback {
+ public:
+  MOCK_METHOD(void, onSessionBegin, (), (override));
+  MOCK_METHOD(void, onSessionEnd, (), (override));
+};
+
 class MockObjectAckStats
     : public MoQPublisherStatsCallback::ObjectAckStatsCallback {
  public:

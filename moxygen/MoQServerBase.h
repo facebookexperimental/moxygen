@@ -8,6 +8,7 @@
 
 #include <moxygen/MoQSession.h>
 #include <moxygen/mlog/MLoggerFactory.h>
+#include <moxygen/stats/MoQStats.h>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -68,6 +69,13 @@ class MoQServerBase : public MoQSession::ServerSetupCallback,
    */
   void setMLoggerFactory(std::shared_ptr<MLoggerFactory> factory);
 
+  // Configure before accepting sessions. Callbacks may run concurrently on
+  // different session executors.
+  void setServerStatsCallback(
+      std::shared_ptr<MoQServerStatsCallback> serverStatsCallback) {
+    serverStatsCallback_ = std::move(serverStatsCallback);
+  }
+
   /**
    * Enable or disable auth token alias caching in both directions.
    * Configure before accepting sessions.
@@ -123,6 +131,9 @@ class MoQServerBase : public MoQSession::ServerSetupCallback,
   std::shared_ptr<MLoggerFactory> mLoggerFactory_;
   std::vector<std::shared_ptr<MoQExtension>> extensions_;
   bool authTokenCacheEnabled_{true};
+
+ private:
+  std::shared_ptr<MoQServerStatsCallback> serverStatsCallback_;
 };
 
 } // namespace moxygen

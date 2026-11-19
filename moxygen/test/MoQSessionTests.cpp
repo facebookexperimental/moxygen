@@ -11,6 +11,7 @@
 #include <quic/common/events/FollyQuicEventBase.h>
 #include <quic/common/udpsocket/FollyQuicAsyncUDPSocket.h>
 #include <quic/fizz/client/handshake/FizzClientQuicHandshakeContext.h>
+#include <stdexcept>
 #include "moxygen/MoQServerBase.h"
 #include "moxygen/test/MoQSessionTestCommon.h"
 
@@ -2544,6 +2545,9 @@ class SetupTimeoutServer : public MoQServerBase {
   SetupTimeoutServer() : MoQServerBase("/test") {}
   void onNewSession(std::shared_ptr<MoQSession> session) override {
     ++newSessions;
+    if (throwOnNewSession) {
+      throw std::runtime_error("session callback failed");
+    }
     if (closeOnNewSession) {
       session->close(SessionCloseErrorCode::NO_ERROR);
     }
@@ -2557,10 +2561,80 @@ class SetupTimeoutServer : public MoQServerBase {
   using MoQServerBase::handleClientSession;
 
   bool closeOnNewSession{false};
+  bool throwOnNewSession{false};
   size_t newSessions{0};
   size_t terminatedSessions{0};
 };
 } // namespace
+
+CO_TEST_P_X(MoQVersionNegotiationTest, ServerReportsActiveSessions) {
+  auto server = std::make_shared<SetupTimeoutServer>();
+  auto stats = std::make_shared<testing::StrictMock<MockMoQServerStats>>();
+  server->setServerStatsCallback(stats);
+  size_t activeSessions = 0;
+  EXPECT_CALL(*stats, onSessionBegin())
+      .Times(2)
+      .WillRepeatedly([&activeSessions] { ++activeSessions; });
+  EXPECT_CALL(*stats, onSessionEnd())
+      .Times(2)
+      .WillRepeatedly([&activeSessions] { --activeSessions; });
+
+  clientSession_->start();
+  auto firstHandled =
+      co_withExecutor(&eventBase_, server->handleClientSession(serverSession_))
+          .start();
+  co_await clientSession_->setup(getClientSetup(initialMaxRequestID_));
+  EXPECT_EQ(activeSessions, 1);
+
+  auto [secondClientWt, secondServerWt] =
+      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
+  secondClientWt->setDeliveryExecutor(&eventBase_);
+  secondServerWt->setDeliveryExecutor(&eventBase_);
+  auto secondClient = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(secondClientWt.get()),
+      MoQExecutor_);
+  auto secondServer = std::make_shared<MoQRelaySession>(
+      folly::MaybeManagedPtr<proxygen::WebTransport>(secondServerWt.get()),
+      *server,
+      MoQExecutor_);
+  secondClientWt->setPeerHandler(secondServer.get());
+  secondServerWt->setPeerHandler(secondClient.get());
+  secondClient->setNegotiatedVersionForTesting(getServerSelectedVersion());
+  secondServer->setNegotiatedVersionForTesting(getServerSelectedVersion());
+
+  secondClient->start();
+  auto secondHandled =
+      co_withExecutor(&eventBase_, server->handleClientSession(secondServer))
+          .start();
+  co_await secondClient->setup(getClientSetup(initialMaxRequestID_));
+  EXPECT_EQ(activeSessions, 2);
+
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await std::move(firstHandled);
+  EXPECT_EQ(activeSessions, 1);
+
+  secondServer->close(SessionCloseErrorCode::NO_ERROR);
+  co_await std::move(secondHandled);
+  EXPECT_EQ(activeSessions, 0);
+  EXPECT_EQ(server->terminatedSessions, 2);
+}
+
+CO_TEST_P_X(
+    MoQVersionNegotiationTest,
+    ServerSessionCallbackFailureReportsSessionEnd) {
+  auto server = std::make_shared<SetupTimeoutServer>();
+  server->throwOnNewSession = true;
+  auto stats = std::make_shared<testing::StrictMock<MockMoQServerStats>>();
+  server->setServerStatsCallback(stats);
+  testing::InSequence sequence;
+  EXPECT_CALL(*stats, onSessionBegin());
+  EXPECT_CALL(*stats, onSessionEnd());
+
+  auto result = co_await folly::coro::co_awaitTry(
+      server->handleClientSession(serverSession_));
+  EXPECT_TRUE(result.hasException<std::runtime_error>());
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 
 CO_TEST_P_X(MoQUniControlTest, ServerClosesSessionWithoutClientSetup) {
   // The client never starts and reads none of the server's streams.
@@ -2575,17 +2649,28 @@ CO_TEST_P_X(MoQUniControlTest, ServerClosesSessionWithoutClientSetup) {
 
   // handleClientSession keeps the server alive until the session ends.
   auto server = std::make_shared<SetupTimeoutServer>();
-  co_withExecutor(&eventBase_, server->handleClientSession(serverSession_))
-      .start();
+  auto stats = std::make_shared<testing::StrictMock<MockMoQServerStats>>();
+  server->setServerStatsCallback(stats);
+  testing::InSequence sequence;
+  EXPECT_CALL(*stats, onSessionBegin());
+  EXPECT_CALL(*stats, onSessionEnd());
+  auto handled =
+      co_withExecutor(&eventBase_, server->handleClientSession(serverSession_))
+          .start();
   for (int i = 0; i < 40 && !serverWt_->isSessionClosed(); ++i) {
     co_await folly::coro::sleep(std::chrono::milliseconds(50));
   }
   EXPECT_TRUE(serverWt_->isSessionClosed());
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await std::move(handled);
 }
 
 CO_TEST_P_X(MoQUniControlTest, ClientCloseBeforeHandleClientSessionRuns) {
   auto server = std::make_shared<SetupTimeoutServer>();
+  auto stats = std::make_shared<testing::StrictMock<MockMoQServerStats>>();
+  server->setServerStatsCallback(stats);
+  EXPECT_CALL(*stats, onSessionBegin()).Times(0);
+  EXPECT_CALL(*stats, onSessionEnd()).Times(0);
   auto handled =
       co_withExecutor(&eventBase_, server->handleClientSession(serverSession_))
           .start();
@@ -2866,6 +2951,10 @@ CO_TEST_P_X(MoQUniControlTest, ClosedServerSessionIsNotStarted) {
   serverSession_->close(SessionCloseErrorCode::NO_ERROR);
 
   auto server = std::make_shared<SetupTimeoutServer>();
+  auto stats = std::make_shared<testing::StrictMock<MockMoQServerStats>>();
+  server->setServerStatsCallback(stats);
+  EXPECT_CALL(*stats, onSessionBegin()).Times(0);
+  EXPECT_CALL(*stats, onSessionEnd()).Times(0);
   co_await server->handleClientSession(serverSession_);
 
   EXPECT_EQ(server->newSessions, 0);
@@ -2876,6 +2965,11 @@ CO_TEST_P_X(MoQUniControlTest, ClosedServerSessionIsNotStarted) {
 CO_TEST_P_X(MoQUniControlTest, SessionClosedByApplicationIsTerminated) {
   auto server = std::make_shared<SetupTimeoutServer>();
   server->closeOnNewSession = true;
+  auto stats = std::make_shared<testing::StrictMock<MockMoQServerStats>>();
+  server->setServerStatsCallback(stats);
+  testing::InSequence sequence;
+  EXPECT_CALL(*stats, onSessionBegin());
+  EXPECT_CALL(*stats, onSessionEnd());
   co_await server->handleClientSession(serverSession_);
 
   EXPECT_EQ(server->newSessions, 1);

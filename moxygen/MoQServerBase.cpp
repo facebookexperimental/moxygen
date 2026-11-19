@@ -4,6 +4,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <folly/ScopeGuard.h>
 #include <folly/coro/Baton.h>
 #include <folly/logging/xlog.h>
 #include <moxygen/MoQServerBase.h>
@@ -47,6 +48,15 @@ folly::coro::Task<void> MoQServerBase::handleClientSession(
   for (const auto& extension : extensions_) {
     clientSession->addExtension(extension);
   }
+  const auto statsCallback = serverStatsCallback_;
+  if (statsCallback) {
+    statsCallback->onSessionBegin();
+  }
+  auto sessionStatsGuard = folly::makeGuard([&statsCallback] {
+    if (statsCallback) {
+      statsCallback->onSessionEnd();
+    }
+  });
   onNewSession(clientSession);
   if (clientSession->isClosed()) {
     terminateClientSession(std::move(clientSession));
