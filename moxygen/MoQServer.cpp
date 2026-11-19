@@ -391,8 +391,7 @@ void MoQServer::Handler::onHeadersComplete(
     txn_->sendHeadersWithEOM(resp);
     return;
   }
-  if (req->getMethod() != HTTPMethod::CONNECT || !req->getUpgradeProtocol() ||
-      *req->getUpgradeProtocol() != std::string("webtransport")) {
+  if (!HTTPWebTransport::isConnectMessage(*req)) {
     resp.setStatusCode(400);
     txn_->sendHeadersWithEOM(resp);
     return;
