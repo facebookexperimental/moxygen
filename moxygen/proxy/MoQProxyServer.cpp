@@ -11,9 +11,10 @@
 #include "moxygen/MoQServer.h"
 #include "moxygen/MoQVersions.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
+#include "moxygen/facebook/lane_manager/PtmSwitchingPolicy.h"
 #include "moxygen/lane_manager/MoQLaneRouter.h"
+#include "moxygen/lane_manager/SwitchingSet.h"
 #include "moxygen/proxy/MoQProxy.h"
-#include "moxygen/samples/lane_manager/ScriptedPolicy.h"
 #include "moxygen/samples/util/Utils.h"
 #include "moxygen/util/InsecureVerifierDangerousDoNotUseInProduction.h"
 #include "moxygen/util/SignalHandler.h"
@@ -27,6 +28,7 @@
 #include <folly/init/Init.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/synchronization/Baton.h>
+#include <proxygen/facebook/lib/ptm/base/PTMConfigStore.h>
 #include <proxygen/httpserver/samples/hq/FizzContext.h>
 #include <algorithm>
 #include <chrono>
@@ -34,12 +36,14 @@
 #include <iostream>
 #include <optional>
 #include <thread>
+#include <utility>
 #include <vector>
 
 DEFINE_string(cert, "", "Cert path");
 DEFINE_string(key, "", "Key path");
 DEFINE_string(endpoint, "/moq-proxy", "End point");
 DEFINE_int32(port, 9670, "Proxy server port");
+DEFINE_string(bind_address, "::", "Proxy listener address");
 DEFINE_bool(
     insecure,
     false,
@@ -53,6 +57,34 @@ DEFINE_string(
     "",
     "Comma-separated URLs of the upstream servers, in routing order "
     "(required)");
+DEFINE_bool(
+    lane_manager_ptm,
+    false,
+    "Choose lanes with the ABR module PTM installs on each connection");
+DEFINE_bool(
+    lane_manager_catalog_init_only,
+    false,
+    "Client has compatible initial decoder setup from catalog");
+DEFINE_string(
+    lane_manager_wire_prefix,
+    "file",
+    "Client-facing namespace prefix");
+DEFINE_string(
+    lane_manager_virtual_track,
+    "video--abr-video",
+    "Virtual video track name");
+DEFINE_string(
+    lane_manager_namespace,
+    "demo",
+    "Broadcast name for the prototype file_ssts/<name>/video subscription");
+DEFINE_string(
+    lane_manager_initial_lane,
+    "video1",
+    "Initial physical lane for virtual video");
+DEFINE_string(
+    lane_manager_abr_module_name,
+    "",
+    "Installed PTM ABR module name; empty uses the unnamed module");
 DEFINE_string(
     upstream_transport,
     "h3wt",
@@ -240,6 +272,47 @@ class ClientUpstreamProvider : public MoQUpstreamProvider {
   bool shutdown_{false};
 };
 
+class ConfiguredStartPolicy : public lane_manager::SwitchingPolicy {
+ public:
+  explicit ConfiguredStartPolicy(std::string lane) : lane_(std::move(lane)) {}
+
+  std::string initialLane(const lane_manager::SwitchingSet& set) override {
+    if (set.lanes.empty()) {
+      return {};
+    }
+    return set.find(lane_) ? lane_ : set.lanes.front().trackName;
+  }
+
+  std::optional<lane_manager::SwitchPlan> select(
+      const lane_manager::SwitchingSet&,
+      std::string_view,
+      uint64_t,
+      lane_manager::Clock::time_point) override {
+    return std::nullopt;
+  }
+
+ private:
+  std::string lane_;
+};
+
+class ProxySession final : public MoQRelaySession {
+ public:
+  using MoQRelaySession::MoQRelaySession;
+
+  void setBandwidthProvider(
+      std::shared_ptr<media_server::PtmBandwidthEstimateProvider> provider) {
+    provider_ = std::move(provider);
+  }
+
+  [[nodiscard]] std::shared_ptr<media_server::PtmBandwidthEstimateProvider>
+  takeBandwidthProvider() {
+    return std::exchange(provider_, nullptr);
+  }
+
+ private:
+  std::shared_ptr<media_server::PtmBandwidthEstimateProvider> provider_;
+};
+
 class ProxyServer : public MoQServer {
  public:
   // A null `policies` serves no virtual tracks.
@@ -247,13 +320,25 @@ class ProxyServer : public MoQServer {
   ProxyServer(
       std::shared_ptr<MoQProxy> proxy,
       lane_manager::MoQLaneRouter::PolicyFactory policies,
+      std::shared_ptr<proxygen::PTMSharedState> ptmSharedState,
+      bool ptmAbr,
       BaseArgs&&... baseArgs)
       : MoQServer(std::forward<BaseArgs>(baseArgs)...),
         proxy_(std::move(proxy)),
-        policies_(std::move(policies)) {}
+        policies_(std::move(policies)),
+        ptmSharedState_(std::move(ptmSharedState)),
+        ptmAbr_(ptmAbr) {}
 
   void onNewSession(std::shared_ptr<MoQSession> clientSession) override {
+    std::erase_if(downstream_, [](const auto& downstream) {
+      return downstream.session.expired();
+    });
+    downstream_.push_back({.session = clientSession});
     if (policies_) {
+      if (ptmAbr_) {
+        bindConfiguredManager(clientSession);
+        return;
+      }
       clientSession->setPublishHandler(
           std::make_shared<lane_manager::MoQLaneRouter>(
               proxy_,
@@ -263,10 +348,6 @@ class ProxyServer : public MoQServer {
       clientSession->setPublishHandler(proxy_);
     }
     clientSession->setSubscribeHandler(proxy_);
-    std::erase_if(downstream_, [](const auto& downstream) {
-      return downstream.session.expired();
-    });
-    downstream_.push_back({.session = clientSession});
   }
 
   folly::Try<Setup> onClientSetup(
@@ -310,10 +391,24 @@ class ProxyServer : public MoQServer {
   }
 
  protected:
+  void onSessionTransportReady(
+      const std::shared_ptr<MoQSession>& session,
+      QuicTransportObservers& observers) override {
+    if (!ptmAbr_) {
+      return;
+    }
+    try {
+      static_cast<ProxySession&>(*session).setBandwidthProvider(
+          media_server::PtmBandwidthEstimateProvider::getOrCreate(
+              observers, ptmSharedState_));
+    } catch (const std::exception& error) {
+      XLOG(ERR) << "LaneManager PTM setup failed: " << error.what();
+    }
+  }
   std::shared_ptr<MoQSession> createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
       std::shared_ptr<MoQExecutor> executor) override {
-    return std::make_shared<MoQRelaySession>(
+    return std::make_shared<ProxySession>(
         folly::MaybeManagedPtr<proxygen::WebTransport>(std::move(wt)),
         *this,
         std::move(executor));
@@ -346,10 +441,75 @@ class ProxyServer : public MoQServer {
     session.goaway(Goaway{.timeout = static_cast<uint64_t>(left)});
   }
 
+  void bindConfiguredManager(const std::shared_ptr<MoQSession>& session) {
+    const auto id = session->sessionId();
+    auto provider =
+        static_cast<ProxySession&>(*session).takeBandwidthProvider();
+    const FullTrackName virtualTrack{
+        TrackNamespace(
+            {FLAGS_lane_manager_wire_prefix, FLAGS_lane_manager_namespace}),
+        FLAGS_lane_manager_virtual_track};
+    media_server::AbrPolicyFactory factory;
+    try {
+      factory = media_server::makePtmAbrPolicyFactory(
+          provider, FLAGS_lane_manager_abr_module_name);
+    } catch (const std::exception& error) {
+      XLOG(ERR) << "[LaneManager-PTM] setup failed: " << error.what();
+      factory = [](const media::abr::ClientStateProvider&) {
+        return std::shared_ptr<media::abr::AbrPolicy>{};
+      };
+    }
+    lane_manager::LaneManagerAbrOptions abr;
+    abr.immutableCatalog = true;
+    abr.initializationFromCatalog = FLAGS_lane_manager_catalog_init_only;
+    abr.onOutcome =
+        [id](const FullTrackName&, const lane_manager::SwitchOutcome& outcome) {
+          XLOG(INFO) << "[LaneManager-PTM-Switch] session=" << id
+                     << " outcome=" << static_cast<int>(outcome.kind)
+                     << " from=" << outcome.fromLane
+                     << " to=" << outcome.targetLane
+                     << " group=" << outcome.group;
+        };
+    lane_manager::MoQLaneRouter::RoutingOptions routing;
+    routing.policyFactory = [factory = std::move(factory),
+                             virtualTrack,
+                             defaults = policies_,
+                             initial = FLAGS_lane_manager_initial_lane](
+                                const FullTrackName& track,
+                                lane_manager::Role role)
+        -> std::shared_ptr<lane_manager::SwitchingPolicy> {
+      if (track != virtualTrack) {
+        return defaults(role);
+      }
+      auto policy = factory([] { return media::abr::AbrClientState{}; });
+      return policy ? std::make_shared<media_server::PtmSwitchingPolicy>(
+                          std::move(policy), initial)
+                    : nullptr;
+    };
+    routing.virtualVideoTrack = virtualTrack;
+    routing.originNamespace =
+        [wire = virtualTrack.trackNamespace,
+         origin = TrackNamespace({"file", FLAGS_lane_manager_namespace})](
+            const TrackNamespace& requested) {
+          return requested == wire ? origin : requested;
+        };
+    auto router = std::make_shared<lane_manager::MoQLaneRouter>(
+        proxy_,
+        policies_,
+        std::chrono::milliseconds(FLAGS_lane_max_wait_ms),
+        std::move(abr),
+        std::move(routing));
+    std::shared_ptr<Publisher> publisher = router;
+    session->setPublishHandler(std::move(publisher));
+    session->setSubscribeHandler(proxy_);
+  }
+
   std::shared_ptr<MoQProxy> proxy_;
   lane_manager::MoQLaneRouter::PolicyFactory policies_;
   std::vector<Downstream> downstream_;
   std::optional<std::chrono::steady_clock::time_point> drainDeadline_;
+  std::shared_ptr<proxygen::PTMSharedState> ptmSharedState_;
+  bool ptmAbr_{false};
 };
 
 // Drains the server, waiting up to timeout, and the sessions' drain flush
@@ -390,13 +550,17 @@ void logJoinStats(const MoQProxyJoinStats& stats) {
              << " completionWaitTimeMs=" << stats.completionWaitTime.count();
 }
 
-std::vector<proxygen::URL> parseUpstreamUrls(const std::string& urls) {
+std::vector<proxygen::URL> parseUpstreamUrls(
+    const std::string& urls,
+    samples::TransportType transport) {
   std::vector<std::string> specs;
   folly::split(',', urls, specs, /*ignoreEmpty=*/true);
   std::vector<proxygen::URL> parsed;
   for (const auto& spec : specs) {
     proxygen::URL url(std::string(folly::trimWhitespace(spec)));
-    XLOG_IF(FATAL, !url.isValid() || !url.hasHost())
+    const bool validMoqt = transport == samples::TransportType::QUIC &&
+        url.getScheme() == "moqt" && !url.getHost().empty();
+    XLOG_IF(FATAL, (!url.isValid() || !url.hasHost()) && !validMoqt)
         << "Invalid URL in --upstream_url: " << spec;
     parsed.push_back(std::move(url));
   }
@@ -435,16 +599,19 @@ std::shared_ptr<fizz::client::CertManager> upstreamCertificates(
 
 int main(int argc, char* argv[]) {
   folly::Init init(&argc, &argv, true);
-  auto upstreamUrls = parseUpstreamUrls(FLAGS_upstream_url);
   XLOG_IF(FATAL, FLAGS_upstream_idle_timeout_ms < 0)
       << "--upstream_idle_timeout_ms can't be negative";
   XLOG_IF(FATAL, FLAGS_upstream_retry_ms < 0)
       << "--upstream_retry_ms can't be negative";
   XLOG_IF(FATAL, FLAGS_drain_timeout_ms < 0)
       << "--drain_timeout_ms can't be negative";
+  std::shared_ptr<proxygen::PTMSharedState> ptmSharedState;
+  XCHECK(!FLAGS_lane_manager_ptm || FLAGS_lane_manager)
+      << "--lane_manager_ptm requires --lane_manager";
   auto upstreamTransport =
       samples::parseTransportType(FLAGS_upstream_transport);
   XLOG_IF(FATAL, !upstreamTransport) << "Invalid --upstream_transport";
+  auto upstreamUrls = parseUpstreamUrls(FLAGS_upstream_url, *upstreamTransport);
   const auto certificates = upstreamCertificates(*upstreamTransport);
 
   // MoQProxy is single-threaded, so one worker serves every session.
@@ -485,17 +652,22 @@ int main(int argc, char* argv[]) {
   ts.orderedReadCallbacks = true;
   lane_manager::MoQLaneRouter::PolicyFactory policies;
   if (FLAGS_lane_manager) {
-    policies = [](lane_manager::Role) {
-      return std::make_shared<samples::ScriptedPolicy>();
+    policies = [](lane_manager::Role)
+        -> std::shared_ptr<lane_manager::SwitchingPolicy> {
+      return std::make_shared<ConfiguredStartPolicy>(
+          FLAGS_lane_manager_initial_lane);
     };
   }
   auto server = std::make_shared<ProxyServer>(
       proxy,
       std::move(policies),
+      std::move(ptmSharedState),
+      FLAGS_lane_manager_ptm,
       std::move(fizzContext),
       FLAGS_endpoint,
       MoQServer::Options{.transportSettings = ts});
-  server->start(folly::SocketAddress("::", FLAGS_port), {&workerEvb});
+  server->start(
+      folly::SocketAddress(FLAGS_bind_address, FLAGS_port), {&workerEvb});
   // Scripts wait for this line.
   std::cout << "ready port=" << server->getAddress().getPort() << std::endl;
 
