@@ -19,6 +19,7 @@
 #include "moxygen/MoQSession.h"
 #include "moxygen/proxy/MoQFetchCacheWriter.h"
 #include "moxygen/proxy/MoQJoinReplay.h"
+#include "moxygen/proxy/MoQProxyFetchConsumer.h"
 #include "moxygen/proxy/MoQProxyTrack.h"
 
 namespace moxygen {
@@ -37,156 +38,6 @@ AbsoluteLocation toWireFetchEnd(AbsoluteLocation exclusiveEnd) {
   }
   return AbsoluteLocation{exclusiveEnd.group - 1, 0};
 }
-
-// Forwards every callback and records whether any response data, status or
-// framing reached the downstream consumer. Once detached, it drops them.
-class ExposureTrackingFetchConsumer final : public FetchConsumer {
- public:
-  explicit ExposureTrackingFetchConsumer(
-      std::shared_ptr<FetchConsumer> consumer)
-      : consumer_(std::move(consumer)) {}
-
-  bool exposed() const {
-    return exposed_;
-  }
-
-  // For a refused FETCH whose stream may still deliver once another upstream
-  // serves the consumer.
-  void detach() {
-    consumer_.reset();
-  }
-
-  folly::Expected<folly::Unit, MoQPublishError> object(
-      uint64_t groupID,
-      uint64_t subgroupID,
-      uint64_t objectID,
-      Payload payload,
-      Extensions extensions,
-      bool finFetch,
-      bool forwardingPreferenceIsDatagram) override {
-    if (!consumer_) {
-      return detached();
-    }
-    exposed_ = true;
-    return consumer_->object(
-        groupID,
-        subgroupID,
-        objectID,
-        std::move(payload),
-        std::move(extensions),
-        finFetch,
-        forwardingPreferenceIsDatagram);
-  }
-
-  void checkpoint() override {
-    if (consumer_) {
-      consumer_->checkpoint();
-    }
-  }
-
-  folly::Expected<folly::Unit, MoQPublishError> beginObject(
-      uint64_t groupID,
-      uint64_t subgroupID,
-      uint64_t objectID,
-      uint64_t length,
-      Payload initialPayload,
-      Extensions extensions) override {
-    if (!consumer_) {
-      return detached();
-    }
-    exposed_ = true;
-    return consumer_->beginObject(
-        groupID,
-        subgroupID,
-        objectID,
-        length,
-        std::move(initialPayload),
-        std::move(extensions));
-  }
-
-  folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
-      Payload payload,
-      bool finSubgroup) override {
-    if (!consumer_) {
-      return detached();
-    }
-    exposed_ = true;
-    return consumer_->objectPayload(std::move(payload), finSubgroup);
-  }
-
-  folly::Expected<folly::Unit, MoQPublishError> endOfGroup(
-      uint64_t groupID,
-      uint64_t subgroupID,
-      uint64_t objectID,
-      bool finFetch) override {
-    if (!consumer_) {
-      return detached();
-    }
-    exposed_ = true;
-    return consumer_->endOfGroup(groupID, subgroupID, objectID, finFetch);
-  }
-
-  folly::Expected<folly::Unit, MoQPublishError> endOfTrackAndGroup(
-      uint64_t groupID,
-      uint64_t subgroupID,
-      uint64_t objectID) override {
-    if (!consumer_) {
-      return detached();
-    }
-    exposed_ = true;
-    return consumer_->endOfTrackAndGroup(groupID, subgroupID, objectID);
-  }
-
-  folly::Expected<folly::Unit, MoQPublishError> endOfFetch() override {
-    if (!consumer_) {
-      return detached();
-    }
-    exposed_ = true;
-    return consumer_->endOfFetch();
-  }
-
-  void reset(ResetStreamErrorCode error) override {
-    if (consumer_) {
-      exposed_ = true;
-      consumer_->reset(error);
-    }
-  }
-
-  void goaway(Goaway goaway) override {
-    if (consumer_) {
-      exposed_ = true;
-      consumer_->goaway(std::move(goaway));
-    }
-  }
-
-  folly::Expected<folly::SemiFuture<uint64_t>, MoQPublishError>
-  awaitReadyToConsume() override {
-    if (!consumer_) {
-      return detached();
-    }
-    return consumer_->awaitReadyToConsume();
-  }
-
-  folly::Expected<folly::Unit, MoQPublishError> endOfUnknownRange(
-      uint64_t groupID,
-      uint64_t objectID,
-      bool finFetch) override {
-    if (!consumer_) {
-      return detached();
-    }
-    exposed_ = true;
-    return consumer_->endOfUnknownRange(groupID, objectID, finFetch);
-  }
-
- private:
-  static folly::Unexpected<MoQPublishError> detached() {
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::CANCELLED, "FETCH abandoned"));
-  }
-
-  std::shared_ptr<FetchConsumer> consumer_;
-  bool exposed_{false};
-};
 
 // The handle for a joining FETCH served by one upstream FETCH.
 class UpstreamJoiningFetchHandle final : public Publisher::FetchHandle {
@@ -470,11 +321,14 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::forwardStandaloneFetch(
         : nullptr;
     auto tee =
         writer ? std::make_shared<MoQFetchCacheTee>(writer, consumer) : nullptr;
-    auto exposure = std::make_shared<ExposureTrackingFetchConsumer>(
-        tee ? std::static_pointer_cast<FetchConsumer>(tee) : consumer);
+    auto exposure = std::make_shared<MoQProxyFetchConsumer>(
+        tee ? std::static_pointer_cast<FetchConsumer>(tee) : consumer,
+        options_.statsCallback);
+    exposure->startTimeToFirstObject();
     auto result = co_await folly::coro::co_awaitTry(
         upstreamSession->fetch(fetch, exposure));
     if (closed_ || token.isCancellationRequested()) {
+      exposure->detach();
       if (result.hasValue() && result->hasValue()) {
         result->value()->fetchCancel();
       }
@@ -490,6 +344,7 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::forwardStandaloneFetch(
       }
       co_return std::move(result->value());
     }
+    exposure->detach();
     if (result.hasException()) {
       failure = fetchFailure(
           requestID,
@@ -504,7 +359,6 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::forwardStandaloneFetch(
         failure.errorCode == FetchErrorCode::CANCELLED) {
       co_return folly::makeUnexpected(std::move(failure));
     }
-    exposure->detach();
   }
   co_return folly::makeUnexpected(std::move(failure));
 }
@@ -751,7 +605,6 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::forwardHistoryFetch(
         fetch.priority,
         fetch.groupOrder);
     upstreamFetch.params = fetch.params;
-    auto exposure = std::make_shared<ExposureTrackingFetchConsumer>(consumer);
     auto writer = track->groupCache() ? std::make_shared<MoQFetchCacheWriter>(
                                             track->groupCache(),
                                             range.start,
@@ -760,16 +613,16 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::forwardHistoryFetch(
                                             fetch.groupOrder)
                                       : nullptr;
     auto tee =
-        writer ? std::make_shared<MoQFetchCacheTee>(writer, exposure) : nullptr;
-    auto upstreamConsumer = tee
-        ? std::static_pointer_cast<FetchConsumer>(tee)
-        : std::static_pointer_cast<FetchConsumer>(exposure);
+        writer ? std::make_shared<MoQFetchCacheTee>(writer, consumer) : nullptr;
+    auto exposure = std::make_shared<MoQProxyFetchConsumer>(
+        tee ? std::static_pointer_cast<FetchConsumer>(tee) : consumer,
+        options_.statsCallback);
+    exposure->startTimeToFirstObject();
     auto result = co_await folly::coro::co_awaitTry(
         folly::coro::co_withCancellation(
-            token,
-            upstream->fetch(
-                std::move(upstreamFetch), std::move(upstreamConsumer))));
+            token, upstream->fetch(std::move(upstreamFetch), exposure)));
     if (token.isCancellationRequested()) {
+      exposure->detach();
       if (result.hasValue() && result->hasValue()) {
         result->value()->fetchCancel();
       }
@@ -783,6 +636,7 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::forwardHistoryFetch(
       co_return std::make_shared<UpstreamJoiningFetchHandle>(
           requestID, std::move(upstreamHandle), std::move(upstream));
     }
+    exposure->detach();
     auto error = result.hasException()
         ? fetchFailure(
               requestID,
@@ -797,7 +651,6 @@ folly::coro::Task<Publisher::FetchResult> MoQProxy::forwardHistoryFetch(
          upstream == track->upstreamSession())) {
       co_return folly::makeUnexpected(std::move(error));
     }
-    exposure->detach();
     if (writer) {
       writer->invalidate();
     }
@@ -943,7 +796,8 @@ std::shared_ptr<MoQProxyTrack> MoQProxy::getOrCreateTrack(
           .switchStats = switchStats_,
           .switchOptions = options_.upstreamSwitch,
           .timekeeper = options_.timekeeper,
-          .random = switchRandom_},
+          .random = switchRandom_,
+          .statsCallback = options_.statsCallback},
       options_.trackObservers ? options_.trackObservers(fullTrackName)
                               : nullptr);
   track->setCallback(shared_from_this());

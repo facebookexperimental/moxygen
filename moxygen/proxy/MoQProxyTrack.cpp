@@ -25,6 +25,7 @@
 #include "moxygen/MoQSession.h"
 #include "moxygen/events/MoQExecutor.h"
 #include "moxygen/proxy/MoQFetchCacheWriter.h"
+#include "moxygen/proxy/MoQProxyFetchConsumer.h"
 #include "moxygen/relay/MoQForwarder.h"
 
 namespace moxygen {
@@ -410,6 +411,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     if (abandoned()) {
       return abandonedError();
     }
+    recordFirstObject();
     ++*attemptObjects_;
     if (!record([&](MoQGroupCache& cache) {
           return cache.subgroupObject(
@@ -457,6 +459,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
     if (abandoned()) {
       return abandonedError();
     }
+    recordFirstObject();
     ++*attemptObjects_;
     if (!record([&](MoQGroupCache& cache) {
           return cache.beginObject(
@@ -591,6 +594,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
         MoQPublishError::CANCELLED, "upstream attempt was abandoned"));
   }
 
+  void recordFirstObject();
   void resume();
   // Only the first call counts. finished: it reached its end, rather than
   // being reset or dropped.
@@ -678,6 +682,7 @@ class MoQProxyTrack::SubgroupRecorder final : public SubgroupConsumer {
   MoQProxyObjectId objectId_;
   uint64_t objectRemaining_{0};
   bool caching_;
+  bool firstObjectRecorded_{false};
   bool resumed_{false};
   bool ended_{false};
 };
@@ -701,6 +706,27 @@ class MoQProxyTrack::Recorder final
         cache_(std::move(cache)),
         track_(std::move(track)),
         objectTap_(std::move(objectTap)) {}
+
+  void startTimeToFirstObject() {
+    if (auto track = track_.lock(); track && track->statsCallback_) {
+      subscribeStartedAt_ = track->clock_();
+    }
+  }
+
+  void recordFirstObject() {
+    if (disabled_ || lost_) {
+      return;
+    }
+    if (auto startedAt = std::exchange(subscribeStartedAt_, std::nullopt)) {
+      if (auto track = track_.lock()) {
+        const auto duration =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                track->clock_() - *startedAt);
+        track->statsCallback_->recordUpstreamTimeToFirstSubscribeObject(
+            duration.count());
+      }
+    }
+  }
 
   void disable() {
     disabled_ = true;
@@ -884,6 +910,9 @@ class MoQProxyTrack::Recorder final
     if (disabled_ || lost_) {
       return folly::makeUnexpected(endedError());
     }
+    if (header.status == ObjectStatus::NORMAL) {
+      recordFirstObject();
+    }
     // An object stream is a subgroup of its own, which starts with its object.
     if (arbiter_ &&
         !admit(
@@ -920,6 +949,9 @@ class MoQProxyTrack::Recorder final
       bool lastInGroup) override {
     if (disabled_ || lost_) {
       return folly::makeUnexpected(endedError());
+    }
+    if (header.status == ObjectStatus::NORMAL) {
+      recordFirstObject();
     }
     if (arbiter_ &&
         !admit(
@@ -1188,6 +1220,7 @@ class MoQProxyTrack::Recorder final
   std::weak_ptr<MoQGroupCache> cache_;
   std::weak_ptr<MoQProxyTrack> track_;
   std::shared_ptr<MoQProxyObjectTap> objectTap_;
+  std::optional<std::chrono::steady_clock::time_point> subscribeStartedAt_;
   bool disabled_{false};
   bool lost_{false};
   std::optional<ReceivedGoaway> goaway_;
@@ -1216,6 +1249,15 @@ void MoQGroupDurationEstimate::onGroupStart(
     duration_ = duration_ ? (*duration_ * 7 + spacing) / 8 : spacing;
   }
   lastStart_ = at;
+}
+
+void MoQProxyTrack::SubgroupRecorder::recordFirstObject() {
+  if (std::exchange(firstObjectRecorded_, true)) {
+    return;
+  }
+  if (auto recorder = recorder_.lock()) {
+    recorder->recordFirstObject();
+  }
 }
 
 void MoQProxyTrack::SubgroupRecorder::resume() {
@@ -1275,6 +1317,7 @@ MoQProxyTrack::MoQProxyTrack(
       switchStats_(
           upstreamConfig.switchStats ? std::move(upstreamConfig.switchStats)
                                      : std::make_shared<MoQProxySwitchStats>()),
+      statsCallback_(std::move(upstreamConfig.statsCallback)),
       switchOptions_(upstreamConfig.switchOptions),
       timekeeper_(std::move(upstreamConfig.timekeeper)),
       clock_(
@@ -1537,16 +1580,21 @@ void MoQProxyTrack::trySendJoiningFetchToCurrentUpstream() {
         self->joiningFetchExposed_ |= exposesResponse;
         return true;
       });
+  auto timing = std::make_shared<MoQProxyFetchConsumer>(
+      std::move(consumer), statsCallback_, clock_);
+  joiningFetchAttempt_->consumer = timing;
   auto executor = session->getExecutor();
-  auto fetchTask =
-      [](std::shared_ptr<MoQProxyTrack> self,
-         uint64_t attempt,
-         std::shared_ptr<MoQSession> session,
-         Fetch fetch,
-         std::shared_ptr<FetchConsumer> consumer) -> folly::coro::Task<void> {
+  auto fetchTask = [](std::shared_ptr<MoQProxyTrack> self,
+                      uint64_t attempt,
+                      std::shared_ptr<MoQSession> session,
+                      Fetch fetch,
+                      std::shared_ptr<MoQProxyFetchConsumer> timing)
+      -> folly::coro::Task<void> {
+    timing->startTimeToFirstObject();
     auto result = co_await folly::coro::co_awaitTry(
-        session->fetch(std::move(fetch), std::move(consumer)));
+        session->fetch(std::move(fetch), timing));
     if (result.hasException()) {
+      timing->detach();
       self->joiningFetchFailed(
           attempt,
           FetchError{
@@ -1556,12 +1604,14 @@ void MoQProxyTrack::trySendJoiningFetchToCurrentUpstream() {
       co_return;
     }
     if (result->hasError()) {
+      timing->detach();
       auto error = std::move(result->error());
       error.requestID = RequestID(0);
       self->joiningFetchFailed(attempt, std::move(error));
       co_return;
     }
     if (!result->value()) {
+      timing->detach();
       self->joiningFetchFailed(
           attempt,
           FetchError{
@@ -1572,10 +1622,10 @@ void MoQProxyTrack::trySendJoiningFetchToCurrentUpstream() {
     }
     self->joiningFetchAccepted(attempt, std::move(result->value()));
   }(shared_from_this(),
-                                                  attempt,
-                                                  std::move(session),
-                                                  std::move(fetch),
-                                                  std::move(consumer));
+      attempt,
+      std::move(session),
+      std::move(fetch),
+      std::move(timing));
   folly::coro::co_withExecutor(
       std::move(executor),
       folly::coro::co_withCancellation(cancellation, std::move(fetchTask)))
@@ -1655,6 +1705,9 @@ void MoQProxyTrack::resolveJoiningFetchAttempt(uint64_t attempt) {
       (void)operation.writer->setRange(status.range->start, status.range->end);
     }
     if (status.error) {
+      if (auto consumer = operation.consumer.lock()) {
+        consumer->detach();
+      }
       if (auto handle = std::exchange(operation.handle, nullptr)) {
         handle->fetchCancel();
       }
@@ -1674,6 +1727,9 @@ void MoQProxyTrack::cancelJoiningFetchAttempt(uint64_t attempt) {
   if (!joiningFetchAttempt_ || joiningFetchAttempt_->id != attempt) {
     return;
   }
+  if (auto consumer = joiningFetchAttempt_->consumer.lock()) {
+    consumer->detach();
+  }
   joiningFetchAttempt_->finished = true;
   joiningFetchAttempt_->cancellation.requestCancellation();
   if (auto handle = std::exchange(joiningFetchAttempt_->handle, nullptr)) {
@@ -1688,6 +1744,9 @@ void MoQProxyTrack::failJoiningFetch(FetchError error) {
     return;
   }
   if (joiningFetchAttempt_) {
+    if (auto consumer = joiningFetchAttempt_->consumer.lock()) {
+      consumer->detach();
+    }
     joiningFetchAttempt_->cancellation.requestCancellation();
     if (auto handle = std::exchange(joiningFetchAttempt_->handle, nullptr)) {
       handle->fetchCancel();
@@ -1895,6 +1954,7 @@ MoQProxyTrack::establishWithProvider(
         }
         onReplacementGone(*recorder);
       });
+  recorder->startTimeToFirstObject();
   auto subscribeTask = folly::coro::co_withCancellation(
       stopWaiting,
       upstreamSession->subscribe(std::move(upstreamRequest), recorder));

@@ -12,6 +12,7 @@
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -21,6 +22,7 @@
 
 #include "moxygen/events/MoQFollyExecutorImpl.h"
 #include "moxygen/proxy/MoQProxy.h"
+#include "moxygen/proxy/MoQProxyFetchConsumer.h"
 #include "moxygen/proxy/test/RecordingFetchConsumer.h"
 #include "moxygen/test/LiveViewerConsumer.h"
 #include "moxygen/test/MockMoQSession.h"
@@ -250,6 +252,125 @@ TEST_F(MoQProxyTest, EstablishesUpstreamSubscription) {
   EXPECT_EQ(provider_->calls, 1);
   EXPECT_EQ(provider_->lastTrackName, kTrackName);
   result.value()->unsubscribe();
+}
+
+TEST_F(MoQProxyTest, ExportsUpstreamTimeToFirstSubscribeObject) {
+  auto stats = std::make_shared<NiceMock<MockMoQProxyStats>>();
+  proxy_ =
+      MoQProxy::create({provider_}, MoQProxyOptions{.statsCallback = stats});
+  auto upstreamHandle = makeUpstreamHandle(RequestID(100));
+  std::shared_ptr<TrackConsumer> upstreamConsumer;
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [&](SubscribeRequest, std::shared_ptr<TrackConsumer> consumer)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            upstreamConsumer = std::move(consumer);
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+  auto consumer = makeConsumer();
+  ON_CALL(*consumer, datagram(_, _, _))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  auto result = subscribe(
+      makeDownstreamSession(), makeSubscribeRequest(RequestID(1)), consumer);
+  ASSERT_TRUE(result.hasValue());
+  ASSERT_NE(upstreamConsumer, nullptr);
+  EXPECT_CALL(*stats, recordUpstreamTimeToFirstSubscribeObject(_)).Times(1);
+
+  EXPECT_TRUE(upstreamConsumer->datagram(
+      ObjectHeader(11, 0, 0, kDefaultPriority, uint64_t(0)), nullptr, true));
+  result.value()->unsubscribe();
+}
+
+TEST_F(MoQProxyTest, ExportsUpstreamTimeToFirstFetchObject) {
+  auto stats = std::make_shared<StrictMock<MockMoQProxyStats>>();
+  proxy_ =
+      MoQProxy::create({provider_}, MoQProxyOptions{.statsCallback = stats});
+  auto upstreamHandle = makeFetchHandle(RequestID(100));
+  EXPECT_CALL(*stats, recordUpstreamTimeToFirstFetchObject(_)).Times(1);
+  EXPECT_CALL(*upstreamSession_, fetch(_, _))
+      .WillOnce(
+          [upstreamHandle](Fetch, std::shared_ptr<FetchConsumer> consumer)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            EXPECT_TRUE(consumer->object(0, 0, 0, nullptr));
+            EXPECT_TRUE(consumer->object(0, 0, 1, nullptr));
+            co_return upstreamHandle;
+          });
+
+  auto result = fetch(
+      makeDownstreamSession(),
+      makeFetch(RequestID(1)),
+      std::make_shared<test::RecordingFetchConsumer>());
+
+  EXPECT_TRUE(result.hasValue());
+}
+
+class MoQProxyFetchFirstObjectTest : public Test {
+ protected:
+  std::chrono::steady_clock::time_point now_{};
+  std::shared_ptr<StrictMock<MockMoQProxyStats>> stats_{
+      std::make_shared<StrictMock<MockMoQProxyStats>>()};
+  std::shared_ptr<test::RecordingFetchConsumer> downstream_{
+      std::make_shared<test::RecordingFetchConsumer>()};
+  MoQProxyFetchConsumer consumer_{downstream_, stats_, [this] { return now_; }};
+};
+
+TEST_F(
+    MoQProxyFetchFirstObjectTest,
+    StartsAtFetchAndRecordsOnlyFirstDataObject) {
+  now_ += std::chrono::milliseconds(100);
+  consumer_.startTimeToFirstObject();
+  now_ += std::chrono::milliseconds(5);
+  consumer_.checkpoint();
+  EXPECT_TRUE(consumer_.endOfGroup(0, 0, 0, false));
+  EXPECT_TRUE(consumer_.endOfUnknownRange(1, 0, false));
+  now_ += std::chrono::milliseconds(8);
+  EXPECT_CALL(*stats_, recordUpstreamTimeToFirstFetchObject(13));
+
+  EXPECT_TRUE(consumer_.object(2, 0, 0, nullptr, noExtensions(), false, false));
+  now_ += std::chrono::milliseconds(10);
+  EXPECT_TRUE(consumer_.object(2, 0, 1, nullptr, noExtensions(), true, false));
+}
+
+TEST_F(MoQProxyFetchFirstObjectTest, StreamingRecordsWhenObjectBegins) {
+  consumer_.startTimeToFirstObject();
+  now_ += std::chrono::milliseconds(17);
+  EXPECT_CALL(*stats_, recordUpstreamTimeToFirstFetchObject(17));
+
+  EXPECT_TRUE(consumer_.beginObject(
+      0, 0, 0, 4, folly::IOBuf::copyBuffer(""), noExtensions()));
+  now_ += std::chrono::milliseconds(100);
+  EXPECT_TRUE(consumer_.objectPayload(folly::IOBuf::copyBuffer("data"), true));
+}
+
+TEST_F(MoQProxyFetchFirstObjectTest, ImmediateObjectRecordsZeroDuration) {
+  consumer_.startTimeToFirstObject();
+  EXPECT_CALL(*stats_, recordUpstreamTimeToFirstFetchObject(0));
+
+  EXPECT_TRUE(consumer_.object(0, 0, 0, nullptr, noExtensions(), true, false));
+}
+
+TEST_F(MoQProxyFetchFirstObjectTest, EmptyFetchDoesNotRecord) {
+  consumer_.startTimeToFirstObject();
+
+  EXPECT_TRUE(consumer_.endOfGroup(0, 0, 0, false));
+  EXPECT_TRUE(consumer_.endOfFetch());
+}
+
+TEST_F(MoQProxyFetchFirstObjectTest, DetachedAttemptIgnoresLateData) {
+  consumer_.startTimeToFirstObject();
+  consumer_.detach();
+
+  EXPECT_TRUE(consumer_.object(0, 0, 0, nullptr, noExtensions(), true, false)
+                  .hasError());
+  EXPECT_TRUE(downstream_->log.empty());
+}
+
+TEST_F(MoQProxyFetchFirstObjectTest, ResetBeforeFirstObjectDoesNotRecord) {
+  consumer_.startTimeToFirstObject();
+  consumer_.reset(ResetStreamErrorCode::CANCELLED);
+
+  EXPECT_EQ(downstream_->resetCode, ResetStreamErrorCode::CANCELLED);
+  EXPECT_TRUE(downstream_->log.empty());
 }
 
 TEST_F(MoQProxyTest, FillOpensAndResets) {
@@ -901,7 +1022,10 @@ TEST_F(MoQProxyTest, FetchFallsBackToNextProvider) {
       std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
   auto fallbackProvider =
       std::make_shared<TestUpstreamProvider>(fallbackSession);
-  proxy_ = MoQProxy::create({provider_, fallbackProvider});
+  auto stats = std::make_shared<StrictMock<MockMoQProxyStats>>();
+  proxy_ = MoQProxy::create(
+      {provider_, fallbackProvider}, MoQProxyOptions{.statsCallback = stats});
+  EXPECT_CALL(*stats, recordUpstreamTimeToFirstFetchObject(_)).Times(1);
   std::shared_ptr<FetchConsumer> failedConsumer;
   EXPECT_CALL(*upstreamSession_, fetch(_, _))
       .WillOnce(
@@ -917,8 +1041,9 @@ TEST_F(MoQProxyTest, FetchFallsBackToNextProvider) {
   auto upstreamHandle = makeFetchHandle(RequestID(101));
   EXPECT_CALL(*fallbackSession, fetch(_, _))
       .WillOnce(
-          [upstreamHandle](Fetch, std::shared_ptr<FetchConsumer>)
+          [upstreamHandle](Fetch, std::shared_ptr<FetchConsumer> consumer)
               -> folly::coro::Task<Publisher::FetchResult> {
+            EXPECT_TRUE(consumer->object(0, 0, 0, nullptr));
             co_return upstreamHandle;
           });
 
@@ -931,9 +1056,11 @@ TEST_F(MoQProxyTest, FetchFallsBackToNextProvider) {
   EXPECT_EQ(provider_->lastFallbackExists, true);
   EXPECT_EQ(fallbackProvider->lastFallbackExists, false);
   ASSERT_NE(failedConsumer, nullptr);
+  const auto received = viewer->log;
   EXPECT_TRUE(failedConsumer->object(0, 0, 0, folly::IOBuf::copyBuffer("x"))
                   .hasError());
-  EXPECT_TRUE(viewer->log.empty());
+  EXPECT_EQ(viewer->log, received);
+  EXPECT_EQ(received.size(), 1);
 }
 
 TEST_F(MoQProxyTest, CloseDuringFetchCancelsUpstream) {
@@ -1021,6 +1148,7 @@ class MoQProxyJoiningTest : public MoQProxyTest {
     options.cacheCompletionWait = 100ms;
     options.replayStallTimeout = 5s;
     options.trackObservers = trackObservers_;
+    options.statsCallback = statsCallback_;
     return options;
   }
 
@@ -1173,6 +1301,8 @@ class MoQProxyJoiningTest : public MoQProxyTest {
   std::vector<std::shared_ptr<Publisher::SubscriptionHandle>> viewerHandles_;
   std::shared_ptr<TrackConsumer> upstreamConsumer_;
   MoQProxyTrackObserverFactory trackObservers_;
+  std::shared_ptr<NiceMock<MockMoQProxyStats>> statsCallback_{
+      std::make_shared<NiceMock<MockMoQProxyStats>>()};
 };
 
 TEST_F(MoQProxyJoiningTest, PendingSubscribersShareJoiningLocation) {
@@ -1229,6 +1359,10 @@ std::vector<std::string> expectedReplay(
 }
 
 TEST_F(MoQProxyJoiningTest, WarmJoinIsServedFromCacheWithoutUpstream) {
+  EXPECT_CALL(*statsCallback_, recordUpstreamTimeToFirstSubscribeObject(_))
+      .Times(1);
+  EXPECT_CALL(*statsCallback_, recordUpstreamTimeToFirstFetchObject(_))
+      .Times(0);
   establish();
   publishGroup(41, 2);
   publishGroup(42, 2);
@@ -1408,6 +1542,37 @@ TEST_F(MoQProxyJoiningTest, SlowObjectIsServedLocallyOnlyWithinTheDeadline) {
     firstHandle_.reset();
     drive();
   }
+}
+
+TEST_F(MoQProxyJoiningTest, UncachedHistoryHasIndependentFetchTiming) {
+  EXPECT_CALL(*statsCallback_, recordUpstreamTimeToFirstSubscribeObject(_))
+      .Times(1);
+  establish();
+  publishGroup(43, 1);
+  auto viewer = addViewer(RequestID(5));
+  std::shared_ptr<FetchConsumer> upstreamFetchConsumer;
+  auto handle = std::make_shared<NiceMock<MockFetchHandle>>(FetchOk{
+      .requestID = RequestID(7),
+      .groupOrder = GroupOrder::OldestFirst,
+      .endLocation = AbsoluteLocation{43, 1}});
+  EXPECT_CALL(*upstreamSession_, fetch(_, _))
+      .WillOnce(
+          [&](Fetch, std::shared_ptr<FetchConsumer> consumer)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            upstreamFetchConsumer = std::move(consumer);
+            co_return handle;
+          });
+  auto result = fetch(
+      viewer,
+      joiningFetch(RequestID(7), RequestID(5), 10),
+      std::make_shared<test::RecordingFetchConsumer>());
+  ASSERT_TRUE(result.hasValue());
+  ASSERT_NE(upstreamFetchConsumer, nullptr);
+  EXPECT_CALL(*statsCallback_, recordUpstreamTimeToFirstFetchObject(_))
+      .Times(1);
+
+  EXPECT_TRUE(upstreamFetchConsumer->object(41, 0, 0, nullptr));
+  EXPECT_TRUE(upstreamFetchConsumer->object(42, 0, 0, nullptr));
 }
 
 TEST_F(MoQProxyJoiningTest, UncachedHistoryGoesUpstreamWithoutWaiting) {

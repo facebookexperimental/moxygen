@@ -257,6 +257,295 @@ class MoQProxyTrackTest : public Test {
   std::shared_ptr<TrackConsumer> upstreamConsumer_;
 };
 
+class MoQProxyTrackFirstObjectTest : public MoQProxyTrackTest {
+ protected:
+  void SetUp() override {
+    MoQProxyTrackTest::SetUp();
+    makeTimedTrack({provider_});
+  }
+
+  void TearDown() override {
+    track_->close();
+    track_.reset();
+  }
+
+  void makeTimedTrack(
+      std::vector<std::shared_ptr<MoQUpstreamProvider>> providers) {
+    track_ = MoQProxyTrack::create(
+        kTrackName,
+        std::move(providers),
+        /*cacheConfig=*/{},
+        MoQProxyTrack::UpstreamConfig{
+            .clock = [this] { return now_; },
+            .statsCallback = firstObjectStats_});
+  }
+
+  std::shared_ptr<NiceMock<MockTrackConsumer>> makeObjectConsumer() {
+    auto consumer = makeConsumer();
+    auto ok = folly::makeExpected<MoQPublishError>(folly::unit);
+    ON_CALL(*consumer, objectStream(_, _, _)).WillByDefault(Return(ok));
+    ON_CALL(*consumer, datagram(_, _, _)).WillByDefault(Return(ok));
+    ON_CALL(*subgroup_, object(_, _, _, _)).WillByDefault(Return(ok));
+    ON_CALL(*subgroup_, beginObject(_, _, _, _)).WillByDefault(Return(ok));
+    ON_CALL(*subgroup_, objectPayload(_, _))
+        .WillByDefault(Return(
+            folly::makeExpected<MoQPublishError>(ObjectPublishStatus::DONE)));
+    ON_CALL(*subgroup_, endOfGroup(_)).WillByDefault(Return(ok));
+    ON_CALL(*consumer, beginSubgroup(_, _, _, _))
+        .WillByDefault(Return(
+            folly::makeExpected<MoQPublishError>(
+                std::static_pointer_cast<SubgroupConsumer>(subgroup_))));
+    return consumer;
+  }
+
+  std::chrono::steady_clock::time_point now_{};
+  std::shared_ptr<StrictMock<MockMoQProxyStats>> firstObjectStats_{
+      std::make_shared<StrictMock<MockMoQProxyStats>>()};
+  std::shared_ptr<NiceMock<MockSubgroupConsumer>> subgroup_{
+      std::make_shared<NiceMock<MockSubgroupConsumer>>()};
+};
+
+TEST_F(
+    MoQProxyTrackFirstObjectTest,
+    FirstSubgroupObjectRecordsOnceForSharedUpstream) {
+  auto consumer = makeObjectConsumer();
+  auto handle = subscribeThroughUpstream(makeUpstreamHandle(), consumer);
+  ASSERT_NE(handle, nullptr);
+  now_ += std::chrono::milliseconds(5);
+  auto second = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(2)),
+          makeObjectConsumer(),
+          makeDownstreamPeer()),
+      &eventBase_);
+  ASSERT_TRUE(second.hasValue());
+  auto status = upstreamConsumer_->beginSubgroup(11, 0, kDefaultPriority);
+  ASSERT_TRUE(status.hasValue());
+  EXPECT_TRUE(status.value()->endOfGroup(0));
+  auto subgroup = upstreamConsumer_->beginSubgroup(12, 0, kDefaultPriority);
+  ASSERT_TRUE(subgroup.hasValue());
+  now_ += std::chrono::milliseconds(8);
+  EXPECT_CALL(*firstObjectStats_, recordUpstreamTimeToFirstSubscribeObject(13));
+
+  EXPECT_TRUE(subgroup.value()->object(
+      0, folly::IOBuf::copyBuffer("first"), noExtensions(), false));
+  now_ += std::chrono::milliseconds(10);
+  EXPECT_TRUE(subgroup.value()->object(
+      1, folly::IOBuf::copyBuffer("second"), noExtensions(), true));
+}
+
+TEST_F(MoQProxyTrackFirstObjectTest, StreamingObjectRecordsWhenItBegins) {
+  auto handle =
+      subscribeThroughUpstream(makeUpstreamHandle(), makeObjectConsumer());
+  ASSERT_NE(handle, nullptr);
+  auto subgroup = upstreamConsumer_->beginSubgroup(11, 0, kDefaultPriority);
+  ASSERT_TRUE(subgroup.hasValue());
+  now_ += std::chrono::milliseconds(17);
+  EXPECT_CALL(*firstObjectStats_, recordUpstreamTimeToFirstSubscribeObject(17));
+
+  EXPECT_TRUE(subgroup.value()->beginObject(0, 4, nullptr, noExtensions()));
+  now_ += std::chrono::milliseconds(20);
+  EXPECT_TRUE(
+      subgroup.value()->objectPayload(folly::IOBuf::copyBuffer("data"), true));
+}
+
+class MoQProxyTrackStandaloneFirstObjectTest
+    : public MoQProxyTrackFirstObjectTest,
+      public WithParamInterface<bool> {};
+
+TEST_P(MoQProxyTrackStandaloneFirstObjectTest, OnlyFirstDataObjectRecords) {
+  auto handle =
+      subscribeThroughUpstream(makeUpstreamHandle(), makeObjectConsumer());
+  ASSERT_NE(handle, nullptr);
+  auto send = [&](const ObjectHeader& header, Payload payload) {
+    return GetParam()
+        ? upstreamConsumer_->datagram(header, std::move(payload), true)
+        : upstreamConsumer_->objectStream(header, std::move(payload), true);
+  };
+  EXPECT_TRUE(send(
+      ObjectHeader(11, 0, 0, kDefaultPriority, ObjectStatus::END_OF_GROUP),
+      nullptr));
+  now_ += std::chrono::milliseconds(19);
+  EXPECT_CALL(*firstObjectStats_, recordUpstreamTimeToFirstSubscribeObject(19));
+
+  EXPECT_TRUE(
+      send(ObjectHeader(12, 0, 0, kDefaultPriority, uint64_t(0)), nullptr));
+  now_ += std::chrono::milliseconds(10);
+  EXPECT_TRUE(send(
+      ObjectHeader(13, 0, 0, kDefaultPriority, uint64_t(5)),
+      folly::IOBuf::copyBuffer("later")));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ObjectStreamAndDatagram,
+    MoQProxyTrackStandaloneFirstObjectTest,
+    Values(false, true));
+
+TEST_F(
+    MoQProxyTrackFirstObjectTest,
+    ObjectBeforeSubscribeOkIncludesSubscribeWait) {
+  EXPECT_CALL(*firstObjectStats_, recordUpstreamTimeToFirstSubscribeObject(23));
+  auto handle = subscribeThroughUpstream(
+      makeUpstreamHandle(), makeObjectConsumer(), [this] {
+        now_ += std::chrono::milliseconds(23);
+        EXPECT_TRUE(upstreamConsumer_->objectStream(
+            ObjectHeader(11, 0, 0, kDefaultPriority, uint64_t(5)),
+            folly::IOBuf::copyBuffer("early"),
+            true));
+        now_ += std::chrono::milliseconds(7);
+      });
+  ASSERT_NE(handle, nullptr);
+}
+
+TEST_F(
+    MoQProxyTrackFirstObjectTest,
+    FallbackRestartsTimerAndIgnoresAbandonedAttempts) {
+  auto fallbackSession =
+      std::make_shared<NiceMock<test::MockMoQSession>>(executor_);
+  ON_CALL(*fallbackSession, getNegotiatedVersion())
+      .WillByDefault(Return(kVersionDraftCurrent));
+  auto fallbackProvider =
+      std::make_shared<TestUpstreamProvider>(fallbackSession);
+  makeTimedTrack({provider_, fallbackProvider});
+  std::shared_ptr<TrackConsumer> abandoned;
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(Invoke(
+          [&](SubscribeRequest, std::shared_ptr<TrackConsumer> consumer)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            abandoned = std::move(consumer);
+            now_ += std::chrono::milliseconds(50);
+            co_return folly::makeUnexpected(
+                SubscribeError{
+                    RequestID(100),
+                    SubscribeErrorCode::UNAUTHORIZED,
+                    "denied"});
+          }));
+  auto upstreamHandle = makeUpstreamHandle();
+  EXPECT_CALL(*fallbackSession, subscribe(_, _))
+      .WillOnce(Invoke(
+          [&, upstreamHandle](
+              SubscribeRequest, std::shared_ptr<TrackConsumer> consumer)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            upstreamConsumer_ = std::move(consumer);
+            now_ += std::chrono::milliseconds(7);
+            co_return Publisher::SubscribeResult(upstreamHandle);
+          }));
+  auto result = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(1)),
+          makeObjectConsumer(),
+          makeDownstreamPeer()),
+      &eventBase_);
+  ASSERT_TRUE(result.hasValue());
+  ASSERT_NE(abandoned, nullptr);
+  EXPECT_TRUE(abandoned
+                  ->datagram(
+                      ObjectHeader(11, 0, 0, kDefaultPriority, uint64_t(0)),
+                      nullptr,
+                      true)
+                  .hasError());
+  now_ += std::chrono::milliseconds(13);
+  EXPECT_CALL(*firstObjectStats_, recordUpstreamTimeToFirstSubscribeObject(20));
+
+  EXPECT_TRUE(upstreamConsumer_->datagram(
+      ObjectHeader(11, 0, 0, kDefaultPriority, uint64_t(0)), nullptr, true));
+}
+
+TEST_F(
+    MoQProxyTrackFirstObjectTest,
+    JoiningFetchTimingIsIndependentFromSubscribeTiming) {
+  auto request = Fetch(
+      RequestID(3),
+      RequestID(1),
+      0,
+      FetchType::RELATIVE_JOINING,
+      kDefaultPriority,
+      GroupOrder::OldestFirst);
+  request.fullTrackName = kTrackName;
+  auto fetchConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  ON_CALL(*fetchConsumer, object(_, _, _, _, _, _, _))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  auto state = track_->saveJoiningFetchForUpstream(request, fetchConsumer);
+  ASSERT_NE(state, nullptr);
+  auto fetchHandle = std::make_shared<NiceMock<MockFetchHandle>>(FetchOk{
+      .requestID = RequestID(200),
+      .groupOrder = GroupOrder::OldestFirst,
+      .endLocation = AbsoluteLocation{10, 3}});
+  bool fetchSent = false;
+  EXPECT_CALL(*firstObjectStats_, recordUpstreamTimeToFirstFetchObject(7));
+  EXPECT_CALL(*firstObjectStats_, recordUpstreamTimeToFirstSubscribeObject(12));
+  EXPECT_CALL(*upstreamSession_, fetch(_, _))
+      .WillOnce(
+          [&, fetchHandle](Fetch, std::shared_ptr<FetchConsumer> consumer)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            fetchSent = true;
+            now_ += std::chrono::milliseconds(7);
+            EXPECT_TRUE(
+                consumer->object(10, 0, 0, nullptr, noExtensions(), true));
+            co_return fetchHandle;
+          });
+
+  auto handle =
+      subscribeThroughUpstream(makeUpstreamHandle(), makeObjectConsumer());
+  ASSERT_NE(handle, nullptr);
+  for (size_t i = 0; i < 20; ++i) {
+    eventBase_.loopOnce(EVLOOP_NONBLOCK);
+  }
+  ASSERT_TRUE(fetchSent);
+  now_ += std::chrono::milliseconds(5);
+
+  EXPECT_TRUE(upstreamConsumer_->datagram(
+      ObjectHeader(11, 0, 0, kDefaultPriority, uint64_t(0)), nullptr, true));
+}
+
+TEST_F(MoQProxyTrackFirstObjectTest, CancelledJoiningFetchIgnoresLateData) {
+  auto request = Fetch(
+      RequestID(3),
+      RequestID(1),
+      0,
+      FetchType::RELATIVE_JOINING,
+      kDefaultPriority,
+      GroupOrder::OldestFirst);
+  request.fullTrackName = kTrackName;
+  auto state = track_->saveJoiningFetchForUpstream(
+      request, std::make_shared<NiceMock<MockFetchConsumer>>());
+  ASSERT_NE(state, nullptr);
+  auto fetchHandle = std::make_shared<NiceMock<MockFetchHandle>>(FetchOk{
+      .requestID = RequestID(200),
+      .groupOrder = GroupOrder::OldestFirst,
+      .endLocation = AbsoluteLocation{10, 3}});
+  std::shared_ptr<FetchConsumer> upstreamFetchConsumer;
+  EXPECT_CALL(*upstreamSession_, fetch(_, _))
+      .WillOnce(
+          [&, fetchHandle](Fetch, std::shared_ptr<FetchConsumer> consumer)
+              -> folly::coro::Task<Publisher::FetchResult> {
+            upstreamFetchConsumer = std::move(consumer);
+            co_return fetchHandle;
+          });
+  auto handle =
+      subscribeThroughUpstream(makeUpstreamHandle(), makeObjectConsumer());
+  ASSERT_NE(handle, nullptr);
+  for (size_t i = 0; i < 20; ++i) {
+    eventBase_.loopOnce(EVLOOP_NONBLOCK);
+  }
+  ASSERT_NE(upstreamFetchConsumer, nullptr);
+  track_->cancelJoiningFetch(state);
+  now_ += std::chrono::milliseconds(100);
+
+  EXPECT_TRUE(upstreamFetchConsumer->object(10, 0, 0, nullptr).hasError());
+}
+
+TEST_F(MoQProxyTrackFirstObjectTest, NoDataObjectDoesNotRecord) {
+  auto handle =
+      subscribeThroughUpstream(makeUpstreamHandle(), makeObjectConsumer());
+  ASSERT_NE(handle, nullptr);
+  now_ += std::chrono::milliseconds(30);
+
+  EXPECT_TRUE(upstreamConsumer_->publishDone(
+      PublishDone{
+          RequestID(100), PublishDoneStatusCode::TRACK_ENDED, 0, "ended"}));
+}
+
 TEST_F(MoQProxyTrackTest, FirstSubscriberEstablishesUpstreamSubscription) {
   auto downstreamPeer = makeDownstreamPeer();
   auto consumer = makeConsumer();
@@ -1083,7 +1372,8 @@ class MoQProxyTrackSwitchTest : public MoQProxyTrackTest {
             .switchStats = switchStats_,
             .switchOptions = switchOptions,
             .timekeeper = std::move(timekeeper),
-            .clock = std::move(clock)});
+            .clock = std::move(clock),
+            .statsCallback = statsCallback_});
     track_->setCallback(callback_);
   }
 
@@ -1217,6 +1507,35 @@ class MoQProxyTrackSwitchTest : public MoQProxyTrackTest {
   std::map<uint64_t, std::shared_ptr<NiceMock<MockSubgroupConsumer>>>
       viewerSubgroups_;
 };
+
+TEST_F(MoQProxyTrackSwitchTest, ReplacementFirstObjectHasItsOwnTiming) {
+  makeTrackOnManualTime({provider_, replacementProvider_});
+  auto handle =
+      subscribeThroughUpstream(makeUpstreamHandle(), makeRecordingConsumer());
+  ASSERT_NE(handle, nullptr);
+  {
+    InSequence sequence;
+    EXPECT_CALL(*statsCallback_, recordUpstreamTimeToFirstSubscribeObject(11));
+    EXPECT_CALL(*statsCallback_, recordUpstreamTimeToFirstSubscribeObject(7));
+  }
+  advanceTime(std::chrono::milliseconds(11));
+  ASSERT_TRUE(sendFirstObject(*upstreamConsumer_, 11));
+  advanceTime(std::chrono::milliseconds(60));
+  expectReplacementSubscribe();
+  loseUpstream();
+  runPending();
+  ASSERT_NE(replacementConsumer_, nullptr);
+  advanceTime(std::chrono::milliseconds(7));
+
+  EXPECT_TRUE(replacementConsumer_
+                  ->datagram(
+                      ObjectHeader(11, 0, 0, kDefaultPriority, uint64_t(0)),
+                      nullptr,
+                      true)
+                  .hasError());
+  advanceTime(std::chrono::milliseconds(20));
+  EXPECT_TRUE(sendFirstObject(*replacementConsumer_, 12));
+}
 
 class MoQProxyTrackLostUpstreamTest
     : public MoQProxyTrackSwitchTest,

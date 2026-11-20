@@ -16,6 +16,12 @@ class MoQProxyStatsCallback {
  public:
   virtual ~MoQProxyStatsCallback() = default;
 
+  // From sending an upstream SUBSCRIBE to the start of its first data object.
+  virtual void recordUpstreamTimeToFirstSubscribeObject(
+      uint64_t durationMs) = 0;
+  // From sending an upstream FETCH to the start of its first data object.
+  virtual void recordUpstreamTimeToFirstFetchObject(uint64_t durationMs) = 0;
+
   // Once for each track that acts on an upstream GOAWAY.
   virtual void onUpstreamGoaway() = 0;
   // Once per received GOAWAY on a session the proxy watches, before its tracks.

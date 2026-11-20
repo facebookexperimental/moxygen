@@ -36,6 +36,7 @@ namespace moxygen {
 
 class MoQForwarder;
 class MoQFetchCacheWriter;
+class MoQProxyFetchConsumer;
 class MoQSession;
 class FetchConsumer;
 class TrackConsumer;
@@ -232,10 +233,11 @@ struct MoQProxyTrackUpstreamConfig {
   MoQProxySwitchOptions switchOptions;
   // Times the switch deadline and retry backoff; null uses folly's default.
   std::shared_ptr<folly::Timekeeper> timekeeper;
-  // What the track measures group durations by; null reads the steady clock.
+  // What the track measures durations by; null reads the steady clock.
   std::function<std::chrono::steady_clock::time_point()> clock;
   // Null seeds a per-track generator from switchOptions.randomSeed.
   std::shared_ptr<std::mt19937_64> random;
+  std::shared_ptr<MoQProxyStatsCallback> statsCallback;
 };
 
 // How far apart a track's groups start, smoothed: each new spacing weighs an
@@ -359,6 +361,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
     folly::CancellationSource cancellation;
     std::optional<FetchError> error;
     std::shared_ptr<MoQFetchCacheWriter> writer;
+    std::weak_ptr<MoQProxyFetchConsumer> consumer;
     std::shared_ptr<Publisher::FetchHandle> handle;
     bool subscriptionAccepted{false};
     bool finished{false};
@@ -534,6 +537,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   folly::CancellationSource replayStopped_;
   std::shared_ptr<MoQUpstreamGoaways> goaways_;
   std::shared_ptr<MoQProxySwitchStats> switchStats_;
+  std::shared_ptr<MoQProxyStatsCallback> statsCallback_;
   MoQProxySwitchOptions switchOptions_;
   std::shared_ptr<folly::Timekeeper> timekeeper_;
   std::function<std::chrono::steady_clock::time_point()> clock_;
