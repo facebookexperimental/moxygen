@@ -3197,6 +3197,58 @@ TEST_F(MoQRelayTest, FetchOfPublishedTrackServedFromCache) {
   removeSession(publisherSession);
 }
 
+// A FETCH that starts past the Largest Object of a live track is refused, and
+// the publisher does not receive a FETCH.
+TEST_F(MoQRelayTest, FetchPastLargestObjectIsInvalidRange) {
+  relay_ = std::make_shared<MoQRelay>();
+  relay_->setAllowedNamespacePrefix(kAllowedPrefix);
+  auto publisherSession = createMockSession();
+  auto fetchSession = createMockSession();
+  EXPECT_CALL(*publisherSession, fetch(_, _)).Times(0);
+
+  auto publishConsumer = doPublish(publisherSession, kTestTrackName);
+  ASSERT_NE(publishConsumer, nullptr);
+  auto holderSession = createMockSession();
+  auto holder = createMockConsumer();
+  auto holderSubgroup = createMockSubgroupConsumer();
+  ON_CALL(*holderSubgroup, object(_, _, _, _))
+      .WillByDefault(Return(folly::makeExpected<MoQPublishError>(folly::unit)));
+  ON_CALL(*holder, beginSubgroup(_, _, _, _))
+      .WillByDefault(Return(
+          folly::
+              makeExpected<MoQPublishError, std::shared_ptr<SubgroupConsumer>>(
+                  holderSubgroup)));
+  subscribeToTrack(holderSession, kTestTrackName, holder, RequestID(1));
+  auto subgroup = publishConsumer->beginSubgroup(2, 0, kDefaultPriority);
+  ASSERT_TRUE(subgroup.hasValue());
+  ASSERT_TRUE((*subgroup)
+                  ->object(
+                      0,
+                      folly::IOBuf::copyBuffer("x"),
+                      Extensions(),
+                      /*finSubgroup=*/true)
+                  .hasValue());
+
+  auto fetchConsumer = std::make_shared<NiceMock<MockFetchConsumer>>();
+  Fetch fetch(
+      RequestID(0),
+      kTestTrackName,
+      AbsoluteLocation{10, 0},
+      AbsoluteLocation{11, 0});
+  withSessionContext(fetchSession, [&]() {
+    auto res = folly::coro::blockingWait(
+        relay_->fetch(fetchSession, std::move(fetch), fetchConsumer),
+        exec_.get());
+    ASSERT_TRUE(res.hasError());
+    EXPECT_EQ(res.error().errorCode, FetchErrorCode::INVALID_RANGE);
+  });
+
+  removeSession(fetchSession);
+  removeSession(holderSession);
+  exec_->drive();
+  removeSession(publisherSession);
+}
+
 // ============================================================
 // Publish Replaces Subscribe Tests
 // ============================================================

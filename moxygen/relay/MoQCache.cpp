@@ -1571,6 +1571,16 @@ folly::coro::Task<Publisher::FetchResult> MoQCache::fetch(
   auto lastMaybe = standalone->end.prev();
   XCHECK(lastMaybe) << "exclusive end must be > {0, 0}";
   AbsoluteLocation last = *lastMaybe;
+  // The cached largest is final only after END_OF_TRACK.  Live tracks are
+  // checked against the forwarder's Largest Object in MoQRelay::fetch.
+  if (track->endOfTrack && track->largestGroupAndObject &&
+      *track->largestGroupAndObject < standalone->start) {
+    co_return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::INVALID_RANGE,
+            "Fetch starts after the Largest Object"});
+  }
   if (track->largestGroupAndObject &&
       (track->liveWritebackCount > 0 ||
        last <= *track->largestGroupAndObject)) {

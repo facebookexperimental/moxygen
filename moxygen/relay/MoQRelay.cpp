@@ -1939,6 +1939,15 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
   auto subscriptionIt = subscriptions_.find(fetch.fullTrackName);
   if (subscriptionIt != subscriptions_.end()) {
     upstreamSession = subscriptionIt->second.upstream;
+    if (standalone && subscriptionIt->second.promise.isFulfilled()) {
+      auto largest = subscriptionIt->second.forwarder->largest();
+      if (largest && *largest < standalone->start) {
+        co_return folly::makeUnexpected(FetchError(
+            {fetch.requestID,
+             FetchErrorCode::INVALID_RANGE,
+             "Fetch starts after the Largest Object"}));
+      }
+    }
   }
   if (!upstreamSession) {
     upstreamSession =

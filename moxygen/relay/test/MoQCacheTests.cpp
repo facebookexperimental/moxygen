@@ -1163,6 +1163,21 @@ CO_TEST_F(MoQCacheTest, TestFetchStartsPastLargestEndLocation) {
   co_await folly::coro::co_reschedule_on_current_executor;
 }
 
+// A FETCH that starts past the end of track is refused without serving
+// anything or going upstream.
+CO_TEST_F(MoQCacheTest, TestFetchStartsPastEndOfTrack) {
+  populateCacheRange({0, 0}, {0, 5});
+  auto writeback = cache_.getSubscribeWriteback(kTestTrackName, trackConsumer_);
+  writeback->datagram(
+      ObjectHeader(0, 0, 5, 0, ObjectStatus::END_OF_TRACK), nullptr);
+  writeback.reset();
+
+  auto res = co_await cache_.fetch(
+      getFetch({1, 0}, {2, 0}), trackingConsumer_, upstream_);
+  CO_ASSERT_TRUE(res.hasError());
+  EXPECT_EQ(res.error().errorCode, FetchErrorCode::INVALID_RANGE);
+}
+
 CO_TEST_F(MoQCacheTest, TestFetchWaitsForFetchInProgress) {
   // Test case for fetch waiting for a fetch in progress
   expectUpstreamFetch({0, 0}, {0, 10}, 0, AbsoluteLocation{1, 0})
