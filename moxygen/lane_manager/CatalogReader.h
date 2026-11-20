@@ -20,14 +20,16 @@ namespace moxygen::lane_manager {
 
 enum class Role { Video, Audio };
 
-// Keeps a broadcast's catalog current: a SUBSCRIBE for updates and a joining
-// FETCH for the catalog already published.
+// Reads a catalog through live updates or one immutable snapshot.
 class CatalogReader {
  public:
+  enum class Mode { Live, ImmutableSnapshot };
+
   CatalogReader(
       std::shared_ptr<Publisher> publisher,
       TrackNamespace broadcast,
-      std::chrono::milliseconds firstCatalogWait = std::chrono::seconds(5));
+      std::chrono::milliseconds firstCatalogWait = std::chrono::seconds(5),
+      Mode mode = Mode::Live);
   ~CatalogReader();
 
   CatalogReader(const CatalogReader&) = delete;
@@ -35,8 +37,8 @@ class CatalogReader {
   CatalogReader(CatalogReader&&) = delete;
   CatalogReader& operator=(CatalogReader&&) = delete;
 
-  // The first call subscribes. Every call completes once the first catalog is
-  // read, or with false if the SUBSCRIBE fails or the reader is closed. Throws
+  // Every call completes once the first catalog is read, or with false when
+  // opening fails or the reader is closed. Throws
   // folly::FutureTimeout if no catalog arrives within `firstCatalogWait`.
   folly::coro::Task<bool> open(RequestID requestID);
   void close();
@@ -46,6 +48,8 @@ class CatalogReader {
 
  private:
   class Callback;
+
+  folly::coro::Task<bool> openSnapshot(RequestID requestID);
 
   void onCatalog(Payload payload);
 
@@ -57,6 +61,7 @@ class CatalogReader {
   std::optional<SwitchingSet> video_;
   std::optional<SwitchingSet> audio_;
   std::chrono::milliseconds firstCatalogWait_;
+  Mode mode_;
   folly::coro::SharedPromise<void> ready_;
   bool opened_{false};
   bool closed_{false};

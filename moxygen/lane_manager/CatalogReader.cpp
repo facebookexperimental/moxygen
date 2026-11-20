@@ -127,11 +127,13 @@ class CatalogReader::Callback : public ObjectReceiverCallback {
 CatalogReader::CatalogReader(
     std::shared_ptr<Publisher> publisher,
     TrackNamespace broadcast,
-    std::chrono::milliseconds firstCatalogWait)
+    std::chrono::milliseconds firstCatalogWait,
+    Mode mode)
     : publisher_(std::move(publisher)),
       track_{std::move(broadcast), std::string(kCatalogTrackName)},
       callback_(std::make_shared<Callback>(this)),
-      firstCatalogWait_(firstCatalogWait) {}
+      firstCatalogWait_(firstCatalogWait),
+      mode_(mode) {}
 
 CatalogReader::~CatalogReader() {
   close();
@@ -140,6 +142,9 @@ CatalogReader::~CatalogReader() {
 folly::coro::Task<bool> CatalogReader::open(RequestID requestID) {
   if (!opened_) {
     opened_ = true;
+    if (mode_ == Mode::ImmutableSnapshot) {
+      co_return co_await openSnapshot(requestID);
+    }
     auto request = SubscribeRequest::make(
         track_,
         kDefaultPriority,
@@ -177,6 +182,40 @@ folly::coro::Task<bool> CatalogReader::open(RequestID requestID) {
     }
   }
   co_await folly::coro::timeout(ready_.getFuture(), firstCatalogWait_);
+  co_return !closed_;
+}
+
+folly::coro::Task<bool> CatalogReader::openSnapshot(RequestID requestID) {
+  Fetch fetch(
+      requestID, track_, AbsoluteLocation{0, 0}, AbsoluteLocation{0, 1});
+  auto fetched = co_await folly::coro::co_awaitTry(
+      folly::coro::timeout(
+          publisher_->fetch(
+              std::move(fetch),
+              std::make_shared<ObjectReceiver>(
+                  ObjectReceiver::FETCH, callback_)),
+          firstCatalogWait_));
+  if (fetched.hasException()) {
+    close();
+    co_yield folly::coro::co_error(std::move(fetched.exception()));
+  }
+  if (fetched->hasError()) {
+    XLOG(ERR) << "[lane_manager] catalog snapshot FETCH failed: "
+              << fetched->error().reasonPhrase;
+    close();
+    co_return false;
+  }
+  if (closed_) {
+    fetched->value()->fetchCancel();
+    co_return false;
+  }
+  fetch_ = std::move(fetched->value());
+  auto ready = co_await folly::coro::co_awaitTry(
+      folly::coro::timeout(ready_.getFuture(), firstCatalogWait_));
+  if (ready.hasException()) {
+    close();
+    co_yield folly::coro::co_error(std::move(ready.exception()));
+  }
   co_return !closed_;
 }
 

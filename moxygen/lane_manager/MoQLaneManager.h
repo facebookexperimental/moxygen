@@ -15,6 +15,8 @@
 #include <folly/coro/Task.h>
 
 #include <chrono>
+#include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -22,6 +24,23 @@ namespace moxygen::lane_manager {
 
 // Object property carrying a lane's init segment.
 inline constexpr uint64_t kInitPropertyType = 0x3801;
+
+struct LaneManagerAbrOptions {
+  // Bounds on what a subscription may hold while a switch waits; going over
+  // ends the subscription.
+  struct HoldLimits {
+    size_t bytes{8 * 1024 * 1024};
+    size_t subgroups{64};
+  };
+  HoldLimits holdLimits;
+  // Read the catalog once with a FETCH instead of subscribing to it.
+  bool immutableCatalog{false};
+  // The client takes init segments from the catalog; none are sent in-band.
+  bool initializationFromCatalog{false};
+  std::function<void(const FullTrackName&, const SwitchingSet&)> onStarted;
+  std::function<void(const FullTrackName&)> onClosed;
+  std::function<void(const FullTrackName&, const SwitchOutcome&)> onOutcome;
+};
 
 // Serves one client session's virtual tracks for one broadcast, one per role,
 // from the broadcast's lanes, which it SUBSCRIBEs through `proxy`. Every lane
@@ -32,7 +51,8 @@ class MoQLaneManager : public std::enable_shared_from_this<MoQLaneManager> {
   MoQLaneManager(
       std::shared_ptr<Publisher> proxy,
       TrackNamespace broadcast,
-      std::chrono::milliseconds defaultMaxWait);
+      std::chrono::milliseconds defaultMaxWait,
+      LaneManagerAbrOptions abr = {});
   ~MoQLaneManager();
 
   MoQLaneManager(const MoQLaneManager&) = delete;
@@ -51,6 +71,9 @@ class MoQLaneManager : public std::enable_shared_from_this<MoQLaneManager> {
   // came from.
   folly::coro::Task<Publisher::FetchResult>
   fetch(Fetch fetch, std::shared_ptr<FetchConsumer> client, Role role);
+
+  // The policy's inputs changed: drops the pending switch and asks again.
+  void onPolicyChanged(Role role);
 
  private:
   class LaneConsumer;
@@ -73,9 +96,13 @@ class MoQLaneManager : public std::enable_shared_from_this<MoQLaneManager> {
       Priority priority,
       BeginSubgroupOptions options);
   void expireHold(SubscriptionSet& set);
+  // Ends `set` with PUBLISH_DONE, after the current callback returns.
+  void fail(SubscriptionSet& set, const MoQPublishError& error);
   // Ends `set` if it is still its role's; the lanes are UNSUBSCRIBEd.
   void unsubscribe(const SubscriptionSet& set);
+  void close(SubscriptionSet& set);
   void applyOutcomes(SubscriptionSet& set);
+  void notify(SubscriptionSet& set, const SwitchOutcome& outcome);
   // Asks the policy for a plan once per live group, while no switch is
   // pending.
   void select(SubscriptionSet& set);
@@ -83,6 +110,7 @@ class MoQLaneManager : public std::enable_shared_from_this<MoQLaneManager> {
   std::shared_ptr<Publisher> proxy_;
   TrackNamespace broadcast_;
   std::chrono::milliseconds defaultMaxWait_;
+  LaneManagerAbrOptions abr_;
   CatalogReader catalog_;
   folly::F14FastMap<Role, std::shared_ptr<SubscriptionSet>> sets_;
 };

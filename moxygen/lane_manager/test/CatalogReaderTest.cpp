@@ -64,7 +64,8 @@ class CatalogReaderTest : public testing::Test {
   void expectFetch(const std::optional<std::string>& catalog) {
     EXPECT_CALL(*publisher_, fetch(_, _))
         .WillOnce([catalog](
-                      Fetch fetch, std::shared_ptr<FetchConsumer> consumer) {
+                      const Fetch& fetch,
+                      std::shared_ptr<FetchConsumer> consumer) {
           EXPECT_EQ(
               std::get<JoiningFetch>(fetch.args).joiningRequestID, kRequestID);
           if (!catalog) {
@@ -93,6 +94,67 @@ class CatalogReaderTest : public testing::Test {
   std::shared_ptr<MockSubscriptionHandle> subscription_;
   uint64_t group_{0};
 };
+
+TEST_F(CatalogReaderTest, ImmutableSnapshotDoesNotSubscribeToTheClientCatalog) {
+  CatalogReader reader{
+      publisher_,
+      kBroadcast,
+      std::chrono::seconds(5),
+      CatalogReader::Mode::ImmutableSnapshot};
+  auto handle = std::make_shared<MockFetchHandle>(FetchOk{});
+  EXPECT_CALL(*publisher_, subscribe(_, _)).Times(0);
+  EXPECT_CALL(*publisher_, fetch(_, _))
+      .WillOnce([handle](
+                    const Fetch& fetch,
+                    std::shared_ptr<FetchConsumer> consumer) {
+        EXPECT_TRUE(std::holds_alternative<StandaloneFetch>(fetch.args));
+        EXPECT_EQ(fetch.fullTrackName, (FullTrackName{kBroadcast, "catalog"}));
+        consumer->object(0, 0, 0, folly::IOBuf::copyBuffer(kFbmsCatalog));
+        consumer->endOfFetch();
+        return folly::coro::makeTask<Publisher::FetchResult>(handle);
+      });
+  EXPECT_TRUE(folly::coro::blockingWait(reader.open(kRequestID)));
+  EXPECT_TRUE(folly::coro::blockingWait(reader.open(kRequestID)));
+  ASSERT_NE(reader.switchingSet(Role::Video), nullptr);
+  EXPECT_EQ(
+      reader.switchingSet(Role::Video)->lanes[0].init->to<std::string>(),
+      "video");
+  EXPECT_CALL(*handle, fetchCancel());
+  reader.close();
+}
+
+TEST_F(CatalogReaderTest, FailedSnapshotDoesNotOpenALiveSubscription) {
+  CatalogReader reader{
+      publisher_,
+      kBroadcast,
+      std::chrono::seconds(5),
+      CatalogReader::Mode::ImmutableSnapshot};
+  EXPECT_CALL(*publisher_, subscribe(_, _)).Times(0);
+  EXPECT_CALL(*publisher_, fetch(_, _)).WillOnce([](const Fetch& fetch, auto) {
+    return folly::coro::makeTask<Publisher::FetchResult>(folly::makeUnexpected(
+        FetchError{
+            fetch.requestID, FetchErrorCode::DOES_NOT_EXIST, "no catalog"}));
+  });
+  EXPECT_FALSE(folly::coro::blockingWait(reader.open(kRequestID)));
+  EXPECT_FALSE(folly::coro::blockingWait(reader.open(kRequestID)));
+}
+
+TEST_F(CatalogReaderTest, SnapshotTimeoutCancelsFetchAndReleasesLaterCalls) {
+  CatalogReader reader{
+      publisher_,
+      kBroadcast,
+      std::chrono::milliseconds(1),
+      CatalogReader::Mode::ImmutableSnapshot};
+  auto handle = std::make_shared<MockFetchHandle>(FetchOk{});
+  EXPECT_CALL(*publisher_, subscribe(_, _)).Times(0);
+  EXPECT_CALL(*publisher_, fetch(_, _)).WillOnce([handle](const Fetch&, auto) {
+    return folly::coro::makeTask<Publisher::FetchResult>(handle);
+  });
+  EXPECT_CALL(*handle, fetchCancel()).Times(1);
+  EXPECT_THROW(
+      folly::coro::blockingWait(reader.open(kRequestID)), folly::FutureTimeout);
+  EXPECT_FALSE(folly::coro::blockingWait(reader.open(kRequestID)));
+}
 
 TEST_F(CatalogReaderTest, ReadsTheCatalogFromTheJoiningFetch) {
   expectSubscribe();

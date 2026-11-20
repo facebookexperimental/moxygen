@@ -84,18 +84,43 @@ openSubgroup(
       std::move(consumer.value()), std::exchange(init, nullptr));
 }
 
-// Keeps a subgroup's calls until release() sends them on or drops them.
+// Keeps a subgroup's calls until release() sends them on or drops them. What
+// it keeps counts against its subscription's byte budget; going over it, or a
+// failed send, is reported to `failure`.
 class HeldSubgroup : public SubgroupConsumer {
  public:
+  struct Budget {
+    size_t limit{0};
+    size_t bytes{0};
+    bool closed{false}; // the subscription ended
+  };
+  using Failure = std::function<void(const MoQPublishError&)>;
+
+  HeldSubgroup(std::shared_ptr<Budget> budget, Failure failure)
+      : budget_(std::move(budget)), failure_(std::move(failure)) {}
+
+  HeldSubgroup(const HeldSubgroup&) = delete;
+  HeldSubgroup& operator=(const HeldSubgroup&) = delete;
+  HeldSubgroup(HeldSubgroup&&) = delete;
+  HeldSubgroup& operator=(HeldSubgroup&&) = delete;
+
+  ~HeldSubgroup() override {
+    budget_->bytes -= bytes_;
+  }
+
   // Replays what was kept to `downstream`, then forwards; null drops it all.
   void release(std::shared_ptr<SubgroupConsumer> downstream) {
     released_ = true;
+    downstream_ = std::move(downstream);
+    budget_->bytes -= std::exchange(bytes_, 0);
     for (auto& op : std::exchange(ops_, {})) {
-      if (downstream && op(*downstream).hasError()) {
-        downstream.reset();
+      if (!downstream_) {
+        break;
+      }
+      if (auto result = op(*downstream_); result.hasError()) {
+        fail(result.error());
       }
     }
-    downstream_ = std::move(downstream);
   }
 
   folly::Expected<folly::Unit, MoQPublishError> object(
@@ -103,19 +128,23 @@ class HeldSubgroup : public SubgroupConsumer {
       Payload payload,
       Extensions extensions,
       bool finSubgroup) override {
-    return apply([objectID,
-                  payload = std::move(payload),
-                  extensions = std::move(extensions),
-                  finSubgroup](SubgroupConsumer& consumer) mutable {
-      return consumer.object(
-          objectID, std::move(payload), std::move(extensions), finSubgroup);
-    });
+    const auto bytes = sizeOf(payload, extensions);
+    return apply(
+        [objectID,
+         payload = std::move(payload),
+         extensions = std::move(extensions),
+         finSubgroup](SubgroupConsumer& consumer) mutable {
+          return consumer.object(
+              objectID, std::move(payload), std::move(extensions), finSubgroup);
+        },
+        bytes);
   }
 
   void checkpoint() override {
-    if (downstream_) {
-      downstream_->checkpoint();
-    }
+    (void)apply([](SubgroupConsumer& consumer) {
+      consumer.checkpoint();
+      return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+    });
   }
 
   folly::Expected<folly::Unit, MoQPublishError> beginObject(
@@ -123,27 +152,40 @@ class HeldSubgroup : public SubgroupConsumer {
       uint64_t length,
       Payload initialPayload,
       Extensions extensions) override {
-    return apply([objectID,
-                  length,
-                  payload = std::move(initialPayload),
-                  extensions = std::move(extensions)](
-                     SubgroupConsumer& consumer) mutable {
-      return consumer.beginObject(
-          objectID, length, std::move(payload), std::move(extensions));
-    });
+    const auto bytes = sizeOf(initialPayload, extensions);
+    return apply(
+        [objectID,
+         length,
+         payload = std::move(initialPayload),
+         extensions =
+             std::move(extensions)](SubgroupConsumer& consumer) mutable {
+          return consumer.beginObject(
+              objectID, length, std::move(payload), std::move(extensions));
+        },
+        bytes);
   }
 
   folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
       Payload payload,
       bool finSubgroup) override {
     if (downstream_) {
-      return downstream_->objectPayload(std::move(payload), finSubgroup);
+      auto result = downstream_->objectPayload(std::move(payload), finSubgroup);
+      if (result.hasError()) {
+        fail(result.error());
+      }
+      return result;
     }
-    apply([payload = std::move(payload),
-           finSubgroup](SubgroupConsumer& consumer) mutable {
-      return consumer.objectPayload(std::move(payload), finSubgroup)
-          .then([](ObjectPublishStatus) { return folly::unit; });
-    });
+    const auto bytes = sizeOf(payload, {});
+    auto result = apply(
+        [payload = std::move(payload),
+         finSubgroup](SubgroupConsumer& consumer) mutable {
+          return consumer.objectPayload(std::move(payload), finSubgroup)
+              .then([](ObjectPublishStatus) { return folly::unit; });
+        },
+        bytes);
+    if (result.hasError()) {
+      return folly::makeUnexpected(result.error());
+    }
     return ObjectPublishStatus::IN_PROGRESS;
   }
 
@@ -167,9 +209,9 @@ class HeldSubgroup : public SubgroupConsumer {
   }
 
   void reset(ResetStreamErrorCode error) override {
-    apply([error](SubgroupConsumer& consumer) {
+    (void)apply([error](SubgroupConsumer& consumer) {
       consumer.reset(error);
-      return folly::unit;
+      return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
     });
   }
 
@@ -177,18 +219,73 @@ class HeldSubgroup : public SubgroupConsumer {
   using Op = folly::Function<folly::Expected<folly::Unit, MoQPublishError>(
       SubgroupConsumer&)>;
 
-  folly::Expected<folly::Unit, MoQPublishError> apply(Op op) {
+  // Bytes a kept call is charged: its payload and properties plus a fixed
+  // allowance for the call itself.
+  static constexpr size_t kCallBytes = 64;
+
+  static size_t sizeOf(const Payload& payload, const Extensions& extensions) {
+    size_t bytes =
+        kCallBytes + (payload ? payload->computeChainDataLength() : 0);
+    for (const auto* entries :
+         {&extensions.getMutableExtensions(),
+          &extensions.getImmutableExtensions()}) {
+      for (const auto& extension : *entries) {
+        bytes += sizeof(Extension) +
+            (extension.arrayValue
+                 ? extension.arrayValue->computeChainDataLength()
+                 : 0);
+      }
+    }
+    return bytes;
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> fail(MoQPublishError error) {
+    if (!error_) {
+      error_ = std::move(error);
+      ops_.clear();
+      budget_->bytes -= std::exchange(bytes_, 0);
+      if (auto downstream = std::exchange(downstream_, nullptr)) {
+        downstream->reset(ResetStreamErrorCode::CANCELLED);
+      }
+      failure_(*error_);
+    }
+    return folly::makeUnexpected(*error_);
+  }
+
+  folly::Expected<folly::Unit, MoQPublishError> apply(
+      Op op,
+      size_t bytes = kCallBytes) {
+    if (error_) {
+      return folly::makeUnexpected(*error_);
+    }
     if (downstream_) {
-      return op(*downstream_);
+      auto result = op(*downstream_);
+      return result.hasError() ? fail(result.error()) : result;
     }
-    if (!released_) {
-      ops_.push_back(std::move(op));
+    if (released_) {
+      return folly::unit;
     }
+    if (budget_->closed) {
+      return folly::makeUnexpected(
+          MoQPublishError{MoQPublishError::CANCELLED, "unsubscribed"});
+    }
+    if (bytes > budget_->limit - budget_->bytes) {
+      return fail(
+          MoQPublishError{
+              MoQPublishError::TOO_FAR_BEHIND, "switch hold budget exhausted"});
+    }
+    ops_.push_back(std::move(op));
+    bytes_ += bytes;
+    budget_->bytes += bytes;
     return folly::unit;
   }
 
   std::vector<Op> ops_;
   std::shared_ptr<SubgroupConsumer> downstream_;
+  std::shared_ptr<Budget> budget_;
+  Failure failure_;
+  std::optional<MoQPublishError> error_;
+  size_t bytes_{0};
   bool released_{false};
 };
 
@@ -329,6 +426,13 @@ struct MoQLaneManager::SubscriptionSet
   std::shared_ptr<TrackConsumer> client;
   std::shared_ptr<SwitchingPolicy> policy;
   MoQExecutor& executor;
+  RequestID requestID{0};
+  // The virtual track, set once its SUBSCRIBE succeeds.
+  std::optional<FullTrackName> track;
+  std::shared_ptr<HeldSubgroup::Budget> holdBudget{
+      std::make_shared<HeldSubgroup::Budget>()};
+  bool failed{false};
+  bool closed{false};
   std::string lane; // the one the virtual SUBSCRIBE_OK came from
   // Lanes with a SUBSCRIBE_OK.
   folly::F14FastMap<std::string, std::shared_ptr<SubscriptionHandle>> laneSubs;
@@ -417,26 +521,23 @@ class MoQLaneManager::LaneConsumer : public TrackConsumerFilter {
     return subgroup;
   }
 
+  // Switching works on subgroup streams only.
   folly::Expected<folly::Unit, MoQPublishError> objectStream(
-      const ObjectHeader& header,
-      Payload payload,
-      bool lastInGroup) override {
-    auto live = liveHeader(header);
-    if (!live) {
-      return folly::unit;
-    }
-    return downstream_->objectStream(*live, std::move(payload), lastInGroup);
+      const ObjectHeader& /*header*/,
+      Payload /*payload*/,
+      bool /*lastInGroup*/) override {
+    return folly::makeUnexpected(
+        MoQPublishError{
+            MoQPublishError::MALFORMED_TRACK, "lanes need subgroup streams"});
   }
 
   folly::Expected<folly::Unit, MoQPublishError> datagram(
-      const ObjectHeader& header,
-      Payload payload,
-      bool lastInGroup) override {
-    auto live = liveHeader(header);
-    if (!live) {
-      return folly::unit;
-    }
-    return downstream_->datagram(*live, std::move(payload), lastInGroup);
+      const ObjectHeader& /*header*/,
+      Payload /*payload*/,
+      bool /*lastInGroup*/) override {
+    return folly::makeUnexpected(
+        MoQPublishError{
+            MoQPublishError::MALFORMED_TRACK, "lanes need subgroup streams"});
   }
 
   folly::Expected<folly::Unit, MoQPublishError> publishDone(
@@ -445,7 +546,7 @@ class MoQLaneManager::LaneConsumer : public TrackConsumerFilter {
     // publishDone().
     auto manager = manager_.lock();
     auto set = set_.lock();
-    if (!manager || !set) {
+    if (!manager || !set || set->closed) {
       return folly::unit;
     }
     if (lane_ != set->switcher->liveLane()) {
@@ -464,18 +565,6 @@ class MoQLaneManager::LaneConsumer : public TrackConsumerFilter {
   }
 
  private:
-  // Objects outside subgroup streams are sent from the live lane only, never
-  // held.
-  std::optional<ObjectHeader> liveHeader(const ObjectHeader& header) const {
-    auto set = set_.lock();
-    if (!set || set->switcher->liveLane() != lane_) {
-      return std::nullopt;
-    }
-    auto live = header;
-    addInit(live.extensions, set->init);
-    return live;
-  }
-
   std::weak_ptr<MoQLaneManager> manager_;
   std::weak_ptr<SubscriptionSet> set_;
   std::string lane_;
@@ -484,14 +573,22 @@ class MoQLaneManager::LaneConsumer : public TrackConsumerFilter {
 MoQLaneManager::MoQLaneManager(
     std::shared_ptr<Publisher> proxy,
     TrackNamespace broadcast,
-    std::chrono::milliseconds defaultMaxWait)
+    std::chrono::milliseconds defaultMaxWait,
+    LaneManagerAbrOptions abr)
     : proxy_(std::move(proxy)),
       broadcast_(std::move(broadcast)),
       defaultMaxWait_(defaultMaxWait),
-      catalog_(proxy_, broadcast_) {}
+      abr_(std::move(abr)),
+      catalog_(
+          proxy_,
+          broadcast_,
+          std::chrono::seconds(5),
+          abr_.immutableCatalog ? CatalogReader::Mode::ImmutableSnapshot
+                                : CatalogReader::Mode::Live) {}
 
 MoQLaneManager::~MoQLaneManager() {
   for (auto& [role, set] : sets_) {
+    close(*set);
     for (auto& [lane, handle] : set->laneSubs) {
       handle->unsubscribe();
     }
@@ -516,6 +613,8 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
       client,
       std::move(policy),
       *MoQSession::getRequestContext().executor);
+  set->requestID = request.requestID;
+  set->holdBudget->limit = abr_.holdLimits.bytes;
   it->second = set;
   auto current = [&] {
     auto found = sets_.find(role);
@@ -524,6 +623,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
   // Frees the role on every exit but success, a cancelled await included.
   auto release = folly::makeGuard([&] {
     set->started.setValue();
+    close(*set);
     if (current()) {
       sets_.erase(role);
     }
@@ -532,6 +632,9 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
     return folly::makeUnexpected(
         SubscribeError{request.requestID, code, std::move(reason)});
   };
+  if (!set->policy) {
+    co_return fail(RequestErrorCode::NOT_SUPPORTED, "no switching policy");
+  }
   auto opened =
       co_await folly::coro::co_awaitTry(catalog_.open(request.requestID));
   if (opened.hasException<folly::FutureTimeout>()) {
@@ -562,7 +665,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
       lane = info->trackName;
     }
     set->switcher.emplace(lane, defaultMaxWait_);
-    set->init = info->init;
+    set->init = nullptr;
+    if (!abr_.initializationFromCatalog) {
+      set->init = info->init;
+    }
     auto laneRequest = request;
     laneRequest.fullTrackName = FullTrackName{broadcast_, lane};
     auto subscribed = co_await proxy_->subscribe(
@@ -602,6 +708,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
       }
       release.dismiss();
       set->started.setValue();
+      set->track = request.fullTrackName;
+      if (abr_.onStarted) {
+        abr_.onStarted(*set->track, candidates);
+      }
       co_return std::make_shared<VirtualHandle>(self, set, std::move(ok));
     }
     reason = subscribed.error().reasonPhrase;
@@ -627,7 +737,7 @@ folly::coro::Task<void> MoQLaneManager::subscribeLane(
                << " failed: " << subscribed.error().reasonPhrase;
     co_return;
   }
-  if (auto locked = set.lock()) {
+  if (auto locked = set.lock(); locked && !locked->closed) {
     locked->laneSubs.emplace(std::move(lane), std::move(subscribed.value()));
   } else {
     subscribed.value()->unsubscribe();
@@ -642,6 +752,10 @@ MoQLaneManager::beginSubgroup(
     uint64_t subgroup,
     Priority priority,
     BeginSubgroupOptions options) {
+  if (set.closed || set.failed) {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::CANCELLED, "unsubscribed"));
+  }
   auto& switcher = *set.switcher;
   const auto now = Clock::now();
   const auto deadline = switcher.deadline();
@@ -657,8 +771,24 @@ MoQLaneManager::beginSubgroup(
     return openSubgroup(
         *set.client, set.init, group, subgroup, priority, options);
   }
-  auto consumer = std::make_shared<HeldSubgroup>();
+  auto consumer = std::make_shared<HeldSubgroup>(
+      set.holdBudget,
+      [weak = weak_from_this(),
+       weakSet = std::weak_ptr(set.shared_from_this())](
+          const MoQPublishError& error) {
+        auto manager = weak.lock();
+        auto current = weakSet.lock();
+        if (manager && current) {
+          manager->fail(*current, error);
+        }
+      });
   if (action == SwitchExecutor::Action::Hold) {
+    if (set.held.size() >= abr_.holdLimits.subgroups) {
+      const MoQPublishError error{
+          MoQPublishError::TOO_FAR_BEHIND, "too many held subgroups"};
+      fail(set, error);
+      return folly::makeUnexpected(error);
+    }
     set.held.push_back({subgroup, priority, options, consumer});
   } else {
     consumer->release(nullptr);
@@ -667,6 +797,9 @@ MoQLaneManager::beginSubgroup(
 }
 
 void MoQLaneManager::expireHold(SubscriptionSet& set) {
+  if (set.closed || set.failed) {
+    return;
+  }
   const auto now = Clock::now();
   set.switcher->onDeadline(now);
   applyOutcomes(set);
@@ -687,7 +820,7 @@ void MoQLaneManager::applyOutcomes(SubscriptionSet& set) {
     const bool committed = outcome.kind == SwitchOutcome::Kind::Committed;
     for (auto& held : std::exchange(set.held, {})) {
       std::shared_ptr<SubgroupConsumer> sent;
-      if (!committed) {
+      if (!committed && !set.failed) {
         auto opened = openSubgroup(
             *set.client,
             set.init,
@@ -698,16 +831,15 @@ void MoQLaneManager::applyOutcomes(SubscriptionSet& set) {
         if (opened.hasValue()) {
           sent = std::move(opened.value());
         } else {
-          XLOG(WARN) << "[lane_manager] " << broadcast_.describe()
-                     << " dropped held group " << outcome.group << ": "
-                     << opened.error().what();
+          fail(set, opened.error());
         }
       }
       held.consumer->release(std::move(sent));
     }
     if (!committed) {
       set.liveGroup = outcome.group;
-    } else if (const auto* lanes = catalog_.switchingSet(set.role)) {
+    } else if (const auto* lanes = catalog_.switchingSet(set.role);
+               lanes && !abr_.initializationFromCatalog) {
       if (const auto* target = lanes->find(outcome.targetLane)) {
         set.init = target->init;
       }
@@ -715,15 +847,46 @@ void MoQLaneManager::applyOutcomes(SubscriptionSet& set) {
     XLOG(DBG1) << "[lane_manager] " << broadcast_.describe() << " "
                << outcome.targetLane << (committed ? " is live" : " missed")
                << " at group " << outcome.group;
-    set.policy->onSwitchOutcome(outcome);
+    notify(set, outcome);
   }
+}
+
+void MoQLaneManager::notify(
+    SubscriptionSet& set,
+    const SwitchOutcome& outcome) {
+  set.policy->onSwitchOutcome(outcome);
+  if (abr_.onOutcome && set.track) {
+    abr_.onOutcome(*set.track, outcome);
+  }
+}
+
+void MoQLaneManager::fail(SubscriptionSet& set, const MoQPublishError& error) {
+  if (set.closed || std::exchange(set.failed, true)) {
+    return;
+  }
+  set.holdBudget->closed = true;
+  set.executor.add([weak = weak_from_this(),
+                    weakSet = std::weak_ptr(set.shared_from_this()),
+                    error] {
+    auto manager = weak.lock();
+    auto current = weakSet.lock();
+    if (manager && current && !current->closed) {
+      (void)current->client->publishDone(
+          PublishDone{
+              current->requestID,
+              PublishDoneStatusCode::INTERNAL_ERROR,
+              0,
+              error.what()});
+      manager->unsubscribe(*current);
+    }
+  });
 }
 
 void MoQLaneManager::select(SubscriptionSet& set) {
   auto& switcher = *set.switcher;
   const auto* lanes = catalog_.switchingSet(set.role);
-  if (switcher.pending() || !lanes || !set.liveGroup ||
-      set.liveGroup == set.selectedGroup) {
+  if (set.closed || set.failed || switcher.pending() || !lanes ||
+      !set.liveGroup || set.liveGroup == set.selectedGroup) {
     return;
   }
   set.selectedGroup = set.liveGroup;
@@ -736,7 +899,8 @@ void MoQLaneManager::select(SubscriptionSet& set) {
   auto plan =
       set.policy->select(eligible, switcher.liveLane(), *set.liveGroup, now);
   if (plan && switcher.plan(eligible, *plan, *set.liveGroup)) {
-    set.policy->onSwitchOutcome(
+    notify(
+        set,
         SwitchOutcome{
             SwitchOutcome::Kind::Prepared,
             switcher.liveLane(),
@@ -773,9 +937,13 @@ folly::coro::Task<Publisher::FetchResult> MoQLaneManager::fetch(
         FetchError{fetch.requestID, FetchErrorCode::DOES_NOT_EXIST, ""});
   }
   fetch.fullTrackName = FullTrackName{broadcast_, lane->trackName};
+  std::shared_ptr<const folly::IOBuf> init;
+  if (!abr_.initializationFromCatalog) {
+    init = lane->init;
+  }
   co_return co_await proxy_->fetch(
       std::move(fetch),
-      std::make_shared<InitFetchConsumer>(std::move(client), lane->init));
+      std::make_shared<InitFetchConsumer>(std::move(client), std::move(init)));
 }
 
 void MoQLaneManager::unsubscribe(const SubscriptionSet& set) {
@@ -783,11 +951,38 @@ void MoQLaneManager::unsubscribe(const SubscriptionSet& set) {
   if (it == sets_.end() || it->second.get() != &set) {
     return;
   }
+  close(*it->second);
   auto laneSubs = std::move(it->second->laneSubs);
   sets_.erase(it);
   for (auto& [lane, handle] : laneSubs) {
     handle->unsubscribe();
   }
+}
+
+void MoQLaneManager::close(SubscriptionSet& set) {
+  if (std::exchange(set.closed, true)) {
+    return;
+  }
+  set.holdTimer.cancelTimerCallback();
+  set.holdBudget->closed = true;
+  for (auto& held : std::exchange(set.held, {})) {
+    held.consumer->release(nullptr);
+  }
+  if (set.track && abr_.onClosed) {
+    abr_.onClosed(*set.track);
+  }
+}
+
+void MoQLaneManager::onPolicyChanged(Role role) {
+  auto found = sets_.find(role);
+  if (found == sets_.end() || found->second->closed || found->second->failed) {
+    return;
+  }
+  auto set = found->second;
+  set->switcher->cancel(Clock::now());
+  applyOutcomes(*set);
+  set->selectedGroup.reset();
+  select(*set);
 }
 
 } // namespace moxygen::lane_manager
