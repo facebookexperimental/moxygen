@@ -489,7 +489,8 @@ class ProxyServer : public MoQServer {
     routing.virtualVideoTrack = virtualTrack;
     routing.originNamespace =
         [wire = virtualTrack.trackNamespace,
-         origin = TrackNamespace({"file", FLAGS_lane_manager_namespace})](
+         origin = TrackNamespace(
+             std::vector<std::string>{"file", FLAGS_lane_manager_namespace})](
             const TrackNamespace& requested) {
           return requested == wire ? origin : requested;
         };

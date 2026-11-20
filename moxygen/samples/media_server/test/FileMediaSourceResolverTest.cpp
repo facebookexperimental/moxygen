@@ -67,7 +67,9 @@ TEST_F(FileMediaSourceResolverTest, OnlyFileAndAliasedNamespacesAreServed) {
   EXPECT_FALSE(
       catalogFor({"moq-media"}, TrackNamespace({"other"})).has_value());
   EXPECT_TRUE(
-      catalogFor({}, TrackNamespace({"file", "moq-media"})).has_value());
+      catalogFor(
+          {}, TrackNamespace(std::vector<std::string>{"file", "moq-media"}))
+          .has_value());
 }
 
 } // namespace moxygen::media_server::test

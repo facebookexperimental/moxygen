@@ -225,7 +225,7 @@ const std::string kBitrateCatalog = R"({"tracks":[
 {"id":"v1","type":"inline","data":"djE="},{"id":"a0","type":"inline","data":"YTA="}]})";
 
 TEST_F(LaneManagerTest, VirtualVideoTrackUsesTheOriginNamespace) {
-  const TrackNamespace origin({"file", "demo"});
+  const TrackNamespace origin(std::vector<std::string>{"file", "demo"});
   const FullTrackName video{kBroadcast, "video"};
   LaneManagerAbrOptions abr;
   abr.immutableCatalog = true;
