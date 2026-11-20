@@ -22,6 +22,7 @@ class SwitchExecutor {
  public:
   enum class Action { Forward, Drop, Hold };
 
+  // Throws std::invalid_argument if `defaultMaxWait` is negative.
   SwitchExecutor(
       std::string liveLane,
       std::chrono::milliseconds defaultMaxWait);
@@ -42,10 +43,17 @@ class SwitchExecutor {
   // another codec family, or the wait is negative.
   bool plan(const SwitchingSet& set, const SwitchPlan& plan, uint64_t group);
 
+  // A group older than the newest one sent is dropped, whatever its lane.
   Action onGroup(std::string_view lane, uint64_t group, Clock::time_point now);
 
   // The deadline passed; the held group is to be sent.
   void onDeadline(Clock::time_point now);
+
+  // Drops the pending switch, if any; a held group is to be sent.
+  void cancel(Clock::time_point now);
+
+  // `lane` ended; drops the pending switch if it targets `lane`.
+  void onLaneEnded(std::string_view lane, Clock::time_point now);
 
   std::vector<SwitchOutcome> takeOutcomes();
 
@@ -58,10 +66,12 @@ class SwitchExecutor {
   };
 
   void expire(Clock::time_point now);
+  Action forward(uint64_t group);
 
   std::string live_;
   std::chrono::milliseconds defaultMaxWait_;
   std::optional<Pending> pending_;
+  std::optional<uint64_t> lastSent_;
   std::vector<SwitchOutcome> outcomes_;
 };
 

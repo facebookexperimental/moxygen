@@ -37,6 +37,7 @@ moxygen_add_library(moxygen_lane_manager_moq_lane_manager
   DEPS
     moxygen_events_moq_executor
     moxygen_lane_manager_switch_executor
+    Folly::folly_coro_shared_promise
     Folly::folly_function
     Folly::folly_futures_core
     Folly::folly_logging_logging

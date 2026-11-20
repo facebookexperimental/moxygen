@@ -13,6 +13,7 @@
 
 #include <folly/Function.h>
 #include <folly/ScopeGuard.h>
+#include <folly/coro/SharedPromise.h>
 #include <folly/futures/Future.h>
 #include <folly/logging/xlog.h>
 
@@ -338,6 +339,8 @@ struct MoQLaneManager::SubscriptionSet
   Timer holdTimer;
   std::optional<uint64_t> liveGroup; // the last group sent from the live lane
   std::optional<uint64_t> selectedGroup; // the last group select() ran for
+  // Set once `lane` has its SUBSCRIBE_OK, or the subscribe ended without one.
+  folly::coro::SharedPromise<void> started;
 };
 
 // Like MoQProxy's handles, dropping one unsubscribes.
@@ -447,10 +450,13 @@ class MoQLaneManager::LaneConsumer : public TrackConsumerFilter {
     }
     if (lane_ != set->switcher->liveLane()) {
       set->laneSubs.erase(lane_);
+      set->switcher->onLaneEnded(lane_, Clock::now());
+      manager->applyOutcomes(*set);
       return folly::unit;
     }
     if (set->switcher->deadline()) {
-      manager->expireHold(*set); // the held group goes out first
+      set->switcher->cancel(Clock::now()); // the held group goes out first
+      manager->applyOutcomes(*set);
     }
     auto result = downstream_->publishDone(std::move(pubDone));
     manager->unsubscribe(*set);
@@ -517,6 +523,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
   };
   // Frees the role on every exit but success, a cancelled await included.
   auto release = folly::makeGuard([&] {
+    set->started.setValue();
     if (current()) {
       sets_.erase(role);
     }
@@ -594,6 +601,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
             .start();
       }
       release.dismiss();
+      set->started.setValue();
       co_return std::make_shared<VirtualHandle>(self, set, std::move(ok));
     }
     reason = subscribed.error().reasonPhrase;
@@ -659,8 +667,17 @@ MoQLaneManager::beginSubgroup(
 }
 
 void MoQLaneManager::expireHold(SubscriptionSet& set) {
-  set.switcher->onDeadline(Clock::now());
+  const auto now = Clock::now();
+  set.switcher->onDeadline(now);
   applyOutcomes(set);
+  if (const auto held = set.switcher->deadline()) {
+    // The timer ran early.
+    set.executor.scheduleTimeout(
+        &set.holdTimer,
+        std::max(
+            std::chrono::milliseconds(1),
+            std::chrono::ceil<std::chrono::milliseconds>(*held - now)));
+  }
   select(set);
 }
 
@@ -737,10 +754,20 @@ folly::coro::Task<Publisher::FetchResult> MoQLaneManager::fetch(
     co_return folly::makeUnexpected(
         FetchError{fetch.requestID, FetchErrorCode::NOT_SUPPORTED, ""});
   }
+  auto self = shared_from_this();
   auto it = sets_.find(role);
+  if (it == sets_.end()) {
+    co_return folly::makeUnexpected(
+        FetchError{fetch.requestID, FetchErrorCode::DOES_NOT_EXIST, ""});
+  }
+  // A joining FETCH can arrive while its SUBSCRIBE still awaits the lane.
+  auto set = it->second;
+  co_await set->started.getFuture();
+  it = sets_.find(role);
   const auto* lanes = catalog_.switchingSet(role);
-  const auto* lane =
-      it != sets_.end() && lanes ? lanes->find(it->second->lane) : nullptr;
+  const auto* lane = it != sets_.end() && it->second == set && lanes
+      ? lanes->find(set->lane)
+      : nullptr;
   if (!lane) {
     co_return folly::makeUnexpected(
         FetchError{fetch.requestID, FetchErrorCode::DOES_NOT_EXIST, ""});

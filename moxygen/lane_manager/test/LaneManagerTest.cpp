@@ -10,7 +10,9 @@
 #include "moxygen/test/MockMoQSession.h"
 #include "moxygen/test/Mocks.h"
 
+#include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Collect.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
@@ -70,30 +72,39 @@ std::string initOf(const Extensions& extensions) {
 class LaneManagerTest : public testing::Test {
  protected:
   void SetUp() override {
-    // The proxy answers every SUBSCRIBE except failLane_'s, with largest {5,3}.
+    // The proxy answers every SUBSCRIBE except failLane_'s, with largest {5,3};
+    // heldLane_'s answer waits for heldReply_.
     ON_CALL(*proxy_, subscribe(_, _))
         .WillByDefault([this](
                            const SubscribeRequest& request,
                            std::shared_ptr<TrackConsumer> consumer) {
-          const auto& name = request.fullTrackName.trackName;
-          if (name == failLane_) {
-            return folly::coro::makeTask<Publisher::SubscribeResult>(
-                folly::makeUnexpected(
-                    SubscribeError{
-                        request.requestID,
-                        SubscribeErrorCode::INTERNAL_ERROR,
-                        ""}));
+          auto name = request.fullTrackName.trackName;
+          auto answer = [this, name, requestID = request.requestID, consumer] {
+            if (name == failLane_) {
+              return Publisher::SubscribeResult(
+                  folly::makeUnexpected(
+                      SubscribeError{
+                          requestID, SubscribeErrorCode::INTERNAL_ERROR, ""}));
+            }
+            lanes_[name] = consumer;
+            aliasAtSubscribe_[name] = alias_;
+            SubscribeOk ok;
+            ok.requestID = requestID;
+            ok.trackAlias = TrackAlias(99);
+            ok.largest = AbsoluteLocation{5, 3};
+            handles_[name] =
+                std::make_shared<NiceMock<MockSubscriptionHandle>>(ok);
+            return Publisher::SubscribeResult(handles_[name]);
+          };
+          if (name != heldLane_) {
+            return folly::coro::makeTask<Publisher::SubscribeResult>(answer());
           }
-          lanes_[name] = std::move(consumer);
-          aliasAtSubscribe_[name] = alias_;
-          SubscribeOk ok;
-          ok.requestID = request.requestID;
-          ok.trackAlias = TrackAlias(99);
-          ok.largest = AbsoluteLocation{5, 3};
-          handles_[name] =
-              std::make_shared<NiceMock<MockSubscriptionHandle>>(ok);
-          return folly::coro::makeTask<Publisher::SubscribeResult>(
-              handles_[name]);
+          return folly::coro::co_invoke(
+              [this,
+               answer]() -> folly::coro::Task<Publisher::SubscribeResult> {
+                co_await heldReply_;
+                co_return answer();
+              });
         });
     // The catalog FETCH returns kCatalog; lane FETCHes are kept.
     ON_CALL(*proxy_, fetch(_, _))
@@ -186,6 +197,8 @@ class LaneManagerTest : public testing::Test {
   std::shared_ptr<MoQLaneManager> manager_{
       std::make_shared<MoQLaneManager>(proxy_, kBroadcast, kMaxWait)};
   std::string failLane_;
+  std::string heldLane_;
+  folly::coro::Baton heldReply_;
   std::optional<TrackAlias> alias_;
   folly::F14FastMap<std::string, std::shared_ptr<TrackConsumer>> lanes_;
   folly::F14FastMap<std::string, std::optional<TrackAlias>> aliasAtSubscribe_;
@@ -400,11 +413,97 @@ TEST_F(LaneManagerTest, TrackEndSendsTheHeldGroupFirst) {
   publish("video0", 6);
   publish("video0", 7);
 
+  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video0", "v0"}}));
+  EXPECT_CALL(*client_, publishDone(_)).WillOnce([this](const PublishDone&) {
+    EXPECT_EQ(
+        sent_, (std::vector<Sent>{{6, "video0", "v0"}, {7, "video0", ""}}));
+    return folly::unit;
+  });
+  lanes_.at("video0")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
+
+  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video0", "v0"}, {7, "video0", ""}}));
+  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
+}
+
+TEST_F(LaneManagerTest, TrackEndCancelsEvenWhenThePlanRequestsRetry) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  auto plan = planTo("video1", 10s);
+  plan.timeoutAction = TimeoutAction::RetryNextBoundary;
+  ON_CALL(*policy_, select(_, "video0", 6, _)).WillByDefault(Return(plan));
+  publish("video0", 6);
+  publish("video0", 7);
+
   EXPECT_CALL(*client_, publishDone(_)).WillOnce(Return(folly::unit));
   lanes_.at("video0")->publishDone(
       PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
 
   EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video0", "v0"}, {7, "video0", ""}}));
+  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
+}
+
+TEST_F(LaneManagerTest, AnEndedTargetCancelsThePendingSwitch) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  ON_CALL(*policy_, select(_, "video0", 6, _))
+      .WillByDefault(Return(planTo("video1", 10s)));
+  publish("video0", 6);
+  publish("video0", 7);
+
+  lanes_.at("video1")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
+  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video0", "v0"}, {7, "video0", ""}}));
+  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
+}
+
+TEST_F(LaneManagerTest, JoiningFetchWaitsForTheInitialLane) {
+  heldLane_ = "video0";
+  auto request = SubscribeRequest::make(FullTrackName{kBroadcast, "r--abr"});
+  request.requestID = 1;
+  Fetch fetch(RequestID(3), RequestID(1), 0, FetchType::RELATIVE_JOINING);
+  fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr"};
+  auto release = [this]() -> folly::coro::Task<void> {
+    EXPECT_FALSE(laneFetch_);
+    heldReply_.post();
+    co_return;
+  };
+  auto [subscribed, fetched, released] =
+      run(folly::coro::collectAll(
+          manager_->subscribe(request, client_, Role::Video, policy_),
+          manager_->fetch(
+              fetch,
+              std::make_shared<NiceMock<MockFetchConsumer>>(),
+              Role::Video),
+          release()));
+  ASSERT_TRUE(subscribed.hasValue());
+  ASSERT_TRUE(fetched.hasValue());
+  EXPECT_EQ(laneFetch_->fullTrackName.trackName, "video0");
+}
+
+TEST_F(LaneManagerTest, JoiningFetchFailsWhenItsSubscribeFails) {
+  heldLane_ = "catalog";
+  failLane_ = "catalog";
+  auto request = SubscribeRequest::make(FullTrackName{kBroadcast, "r--abr"});
+  request.requestID = 1;
+  Fetch fetch(RequestID(3), RequestID(1), 0, FetchType::RELATIVE_JOINING);
+  fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr"};
+  auto release = [this]() -> folly::coro::Task<void> {
+    heldReply_.post();
+    co_return;
+  };
+  auto [subscribed, fetched, released] =
+      run(folly::coro::collectAll(
+          manager_->subscribe(request, client_, Role::Video, policy_),
+          manager_->fetch(
+              fetch,
+              std::make_shared<NiceMock<MockFetchConsumer>>(),
+              Role::Video),
+          release()));
+  EXPECT_TRUE(subscribed.hasError());
+  ASSERT_TRUE(fetched.hasError());
+  EXPECT_EQ(fetched.error().errorCode, FetchErrorCode::DOES_NOT_EXIST);
+  EXPECT_FALSE(laneFetch_);
 }
 
 TEST_F(LaneManagerTest, ALateOlderGroupIsNotPlannedFrom) {

@@ -8,6 +8,8 @@
 
 #include <folly/portability/GTest.h>
 
+#include <stdexcept>
+
 namespace moxygen::lane_manager { namespace {
 
 using namespace std::chrono_literals;
@@ -115,6 +117,67 @@ TEST(SwitchExecutorTest, RejectsPlansItCannotApply) {
   EXPECT_FALSE(executor.plan(kSet, to("hevc"), 10));
   EXPECT_FALSE(executor.plan(kSet, to("gone"), 10));
   EXPECT_TRUE(executor.plan(kSet, to("high"), 10));
+}
+
+TEST(SwitchExecutorTest, RejectsANegativeDefaultWait) {
+  EXPECT_THROW(SwitchExecutor("low", -1ms), std::invalid_argument);
+}
+
+TEST(SwitchExecutorTest, ExpiresByTimeWhenTheTargetComesLate) {
+  SwitchExecutor executor("low", 100ms);
+  ASSERT_TRUE(executor.plan(kSet, to("high", 50ms), 10));
+  EXPECT_EQ(executor.onGroup("low", 11, kNow), Action::Hold);
+
+  // The hold timer has not run yet.
+  EXPECT_EQ(executor.onGroup("high", 11, kNow + 60ms), Action::Drop);
+  EXPECT_EQ(executor.liveLane(), "low");
+  EXPECT_EQ(outcomes(executor), (Outcomes{{Kind::Cancelled, 11}}));
+}
+
+TEST(SwitchExecutorTest, DropsAGroupOlderThanOneAlreadySent) {
+  SwitchExecutor executor("low", 100ms);
+  ASSERT_TRUE(executor.plan(kSet, to("high", 50ms), 10));
+  EXPECT_EQ(executor.onGroup("low", 11, kNow), Action::Hold);
+  executor.onDeadline(kNow + 50ms);
+  ASSERT_TRUE(executor.plan(kSet, to("high"), 11));
+  EXPECT_EQ(executor.onGroup("high", 12, kNow + 60ms), Action::Forward);
+
+  // Group 11 went out from "low"; a late "high" 11 must not reopen it.
+  EXPECT_EQ(executor.onGroup("high", 11, kNow + 70ms), Action::Drop);
+  EXPECT_EQ(executor.onGroup("high", 12, kNow + 70ms), Action::Forward);
+}
+
+TEST(SwitchExecutorTest, CancelSendsTheHeldGroup) {
+  SwitchExecutor executor("low", 100ms);
+  ASSERT_TRUE(executor.plan(kSet, to("high"), 10));
+  EXPECT_EQ(executor.onGroup("low", 11, kNow), Action::Hold);
+
+  executor.cancel(kNow + 10ms);
+  EXPECT_FALSE(executor.pending());
+  EXPECT_EQ(executor.deadline(), std::nullopt);
+  EXPECT_EQ(outcomes(executor), (Outcomes{{Kind::Cancelled, 11}}));
+  EXPECT_EQ(executor.onGroup("low", 11, kNow + 10ms), Action::Forward);
+  EXPECT_EQ(executor.onGroup("high", 11, kNow + 20ms), Action::Drop);
+}
+
+TEST(SwitchExecutorTest, CancelBeforeTheNextGroupReportsThePlannedGroup) {
+  SwitchExecutor executor("low", 100ms);
+  ASSERT_TRUE(executor.plan(kSet, to("high"), 10));
+
+  executor.cancel(kNow);
+  EXPECT_EQ(outcomes(executor), (Outcomes{{Kind::Cancelled, 10}}));
+  EXPECT_EQ(executor.onGroup("high", 11, kNow), Action::Drop);
+}
+
+TEST(SwitchExecutorTest, AnEndedTargetDropsThePlan) {
+  SwitchExecutor executor("low", 100ms);
+  ASSERT_TRUE(executor.plan(kSet, to("high"), 10));
+
+  executor.onLaneEnded("hevc", kNow);
+  EXPECT_TRUE(executor.pending());
+  executor.onLaneEnded("high", kNow);
+  EXPECT_FALSE(executor.pending());
+  EXPECT_EQ(outcomes(executor), (Outcomes{{Kind::Cancelled, 10}}));
 }
 
 }} // namespace moxygen::lane_manager

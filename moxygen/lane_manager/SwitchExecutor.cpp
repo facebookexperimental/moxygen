@@ -6,6 +6,9 @@
 
 #include "moxygen/lane_manager/SwitchExecutor.h"
 
+#include <algorithm>
+#include <stdexcept>
+
 namespace moxygen::lane_manager {
 
 namespace {
@@ -19,7 +22,11 @@ std::string_view family(std::string_view codec) {
 SwitchExecutor::SwitchExecutor(
     std::string liveLane,
     std::chrono::milliseconds defaultMaxWait)
-    : live_(std::move(liveLane)), defaultMaxWait_(defaultMaxWait) {}
+    : live_(std::move(liveLane)), defaultMaxWait_(defaultMaxWait) {
+  if (defaultMaxWait_.count() < 0) {
+    throw std::invalid_argument("negative default switch wait");
+  }
+}
 
 std::optional<Clock::time_point> SwitchExecutor::deadline() const {
   if (pending_ && pending_->held) {
@@ -47,8 +54,12 @@ SwitchExecutor::Action SwitchExecutor::onGroup(
     std::string_view lane,
     uint64_t group,
     Clock::time_point now) {
+  onDeadline(now);
+  if (lastSent_ && group < *lastSent_) {
+    return Action::Drop;
+  }
   if (!pending_ || group <= pending_->after) {
-    return lane == live_ ? Action::Forward : Action::Drop;
+    return lane == live_ ? forward(group) : Action::Drop;
   }
   auto& pending = *pending_;
   if (lane == live_) {
@@ -63,7 +74,7 @@ SwitchExecutor::Action SwitchExecutor::onGroup(
     const auto wait = pending.plan.maxWait.value_or(defaultMaxWait_);
     if (wait.count() == 0) {
       expire(now);
-      return Action::Forward;
+      return forward(group);
     }
     pending.deadline = now + wait;
     return Action::Hold;
@@ -85,12 +96,41 @@ SwitchExecutor::Action SwitchExecutor::onGroup(
           now});
   live_ = std::string(lane);
   pending_.reset();
+  return forward(group);
+}
+
+SwitchExecutor::Action SwitchExecutor::forward(uint64_t group) {
+  lastSent_ = std::max(group, lastSent_.value_or(group));
   return Action::Forward;
 }
 
 void SwitchExecutor::onDeadline(Clock::time_point now) {
-  if (pending_ && pending_->held) {
+  if (pending_ && pending_->held && now >= pending_->deadline) {
     expire(now);
+  }
+}
+
+void SwitchExecutor::cancel(Clock::time_point now) {
+  if (!pending_) {
+    return;
+  }
+  const auto group = pending_->held.value_or(pending_->after);
+  if (pending_->held) {
+    forward(*pending_->held);
+  }
+  outcomes_.push_back(
+      SwitchOutcome{
+          SwitchOutcome::Kind::Cancelled,
+          live_,
+          pending_->plan.targetLane,
+          group,
+          now});
+  pending_.reset();
+}
+
+void SwitchExecutor::onLaneEnded(std::string_view lane, Clock::time_point now) {
+  if (pending_ && pending_->plan.targetLane == lane) {
+    cancel(now);
   }
 }
 
@@ -100,6 +140,7 @@ std::vector<SwitchOutcome> SwitchExecutor::takeOutcomes() {
 
 void SwitchExecutor::expire(Clock::time_point now) {
   auto& pending = *pending_;
+  forward(*pending.held);
   const bool retry =
       pending.plan.timeoutAction == TimeoutAction::RetryNextBoundary;
   outcomes_.push_back(
