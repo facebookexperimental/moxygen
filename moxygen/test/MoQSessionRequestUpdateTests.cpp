@@ -619,6 +619,72 @@ CO_TEST_P_X(MoQSessionTest, SubscribeRequestUpdateCarriesAuthToken) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// PUBLISH_DONE(UPDATE_FAILED) carries the number of streams opened, so the
+// subscriber delivers it without waiting for streams that were never sent.
+CO_TEST_P_X(MoQSessionTest, FailedRequestUpdatePublishDoneCarriesStreamCount) {
+  co_await setupMoQSession();
+  auto settings = clientSession_->getMoqSettings();
+  settings.publishDoneStreamCountTimeout = std::chrono::minutes(1);
+  clientSession_->setMoqSettings(settings);
+  std::shared_ptr<MockSubscriptionHandle> serverHandle;
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  expectSubscribe([&](auto sub, auto pub) -> TaskSubscribeResult {
+    trackConsumer = pub;
+    serverHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return serverHandle;
+  });
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto subscribe =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  CO_ASSERT_TRUE(subscribe.hasValue());
+
+  auto subgroup = std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  folly::coro::Baton objectReceived;
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(0, 0, 0, _))
+      .WillOnce(testing::Return(subgroup));
+  EXPECT_CALL(*subgroup, object(0, _, _, false))
+      .WillOnce(testing::Invoke([&objectReceived]() {
+        objectReceived.post();
+        return folly::unit;
+      }));
+  auto subgroupPublisher = trackConsumer->beginSubgroup(0, 0, 0).value();
+  subgroupPublisher->object(0, moxygen::test::makeBuf(10), noExtensions());
+  co_await objectReceived;
+
+  EXPECT_CALL(*serverHandle, requestUpdateCalled);
+  EXPECT_CALL(*serverHandle, requestUpdateResult)
+      .WillOnce(
+          testing::Return(
+              folly::makeUnexpected(
+                  RequestError{
+                      subscribeRequest.requestID,
+                      RequestErrorCode::EXPIRED_AUTH_TOKEN,
+                      "expired"})));
+  std::optional<PublishDoneStatusCode> statusCode;
+  std::optional<uint64_t> streamCount;
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce([&statusCode, &streamCount](const PublishDone& done) {
+        statusCode = done.statusCode;
+        streamCount = done.streamCount;
+        return folly::Expected<folly::Unit, MoQPublishError>(folly::unit);
+      });
+  SubscribeUpdate update{
+      subscribeRequest.requestID,
+      subscribeRequest.requestID,
+      std::nullopt,
+      kDefaultPriority,
+      std::nullopt};
+  auto updateResult = co_await subscribe.value()->requestUpdate(update);
+  for (int i = 0; i < 500 && !statusCode; ++i) {
+    co_await folly::coro::sleep(std::chrono::milliseconds(10));
+  }
+
+  EXPECT_TRUE(updateResult.hasError());
+  EXPECT_EQ(statusCode, PublishDoneStatusCode::UPDATE_FAILED);
+  EXPECT_EQ(streamCount, 1u);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // Each REQUEST_UPDATE takes a request ID of its own and must give it back,
 // or a subscriber that updates more often than its initial credit allows is
 // closed with TOO_MANY_REQUESTS.

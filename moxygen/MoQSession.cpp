@@ -1896,6 +1896,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
           *replyContext_);
     } else {
       subscriptionHandle_.reset();
+      pubDone.streamCount = streamCount_;
       session->sendPublishDone(pubDone);
     }
   }
@@ -8265,10 +8266,9 @@ void MoQSession::terminateExistingRequest(
   auto it = pubTracks_.find(existingRequestID);
   if (it != pubTracks_.end()) {
     PublishDone pubDone{
-        existingRequestID,
-        PublishDoneStatusCode::UPDATE_FAILED,
-        static_cast<uint64_t>(requestError.errorCode),
-        requestError.reasonPhrase};
+        .requestID = existingRequestID,
+        .statusCode = PublishDoneStatusCode::UPDATE_FAILED,
+        .reasonPhrase = requestError.reasonPhrase};
     // terminatePublish can retire the publisher and drop the map's reference
     // to it before returning, so hold one for the duration of the call.
     auto pubTrack = it->second;
