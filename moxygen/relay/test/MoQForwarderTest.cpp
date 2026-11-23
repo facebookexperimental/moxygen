@@ -26,8 +26,7 @@ class MoQForwarderTest : public ::testing::Test {
   std::shared_ptr<MockMoQSession> createMockSession(
       uint64_t version = kVersionDraftCurrent) {
     auto session = std::make_shared<NiceMock<MockMoQSession>>();
-    ON_CALL(*session, getNegotiatedVersion())
-        .WillByDefault(Return(std::optional<uint64_t>(version)));
+    ON_CALL(*session, getNegotiatedVersion()).WillByDefault(Return(version));
     return session;
   }
 

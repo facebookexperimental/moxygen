@@ -311,8 +311,7 @@ size_t SwitchTestHub::sendRequestGoaway(
     auto& subscription = subscriptions_.at(id);
     if (auto session = subscription.session.lock()) {
       session->requestStreamGoaway(subscription.requestID, "", timeout);
-      const auto version = session->getNegotiatedVersion();
-      sent += version && getDraftMajorVersion(*version) >= 18 &&
+      sent += getDraftMajorVersion(session->getNegotiatedVersion()) >= 18 &&
           !std::exchange(subscription.goawaySent, true);
     }
   }

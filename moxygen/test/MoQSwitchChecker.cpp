@@ -176,9 +176,9 @@ folly::coro::Task<void> SwitchChecker::fetchHistory(
     std::shared_ptr<MoQSession> session,
     Viewer& joiner) {
   if (const auto version = session->getNegotiatedVersion();
-      version && useFillFetch(*version)) {
+      useFillFetch(version)) {
     joiner.historySkipped = fmt::format(
-        "draft {} has no joining FETCH", getDraftMajorVersion(*version));
+        "draft {} has no joining FETCH", getDraftMajorVersion(version));
     co_return;
   }
   const auto start = *joiner.live->expectedStart;

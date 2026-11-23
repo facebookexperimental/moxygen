@@ -678,8 +678,7 @@ void MoQTestClient::onAllDataReceived(ReceiveState& state) {
 }
 
 uint64_t MoQTestClient::draftMajorVersion() const {
-  auto version = moqClient_->moqSession_->getNegotiatedVersion();
-  return version ? getDraftMajorVersion(*version) : 0;
+  return getDraftMajorVersion(moqClient_->moqSession_->getNegotiatedVersion());
 }
 
 void MoQTestClient::recordSemanticsFailure(const std::string& reason) {

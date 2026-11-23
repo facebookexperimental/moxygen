@@ -129,11 +129,11 @@ LocationFilter flags2filter() {
 
 void addRendezvousTimeoutParamIfSupported(
     SubscribeRequest& sub,
-    std::optional<uint64_t> negotiatedVersion) {
-  if (FLAGS_rendezvous_timeout == 0 || !negotiatedVersion.has_value()) {
+    uint64_t negotiatedVersion) {
+  if (FLAGS_rendezvous_timeout == 0) {
     return;
   }
-  auto majorVersion = getDraftMajorVersion(*negotiatedVersion);
+  auto majorVersion = getDraftMajorVersion(negotiatedVersion);
   if (majorVersion < 18) {
     return;
   }

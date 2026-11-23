@@ -1105,6 +1105,6 @@ class MoQFrameWriter {
 // Returns std::nullopt if there isn't enough data to parse the frame type.
 std::optional<FrameType> getFrameType(
     const folly::IOBufQueue& readBuf,
-    std::optional<uint64_t> version = std::nullopt);
+    uint64_t version);
 
 } // namespace moxygen

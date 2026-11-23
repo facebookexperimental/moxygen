@@ -89,7 +89,7 @@ folly::coro::Task<void> MoQChatClient::run() noexcept {
     }
     publishNamespaceHandle_ = std::move(publishNamespaceRes.value());
     uint64_t negotiatedVersion =
-        *(moqClient_.getSession()->getNegotiatedVersion());
+        moqClient_.getSession()->getNegotiatedVersion();
     // subscribe to the catalog track from the beginning of the largest group
     SubscribeNamespace subNs{
         .requestID = RequestID(0),

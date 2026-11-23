@@ -72,7 +72,7 @@ class MoQRelayTest : public ::testing::Test {
     auto session =
         std::make_shared<NiceMock<MockMoQSession>>(exec_->moqExecutor());
     ON_CALL(*session, getNegotiatedVersion())
-        .WillByDefault(Return(std::optional<uint64_t>(kVersionDraftCurrent)));
+        .WillByDefault(Return(kVersionDraftCurrent));
     auto state = getOrCreateMockState(session);
     return session;
   }
@@ -1270,7 +1270,7 @@ class MoQRelayRendezvousTest : public MoQRelayTest {
   std::shared_ptr<MockMoQSession> createV18Session() {
     auto session = createMockSession();
     ON_CALL(*session, getNegotiatedVersion())
-        .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft18)));
+        .WillByDefault(Return(kVersionDraft18));
     return session;
   }
 
@@ -1378,7 +1378,7 @@ TEST_F(MoQRelayTest, SubscribeNamespaceEmptyPrefixAllowedV16) {
   auto session = createMockSession();
   // Override the negotiated version to draft-16
   ON_CALL(*session, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft16)));
+      .WillByDefault(Return(kVersionDraft16));
 
   TrackNamespace emptyNs{{}};
   doSubscribeNamespace(session, emptyNs);
@@ -1390,7 +1390,7 @@ TEST_F(MoQRelayTest, SubscribeEmptyNamespaceRejectedPreV18) {
   // draft-16 still rejects: zero-field namespaces are a draft-18 feature.
   auto session = createMockSession();
   ON_CALL(*session, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft16)));
+      .WillByDefault(Return(kVersionDraft16));
 
   SubscribeRequest sub;
   sub.fullTrackName = FullTrackName{TrackNamespace{{}}, "track1"};
@@ -1412,7 +1412,7 @@ TEST_F(MoQRelayTest, SubscribeEmptyNamespaceRejectedPreV18) {
 TEST_F(MoQRelayTest, SubscribeEmptyNamespaceAcceptedV18) {
   auto session = createMockSession();
   ON_CALL(*session, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft18)));
+      .WillByDefault(Return(kVersionDraft18));
 
   SubscribeRequest sub;
   sub.fullTrackName = FullTrackName{TrackNamespace{{}}, "track1"};
@@ -1434,7 +1434,7 @@ TEST_F(MoQRelayTest, FetchEmptyNamespaceRejectedPreV18) {
   // draft-16 still rejects: zero-field namespaces are a draft-18 feature.
   auto session = createMockSession();
   ON_CALL(*session, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft16)));
+      .WillByDefault(Return(kVersionDraft16));
 
   Fetch fetch;
   fetch.requestID = RequestID(0);
@@ -1456,7 +1456,7 @@ TEST_F(MoQRelayTest, FetchEmptyNamespaceRejectedPreV18) {
 TEST_F(MoQRelayTest, FetchEmptyNamespaceAcceptedV18) {
   auto session = createMockSession();
   ON_CALL(*session, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft18)));
+      .WillByDefault(Return(kVersionDraft18));
 
   Fetch fetch;
   fetch.requestID = RequestID(0);
@@ -1515,7 +1515,7 @@ TEST_F(MoQRelayTest, TrackStatusEmptyNamespaceRejectedPreV18) {
   // draft-16 still rejects: zero-field namespaces are a draft-18 feature.
   auto session = createMockSession();
   ON_CALL(*session, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft16)));
+      .WillByDefault(Return(kVersionDraft16));
 
   TrackStatus trackStatus;
   trackStatus.requestID = RequestID(0);
@@ -1535,7 +1535,7 @@ TEST_F(MoQRelayTest, TrackStatusEmptyNamespaceRejectedPreV18) {
 TEST_F(MoQRelayTest, TrackStatusEmptyNamespaceAcceptedV18) {
   auto session = createMockSession();
   ON_CALL(*session, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft18)));
+      .WillByDefault(Return(kVersionDraft18));
 
   TrackStatus trackStatus;
   trackStatus.requestID = RequestID(0);
@@ -1558,7 +1558,7 @@ TEST_F(MoQRelayTest, PublishEmptyNamespaceRejectedPreV18) {
   relay_->setAllowedNamespacePrefix(TrackNamespace{{}});
   auto session = createMockSession();
   ON_CALL(*session, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft16)));
+      .WillByDefault(Return(kVersionDraft16));
 
   PublishRequest pub;
   pub.requestID = RequestID(0);
@@ -1579,7 +1579,7 @@ TEST_F(MoQRelayTest, PublishEmptyNamespaceAcceptedV18) {
   relay_->setAllowedNamespacePrefix(TrackNamespace{{}});
   auto session = createMockSession();
   ON_CALL(*session, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft18)));
+      .WillByDefault(Return(kVersionDraft18));
 
   auto consumer =
       doPublish(session, FullTrackName{TrackNamespace{{}}, "track1"});
@@ -1781,7 +1781,7 @@ TEST_F(MoQRelayTest, PastRangeSubscriptionAcceptedAtDraft22) {
   auto subscriber1 = createMockSession();
   auto subscriber2 = createMockSession();
   ON_CALL(*subscriber2, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft22)));
+      .WillByDefault(Return(kVersionDraft22));
 
   doPublishNamespace(publisherSession, kTestNamespace);
 
@@ -2710,7 +2710,7 @@ TEST_F(MoQRelayTest, SubscriberOnPublishOkPostprocessing) {
 TEST_F(MoQRelayTest, Draft22PublishPausesWithHandleUpdate) {
   auto publisherSession = createMockSession();
   ON_CALL(*publisherSession, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft22)));
+      .WillByDefault(Return(kVersionDraft22));
 
   PublishRequest publish;
   publish.fullTrackName = kTestTrackName;
@@ -2745,7 +2745,7 @@ TEST_F(MoQRelayTest, Draft22PublishPausesWithHandleUpdate) {
 TEST_F(MoQRelayTest, Draft22PublishForwardUpdateLogsException) {
   auto publisherSession = createMockSession();
   ON_CALL(*publisherSession, getNegotiatedVersion())
-      .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft22)));
+      .WillByDefault(Return(kVersionDraft22));
 
   PublishRequest publish;
   publish.fullTrackName = kTestTrackName;
@@ -3933,7 +3933,7 @@ class MoQRelayTracksTest : public MoQRelayTest {
     auto session =
         std::make_shared<NiceMock<MockMoQSession>>(exec_->moqExecutor());
     ON_CALL(*session, getNegotiatedVersion())
-        .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft18)));
+        .WillByDefault(Return(kVersionDraft18));
     getOrCreateMockState(session);
     return session;
   }
@@ -3942,7 +3942,7 @@ class MoQRelayTracksTest : public MoQRelayTest {
     auto session =
         std::make_shared<NiceMock<MockMoQSession>>(exec_->moqExecutor());
     ON_CALL(*session, getNegotiatedVersion())
-        .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft21)));
+        .WillByDefault(Return(kVersionDraft21));
     getOrCreateMockState(session);
     return session;
   }
@@ -3951,7 +3951,7 @@ class MoQRelayTracksTest : public MoQRelayTest {
     auto session =
         std::make_shared<NiceMock<MockMoQSession>>(exec_->moqExecutor());
     ON_CALL(*session, getNegotiatedVersion())
-        .WillByDefault(Return(std::optional<uint64_t>(kVersionDraft22)));
+        .WillByDefault(Return(kVersionDraft22));
     getOrCreateMockState(session);
     return session;
   }

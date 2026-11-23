@@ -5984,12 +5984,12 @@ bool isValidDatagramType(uint64_t /*version*/, uint64_t datagramType) {
 
 std::optional<FrameType> getFrameType(
     const folly::IOBufQueue& readBuf,
-    std::optional<uint64_t> version) {
+    uint64_t version) {
   if (readBuf.empty()) {
     return std::nullopt;
   }
   folly::io::Cursor cursor(readBuf.front());
-  if (version && getDraftMajorVersion(*version) >= 17) {
+  if (getDraftMajorVersion(version) >= 17) {
     auto frameType = decodeMoQVarint(cursor);
     if (!frameType) {
       return std::nullopt;

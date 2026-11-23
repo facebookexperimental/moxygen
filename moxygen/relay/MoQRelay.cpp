@@ -438,7 +438,7 @@ Subscriber::PublishResult MoQRelay::publish(
   }
 
   if (pub.fullTrackName.trackNamespace.empty() &&
-      !emptyNamespaceAllowed(session->getNegotiatedVersion().value_or(0))) {
+      !emptyNamespaceAllowed(session->getNegotiatedVersion())) {
     return folly::makeUnexpected(PublishError(
         {pub.requestID,
          PublishErrorCode::INTERNAL_ERROR,
@@ -477,7 +477,7 @@ Subscriber::PublishResult MoQRelay::publish(
   }
 
   const auto majorVersion =
-      getDraftMajorVersion(*session->getNegotiatedVersion());
+      getDraftMajorVersion(session->getNegotiatedVersion());
   bool wasEmpty = !nodePtr->hasLocalSessions();
 
   auto it = subscriptions_.find(pub.fullTrackName);
@@ -637,9 +637,8 @@ folly::coro::Task<void> MoQRelay::publishToSession(
   if (subscribeTracksSettings.has_value()) {
     applySubscribeTracksSettings(publishRequest, *subscribeTracksSettings);
   }
-  auto negotiatedVersion = session->getNegotiatedVersion();
-  if (!includeProperties && negotiatedVersion.has_value() &&
-      getDraftMajorVersion(*negotiatedVersion) >= 22) {
+  if (!includeProperties &&
+      getDraftMajorVersion(session->getNegotiatedVersion()) >= 22) {
     publishRequest.extensions = Extensions{};
   }
   auto pubInitial = session->publish(std::move(publishRequest), subscriber);
@@ -990,7 +989,7 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
     std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle) {
   XLOG(DBG1) << __func__ << " nsp=" << subTracks.trackNamespacePrefix;
 
-  const auto negotiatedVersion = session->getNegotiatedVersion().value_or(0);
+  const auto negotiatedVersion = session->getNegotiatedVersion();
   if (getDraftMajorVersion(negotiatedVersion) < 18) {
     co_return folly::makeUnexpected(
         SubscribeTracksError{
@@ -1233,10 +1232,10 @@ folly::Expected<folly::Unit, RequestErrorCode> MoQRelay::updateSubscribeTracks(
       if (requestUpdate.forward.has_value()) {
         it->second.forward = *requestUpdate.forward;
       }
-      auto version = session->getNegotiatedVersion();
-      XCHECK(version.has_value());
       updateSubscribeTracksSettings(
-          it->second.subscribeTracksSettings, requestUpdate, *version);
+          it->second.subscribeTracksSettings,
+          requestUpdate,
+          session->getNegotiatedVersion());
       publishExistingMatchingTracks(
           session,
           newPrefix,
@@ -1330,15 +1329,8 @@ folly::Expected<TrackNamespace, RequestError> MoQRelay::applySubscriptionUpdate(
   const std::optional<bool> forward = tracks ? reqUpdate.forward : std::nullopt;
 
   auto version = session->getNegotiatedVersion();
-  if (!version) {
-    return folly::makeUnexpected(
-        RequestError{
-            reqUpdate.requestID,
-            RequestErrorCode::INTERNAL_ERROR,
-            "No negotiated version"});
-  }
   auto decoded =
-      MoQFrameParser::findTrackNamespacePrefixParam(reqUpdate.params, *version);
+      MoQFrameParser::findTrackNamespacePrefixParam(reqUpdate.params, version);
   if (decoded.hasError()) {
     // Unreachable for anything that arrived on the wire: the parser rejects a
     // malformed tuple as a protocol violation before the message gets here.
@@ -1360,7 +1352,7 @@ folly::Expected<TrackNamespace, RequestError> MoQRelay::applySubscriptionUpdate(
             it->second.forward = *forward;
           }
           subscriptionChanged = updateSubscribeTracksSettings(
-              it->second.subscribeTracksSettings, reqUpdate, *version);
+              it->second.subscribeTracksSettings, reqUpdate, version);
         }
       }
     }
@@ -1449,7 +1441,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQRelay::subscribe(
     std::shared_ptr<MoQSession> session,
     SubscribeRequest subReq,
     std::shared_ptr<TrackConsumer> consumer) {
-  const auto version = session->getNegotiatedVersion().value_or(0);
+  const auto version = session->getNegotiatedVersion();
 
   // check auth / get trackNamespace
   if (subReq.fullTrackName.trackNamespace.empty() &&
@@ -1704,7 +1696,7 @@ MoQRelay::subscribeToExistingRelaySubscription(
   // Draft 22 accepts a filter entirely before Largest Object. Older drafts
   // refuse it, but only for a subscriber joining an existing subscription.
   // TODO: retire the asymmetry along with the drafts that need it.
-  if (!useFillFetch(downstreamSession->getNegotiatedVersion().value_or(0))) {
+  if (!useFillFetch(downstreamSession->getNegotiatedVersion())) {
     auto subEndGroup = subReq.filter.legacyEndGroup();
     if (forwarder->largest() && subEndGroup &&
         *subEndGroup < forwarder->largest()->group) {
@@ -1748,12 +1740,10 @@ MoQRelay::subscribeToFirstRelaySubscription(
   XCHECK(downstreamSession)
       << "downstreamSession required for first subscriber";
 
-  auto downstreamMaybeVersion = downstreamSession->getNegotiatedVersion();
-  auto upstreamMaybeVersion = upstreamSession->getNegotiatedVersion();
-  const bool downstreamIsV18Plus = downstreamMaybeVersion.has_value() &&
-      getDraftMajorVersion(*downstreamMaybeVersion) >= 18;
-  const bool upstreamIsV18Plus = upstreamMaybeVersion.has_value() &&
-      getDraftMajorVersion(*upstreamMaybeVersion) >= 18;
+  const bool downstreamIsV18Plus =
+      getDraftMajorVersion(downstreamSession->getNegotiatedVersion()) >= 18;
+  const bool upstreamIsV18Plus =
+      getDraftMajorVersion(upstreamSession->getNegotiatedVersion()) >= 18;
   if (downstreamIsV18Plus || upstreamIsV18Plus) {
     subReq.params.eraseAllParamsOfType(
         TrackRequestParamKey::RENDEZVOUS_TIMEOUT);
@@ -1878,7 +1868,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
   // check auth
   // get trackNamespace
   if (fetch.fullTrackName.trackNamespace.empty() &&
-      !emptyNamespaceAllowed(session->getNegotiatedVersion().value_or(0))) {
+      !emptyNamespaceAllowed(session->getNegotiatedVersion())) {
     co_return folly::makeUnexpected(FetchError(
         {fetch.requestID,
          FetchErrorCode::DOES_NOT_EXIST,
@@ -1886,7 +1876,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
   }
 
   auto [standalone, joining] = fetchType(fetch);
-  if (joining && useFillFetch(session->getNegotiatedVersion().value_or(0))) {
+  if (joining && useFillFetch(session->getNegotiatedVersion())) {
     // Only a locally built request can reach here at draft 22.
     co_return folly::makeUnexpected(FetchError(
         {fetch.requestID,
@@ -1907,7 +1897,7 @@ folly::coro::Task<Publisher::FetchResult> MoQRelay::fetch(
     // A draft 22 upstream refuses Joining FETCH, so resolve the join here once
     // the subscribe completes.
     if (!subscriptionIt->second.promise.isFulfilled() && upstream &&
-        useFillFetch(upstream->getNegotiatedVersion().value_or(0))) {
+        useFillFetch(upstream->getNegotiatedVersion())) {
       auto ready = co_await folly::coro::co_awaitTry(
           subscriptionIt->second.promise.getFuture());
       subscriptionIt = subscriptions_.find(fetch.fullTrackName);
@@ -1985,7 +1975,7 @@ folly::coro::Task<Publisher::TrackStatusResult> MoQRelay::trackStatus(
   XLOG(DBG1) << __func__ << " ftn=" << trackStatus.fullTrackName;
 
   if (trackStatus.fullTrackName.trackNamespace.empty() &&
-      !emptyNamespaceAllowed(session->getNegotiatedVersion().value_or(0))) {
+      !emptyNamespaceAllowed(session->getNegotiatedVersion())) {
     co_return folly::makeUnexpected(TrackStatusError(
         {trackStatus.requestID,
          TrackStatusErrorCode::DOES_NOT_EXIST,

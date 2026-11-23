@@ -1643,7 +1643,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     }
 
     bool coalesce =
-        getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18;
+        getDraftMajorVersion(session_->getNegotiatedVersion()) >= 18;
     if (updates_.add(std::move(requestUpdate), coalesce)) {
       session_->getExecutor()->add(
           [weakSelf = std::weak_ptr<PublisherImpl>(shared_from_this())] {
@@ -1687,7 +1687,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
 
     // Update delivery timeout if present
     auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
-        requestUpdate.params, *session_->getNegotiatedVersion());
+        requestUpdate.params, session_->getNegotiatedVersion());
     if (timeoutValue.has_value() && shouldApplyDeliveryTimeout(*timeoutValue)) {
       XLOG(DBG6)
           << "MoQSession::TrackPublisherImpl::handleRequestUpdate: SETTING subscriber timeout"
@@ -1803,12 +1803,12 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   // clears any previously-negotiated value,
   bool shouldApplyDeliveryTimeout(uint64_t timeoutMs) const {
     return timeoutMs > 0 ||
-        getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18;
+        getDraftMajorVersion(session_->getNegotiatedVersion()) >= 18;
   }
 
   void onPublishOk(const PublishOk& publishOk) {
     auto timeoutValue = MoQSession::getDeliveryTimeoutIfPresent(
-        publishOk.params, *session_->getNegotiatedVersion());
+        publishOk.params, session_->getNegotiatedVersion());
     if (timeoutValue.has_value() && shouldApplyDeliveryTimeout(*timeoutValue)) {
       deliveryTimeoutManager_.setSubscriberTimeout(
           std::chrono::milliseconds(*timeoutValue));
@@ -2213,7 +2213,7 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
 
   void onRequestUpdate(RequestUpdate requestUpdate) {
     bool coalesce =
-        getDraftMajorVersion(*session_->getNegotiatedVersion()) >= 18;
+        getDraftMajorVersion(session_->getNegotiatedVersion()) >= 18;
     if (updates_.add(std::move(requestUpdate), coalesce)) {
       session_->getExecutor()->add(
           [weakSelf = std::weak_ptr<PublisherImpl>(shared_from_this())] {
@@ -4137,7 +4137,7 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
       /*evict=*/!isClient);
   controlCodec_->setTokenCache(&receiveTokenCache_);
   // Optimistically registers params without knowing peer's capabilities
-  aliasifyAuthTokens(setup.params, setupSerializationVersion);
+  aliasifyAuthTokens(setup.params);
   auto res = moqFrameWriter_.writeSetup(
       controlWriteBuf_, setup, setupSerializationVersion, isClient);
   if (res.hasError()) {
@@ -4235,7 +4235,7 @@ folly::coro::Task<Setup> MoQSession::awaitPeerSetup() {
     co_yield folly::coro::co_error(serverSetup.exception());
   }
   markSetupComplete();
-  auto negotiatedVersion = *getNegotiatedVersion();
+  auto negotiatedVersion = getNegotiatedVersion();
   XLOG(DBG1) << "Negotiated Version=0x" << std::hex << negotiatedVersion
              << std::dec << " (draft-"
              << getDraftMajorVersion(negotiatedVersion) << ")";
@@ -4266,7 +4266,7 @@ void MoQSession::onServerSetup(Setup serverSetup) {
 
   initPeerMaxRequestID(serverSetup.params);
   auto peerAuthCacheSize = getMaxAuthTokenCacheSizeIfPresent(
-      serverSetup.params, *getNegotiatedVersion());
+      serverSetup.params, getNegotiatedVersion());
   tokenCache_.setMaxSize(
       authTokenCacheEnabled_
           ? std::min(kMaxSendTokenCacheSize, peerAuthCacheSize)
@@ -4334,7 +4334,7 @@ void MoQSession::onClientSetup(Setup clientSetup) {
 
   // Validate authority with the negotiated version
   auto authorityValidation = serverSetupCallback_->validateAuthority(
-      clientSetup, *getNegotiatedVersion(), shared_from_this());
+      clientSetup, getNegotiatedVersion(), shared_from_this());
   if (!authorityValidation.hasValue()) {
     SessionCloseErrorCode errorCode = authorityValidation.error();
     XLOG(ERR) << "Authority validation failed sess=" << this
@@ -4349,13 +4349,13 @@ void MoQSession::onClientSetup(Setup clientSetup) {
   }
 
   {
-    auto negotiatedVersion = *getNegotiatedVersion();
+    auto negotiatedVersion = getNegotiatedVersion();
     XLOG(DBG1) << "Negotiated Version=0x" << std::hex << negotiatedVersion
                << std::dec << " (draft-"
                << getDraftMajorVersion(negotiatedVersion) << ")";
   }
 
-  bool isUniControl = useUniControlStreams(*getNegotiatedVersion());
+  bool isUniControl = useUniControlStreams(getNegotiatedVersion());
 
   if (isUniControl) {
     // SERVER_SETUP was already sent proactively in start(). Fulfill the
@@ -5754,7 +5754,7 @@ folly::coro::Task<void> MoQSession::handleSubscribe(
   }
   auto& params = sub.params;
   const bool sendTrackProperties =
-      getDraftMajorVersion(*getNegotiatedVersion()) < 22 ||
+      getDraftMajorVersion(getNegotiatedVersion()) < 22 ||
       sub.includeProperties;
 
   // TODO: Formalize after parameter refactor
@@ -6054,7 +6054,7 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
     auto trackPublisher =
         std::static_pointer_cast<TrackPublisherImpl>(trackIt->second);
     trackPublisher->onPublishOk(publishOk);
-    if (getDraftMajorVersion(*getNegotiatedVersion()) < 22) {
+    if (getDraftMajorVersion(getNegotiatedVersion()) < 22) {
       trackPublisher->setForward(publishOk.forward);
       if (publishOk.groupOrder) {
         trackPublisher->setGroupOrder(*publishOk.groupOrder);
@@ -6698,7 +6698,7 @@ bool MoQSession::isDeferrableUnseenJoiningID(
   // flight; this is a deferral policy, not a validity rule.
   const bool peerIssued = ((joiningID.value % 2) == 1) ==
       (dir_ == MoQControlCodec::Direction::CLIENT);
-  return getDraftMajorVersion(*getNegotiatedVersion()) >= 18 && peerIssued &&
+  return getDraftMajorVersion(getNegotiatedVersion()) >= 18 && peerIssued &&
       joiningID.value < fetchID.value && joiningID.value < maxRequestID_;
 }
 
@@ -6730,7 +6730,7 @@ MoQSession::prepareJoiningFetch(
   if (!trackPublisher || trackPublisher->isDone()) {
     return reject("Joining requestID is not an active subscription");
   }
-  if (getDraftMajorVersion(*getNegotiatedVersion()) < 18 &&
+  if (getDraftMajorVersion(getNegotiatedVersion()) < 18 &&
       !trackPublisher->allowsPreDraft18JoiningFetch()) {
     XLOG(ERR) << "Joining FETCH against a non-LargestObject subscription id="
               << joiningID.value << " sess=" << this;
@@ -6749,7 +6749,7 @@ MoQSession::deferJoiningFetch(
   if (numJoiningDependencies_ >= moqSettings_.maxDeferredJoiningFetches) {
     fetchError(
         {fetchID,
-         getDraftMajorVersion(*getNegotiatedVersion()) >= 18
+         getDraftMajorVersion(getNegotiatedVersion()) >= 18
              ? FetchErrorCode::EXCESSIVE_LOAD
              : FetchErrorCode::INTERNAL_ERROR,
          "Too many pending joining FETCHes"},
@@ -6988,7 +6988,7 @@ folly::coro::Task<void> MoQSession::handleFetch(
   setRequestSession();
   auto requestID = fetch.requestID;
   const bool sendTrackProperties =
-      getDraftMajorVersion(*getNegotiatedVersion()) < 22 ||
+      getDraftMajorVersion(getNegotiatedVersion()) < 22 ||
       fetch.includeProperties;
   auto token = co_await folly::coro::co_current_cancellation_token;
   if (dependency) {
@@ -7187,7 +7187,7 @@ folly::coro::Task<void> MoQSession::handleTrackStatus(
   folly::RequestContextScopeGuard guard;
   setRequestSession();
   const bool sendTrackProperties =
-      getDraftMajorVersion(*getNegotiatedVersion()) < 22 ||
+      getDraftMajorVersion(getNegotiatedVersion()) < 22 ||
       trackStatus.includeProperties;
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto trackStatusResult =
@@ -7259,7 +7259,7 @@ void MoQSession::handleTrackStatusOkFromRequestOk(const RequestOk& requestOk) {
 void MoQSession::handlePublishOkFromRequestOk(const RequestOk& requestOk) {
   XLOG(DBG1) << __func__ << " reqID=" << requestOk.requestID
              << " sess=" << this;
-  auto majorVersion = getDraftMajorVersion(*getNegotiatedVersion());
+  auto majorVersion = getDraftMajorVersion(getNegotiatedVersion());
   if (majorVersion < 18) {
     XLOG(ERR) << "PUBLISH_OK received as REQUEST_OK before draft 18 reqID="
               << requestOk.requestID << " sess=" << this;
@@ -7280,7 +7280,7 @@ void MoQSession::handlePublishOkFromRequestOk(const RequestOk& requestOk) {
 bool MoQSession::validateRequestOkTrackProperties(
     const RequestOk& requestOk,
     FrameType resolvedFrameType) {
-  if (getDraftMajorVersion(*getNegotiatedVersion()) < 18) {
+  if (getDraftMajorVersion(getNegotiatedVersion()) < 18) {
     return true;
   }
   if (resolvedFrameType == FrameType::TRACK_STATUS_OK) {
@@ -7298,7 +7298,7 @@ bool MoQSession::validateRequestOkTrackProperties(
 bool MoQSession::validateRequestOkParams(
     const RequestOk& requestOk,
     FrameType resolvedFrameType) {
-  if (getDraftMajorVersion(*getNegotiatedVersion()) < 18) {
+  if (getDraftMajorVersion(getNegotiatedVersion()) < 18) {
     return true;
   }
   // OBJECT_DELIVERY_TIMEOUT, SUBGROUP_DELIVERY_TIMEOUT and NEW_GROUP_REQUEST
@@ -9181,7 +9181,7 @@ bool MoQSession::closeSessionIfRequestIDInvalid(
     }
     // Request IDs can arrive out of order, so there is no strict-sequence
     // check.
-    const auto majorVersion = getDraftMajorVersion(*getNegotiatedVersion());
+    const auto majorVersion = getDraftMajorVersion(getNegotiatedVersion());
     if (majorVersion >= 18) {
       // Draft 18 dropped MAX_REQUEST_ID, so nothing else keeps the cutoff
       // from wrapping.
@@ -9309,11 +9309,7 @@ std::optional<uint64_t> MoQSession::getDeliveryTimeoutIfPresent(
   return std::nullopt;
 }
 
-void MoQSession::aliasifyAuthTokens(
-    Parameters& params,
-    const std::optional<uint64_t>& forceVersion) {
-  auto version = forceVersion.value_or(negotiatedVersion_);
-
+void MoQSession::aliasifyAuthTokens(Parameters& params) {
   auto authParamKey =
       folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
 
@@ -9332,7 +9328,7 @@ void MoQSession::aliasifyAuthTokens(
     // tokenCache_ branch unconditionally — the send-side cache may still
     // hold a pre-SETUP default size before negotiation completes.
     const bool aliasingDisabled =
-        !authTokenCacheEnabled_ || useBidiRequestStreams(version);
+        !authTokenCacheEnabled_ || useBidiRequestStreams(negotiatedVersion_);
     if (!aliasingDisabled && token.alias &&
         token.tokenValue.size() < tokenCache_.maxTokenSize()) {
       auto lookupRes =
@@ -9370,7 +9366,7 @@ void MoQSession::aliasifyAuthTokens(
     params.modifyString(
         currentPosition,
         moqFrameWriter_.encodeTokenValue(
-            token.tokenType, token.tokenValue, version));
+            token.tokenType, token.tokenValue, negotiatedVersion_));
     ++currentPosition;
   }
 }
@@ -9619,7 +9615,7 @@ MoQSession::RequestContext MoQSession::getRequestContext() {
   auto session = getRequestSession();
   return RequestContext{
       session->sessionId(),
-      session->getNegotiatedVersion().value_or(0),
+      session->getNegotiatedVersion(),
       session->getExecutor()};
 }
 

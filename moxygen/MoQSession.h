@@ -320,7 +320,7 @@ class MoQSession : public Subscriber,
       PublishRequest pub,
       std::shared_ptr<Publisher::SubscriptionHandle> handle = nullptr) override;
 
-  virtual std::optional<uint64_t> getNegotiatedVersion() const {
+  virtual uint64_t getNegotiatedVersion() const {
     return negotiatedVersion_;
   }
 
@@ -1332,9 +1332,7 @@ class MoQSession : public Subscriber,
   void initLocalMaxRequestID(uint64_t fromParam);
   void initPeerMaxRequestID(const Parameters& peerParams);
   void deliverBufferedData(TrackAlias trackAlias);
-  void aliasifyAuthTokens(
-      Parameters& params,
-      const std::optional<uint64_t>& forceVersion = std::nullopt);
+  void aliasifyAuthTokens(Parameters& params);
   RequestID getNextRequestID();
   // Cancels the request unless dismissed once its reply arrives. It runs where
   // the awaiting coroutine resumes, on the session executor.

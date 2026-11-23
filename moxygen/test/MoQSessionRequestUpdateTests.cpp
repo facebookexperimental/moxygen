@@ -2929,7 +2929,7 @@ CO_TEST_P_X(Draft18Test, SubscribeNamespaceRequestUpdatePrefixRoundTrip) {
 // 18+ instead rides the subscription's own bidi).
 CO_TEST_P_X(PreDraft18Test, SubscribeNamespaceRequestUpdateRoundTrip) {
   co_await setupMoQSession();
-  const auto version = *clientSession_->getNegotiatedVersion();
+  const auto version = clientSession_->getNegotiatedVersion();
 
   std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
   RequestID serverRequestID{0};
@@ -2981,7 +2981,7 @@ CO_TEST_P_X(
     PreDraft18Test,
     SubscribeNamespaceRequestUpdateRetiresItsRequestID) {
   co_await setupMoQSession();
-  const auto version = *clientSession_->getNegotiatedVersion();
+  const auto version = clientSession_->getNegotiatedVersion();
 
   std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
   RequestID serverRequestID{0};
@@ -3411,7 +3411,7 @@ CO_TEST_P_X(Draft18Test, SubscribeTracksRequestUpdateFailureClosesBidi) {
 // the wire and there is nothing to mis-correlate.
 CO_TEST_P_X(PreDraft18Test, SubscribeNamespaceRequestUpdateNormalizesErrorID) {
   co_await setupMoQSession();
-  const auto version = *clientSession_->getNegotiatedVersion();
+  const auto version = clientSession_->getNegotiatedVersion();
 
   std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
   EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))

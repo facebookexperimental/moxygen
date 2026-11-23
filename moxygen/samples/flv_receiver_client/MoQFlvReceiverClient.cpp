@@ -330,7 +330,7 @@ class MoQFlvReceiverClient
       trackReceiverHandlerVideo_->setFlvWriterShared(flvw_);
 
       uint64_t negotiatedVersion =
-          *(moqClient_->moqSession_->getNegotiatedVersion());
+          moqClient_->moqSession_->getNegotiatedVersion();
 
       std::vector<Parameter> params;
       params.push_back(getAuthParam(negotiatedVersion, FLAGS_auth));

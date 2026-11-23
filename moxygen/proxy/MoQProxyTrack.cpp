@@ -268,8 +268,7 @@ std::chrono::milliseconds millisecondsSince(
 // From draft 18 a stream says whether it starts with its subgroup's first
 // object.
 bool marksFirstObject(const MoQSession& session) {
-  auto version = session.getNegotiatedVersion();
-  return version && getDraftMajorVersion(*version) >= 18;
+  return getDraftMajorVersion(session.getNegotiatedVersion()) >= 18;
 }
 
 // Far longer than any switch, and short enough to add to a clock's time.
@@ -1550,7 +1549,7 @@ void MoQProxyTrack::trySendJoiningFetchToCurrentUpstream() {
     return;
   }
   auto version = upstream_.session->getNegotiatedVersion();
-  if (!version || useFillFetch(*version)) {
+  if (useFillFetch(version)) {
     return;
   }
   joiningFetchAttempt_.emplace(UpstreamJoiningFetchAttempt{});

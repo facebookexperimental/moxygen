@@ -265,7 +265,7 @@ std::shared_ptr<testing::NiceMock<ValidatorSession>> makeValidatorSession(
     uint64_t version) {
   auto session = std::make_shared<testing::NiceMock<ValidatorSession>>();
   ON_CALL(*session, getNegotiatedVersion())
-      .WillByDefault(testing::Return(std::optional<uint64_t>(version)));
+      .WillByDefault(testing::Return(version));
   return session;
 }
 

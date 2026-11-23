@@ -206,14 +206,11 @@ void recordNegotiatedVersion(
     return;
   }
   auto version = client.moqSession_->getNegotiatedVersion();
-  if (!version) {
-    return;
-  }
   if (!result.negotiatedVersion) {
     result.negotiatedVersion = version;
     return;
   }
-  if (*version != *result.negotiatedVersion) {
+  if (version != *result.negotiatedVersion) {
     result.divergentNegotiatedVersion = version;
   }
 }
@@ -223,9 +220,8 @@ void recordNegotiatedVersion(
 // relativeStart(1) goes out as LargestGroup (250), a filter type those
 // drafts do not define and their relays must reject (draft-18 5.1.2).
 LocationFilter subscribeFilter(const MoQClient& client) {
-  auto version = client.moqSession_ ? client.moqSession_->getNegotiatedVersion()
-                                    : std::nullopt;
-  if (version && !useLocationFilter(*version)) {
+  if (client.moqSession_ &&
+      !useLocationFilter(client.moqSession_->getNegotiatedVersion())) {
     return LocationFilter::nextObject();
   }
   return LocationFilter::relativeStart(1);

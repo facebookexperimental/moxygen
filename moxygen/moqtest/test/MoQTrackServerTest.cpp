@@ -65,9 +65,7 @@ class MoQTrackServerTest : public testing::Test {
     auto session =
         std::make_shared<testing::NiceMock<moxygen::test::MockMoQSession>>();
     ON_CALL(*session, getNegotiatedVersion())
-        .WillByDefault(
-            testing::Return(
-                std::optional<uint64_t>(moxygen::kVersionDraftCurrent)));
+        .WillByDefault(testing::Return(moxygen::kVersionDraftCurrent));
     return session;
   }
 
@@ -1857,8 +1855,7 @@ TEST_F(MoQTrackServerTest, RequestUpdateTogglesForward) {
 
   auto session = std::make_shared<NiceMock<MockMoQSession>>();
   ON_CALL(*session, getNegotiatedVersion())
-      .WillByDefault(
-          Return(std::optional<uint64_t>(moxygen::kVersionDraftCurrent)));
+      .WillByDefault(Return(moxygen::kVersionDraftCurrent));
 
   moxygen::TrackNamespace ns{std::vector<std::string>{"moq-test-00"}};
   auto forwarder = std::make_shared<moxygen::MoQForwarder>(
