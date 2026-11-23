@@ -49,5 +49,6 @@ function(moxygen_add_test)
                     EXTRA_ARGS "${MOXYGEN_TEST_EXTRA_ARGS}"
                     WORKING_DIRECTORY ${MOXYGEN_TEST_WORKING_DIRECTORY}
                     TEST_PREFIX ${MOXYGEN_TEST_PREFIX}
+                    NO_PRETTY_VALUES
                     PROPERTIES TIMEOUT 120)
 endfunction()

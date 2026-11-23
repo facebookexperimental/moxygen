@@ -482,4 +482,5 @@ INSTANTIATE_TEST_SUITE_P(
     V18PlusSubscribeTracksTest,
     testing::Values(
         VersionParams{{kVersionDraft18}, kVersionDraft18},
-        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+        VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);

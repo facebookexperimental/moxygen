@@ -1468,7 +1468,8 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         VersionParams{{kVersionDraft16}, kVersionDraft16},
         VersionParams{{kVersionDraft18}, kVersionDraft18},
-        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+        VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 CO_TEST_P_X(PublisherPriorityTest, SubgroupPriorityFallback) {
   co_await setupMoQSession();
   std::shared_ptr<TrackConsumer> trackConsumer;

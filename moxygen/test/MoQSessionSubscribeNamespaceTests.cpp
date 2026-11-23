@@ -395,7 +395,8 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         VersionParams{{kVersionDraft16}, kVersionDraft16},
         VersionParams{{kVersionDraft18}, kVersionDraft18},
-        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+        VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 using V16SubscribeNamespaceTest = MoQSessionTest;
 
@@ -440,7 +441,8 @@ CO_TEST_P_X(V16SubscribeNamespaceTest, PeerFinUnsubscribesNamespace) {
 INSTANTIATE_TEST_SUITE_P(
     V16SubscribeNamespaceTest,
     V16SubscribeNamespaceTest,
-    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}));
+    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}),
+    versionParamsName);
 
 CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceError) {
   co_await setupMoQSession();

@@ -120,7 +120,8 @@ class GroupRankTest : public MoQSessionTest {
 INSTANTIATE_TEST_SUITE_P(
     GroupRankTest,
     GroupRankTest,
-    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}),
+    versionParamsName);
 
 CO_TEST_P_X(GroupRankTest, RankedGroupsStayOldestFirstAcrossTheWrap) {
   co_await setupMoQSession();

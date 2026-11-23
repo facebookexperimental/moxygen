@@ -50,7 +50,8 @@ using MoQVersionNegotiationTest = MoQSessionTest;
 INSTANTIATE_TEST_SUITE_P(
     MoQVersionNegotiationTest,
     MoQVersionNegotiationTest,
-    testing::ValuesIn(getSupportedVersionParams()));
+    testing::ValuesIn(getSupportedVersionParams()),
+    versionParamsName);
 TEST_P(MoQVersionNegotiationTest, Setup) {
   folly::coro::blockingWait(setupMoQSession(), getExecutor());
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -141,7 +142,8 @@ class SetupTokenCacheTest : public MoQSessionTest {
 INSTANTIATE_TEST_SUITE_P(
     LegacySetupTokenCacheTest,
     SetupTokenCacheTest,
-    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}));
+    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}),
+    versionParamsName);
 
 CO_TEST_P_X(SetupTokenCacheTest, PreservesSetupAliasesAcrossFinalClamp) {
   std::vector<std::string> setupTokens;
@@ -224,7 +226,8 @@ class DisabledTokenCacheTest : public SetupTokenCacheTest {
 INSTANTIATE_TEST_SUITE_P(
     LegacyDisabledTokenCacheTest,
     DisabledTokenCacheTest,
-    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}));
+    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}),
+    versionParamsName);
 
 CO_TEST_P_X(DisabledTokenCacheTest, SendsFullTokenValues) {
   clientSession_->setPublishHandler(clientPublisher);
@@ -306,7 +309,8 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent},
         VersionParams{{kVersionDraft18}, kVersionDraft18},
-        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+        VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 namespace {
 class ScopedTestHandler : public Publisher,
                           public Subscriber,
@@ -504,7 +508,8 @@ using MoQControlCallbackExceptionTest = MoQSessionTest;
 INSTANTIATE_TEST_SUITE_P(
     MoQControlCallbackExceptionTest,
     MoQControlCallbackExceptionTest,
-    testing::ValuesIn(getSupportedVersionParams()));
+    testing::ValuesIn(getSupportedVersionParams()),
+    versionParamsName);
 
 CO_TEST_P_X(MoQControlCallbackExceptionTest, GoawayHandlerThrowClosesSession) {
   co_await setupMoQSession();
@@ -545,7 +550,8 @@ using MoQAuthorityPathTest = MoQSessionTest;
 INSTANTIATE_TEST_SUITE_P(
     MoQAuthorityPathTest,
     MoQAuthorityPathTest,
-    testing::ValuesIn(getSupportedVersionParams()));
+    testing::ValuesIn(getSupportedVersionParams()),
+    versionParamsName);
 
 // After a normal setup the server session's path should be populated from the
 // PATH parameter in CLIENT_SETUP, and authority should remain empty (no
@@ -765,12 +771,14 @@ class Draft18GoawayRequestRejectionTest : public MoQSessionTest {
 INSTANTIATE_TEST_SUITE_P(
     Draft18GoawayRequestRejectionTest,
     Draft18GoawayRequestRejectionTest,
-    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}),
+    versionParamsName);
 
 INSTANTIATE_TEST_SUITE_P(
     Draft22GoawayRequestRejectionTest,
     Draft18GoawayRequestRejectionTest,
-    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}));
+    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 CO_TEST_P_X(
     Draft18GoawayRequestRejectionTest,
@@ -1007,7 +1015,8 @@ INSTANTIATE_TEST_SUITE_P(
     Draft18GoawayTimeoutTest,
     testing::Values(
         VersionParams{{kVersionDraft18}, kVersionDraft18},
-        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+        VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 CO_TEST_P_X(Draft18GoawayTimeoutTest, TimeoutClosesOpenPeerSubscription) {
   auto subscription = co_await openPeerSubscription();
@@ -1211,7 +1220,8 @@ INSTANTIATE_TEST_SUITE_P(
     Draft18RequestStreamGoawayTest,
     testing::Values(
         VersionParams{{kVersionDraft18}, kVersionDraft18},
-        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+        VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 CO_TEST_P_X(
     Draft18RequestStreamGoawayTest,
@@ -1984,7 +1994,8 @@ INSTANTIATE_TEST_SUITE_P(
     MoQBidiSetupGateTest,
     testing::Values(
         VersionParams{{kVersionDraft18}, kVersionDraft18},
-        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+        VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 CO_TEST_P_X(MoQBidiSetupGateTest, PublishWaitsForAcceptedSetup) {
   prepareServerSetup();
@@ -2172,7 +2183,8 @@ INSTANTIATE_TEST_SUITE_P(
     MoQUniControlTest,
     testing::Values(
         VersionParams{{kVersionDraft18}, kVersionDraft18},
-        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+        VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 CO_TEST_P_X(MoQUniControlTest, UniControlSetup) {
   co_await setupMoQSession();
@@ -3276,7 +3288,8 @@ using MoQExtensionTest = MoQSessionTest;
 INSTANTIATE_TEST_SUITE_P(
     MoQExtensionTest,
     MoQExtensionTest,
-    testing::ValuesIn(getSupportedVersionParams()));
+    testing::ValuesIn(getSupportedVersionParams()),
+    versionParamsName);
 
 CO_TEST_P_X(MoQExtensionTest, NegotiatedParameterReachesPeer) {
   clientSession_->addExtension(
@@ -4016,7 +4029,8 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         VersionParams{{kVersionDraftCurrent}, kVersionDraftCurrent},
         VersionParams{{kVersionDraft18}, kVersionDraft18},
-        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+        VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 // Demonstrate and verify that cleanup() breaks the shared_ptr cycle between
 // a session and a handler that holds a back-reference to that session.
@@ -4208,4 +4222,5 @@ CO_TEST_P_X(MoQSessionTest, NamespaceRequestsAreRefusedWhileDraining) {
 INSTANTIATE_TEST_SUITE_P(
     MoQSessionTest,
     MoQSessionTest,
-    testing::ValuesIn(getSupportedVersionParams()));
+    testing::ValuesIn(getSupportedVersionParams()),
+    versionParamsName);

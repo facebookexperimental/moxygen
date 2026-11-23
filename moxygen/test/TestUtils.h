@@ -7,6 +7,7 @@
 #pragma once
 
 #include <folly/io/IOBuf.h>
+#include <folly/portability/GTest.h>
 #include <moxygen/MoQFramer.h>
 
 #include <deque>
@@ -85,5 +86,8 @@ std::unique_ptr<folly::IOBuf> makeBuf(uint32_t size = 10);
 std::vector<Extension> getTestExtensions();
 std::vector<Parameter> getTestTrackRequestParams(
     const MoQFrameWriter& moqFrameWriter);
+
+// Names a version-parameterized test by its draft, e.g. "Draft18".
+std::string versionName(const testing::TestParamInfo<uint64_t>& info);
 
 } // namespace moxygen::test

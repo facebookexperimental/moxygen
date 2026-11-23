@@ -167,6 +167,13 @@ struct VersionParams {
   VersionParams(std::vector<uint64_t> cv, uint64_t sv);
 };
 
+// Prints a VersionParams as its test name, e.g. "Draft18".
+void PrintTo(const VersionParams& params, std::ostream* os);
+
+// Names a VersionParams test by its drafts, e.g. "Draft18".
+std::string versionParamsName(
+    const testing::TestParamInfo<VersionParams>& info);
+
 std::vector<VersionParams> getSupportedVersionParams();
 
 // Timeout callback to prevent tests from hanging indefinitely

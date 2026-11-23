@@ -567,7 +567,8 @@ CO_TEST_P_X(MLogReplyTest, SubscribeTracksError) {
 INSTANTIATE_TEST_SUITE_P(
     MLogReplyTest,
     MLogReplyTest,
-    testing::ValuesIn(getSupportedVersionParams()));
+    testing::ValuesIn(getSupportedVersionParams()),
+    versionParamsName);
 
 // === STREAM SIGNALS ===
 

@@ -3647,12 +3647,14 @@ TEST(MoQFramerSubscriptionFilter, EndGroupDeltaOverflowRejectedV18) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerTest,
     MoQFramerTest,
-    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22));
+    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22),
+    moxygen::test::versionName);
 
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerAuthTest,
     MoQFramerAuthTest,
-    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22));
+    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22),
+    moxygen::test::versionName);
 
 TEST(MoQFramerTestUtils, DraftMajorVersion) {
   EXPECT_EQ(getDraftMajorVersion(0xff080001), 0x8);
@@ -4034,7 +4036,8 @@ TEST_P(MoQImmutableExtensionsTest, WriteOnlyImmutableExtensionsDraft) {
 INSTANTIATE_TEST_SUITE_P(
     MoQImmutableExtensionsTest,
     MoQImmutableExtensionsTest,
-    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22));
+    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22),
+    moxygen::test::versionName);
 
 TEST_P(MoQFramerTest, DatagramWithExtensionsAndNonNormalStatus) {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
@@ -5555,7 +5558,8 @@ TEST_P(MoQFramerV16PlusTest, SubscribeOkWithLargestLocation) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV16_17Test,
     MoQFramerV16_17Test,
-    ::testing::Values(kVersionDraft16, kVersionDraft17));
+    ::testing::Values(kVersionDraft16, kVersionDraft17),
+    moxygen::test::versionName);
 
 // Test Namespace message roundtrip
 TEST_P(MoQFramerV16PlusTest, NamespaceRoundtrip) {
@@ -6106,7 +6110,8 @@ TEST_P(MoQFramerV16PlusTest, CalculateExtensionVectorSizeMatchesWritten) {
 INSTANTIATE_TEST_SUITE_P(
     MoQFramerV16PlusTest,
     MoQFramerV16PlusTest,
-    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22));
+    ::testing::Values(kVersionDraft16, kVersionDraft18, kVersionDraft22),
+    moxygen::test::versionName);
 
 // ===========================================================================
 // Draft 18+ tests: SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS split

@@ -689,4 +689,8 @@ std::unique_ptr<folly::IOBuf> makeBuf(uint32_t size) {
   return out;
 }
 
+std::string versionName(const testing::TestParamInfo<uint64_t>& info) {
+  return "Draft" + std::to_string(getDraftMajorVersion(info.param));
+}
+
 } // namespace moxygen::test
