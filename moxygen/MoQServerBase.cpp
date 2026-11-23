@@ -29,9 +29,14 @@ std::shared_ptr<MLogger> MoQServerBase::createLogger() const {
 
 std::shared_ptr<MoQSession> MoQServerBase::createSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+    uint64_t negotiatedVersion,
     std::shared_ptr<MoQExecutor> executor) {
   return std::make_shared<MoQSession>(
-      std::move(wt), *this, std::move(executor), authTokenCacheEnabled_);
+      std::move(wt),
+      negotiatedVersion,
+      *this,
+      std::move(executor),
+      authTokenCacheEnabled_);
 }
 
 folly::coro::Task<void> MoQServerBase::handleClientSession(

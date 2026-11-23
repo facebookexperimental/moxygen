@@ -36,6 +36,7 @@ class MoQClientBase {
  public:
   using SessionFactory = std::function<std::shared_ptr<MoQSession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>,
+      uint64_t /* negotiatedVersion */,
       std::shared_ptr<MoQExecutor>)>;
 
   MoQClientBase(
@@ -200,7 +201,8 @@ class MoQClientBase {
       const quic::TransportSettings& transportSettings) = 0;
 
   virtual std::shared_ptr<MoQSession> createSession(
-      folly::MaybeManagedPtr<proxygen::WebTransport> wt);
+      folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+      uint64_t negotiatedVersion);
 
   static SessionFactory defaultSessionFactory();
 

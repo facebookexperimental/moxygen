@@ -745,9 +745,10 @@ class RelaySessionTestServer : public TestServer {
  protected:
   std::shared_ptr<MoQSession> createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+      uint64_t negotiatedVersion,
       std::shared_ptr<MoQExecutor> executor) override {
     return std::make_shared<MoQRelaySession>(
-        std::move(wt), *this, std::move(executor));
+        std::move(wt), negotiatedVersion, *this, std::move(executor));
   }
 
  private:
@@ -2688,7 +2689,7 @@ class MoQHqWtSessionTest : public MoQIntegrationTest {
             clientEvbThread_.getEventBase()));
     auto resp = co_await h3->sendWebTransportRequest(
         makeWebTransportConnect({protocol}),
-        factory.makeHandler(protocol, "localhost", kTestEndpoint));
+        factory.makeHandler(GetParam(), "localhost", kTestEndpoint));
     EXPECT_EQ(resp->getStatusCode(), 200);
     co_return co_await factory.establish();
   }

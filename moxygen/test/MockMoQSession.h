@@ -18,9 +18,12 @@ namespace moxygen::test {
 class MockMoQSession : public MoQSession {
  public:
   // Constructor that accepts an external executor
-  explicit MockMoQSession(std::shared_ptr<MoQExecutor> exec)
+  explicit MockMoQSession(
+      std::shared_ptr<MoQExecutor> exec,
+      uint64_t negotiatedVersion = kVersionDraftCurrent)
       : MoQSession(
             folly::MaybeManagedPtr<proxygen::WebTransport>(nullptr),
+            negotiatedVersion,
             exec),
         ownsEventBase_(false) {}
 
@@ -28,6 +31,7 @@ class MockMoQSession : public MoQSession {
   MockMoQSession()
       : MoQSession(
             folly::MaybeManagedPtr<proxygen::WebTransport>(nullptr),
+            kVersionDraftCurrent,
             std::make_shared<MoQFollyExecutorImpl>(&evb_)),
         ownsEventBase_(true) {
     // Start EventBase in background thread for async operations

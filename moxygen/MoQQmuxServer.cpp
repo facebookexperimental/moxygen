@@ -431,7 +431,8 @@ folly::coro::Task<void> MoQQmuxServer::runQmuxAndSession(
     std::chrono::milliseconds qmuxTimeout,
     WorkerShutdownState* state,
     folly::Function<void(MoQSession*)> postCreateHook) {
-  if (!getVersionFromAlpn(negotiatedAlpn).has_value()) {
+  auto negotiatedVersion = getVersionFromAlpn(negotiatedAlpn);
+  if (!negotiatedVersion) {
     XLOG(WARN) << "MoQQmuxServer: rejecting session; "
                << (negotiatedAlpn.empty()
                        ? "no negotiated ALPN"
@@ -461,8 +462,8 @@ folly::coro::Task<void> MoQQmuxServer::runQmuxAndSession(
   }
 
   auto qmuxSession = std::move(*sessionResult);
-  auto moqSession = createSession(qmuxSession, std::move(executor));
-  moqSession->validateAndSetVersionFromAlpn(negotiatedAlpn);
+  auto moqSession =
+      createSession(qmuxSession, *negotiatedVersion, std::move(executor));
   qmuxSession->setHandler(moqSession.get());
   qmuxSession->start(qmuxSession);
 

@@ -146,7 +146,10 @@ void MoQClientBase::completeSetupMoQSession(
     std::shared_ptr<Publisher> publishHandler,
     std::shared_ptr<Subscriber> subscribeHandler) {
   // The ALPN or WT protocol is the only source of the MoQT version.
-  if (!negotiatedProtocol_ || !getVersionFromAlpn(*negotiatedProtocol_)) {
+  auto negotiatedVersion = negotiatedProtocol_
+      ? getVersionFromAlpn(*negotiatedProtocol_)
+      : std::nullopt;
+  if (!negotiatedVersion) {
     XLOG(ERR)
         << "MoQClientBase: no supported MoQT version negotiated, protocol="
         << negotiatedProtocol_.value_or("<none>");
@@ -157,7 +160,7 @@ void MoQClientBase::completeSetupMoQSession(
   }
 
   //  Create MoQSession and Setup MoQSession parameters
-  moqSession_ = createSession(std::move(wt));
+  moqSession_ = createSession(std::move(wt), *negotiatedVersion);
   for (const auto& extension : extensions_) {
     moqSession_->addExtension(extension);
   }
@@ -170,8 +173,6 @@ void MoQClientBase::completeSetupMoQSession(
 
   moqSession_->setPath(url_.getPath());
   moqSession_->setAuthority(url_.getHostAndPortOmitDefault());
-
-  moqSession_->validateAndSetVersionFromAlpn(*negotiatedProtocol_);
 
   moqSession_->setPublishHandler(std::move(publishHandler));
   moqSession_->setSubscribeHandler(std::move(subscribeHandler));
@@ -229,15 +230,18 @@ void MoQClientBase::setLogger(const std::shared_ptr<MLogger>& logger) {
 MoQClientBase::SessionFactory MoQClientBase::defaultSessionFactory() {
   static SessionFactory factory =
       [](folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+         uint64_t negotiatedVersion,
          std::shared_ptr<MoQExecutor> exec) {
-        return std::make_shared<MoQSession>(std::move(wt), std::move(exec));
+        return std::make_shared<MoQSession>(
+            std::move(wt), negotiatedVersion, std::move(exec));
       };
   return factory;
 }
 
 std::shared_ptr<MoQSession> MoQClientBase::createSession(
-    folly::MaybeManagedPtr<proxygen::WebTransport> wt) {
-  return sessionFactory_(std::move(wt), exec_);
+    folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+    uint64_t negotiatedVersion) {
+  return sessionFactory_(std::move(wt), negotiatedVersion, exec_);
 }
 
 } // namespace moxygen

@@ -33,11 +33,10 @@ class MoQWtSessionFactory {
       std::shared_ptr<void> keepalive = nullptr,
       StatsCallbacks statsCallbacks = {});
 
-  // The handler creates and starts a session and sends CLIENT_SETUP when the
-  // WebTransport starts. negotiatedProtocol must map to a supported MoQT
-  // version.
+  // The handler creates and starts a session for negotiatedVersion and sends
+  // CLIENT_SETUP when the WebTransport starts.
   proxygen::WebTransportHandler::Ptr makeHandler(
-      std::string negotiatedProtocol,
+      uint64_t negotiatedVersion,
       std::string authority,
       std::string path);
 

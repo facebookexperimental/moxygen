@@ -21,12 +21,15 @@ namespace moxygen {
 
 std::function<std::shared_ptr<MoQSession>(
     folly::MaybeManagedPtr<proxygen::WebTransport>,
+    uint64_t,
     std::shared_ptr<MoQExecutor>)>
 MoQRelaySession::createRelaySessionFactory() {
   static auto factory = [](folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+                           uint64_t negotiatedVersion,
                            std::shared_ptr<MoQExecutor> exec) {
     return std::static_pointer_cast<MoQSession>(
-        std::make_shared<MoQRelaySession>(wt, std::move(exec)));
+        std::make_shared<MoQRelaySession>(
+            wt, negotiatedVersion, std::move(exec)));
   };
   return factory;
 }
@@ -1020,7 +1023,7 @@ void MoQRelaySession::publishNamespaceDone(
               << this;
     return;
   }
-  if (getDraftMajorVersion(*negotiatedVersion_) < 18) {
+  if (getDraftMajorVersion(negotiatedVersion_) < 18) {
     auto res = replyCtx->writer().writePublishNamespaceDone(
         replyCtx->writeBuf(), pubNsDone);
     if (!res) {

@@ -3440,18 +3440,22 @@ class MoQSession::ControlStreamLossTimeoutCallback
 // Constructors
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+    uint64_t negotiatedVersion,
     std::shared_ptr<MoQExecutor> exec)
     : dir_(MoQControlCodec::Direction::CLIENT),
       wt_(std::move(wt)),
       exec_(std::move(exec)),
       controlCodec_(std::make_unique<MoQControlCodec>(dir_, this)),
+      negotiatedVersion_(negotiatedVersion),
       nextRequestID_(0),
       nextPeerRequestIDForGoaway_(1) {
   controlCodec_->setTokenCache(&receiveTokenCache_);
+  initializeVersionState();
 }
 
 MoQSession::MoQSession(
     folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+    uint64_t negotiatedVersion,
     ServerSetupCallback& serverSetupCallback,
     std::shared_ptr<MoQExecutor> exec,
     bool authTokenCacheEnabled)
@@ -3459,6 +3463,7 @@ MoQSession::MoQSession(
       wt_(std::move(wt)),
       exec_(std::move(exec)),
       controlCodec_(std::make_unique<MoQControlCodec>(dir_, this)),
+      negotiatedVersion_(negotiatedVersion),
       nextRequestID_(1),
       nextPeerRequestIDForGoaway_(0),
       serverSetupCallback_(&serverSetupCallback),
@@ -3469,6 +3474,7 @@ MoQSession::MoQSession(
   receiveTokenCache_.setMaxSize(
       authTokenCacheEnabled_ ? kMaxReceiveTokenCacheSize : 0);
   controlCodec_->setTokenCache(&receiveTokenCache_);
+  initializeVersionState();
 }
 
 MoQSession::~MoQSession() {
@@ -3693,7 +3699,7 @@ void MoQSession::start() {
       wt_->closeSession();
     }
   };
-  if (negotiatedVersion_ && useUniControlStreams(*negotiatedVersion_)) {
+  if (useUniControlStreams(negotiatedVersion_)) {
     // Uni control mode: both client and server open a uni stream for outgoing
     // control messages
     auto us = wt_->createUniStream();
@@ -3729,8 +3735,8 @@ void MoQSession::start() {
 
 void MoQSession::setLogger(const std::shared_ptr<MLogger>& logger) {
   logger_ = logger;
-  if (logger_ && negotiatedVersion_) {
-    logger_->setNegotiatedMoQVersion(*negotiatedVersion_);
+  if (logger_) {
+    logger_->setNegotiatedMoQVersion(negotiatedVersion_);
   }
   moqFrameWriter_.setFrameObserver(logger_);
   controlCodec_->setFrameObserver(logger_);
@@ -3754,12 +3760,12 @@ void MoQSession::drain() {
 
 void MoQSession::goaway(Goaway goaway) {
   if (!draining_) {
-    if (!moqFrameWriter_.getVersion().has_value()) {
+    // GOAWAY is a control message, which may only follow SETUP.
+    if (!setupComplete_) {
       close(SessionCloseErrorCode::NO_ERROR);
       return;
     }
-    const auto majorVersion =
-        getDraftMajorVersion(*moqFrameWriter_.getVersion());
+    const auto majorVersion = getDraftMajorVersion(negotiatedVersion_);
     const bool draft18OrLater = majorVersion >= 18;
     if (majorVersion >= 18 && majorVersion < 22) {
       goaway.requestID = RequestID(nextPeerRequestIDForGoaway_);
@@ -3786,8 +3792,7 @@ void MoQSession::requestStreamGoaway(
   XLOG(DBG1) << __func__ << " id=" << requestID << " sess=" << this;
 
   // Request-stream GOAWAY (per-request migration) is a draft-18+ feature.
-  auto negotiatedVersion = getNegotiatedVersion();
-  if (!negotiatedVersion || getDraftMajorVersion(*negotiatedVersion) < 18) {
+  if (getDraftMajorVersion(negotiatedVersion_) < 18) {
     XLOG(ERR) << "request-stream GOAWAY on pre-draft-18 session sess=" << this;
     return;
   }
@@ -4077,10 +4082,6 @@ folly::coro::Task<Setup> MoQSession::setup(Setup setup) {
 folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
     Setup setup) {
   XLOG(DBG1) << __func__ << " sess=" << this;
-  if (!negotiatedVersion_) {
-    XLOG(ERR) << "sendSetup without a negotiated version sess=" << this;
-    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-  }
 
   // Server may also call awaitPeerSetup() after sending SERVER_SETUP
   // proactively, to negotiate setup parameters with the client.
@@ -4089,10 +4090,10 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
 
   setup.params.insertParam(SetupParameter(
       {folly::to_underlying(SetupKey::MOQT_IMPLEMENTATION),
-       getMoQTImplementationString(*negotiatedVersion_)}));
+       getMoQTImplementationString(negotiatedVersion_)}));
   folly::F14FastSet<uint64_t> extensionOptionKeys;
   for (const auto& extension : extensions_) {
-    auto options = extension->getSetupOptions(*negotiatedVersion_);
+    auto options = extension->getSetupOptions(negotiatedVersion_);
     folly::F14FastSet<uint64_t> keys;
     for (const auto& option : options) {
       keys.insert(option.key);
@@ -4111,7 +4112,7 @@ folly::Expected<folly::Unit, quic::TransportErrorCode> MoQSession::sendSetup(
 
   auto maxRequestID = getMaxRequestIDIfPresent(setup.params);
 
-  uint64_t setupSerializationVersion = *negotiatedVersion_;
+  uint64_t setupSerializationVersion = negotiatedVersion_;
 
   bool isClient = (dir_ == MoQControlCodec::Direction::CLIENT);
   if (isClient) {
@@ -4156,7 +4157,7 @@ bool MoQSession::negotiateMessageParameters() {
   if (!localSetupParams_ || !peerSetupParams_) {
     return true;
   }
-  const auto version = *negotiatedVersion_;
+  const auto version = negotiatedVersion_;
   auto& negotiated = *messageParameterExtensions_;
   for (const auto& extension : extensions_) {
     auto result =
@@ -4181,7 +4182,7 @@ bool MoQSession::negotiateMessageParameters() {
 }
 
 void MoQSession::initLocalMaxRequestID(uint64_t fromParam) {
-  if (negotiatedVersion_ && useBidiRequestStreams(*negotiatedVersion_)) {
+  if (useBidiRequestStreams(negotiatedVersion_)) {
     maxRequestID_ = std::numeric_limits<uint64_t>::max();
     maxConcurrentRequests_ = std::numeric_limits<uint64_t>::max();
   } else {
@@ -4191,10 +4192,10 @@ void MoQSession::initLocalMaxRequestID(uint64_t fromParam) {
 }
 
 void MoQSession::initPeerMaxRequestID(const Parameters& peerParams) {
-  if (negotiatedVersion_ && useBidiRequestStreams(*negotiatedVersion_)) {
+  if (useBidiRequestStreams(negotiatedVersion_)) {
     if (getMaxRequestIDIfPresent(peerParams) != 0) {
       XLOG(WARN) << "Ignoring MAX_REQUEST_ID setup param, removed in draft "
-                 << getDraftMajorVersion(*negotiatedVersion_)
+                 << getDraftMajorVersion(negotiatedVersion_)
                  << " sess=" << this;
     }
     peerMaxRequestID_ = std::numeric_limits<uint64_t>::max();
@@ -4263,12 +4264,6 @@ void MoQSession::onServerSetup(Setup serverSetup) {
     return;
   }
 
-  if (!negotiatedVersion_) {
-    XLOG(ERR) << "SERVER_SETUP without a negotiated version sess=" << this;
-    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
-    return;
-  }
-
   initPeerMaxRequestID(serverSetup.params);
   auto peerAuthCacheSize = getMaxAuthTokenCacheSizeIfPresent(
       serverSetup.params, *getNegotiatedVersion());
@@ -4295,8 +4290,8 @@ void MoQSession::onClientSetup(Setup clientSetup) {
   }
 
   initPeerMaxRequestID(clientSetup.params);
-  auto peerAuthCacheSize = getMaxAuthTokenCacheSizeIfPresent(
-      clientSetup.params, negotiatedVersion_.value_or(kVersionDraft16));
+  auto peerAuthCacheSize =
+      getMaxAuthTokenCacheSizeIfPresent(clientSetup.params, negotiatedVersion_);
   tokenCache_.setMaxSize(
       authTokenCacheEnabled_
           ? std::min(kMaxSendTokenCacheSize, peerAuthCacheSize)
@@ -4333,12 +4328,6 @@ void MoQSession::onClientSetup(Setup clientSetup) {
     auto errorMsg = serverSetup.exception().what();
     XLOG(ERR) << "Server setup callback failed sess=" << this
               << " err=" << errorMsg;
-    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
-    return;
-  }
-
-  if (!getNegotiatedVersion()) {
-    XLOG(ERR) << "CLIENT_SETUP without a negotiated version sess=" << this;
     close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
     return;
   }
@@ -4394,7 +4383,7 @@ std::unique_ptr<MoQControlCodec> MoQSession::makeBidiCodec(
     std::deque<RequestID>* responseIDQueue) {
   auto codec = std::make_unique<MoQBidiStreamCodec>(
       callback, std::move(allowedFrames), requestID, okType);
-  codec->initializeVersion(*negotiatedVersion_);
+  codec->initializeVersion(negotiatedVersion_);
   codec->setTokenCache(&receiveTokenCache_);
   codec->setMessageParameterExtensions(messageParameterExtensions_);
   codec->setResponseIDQueue(responseIDQueue);
@@ -4556,9 +4545,9 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
       auto* wtEx =
           streamData.tryGetExceptionObject<proxygen::WebTransport::Exception>();
       peerReset = wtEx != nullptr;
-      if (negotiatedVersion && wtEx) {
+      if (wtEx) {
         peerTerminationError =
-            fromWireResetStreamErrorCode(wtEx->error, *negotiatedVersion);
+            fromWireResetStreamErrorCode(wtEx->error, negotiatedVersion);
         // The session may be gone, so only the loop's own codec is safe here.
         if (codec && !sessionToken.isCancellationRequested()) {
           codec->reportResetStream(wtEx->error);
@@ -4618,9 +4607,9 @@ folly::coro::Task<void> MoQSession::controlReadLoop(
     }
   }
   // Only session close leaves the read side open here.
-  if (control && negotiatedVersion) {
+  if (control) {
     readHandle.setStopSendingCode(toWireResetStreamErrorCode(
-        ResetStreamErrorCode::SESSION_CLOSED, *negotiatedVersion));
+        ResetStreamErrorCode::SESSION_CLOSED, negotiatedVersion));
   }
 }
 
@@ -4747,7 +4736,7 @@ MoQSession::SendRequestResult MoQSession::sendRequest(
     std::unique_ptr<MoQControlCodec::ControlCallback> senderCallback,
     folly::Function<void(RequestID, std::optional<ResetStreamErrorCode>)>
         onPeerTermination) {
-  if (getDraftMajorVersion(*negotiatedVersion_) >= minBidiDraftVersion) {
+  if (getDraftMajorVersion(negotiatedVersion_) >= minBidiDraftVersion) {
     if (!wt_) {
       return folly::makeUnexpected(
           SendRequestError{
@@ -4776,7 +4765,7 @@ MoQSession::SendRequestResult MoQSession::sendRequest(
     auto control = std::make_shared<BidiStreamControl>(
         bidiStream->writeHandle,
         cancellationSource_.getToken(),
-        *negotiatedVersion_,
+        negotiatedVersion_,
         /*finIsCancellation=*/true,
         egressTracker_,
         std::move(writer));
@@ -5437,22 +5426,8 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
     }
   });
 
-  if (!negotiatedVersion_.has_value()) {
-    auto versionBaton = std::make_shared<moxygen::TimedBaton>();
-    subgroupsWaitingForVersion_.push_back(versionBaton);
-    // Merged token for baton waits (session + readHandle)
-    auto batonWaitToken = folly::cancellation_token_merge(
-        cancellationSource_.getToken(), readHandle.cancelToken());
-    auto waitRes = co_await co_awaitTry(co_withCancellation(
-        batonWaitToken,
-        versionBaton->wait(moqSettings_.versionNegotiationTimeout)));
-    if (waitRes.hasException()) {
-      co_return;
-    }
-  }
-
   MoQObjectStreamCodec codec(nullptr);
-  codec.initializeVersion(*negotiatedVersion_);
+  codec.initializeVersion(negotiatedVersion_);
 
   // Lambda for onSubgroup
   TrackAlias deferredAlias{std::numeric_limits<uint64_t>::max()};
@@ -5508,7 +5483,7 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
           fetchCancelCb.emplace(token, [this, &readHandle, &fetchState] {
             if (fetchState) {
               readHandle.stopSending(toWireResetStreamErrorCode(
-                  fetchState->dataStreamCancelCode(), *negotiatedVersion_));
+                  fetchState->dataStreamCancelCode(), negotiatedVersion_));
             }
           });
           codec.setFetchGroupOrder(state->getFetchGroupOrder());
@@ -5542,8 +5517,7 @@ folly::coro::Task<void> MoQSession::dataStreamReadLoop(
             streamDataTry
                 .tryGetExceptionObject<proxygen::WebTransport::Exception>();
         if (wtEx) {
-          errorCode =
-              streamResetCode(wtEx->error, *negotiatedVersion_, closed_);
+          errorCode = streamResetCode(wtEx->error, negotiatedVersion_, closed_);
           if (!closed_) {
             codec.reportResetStream(wtEx->error);
           }
@@ -5720,7 +5694,7 @@ void MoQSession::onSubscribeImpl(
   // Extract delivery timeout from subscribe request params
   std::optional<std::chrono::milliseconds> deliveryTimeout;
   auto timeoutValue =
-      getDeliveryTimeoutIfPresent(subscribeRequest.params, *negotiatedVersion_);
+      getDeliveryTimeoutIfPresent(subscribeRequest.params, negotiatedVersion_);
   if (timeoutValue.has_value() && *timeoutValue > 0) {
     deliveryTimeout = std::chrono::milliseconds(*timeoutValue);
   }
@@ -5732,7 +5706,7 @@ void MoQSession::onSubscribeImpl(
       std::nullopt,
       subscribeRequest.priority,
       subscribeRequest.groupOrder.value_or(GroupOrder::OldestFirst),
-      *negotiatedVersion_,
+      negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription,
       forward,
       deliveryTimeout);
@@ -5854,7 +5828,7 @@ MoQSession::openFillStream(
       requestID,
       fill.subscriberPriority.value_or(trackPublisher->subPriority()),
       fill.groupOrder.value_or(GroupOrder::OldestFirst),
-      *negotiatedVersion_,
+      negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription);
   fillPublisher->setFrameObserver(logger_);
   fillPublisher->setTrackStats(trackPublisher->trackStats());
@@ -6988,7 +6962,7 @@ void MoQSession::onFetchImpl(
       fetch.requestID,
       fetch.priority,
       fetch.groupOrder,
-      *negotiatedVersion_,
+      negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription);
   fetchPublisher->setFrameObserver(logger_);
   fetchPublisher->initialize();
@@ -7497,35 +7471,32 @@ void MoQSession::onGoaway(Goaway goaway) {
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
   }
-  auto negotiatedVersion = getNegotiatedVersion();
-  if (negotiatedVersion) {
-    const auto majorVersion = getDraftMajorVersion(*negotiatedVersion);
-    if (majorVersion >= 22) {
-      if (goaway.requestID.has_value()) {
-        XLOG(ERR) << "Received draft-22+ GOAWAY with requestID sess=" << this;
-        close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-        return;
-      }
-    } else if (majorVersion >= 18) {
-      // Wire input is rejected by parseGoaway(); keep this for synthesized
-      // values.
-      if (!goaway.requestID.has_value()) {
-        XLOG(ERR) << "Received GOAWAY without requestID sess=" << this;
-        close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
-        return;
-      }
-      const bool requestIDOdd = (goaway.requestID->value % 2) == 1;
-      // Our locally initiated request IDs are odd when we are the server.
-      const bool localRequestIDParityOdd =
-          dir_ == MoQControlCodec::Direction::SERVER;
-      if (requestIDOdd != localRequestIDParityOdd) {
-        XLOG(ERR) << "Received GOAWAY with invalid requestID parity id="
-                  << *goaway.requestID << " sess=" << this;
-        close(SessionCloseErrorCode::INVALID_REQUEST_ID);
-        return;
-      }
-      receivedGoawayRequestID_ = goaway.requestID;
+  const auto majorVersion = getDraftMajorVersion(negotiatedVersion_);
+  if (majorVersion >= 22) {
+    if (goaway.requestID.has_value()) {
+      XLOG(ERR) << "Received draft-22+ GOAWAY with requestID sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      return;
     }
+  } else if (majorVersion >= 18) {
+    // Wire input is rejected by parseGoaway(); keep this for synthesized
+    // values.
+    if (!goaway.requestID.has_value()) {
+      XLOG(ERR) << "Received GOAWAY without requestID sess=" << this;
+      close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
+      return;
+    }
+    const bool requestIDOdd = (goaway.requestID->value % 2) == 1;
+    // Our locally initiated request IDs are odd when we are the server.
+    const bool localRequestIDParityOdd =
+        dir_ == MoQControlCodec::Direction::SERVER;
+    if (requestIDOdd != localRequestIDParityOdd) {
+      XLOG(ERR) << "Received GOAWAY with invalid requestID parity id="
+                << *goaway.requestID << " sess=" << this;
+      close(SessionCloseErrorCode::INVALID_REQUEST_ID);
+      return;
+    }
+    receivedGoawayRequestID_ = goaway.requestID;
   }
   receivedGoaway_ = true;
   folly::RequestContextScopeGuard guard;
@@ -7545,8 +7516,7 @@ void MoQSession::onRequestStreamGoaway(RequestID requestID, Goaway goaway) {
   XLOG(DBG1) << __func__ << " id=" << requestID << " sess=" << this;
 
   // Request-stream GOAWAY (per-request migration) is a draft-18+ feature.
-  auto negotiatedVersion = getNegotiatedVersion();
-  if (!negotiatedVersion || getDraftMajorVersion(*negotiatedVersion) < 18) {
+  if (getDraftMajorVersion(negotiatedVersion_) < 18) {
     XLOG(ERR) << "request-stream GOAWAY on pre-draft-18 session sess=" << this;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
@@ -7706,7 +7676,7 @@ Subscriber::PublishResult MoQSession::publish(
 
   uint8_t subscriberPriority = 0;
   std::optional<GroupOrder> subscriptionGroupOrder;
-  if (getDraftMajorVersion(*negotiatedVersion_) >= 22) {
+  if (getDraftMajorVersion(negotiatedVersion_) >= 22) {
     subscriberPriority = static_cast<uint8_t>(
         getFirstIntParam(pub.params, TrackRequestParamKey::SUBSCRIBER_PRIORITY)
             .value_or(kDefaultPriority));
@@ -7720,7 +7690,7 @@ Subscriber::PublishResult MoQSession::publish(
       pub.trackAlias,
       subscriberPriority,
       subscriptionGroupOrder.value_or(pub.groupOrder),
-      *negotiatedVersion_,
+      negotiatedVersion_,
       moqSettings_.bufferingThresholds.perSubscription,
       pub.forward);
 
@@ -7967,7 +7937,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQSession::subscribe(
       fillConsumer = std::move(beginFillResult.value());
     }
   }
-  if (fillConsumer && useFillFetch(*negotiatedVersion_)) {
+  if (fillConsumer && useFillFetch(negotiatedVersion_)) {
     // Register up front: a PUBLISH_DONE can remove the subscription state
     // before the fill stream is read.
     registerFillReceiveState(
@@ -8101,7 +8071,7 @@ void MoQSession::unsubscribe(
       return;
     }
     // Before draft 18 an UNSUBSCRIBE is not a reply to the peer's PUBLISH.
-    if (control && getDraftMajorVersion(*negotiatedVersion_) >= 18) {
+    if (control && getDraftMajorVersion(negotiatedVersion_) >= 18) {
       control->cancel(ResetStreamErrorCode::CANCELLED);
     } else {
       publishError(
@@ -8133,7 +8103,7 @@ void MoQSession::unsubscribe(
   reqIdToTrackAlias_.erase(trackAliasIt);
   // Draft 18+: RESET the write half and cancel the read source on the bidi
   // request stream. Older drafts send Unsubscribe on the control stream.
-  if (control && getDraftMajorVersion(*negotiatedVersion_) >= 18) {
+  if (control && getDraftMajorVersion(negotiatedVersion_) >= 18) {
     control->cancel(ResetStreamErrorCode::CANCELLED);
   } else {
     auto res = moqFrameWriter_.writeUnsubscribe(controlWriteBuf_, unsubscribe);
@@ -8204,7 +8174,7 @@ void MoQSession::sendPublishDone(const PublishDone& pubDone) {
 ReplyContext* MoQSession::getRequestUpdateReplyContext(
     RequestID existingRequestID) {
   // 18+: route on the request's bidi (null if gone). Pre-18: control stream.
-  if (getDraftMajorVersion(*negotiatedVersion_) < 18) {
+  if (getDraftMajorVersion(negotiatedVersion_) < 18) {
     return controlStreamReplyContext().get();
   }
   auto it = pubTracks_.find(existingRequestID);
@@ -8291,7 +8261,7 @@ void MoQSession::retireRequestID(bool signalWriteLoop) {
 }
 
 void MoQSession::sendMaxRequestID(bool signalWriteLoop) {
-  if (negotiatedVersion_ && useBidiRequestStreams(*negotiatedVersion_)) {
+  if (useBidiRequestStreams(negotiatedVersion_)) {
     return;
   }
   XLOG(DBG1) << "Issuing new maxRequestID=" << maxRequestID_
@@ -8416,7 +8386,7 @@ bool MoQSession::requestUpdate(
     }
     // Draft 18+: response REQUEST_OK/ERROR has no wire requestID; record
     // this update's id so the response codec can correlate FIFO-order.
-    if (getDraftMajorVersion(*negotiatedVersion_) >= 18) {
+    if (getDraftMajorVersion(negotiatedVersion_) >= 18) {
       control->responseIDQueue().push_back(reqUpdate.requestID);
     }
   } else {
@@ -8481,7 +8451,7 @@ folly::coro::Task<Publisher::FetchResult> MoQSession::fetch(
   };
   auto g =
       folly::makeGuard([func = __func__] { XLOG(DBG1) << "exit " << func; });
-  if (useFillFetch(negotiatedVersion_.value_or(0)) &&
+  if (useFillFetch(negotiatedVersion_) &&
       std::holds_alternative<JoiningFetch>(fetch.args)) {
     // Draft 22 replaces Joining FETCH with a fill.
     FetchError fetchError = {
@@ -8684,7 +8654,7 @@ void MoQSession::fetchCancel(
     return;
   }
   // Draft 18+ cancels via the bidi; older drafts send FetchCancel on control.
-  if (control && getDraftMajorVersion(*negotiatedVersion_) >= 18) {
+  if (control && getDraftMajorVersion(negotiatedVersion_) >= 18) {
     control->cancel(ResetStreamErrorCode::CANCELLED);
   } else {
     auto res = moqFrameWriter_.writeFetchCancel(controlWriteBuf_, fetchCan);
@@ -8725,7 +8695,7 @@ void MoQSession::onNewUniStream(
   XLOG(DBG1) << __func__ << " sess=" << this;
   ReadHandleRef readHandle(this, rh);
   if (!setupComplete_) {
-    if (negotiatedVersion_ && useUniControlStreams(*negotiatedVersion_)) {
+    if (useUniControlStreams(negotiatedVersion_)) {
       // In uni control mode, uni streams before setup may carry the peer's
       // control stream (with SETUP)
       co_withExecutor(
@@ -8755,15 +8725,6 @@ void MoQSession::onNewBidiStream(
   XLOG(DBG1) << __func__ << " sess=" << this;
   ReadHandleRef readHandle(this, bh.readHandle);
 
-  // The version comes from the ALPN or WT protocol. A transport that let the
-  // peer in without one must not bring the process down.
-  if (!negotiatedVersion_) {
-    XLOG(ERR) << "Bidi stream without a negotiated version sess=" << this;
-    bh.writeHandle->resetStream(/*error=*/0);
-    readHandle.stopSending(/*error=*/0);
-    close(SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
-    return;
-  }
   co_withExecutor(
       exec_.get(),
       co_withCancellation(
@@ -8875,7 +8836,7 @@ void MoQSession::handleClientSetup(
 
 std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
     FrameType frameType) {
-  const auto major = getDraftMajorVersion(*negotiatedVersion_);
+  const auto major = getDraftMajorVersion(negotiatedVersion_);
   auto subscribeNamespaceConfig =
       [this](FrameType wireType, bool finIsCancellation) {
         return BidiStreamConfig{
@@ -8958,7 +8919,7 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
   if (token.isCancellationRequested()) {
     co_return;
   }
-  if (!setupComplete_ && useUniControlStreams(*negotiatedVersion_)) {
+  if (!setupComplete_ && useUniControlStreams(negotiatedVersion_)) {
     if (!setupWaiters_) {
       setupWaiters_ = std::make_shared<SetupWaiters>();
     }
@@ -9016,7 +8977,7 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
     proxygen::WebTransport::StreamData accumulatedData{readBuf.move(), fin};
     if (*frameType == FrameType::CLIENT_SETUP ||
         *frameType == FrameType::SETUP) {
-      if (negotiatedVersion_ && useUniControlStreams(*negotiatedVersion_)) {
+      if (useUniControlStreams(negotiatedVersion_)) {
         XLOG(ERR) << "Setup frame on bidi stream in uni control mode sess="
                   << this;
         close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
@@ -9037,7 +8998,7 @@ folly::coro::Task<void> MoQSession::bidiStreamDemuxer(
       auto control = std::make_shared<BidiStreamControl>(
           writeHandle,
           cancellationSource_.getToken(),
-          *negotiatedVersion_,
+          negotiatedVersion_,
           config->finIsCancellation,
           egressTracker_,
           makeStreamWriter(writeHandle->getID()));
@@ -9095,7 +9056,7 @@ void MoQSession::handleDatagram(
   size_t remainingLength = readBuf.chainLength();
   folly::io::Cursor cursor(readBuf.front());
   MoQFrameParser parser;
-  parser.initializeVersion(*negotiatedVersion_);
+  parser.initializeVersion(negotiatedVersion_);
   auto type = parser.decodeVarint(cursor);
   if (!type) {
     XLOG(ERR) << __func__ << " Bad datagram header failed to parse type l="
@@ -9105,7 +9066,7 @@ void MoQSession::handleDatagram(
   }
   remainingLength -= type->second;
 
-  if (isPaddingDatagramType(*negotiatedVersion_, type->first)) {
+  if (isPaddingDatagramType(negotiatedVersion_, type->first)) {
     const auto paddingLength = remainingLength;
     auto paddingResult = parsePaddingData(cursor, remainingLength);
     if (paddingResult.hasError()) {
@@ -9118,7 +9079,7 @@ void MoQSession::handleDatagram(
     return;
   }
 
-  if (!isValidDatagramType(*negotiatedVersion_, type->first)) {
+  if (!isValidDatagramType(negotiatedVersion_, type->first)) {
     XLOG(ERR) << __func__ << " Bad datagram header type=" << type->first;
     close(SessionCloseErrorCode::PROTOCOL_VIOLATION);
     return;
@@ -9251,8 +9212,7 @@ bool MoQSession::shouldRejectNewPeerRequestDueToGoaway() const {
   if (receivedGoaway_) {
     return true;
   }
-  return draining_ && negotiatedVersion_.has_value() &&
-      getDraftMajorVersion(*negotiatedVersion_) >= 18;
+  return draining_ && getDraftMajorVersion(negotiatedVersion_) >= 18;
 }
 
 std::optional<RequestError> MoQSession::refuseNewLocalRequest(
@@ -9273,32 +9233,23 @@ std::optional<RequestError> MoQSession::refuseNewLocalRequest(
 }
 
 bool MoQSession::shouldFailNewLocalRequestDueToGoaway() const {
-  if (!receivedGoaway_ || !negotiatedVersion_.has_value()) {
+  if (!receivedGoaway_) {
     return false;
   }
-  const auto majorVersion = getDraftMajorVersion(*negotiatedVersion_);
+  const auto majorVersion = getDraftMajorVersion(negotiatedVersion_);
   // Draft 22 removed the cutoff Request ID. Drafts 18-21 still use its
   // presence to confirm receipt of a valid GOAWAY.
   return majorVersion >= 22 ||
       (majorVersion >= 18 && receivedGoawayRequestID_.has_value());
 }
 
-void MoQSession::initializeNegotiatedVersion(uint64_t negotiatedVersion) {
-  negotiatedVersion_ = negotiatedVersion;
-  moqFrameWriter_.initializeVersion(*negotiatedVersion_);
+void MoQSession::initializeVersionState() {
+  moqFrameWriter_.initializeVersion(negotiatedVersion_);
   moqFrameWriter_.setMessageParameterExtensions(messageParameterExtensions_);
-  controlCodec_->initializeVersion(*negotiatedVersion_);
+  controlCodec_->initializeVersion(negotiatedVersion_);
   controlCodec_->setMessageParameterExtensions(messageParameterExtensions_);
-  if (useBidiRequestStreams(*negotiatedVersion_)) {
+  if (useBidiRequestStreams(negotiatedVersion_)) {
     receiveTokenCache_.setMaxSize(0, /*evict=*/true);
-  }
-  for (const auto& versionBaton : subgroupsWaitingForVersion_) {
-    versionBaton->signal();
-  }
-  subgroupsWaitingForVersion_.clear();
-
-  if (logger_) {
-    logger_->setNegotiatedMoQVersion(negotiatedVersion);
   }
 }
 
@@ -9361,10 +9312,7 @@ std::optional<uint64_t> MoQSession::getDeliveryTimeoutIfPresent(
 void MoQSession::aliasifyAuthTokens(
     Parameters& params,
     const std::optional<uint64_t>& forceVersion) {
-  auto version = forceVersion ? forceVersion : getNegotiatedVersion();
-  if (!version) {
-    return;
-  }
+  auto version = forceVersion.value_or(negotiatedVersion_);
 
   auto authParamKey =
       folly::to_underlying(TrackRequestParamKey::AUTHORIZATION_TOKEN);
@@ -9384,7 +9332,7 @@ void MoQSession::aliasifyAuthTokens(
     // tokenCache_ branch unconditionally — the send-side cache may still
     // hold a pre-SETUP default size before negotiation completes.
     const bool aliasingDisabled =
-        !authTokenCacheEnabled_ || useBidiRequestStreams(*version);
+        !authTokenCacheEnabled_ || useBidiRequestStreams(version);
     if (!aliasingDisabled && token.alias &&
         token.tokenValue.size() < tokenCache_.maxTokenSize()) {
       auto lookupRes =
@@ -9669,9 +9617,6 @@ std::shared_ptr<MoQSession> MoQSession::getRequestSession() {
 
 MoQSession::RequestContext MoQSession::getRequestContext() {
   auto session = getRequestSession();
-  // The negotiated version is unset during teardown before SETUP completed.
-  // getDraftMajorVersion(0) is 0, so a version check denies rather than
-  // crashing.
   return RequestContext{
       session->sessionId(),
       session->getNegotiatedVersion().value_or(0),
@@ -9701,11 +9646,6 @@ void MoQSession::setMaxConcurrentRequests(uint64_t maxConcurrent) {
     maxRequestID_ += delta;
     sendMaxRequestID(/*signalWriteLoop=*/true);
   }
-}
-
-void MoQSession::setVersion(uint64_t version) {
-  negotiatedVersion_ = version;
-  markSetupComplete();
 }
 
 void MoQSession::setMoqSettings(MoQSettings settings) {
@@ -9772,17 +9712,6 @@ std::shared_ptr<ReplyContext> MoQSession::controlStreamReplyContext() {
         cancellationSource_.getToken());
   }
   return controlStreamReplyContext_;
-}
-
-bool MoQSession::validateAndSetVersionFromAlpn(const std::string& alpn) {
-  auto version = getVersionFromAlpn(std::string_view(alpn));
-  if (!version) {
-    XLOG(ERR) << "No supported MoQT version for ALPN '" << alpn
-              << "' sess=" << this;
-    return false;
-  }
-  initializeNegotiatedVersion(*version);
-  return true;
 }
 
 WriteResult SubNSReply::ok(const SubscribeNamespaceOk& subNsOk) {

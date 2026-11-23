@@ -186,18 +186,15 @@ class LaneManagerIntegrationTest : public testing::Test,
         FakeSharedWebTransport::makeSharedWebTransport();
     link->client = std::make_shared<MoQRelaySession>(
         folly::MaybeManagedPtr<proxygen::WebTransport>(link->clientWt.get()),
+        kVersion,
         executor_);
     link->serverWt->setPeerHandler(link->client.get());
     link->server = std::make_shared<MoQRelaySession>(
         folly::MaybeManagedPtr<proxygen::WebTransport>(link->serverWt.get()),
+        kVersion,
         *this,
         executor_);
     link->clientWt->setPeerHandler(link->server.get());
-    if (getDraftMajorVersion(kVersion) >= 15) {
-      auto alpn = getAlpnFromVersion(kVersion);
-      link->client->validateAndSetVersionFromAlpn(*alpn);
-      link->server->validateAndSetVersionFromAlpn(*alpn);
-    }
     link->server->setPublishHandler(std::move(publisher));
     link->client->start();
     link->server->start();

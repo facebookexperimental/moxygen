@@ -17,7 +17,6 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 
 #include "moxygen/MoQVersions.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
@@ -67,21 +66,20 @@ class MoQWtSessionFactoryTest : public ::testing::Test {
     }
   }
 
-  void makeServerSession(std::string_view alpn) {
+  void makeServerSession(uint64_t version) {
     serverSession_ = std::make_shared<MoQSession>(
         folly::MaybeManagedPtr<proxygen::WebTransport>(serverTransport_.get()),
+        version,
         serverSetupCallback_,
         executor_);
-    ASSERT_TRUE(
-        serverSession_->validateAndSetVersionFromAlpn(std::string(alpn)));
     clientTransport_->setPeerHandler(serverSession_.get());
   }
 
   // Stands in for sendWtReq, which starts the WebTransport with the handler.
   proxygen::WebTransportHandler::Ptr startWebTransport(
       MoQWtSessionFactory& factory,
-      std::string_view alpn) {
-    auto handler = factory.makeHandler(std::string(alpn), "", "");
+      uint64_t version) {
+    auto handler = factory.makeHandler(version, "", "");
     serverTransport_->setPeerHandler(handler.get());
     handler->onWebTransportSession(clientTransport_);
     return handler;
@@ -103,9 +101,9 @@ TEST_F(MoQWtSessionFactoryTest, CreatesSessionAndOwnsTransport) {
   std::weak_ptr<void> keepaliveObserver = keepalive;
   MoQWtSessionFactory factory(executor_, keepalive);
   keepalive.reset();
-  makeServerSession(kAlpnMoqtDraft16Latest);
+  makeServerSession(kVersionDraft16);
   serverSession_->start();
-  auto handler = startWebTransport(factory, kAlpnMoqtDraft16Latest);
+  auto handler = startWebTransport(factory, kVersionDraft16);
 
   auto session = folly::coro::blockingWait(factory.establish(), &eventBase_);
 
@@ -122,8 +120,8 @@ TEST_F(MoQWtSessionFactoryTest, CreatesSessionAndOwnsTransport) {
 // waiting for CLIENT_SETUP.
 TEST_F(MoQWtSessionFactoryTest, ServerSetupBeforeClientSetup) {
   MoQWtSessionFactory factory(executor_);
-  makeServerSession(kAlpnMoqtDraft18Latest);
-  auto handler = startWebTransport(factory, kAlpnMoqtDraft18Latest);
+  makeServerSession(kVersionDraft18);
+  auto handler = startWebTransport(factory, kVersionDraft18);
   serverSession_->start();
   ASSERT_FALSE(
       serverSession_->sendSetup(AcceptingServerSetupCallback::makeServerSetup())
@@ -152,7 +150,7 @@ TEST_F(MoQWtSessionFactoryTest, StatsCallbacksOutliveFactoryAndRecordRequests) {
   EXPECT_CALL(*subscriber, onFetchError(FetchErrorCode::INTERNAL_ERROR));
   EXPECT_CALL(*subscriber, recordFetchLatency(testing::_));
 
-  makeServerSession(kAlpnMoqtDraft16Latest);
+  makeServerSession(kVersionDraft16);
   serverSession_->start();
   proxygen::WebTransportHandler::Ptr handler;
   std::shared_ptr<MoQSession> session;
@@ -162,7 +160,7 @@ TEST_F(MoQWtSessionFactoryTest, StatsCallbacksOutliveFactoryAndRecordRequests) {
         nullptr,
         {.publisher = std::move(publisher),
          .subscriber = std::move(subscriber)});
-    handler = startWebTransport(factory, kAlpnMoqtDraft16Latest);
+    handler = startWebTransport(factory, kVersionDraft16);
     session = folly::coro::blockingWait(factory.establish(), &eventBase_);
   }
   ASSERT_FALSE(publisherObserver.expired());
@@ -215,8 +213,7 @@ TEST_F(MoQWtSessionFactoryTest, EstablishFailsAtTheGivenSetupTimeout) {
           folly::Optional<uint32_t>(folly::to_underlying(
               SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED))));
   clientTransport_->setPeerHandler(&peer);
-  auto handler =
-      factory.makeHandler(std::string(kAlpnMoqtDraft18Latest), "", "");
+  auto handler = factory.makeHandler(kVersionDraft18, "", "");
   handler->onWebTransportSession(clientTransport_);
   constexpr std::chrono::milliseconds kSetupTimeout{50};
 
@@ -232,8 +229,7 @@ TEST_F(MoQWtSessionFactoryTest, EstablishFailsAtTheGivenSetupTimeout) {
 
 TEST_F(MoQWtSessionFactoryTest, EstablishWithoutWebTransportThrows) {
   MoQWtSessionFactory factory(executor_);
-  auto handler =
-      factory.makeHandler(std::string(kAlpnMoqtDraft16Latest), "", "");
+  auto handler = factory.makeHandler(kVersionDraft16, "", "");
 
   EXPECT_THROW(
       folly::coro::blockingWait(factory.establish(), &eventBase_),

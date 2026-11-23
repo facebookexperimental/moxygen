@@ -29,6 +29,7 @@ folly::coro::Task<MoQTestLink*> MoQTestLinks::connect(
   link->client = std::shared_ptr<MoQRelaySession>(
       new MoQRelaySession(
           folly::MaybeManagedPtr<proxygen::WebTransport>(link->clientWt.get()),
+          version_,
           executor_),
       [weakTransport = std::weak_ptr(link->clientWt),
        weakPeerTransport =
@@ -49,13 +50,10 @@ folly::coro::Task<MoQTestLink*> MoQTestLinks::connect(
   link->serverWt->setPeerHandler(link->client.get());
   link->server = std::make_shared<MoQRelaySession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>(link->serverWt.get()),
+      version_,
       *this,
       executor_);
   link->clientWt->setPeerHandler(link->server.get());
-  if (auto alpn = getAlpnFromVersion(version_)) {
-    link->client->validateAndSetVersionFromAlpn(*alpn);
-    link->server->validateAndSetVersionFromAlpn(*alpn);
-  }
   link->server->setPublishHandler(std::move(serverPublisher));
   if (serverSubscriber) {
     link->server->setSubscribeHandler(std::move(serverSubscriber));

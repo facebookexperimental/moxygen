@@ -77,9 +77,11 @@ class RelayServerImpl : public ServerBase {
  protected:
   std::shared_ptr<MoQSession> createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+      uint64_t negotiatedVersion,
       std::shared_ptr<MoQExecutor> executor) override {
     return std::make_shared<MoQRelaySession>(
         folly::MaybeManagedPtr<proxygen::WebTransport>(std::move(wt)),
+        negotiatedVersion,
         *this,
         std::move(executor));
   }

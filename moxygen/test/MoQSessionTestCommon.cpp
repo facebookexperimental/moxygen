@@ -187,13 +187,16 @@ void MoQSessionTest::SetUp() {
       proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
   clientWt_->setDeliveryExecutor(&eventBase_);
   serverWt_->setDeliveryExecutor(&eventBase_);
+  auto version = getServerSelectedVersion();
   clientSession_ = std::make_shared<MoQRelaySession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt_.get()),
+      version,
       MoQExecutor_);
   serverWt_->setPeerHandler(clientSession_.get());
 
   serverSession_ = std::make_shared<MoQRelaySession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt_.get()),
+      version,
       *this,
       MoQExecutor_,
       serverAuthTokenCacheEnabled_);
@@ -225,19 +228,6 @@ void MoQSessionTest::SetUp() {
   serverPublisherStatsCallback_ =
       std::make_shared<testing::NiceMock<MockPublisherStats>>();
   serverSession_->setPublisherStatsCallback(serverPublisherStatsCallback_);
-
-  // The version comes from the ALPN, except for a draft that is implemented
-  // but not yet supported, which no ALPN maps to.
-  auto version = getServerSelectedVersion();
-  if (isSupportedVersion(version)) {
-    auto alpn = getAlpnFromVersion(version);
-    ASSERT_TRUE(alpn.has_value());
-    ASSERT_TRUE(clientSession_->validateAndSetVersionFromAlpn(*alpn));
-    ASSERT_TRUE(serverSession_->validateAndSetVersionFromAlpn(*alpn));
-  } else {
-    clientSession_->setNegotiatedVersionForTesting(version);
-    serverSession_->setNegotiatedVersionForTesting(version);
-  }
 }
 
 void MoQSessionTest::TearDown() {

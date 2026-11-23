@@ -105,6 +105,7 @@ class MoQServerBase : public MoQSession::ServerSetupCallback,
  protected:
   virtual std::shared_ptr<MoQSession> createSession(
       folly::MaybeManagedPtr<proxygen::WebTransport> wt,
+      uint64_t negotiatedVersion,
       std::shared_ptr<MoQExecutor> executor);
 
   // Coroutine to handle client session lifecycle

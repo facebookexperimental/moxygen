@@ -211,7 +211,7 @@ class MoQServer : public MoQServerBase {
       quic::QuicSocket* quicSocket,
       std::string authority,
       std::string path,
-      const std::string& protocol);
+      uint64_t negotiatedVersion);
 
   std::shared_ptr<MoQExecutor> getOrCreateExecutor(folly::EventBase* evb);
 

@@ -41,12 +41,12 @@ MoQWtSessionFactory::MoQWtSessionFactory(
 }
 
 proxygen::WebTransportHandler::Ptr MoQWtSessionFactory::makeHandler(
-    std::string negotiatedProtocol,
+    uint64_t negotiatedVersion,
     std::string authority,
     std::string path) {
   return std::make_unique<proxygen::SharedWebTransportHandler>(
       [this,
-       negotiatedProtocol = std::move(negotiatedProtocol),
+       negotiatedVersion,
        authority = std::move(authority),
        path = std::move(path)](
           std::shared_ptr<proxygen::WebTransport> webTransport) mutable
@@ -56,12 +56,10 @@ proxygen::WebTransportHandler::Ptr MoQWtSessionFactory::makeHandler(
         // WebTransport alive and closes the session when released.
         auto session = std::make_shared<MoQSession>(
             folly::MaybeManagedPtr<proxygen::WebTransport>(webTransport.get()),
+            negotiatedVersion,
             executor_);
         session->setPublisherStatsCallback(statsCallbacks_.publisher);
         session->setSubscriberStatsCallback(statsCallbacks_.subscriber);
-        if (!session->validateAndSetVersionFromAlpn(negotiatedProtocol)) {
-          return nullptr;
-        }
         session->setAuthority(std::move(authority));
         session->setPath(std::move(path));
         auto handle = std::shared_ptr<MoQSession>(

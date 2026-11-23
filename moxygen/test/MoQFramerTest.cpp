@@ -3666,6 +3666,7 @@ TEST(MoQFramerTestUtils, GetVersionFromAlpn) {
   ASSERT_TRUE(draft16Meta.has_value());
   EXPECT_EQ(*draft16Meta, 0xff000010);
 
+  EXPECT_EQ(getVersionFromAlpn("moqt-16"), kVersionDraft16);
   EXPECT_EQ(getVersionFromAlpn("moqt-18"), kVersionDraft18);
   EXPECT_EQ(getVersionFromAlpn("moqt-18-meta-00"), kVersionDraft18);
   EXPECT_EQ(getVersionFromAlpn("moqt-22"), kVersionDraft22);

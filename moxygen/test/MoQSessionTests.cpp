@@ -316,7 +316,9 @@ std::shared_ptr<MoQRelaySession> makeBareSession(
     const std::shared_ptr<MoQFollyExecutorImpl>& exec,
     proxygen::WebTransport* wt) {
   return std::make_shared<MoQRelaySession>(
-      folly::MaybeManagedPtr<proxygen::WebTransport>(wt), exec);
+      folly::MaybeManagedPtr<proxygen::WebTransport>(wt),
+      kVersionDraftCurrent,
+      exec);
 }
 } // namespace
 
@@ -412,42 +414,6 @@ TEST(MoQSessionTest, SessionScopedHandlerLosesItsPeerWhenTheSessionGoes) {
   EXPECT_EQ(handler->boundSessionId(), sessionId);
 }
 
-TEST(MoQSessionTest, SetVersionFromAlpnUnsupportedRejected) {
-  folly::EventBase eventBase;
-  auto MoQExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
-  auto [clientWt, serverWt] =
-      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
-  auto session = std::make_shared<MoQRelaySession>(
-      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
-      MoQExecutor);
-
-  EXPECT_FALSE(session->validateAndSetVersionFromAlpn("moqt-17"));
-  EXPECT_FALSE(session->getNegotiatedVersion().has_value());
-}
-TEST(MoQSessionTest, SetVersionFromAlpnDraft16) {
-  folly::EventBase eventBase;
-  auto MoQExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
-  auto [clientWt, serverWt] =
-      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
-  auto session = std::make_shared<MoQRelaySession>(
-      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
-      MoQExecutor);
-
-  EXPECT_TRUE(session->validateAndSetVersionFromAlpn("moqt-16"));
-  EXPECT_EQ(session->getNegotiatedVersion(), 0xff000010);
-}
-TEST(MoQSessionTest, SetVersionFromAlpnInvalidAlpn) {
-  folly::EventBase eventBase;
-  auto MoQExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
-  auto [clientWt, serverWt] =
-      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
-  auto session = std::make_shared<MoQRelaySession>(
-      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
-      MoQExecutor);
-
-  EXPECT_FALSE(session->validateAndSetVersionFromAlpn("invalid-alpn"));
-  EXPECT_FALSE(session->getNegotiatedVersion().has_value());
-}
 class RecordingSessionCloseCallback
     : public MoQSession::MoQSessionCloseCallback {
  public:
@@ -468,7 +434,9 @@ TEST(MoQSessionTest, CloseRetainsLastOwnerThroughCallback) {
   auto [clientWt, serverWt] =
       proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
   auto storage = std::make_unique<MoQRelaySession>(
-      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()), executor);
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
+      kVersionDraftCurrent,
+      executor);
   bool releaseRequested = false;
   std::shared_ptr<MoQSession> owner(
       storage.get(), [&](MoQSession*) { releaseRequested = true; });
@@ -497,66 +465,6 @@ TEST(MoQSessionTest, CloseRetainsLastOwnerThroughCallback) {
   EXPECT_TRUE(releaseRequested);
   EXPECT_FALSE(owner);
   EXPECT_TRUE(clientWt->isSessionClosed());
-}
-
-namespace {
-class NoVersionServerSetupCallback : public MoQSession::ServerSetupCallback {
- public:
-  folly::Try<moxygen::Setup> onClientSetup(
-      moxygen::Setup /*clientSetup*/,
-      const std::shared_ptr<MoQSession>& /*session*/) override {
-    return folly::Try<moxygen::Setup>(moxygen::Setup{});
-  }
-
-  folly::Expected<folly::Unit, SessionCloseErrorCode> validateAuthority(
-      const moxygen::Setup& /*clientSetup*/,
-      uint64_t /*negotiatedVersion*/,
-      std::shared_ptr<MoQSession> /*session*/) override {
-    return folly::unit;
-  }
-};
-} // namespace
-
-// A server session the transport let in without a negotiated version closes
-// on the peer's first bidi stream instead of aborting the process.
-TEST(MoQSessionTest, ServerWithoutVersionClosesOnBidiStream) {
-  folly::EventBase eventBase;
-  auto moqExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
-  auto [clientWt, serverWt] =
-      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
-
-  NoVersionServerSetupCallback serverSetupCallback;
-  auto serverSession = std::make_shared<MoQRelaySession>(
-      folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt.get()),
-      serverSetupCallback,
-      moqExecutor);
-  RecordingSessionCloseCallback closeCallback;
-  serverSession->setSessionCloseCallback(&closeCallback);
-  clientWt->setPeerHandler(serverSession.get());
-  serverSession->start();
-
-  // The peer opens a control stream; the server has no version to parse it.
-  EXPECT_TRUE(clientWt->createBidiStream().hasValue());
-  eventBase.loopOnce(EVLOOP_NONBLOCK);
-
-  EXPECT_EQ(
-      closeCallback.errorCode,
-      SessionCloseErrorCode::VERSION_NEGOTIATION_FAILED);
-  EXPECT_FALSE(serverSession->getNegotiatedVersion().has_value());
-}
-
-// A client without a negotiated version fails setup rather than aborting.
-TEST(MoQSessionTest, ClientWithoutVersionFailsSetup) {
-  folly::EventBase eventBase;
-  auto moqExecutor = std::make_shared<MoQFollyExecutorImpl>(&eventBase);
-  auto [clientWt, serverWt] =
-      proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
-  auto clientSession = std::make_shared<MoQRelaySession>(
-      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
-      moqExecutor);
-
-  EXPECT_TRUE(clientSession->sendSetup(moxygen::Setup{}).hasError());
-  EXPECT_FALSE(clientSession->getNegotiatedVersion().has_value());
 }
 
 CO_TEST_P_X(DisabledTokenCacheTest, SetupRegistrationsRemainUncached) {
@@ -2198,13 +2106,13 @@ CO_TEST_P_X(MoQBidiSetupGateTest, WaitingDoesNotRetainFinalSessionOwner) {
   serverSession_ = std::shared_ptr<MoQSession>(
       new MoQRelaySession(
           folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt_.get()),
+          kVersionDraft18,
           *this,
           MoQExecutor_),
       [&](MoQSession* session) {
         delete session;
         destroyed = true;
       });
-  CO_ASSERT_TRUE(serverSession_->validateAndSetVersionFromAlpn("moqt-18"));
   serverSession_->setSubscribeHandler(serverSubscriber);
   EXPECT_CALL(*serverSubscriber, publish(_, _)).Times(0);
   clientWt_->setPeerHandler(serverSession_.get());
@@ -2222,7 +2130,7 @@ CO_TEST_P_X(MoQBidiSetupGateTest, WaitingDoesNotRetainFinalSessionOwner) {
 
 CO_TEST_P_X(MoQBidiSetupGateTest, VersionTestSeamDoesNotWait) {
   prepareServerSetup();
-  serverSession_->setVersion(kVersionDraft18);
+  serverSession_->markSetupCompleteForTesting();
   EXPECT_CALL(*serverSubscriber, publish(_, _))
       .WillOnce([](const PublishRequest& request, auto) {
         return makePublishOkResult(request);
@@ -2592,15 +2500,15 @@ CO_TEST_P_X(MoQVersionNegotiationTest, ServerReportsActiveSessions) {
   secondServerWt->setDeliveryExecutor(&eventBase_);
   auto secondClient = std::make_shared<MoQRelaySession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>(secondClientWt.get()),
+      getServerSelectedVersion(),
       MoQExecutor_);
   auto secondServer = std::make_shared<MoQRelaySession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>(secondServerWt.get()),
+      getServerSelectedVersion(),
       *server,
       MoQExecutor_);
   secondClientWt->setPeerHandler(secondServer.get());
   secondServerWt->setPeerHandler(secondClient.get());
-  secondClient->setNegotiatedVersionForTesting(getServerSelectedVersion());
-  secondServer->setNegotiatedVersionForTesting(getServerSelectedVersion());
 
   secondClient->start();
   auto secondHandled =
@@ -3884,7 +3792,9 @@ TEST(MoQClientTest, TransportStatsUnavailableAfterSessionClose) {
       proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
   (void)serverWt;
   auto session = std::make_shared<MoQSession>(
-      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()), exec);
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
+      kVersionDraftCurrent,
+      exec);
 
   auto quicWebTransport = makeTestQuicWebTransport();
   auto retainedQuicWebTransport = quicWebTransport;
@@ -3912,7 +3822,9 @@ TEST(MoQClientTest, TransportStatsUnavailableAfterSocketClose) {
       proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
   (void)serverWt;
   auto session = std::make_shared<MoQSession>(
-      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()), exec);
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
+      kVersionDraftCurrent,
+      exec);
 
   auto quicWebTransport = makeTestQuicWebTransport();
   auto retainedQuicWebTransport = quicWebTransport;
@@ -3940,7 +3852,9 @@ TEST(MoQRelayClientTest, ShutdownClearsHandlersAndResetsSession) {
   auto [clientWt, serverWt] =
       proxygen::test::FakeSharedWebTransport::makeSharedWebTransport();
   auto session = std::make_shared<MoQSession>(
-      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()), exec);
+      folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
+      kVersionDraftCurrent,
+      exec);
 
   auto moqClient = std::make_unique<MoQClient>(
       exec, proxygen::URL("https://example.com:443/"));
@@ -4121,6 +4035,7 @@ TEST(MoQSessionTest, SharedPtrCycleBreaksOnCleanup) {
 
   auto session = std::make_shared<MoQRelaySession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>(clientWt.get()),
+      kVersionDraftCurrent,
       moqExecutor);
 
   // A minimal Publisher whose only purpose is to hold a strong ref back to the
@@ -4179,13 +4094,12 @@ TEST(MoQSessionTest, BidiStreamRejectsUnexpectedFrameType) {
   };
 
   TestServerSetupCallback serverSetupCallback;
+  // Draft 16 so bidiStreamDemuxer is used
   auto serverSession = std::make_shared<MoQRelaySession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt.get()),
+      kVersionDraft16,
       serverSetupCallback,
       moqExecutor);
-
-  // Set version to moqt-16 via ALPN so bidiStreamDemuxer is used
-  serverSession->validateAndSetVersionFromAlpn("moqt-16");
 
   // Set the peer handler so createBidiStream triggers onNewBidiStream
   clientWt->setPeerHandler(serverSession.get());
@@ -4235,9 +4149,9 @@ TEST(MoQSessionTest, BidiStreamDemuxerHonorsStreamCancellation) {
   TestServerSetupCallback serverSetupCallback;
   auto serverSession = std::make_shared<MoQRelaySession>(
       folly::MaybeManagedPtr<proxygen::WebTransport>(serverWt.get()),
+      kVersionDraft16,
       serverSetupCallback,
       moqExecutor);
-  serverSession->validateAndSetVersionFromAlpn("moqt-16");
   clientWt->setPeerHandler(serverSession.get());
 
   auto bidiResult = clientWt->createBidiStream();
