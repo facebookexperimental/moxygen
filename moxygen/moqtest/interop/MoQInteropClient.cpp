@@ -152,7 +152,7 @@ folly::coro::Task<void> waitFor(folly::coro::Baton& event) {
   folly::CancellationCallback onCancel(token, [&event] { event.post(); });
   co_await event;
   if (token.isCancellationRequested()) {
-    co_yield folly::coro::co_cancelled;
+    co_yield folly::coro::co_stopped_may_throw;
   }
 }
 
