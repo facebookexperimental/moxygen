@@ -96,10 +96,15 @@ struct PublishState {
   std::shared_ptr<folly::coro::Baton> drained;
 };
 
+// How long after the subgroup opened its last object is released; zero when
+// every object is due at once.
 std::chrono::milliseconds maxPublishDelay(const SubgroupBatch& batch) {
   std::chrono::milliseconds delay{0};
   for (const auto& object : batch.objects) {
-    delay = std::max(delay, object.publishDelay);
+    delay = std::max(
+        delay,
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            objectReleaseTime(batch.scheduledAt, object) - batch.scheduledAt));
   }
   return delay;
 }
@@ -118,11 +123,15 @@ folly::coro::Task<uint64_t> publishSubgroup(
     const std::shared_ptr<SegmentSource>& source,
     const std::shared_ptr<MoQForwarder>& forwarder,
     uint64_t fakeBandwidthSampleIndex) {
+  if (batch.objects.empty()) {
+    co_return 0;
+  }
   const auto maxDelay = maxPublishDelay(batch);
   bool releaseStarted = false;
-  const auto firstDelay = batch.objects.front().publishDelay;
-  if (firstDelay > std::chrono::milliseconds::zero()) {
-    co_await sleepUntil(batch.scheduledAt + firstDelay);
+  const auto firstRelease =
+      objectReleaseTime(batch.scheduledAt, batch.objects.front());
+  if (firstRelease > batch.scheduledAt) {
+    co_await sleepUntil(firstRelease);
     source->onSubgroupPublishStarted(batch.group, batch.subgroup);
     releaseStarted = true;
   }
@@ -138,8 +147,9 @@ folly::coro::Task<uint64_t> publishSubgroup(
   uint64_t published = 0;
   uint64_t lastObjectId = 0;
   for (auto& object : batch.objects) {
-    if (object.publishDelay > std::chrono::milliseconds::zero()) {
-      co_await sleepUntil(batch.scheduledAt + object.publishDelay);
+    const auto release = objectReleaseTime(batch.scheduledAt, object);
+    if (release > batch.scheduledAt) {
+      co_await sleepUntil(release);
       if (!releaseStarted) {
         source->onSubgroupPublishStarted(batch.group, batch.subgroup);
         releaseStarted = true;
@@ -226,6 +236,12 @@ folly::coro::Task<void> dispatchSubgroup(
 }
 
 } // namespace
+
+std::chrono::steady_clock::time_point objectReleaseTime(
+    std::chrono::steady_clock::time_point subgroupOpenedAt,
+    const MediaObject& object) {
+  return object.publishAt.value_or(subgroupOpenedAt) + object.publishDelay;
+}
 
 folly::coro::Task<void> runPublishLoop(
     std::shared_ptr<SegmentSource> source,

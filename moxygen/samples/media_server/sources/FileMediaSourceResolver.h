@@ -30,7 +30,8 @@ class FileMediaSourceResolver : public MediaSourceResolver {
       std::chrono::milliseconds fragmentInterval,
       std::chrono::milliseconds catalogUpdateInterval,
       bool loop,
-      const std::vector<std::string>& fileAliases);
+      const std::vector<std::string>& fileAliases,
+      bool paceObjects = false);
 
   folly::coro::Task<std::shared_ptr<SegmentSource>> openTrack(
       const TrackNamespace& ns,

@@ -13,9 +13,16 @@
 #include <folly/Executor.h>
 #include <folly/coro/Task.h>
 
+#include <chrono>
 #include <memory>
 
 namespace moxygen::media_server {
+
+// When the publish loop releases `object` from a subgroup it opened at
+// `subgroupOpenedAt`; see MediaObject::publishAt.
+std::chrono::steady_clock::time_point objectReleaseTime(
+    std::chrono::steady_clock::time_point subgroupOpenedAt,
+    const MediaObject& object);
 
 // Drains source->objects() into the forwarder, translating grouping per
 // spec().mode (SubgroupPerGroup: source-assigned subgroup streams within each

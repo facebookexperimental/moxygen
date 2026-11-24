@@ -44,6 +44,12 @@ DEFINE_int32(
     10,
     "Seconds between file_abr catalog updates");
 DEFINE_bool(loop, false, "Loop the fMP4 source forever");
+DEFINE_bool(
+    pace_objects,
+    false,
+    "Release each group's objects spread evenly over the group's media "
+    "duration, as a live encoder produces them, instead of all at once when "
+    "the group starts");
 DEFINE_string(
     file_namespace_aliases,
     "",
@@ -97,6 +103,7 @@ int main(int argc, char* argv[]) {
           std::chrono::milliseconds(FLAGS_fragment_interval_ms),
           std::chrono::seconds(FLAGS_catalog_update_interval),
           FLAGS_loop,
+          FLAGS_pace_objects,
           fileNamespaceAliases,
           workerEvb),
       *workerEvb);

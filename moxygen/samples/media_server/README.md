@@ -33,6 +33,11 @@ Flags:
   snapshots in `file_abr` mode.
 - `--loop` (default off): loop the source forever (live); omit for a finite
   one-shot that ends after one pass.
+- `--pace_objects` (default off): release each group's objects spread evenly
+  over the group's media duration, as a live encoder produces them. Without it,
+  a group is sent in one burst when its window starts, up to a whole group
+  ahead of the playback clock, which a player's startup and stall behaviour
+  can depend on.
 - `--file_namespace_aliases` (default empty): comma-separated namespace first
   fields served like `file`, e.g. `moq-media` for clients that subscribe to the
   single-field namespace `["moq-media"]`.

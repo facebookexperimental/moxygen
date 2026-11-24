@@ -49,6 +49,11 @@ struct MediaObject {
   uint64_t group{0};
   uint64_t subgroup{0};
   uint64_t object{0};
+  // When to release the object: publishAt if set, else when the publish loop
+  // opened its subgroup, plus publishDelay. publishAt is absolute, so objects
+  // paced against a clock shared by several tracks stay on it however late a
+  // track opened; one already due goes out at once.
+  std::optional<std::chrono::steady_clock::time_point> publishAt;
   std::chrono::milliseconds publishDelay{0};
   bool endOfSubgroup{false};
   bool endOfGroup{false};

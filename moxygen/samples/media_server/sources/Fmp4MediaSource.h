@@ -34,12 +34,23 @@ class Fmp4PlaybackTimeline;
 // Nothing is parsed at construction; the object just remembers where to look.
 // Per-open policies can omit media before retention/publication. Manual fault
 // controls are enabled only for tracks opened through the file_pr namespace.
+// With --pace_objects, when object `objectIndex` of `objectCount` in a group
+// whose window starts at `windowStart` is released: spread evenly over the
+// group's media duration, as a live encoder produces them. Absolute, so tracks
+// sharing the playback timeline stay paced together whenever each opened.
+std::chrono::steady_clock::time_point pacedReleaseTime(
+    std::chrono::steady_clock::time_point windowStart,
+    std::chrono::nanoseconds groupDuration,
+    uint64_t objectIndex,
+    size_t objectCount);
+
 class Fmp4MediaSource {
  public:
   Fmp4MediaSource(
       std::string catalogPath,
       std::chrono::milliseconds fragmentInterval,
-      bool loop);
+      bool loop,
+      bool paceObjects = false);
 
   std::shared_ptr<SegmentSource> openTrack(
       const std::string& trackName,
@@ -64,6 +75,8 @@ class Fmp4MediaSource {
   std::shared_ptr<Fmp4PlaybackTimeline> timeline_;
   std::chrono::milliseconds fragmentInterval_;
   bool loop_;
+  // Spread each group's objects over its media duration; see Fmp4Track.
+  bool paceObjects_;
 };
 
 } // namespace moxygen::media_server

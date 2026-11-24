@@ -17,6 +17,7 @@ MoQBroadcastFactory::MoQBroadcastFactory(
     std::chrono::milliseconds fragmentInterval,
     std::chrono::milliseconds catalogUpdateInterval,
     bool loop,
+    bool paceObjects,
     const std::vector<std::string>& fileNamespaceAliases,
     folly::Executor* loopExecutor)
     : fileResolver_(
@@ -25,7 +26,8 @@ MoQBroadcastFactory::MoQBroadcastFactory(
               fragmentInterval,
               catalogUpdateInterval,
               loop,
-              fileNamespaceAliases)),
+              fileNamespaceAliases,
+              paceObjects)),
       loopExecutor_(loopExecutor) {}
 
 std::shared_ptr<MoQBroadcast> MoQBroadcastFactory::makeBroadcast(

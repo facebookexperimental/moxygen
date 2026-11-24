@@ -26,8 +26,9 @@ FileMediaSourceResolver::FileMediaSourceResolver(
     std::chrono::milliseconds fragmentInterval,
     std::chrono::milliseconds catalogUpdateInterval,
     bool loop,
-    const std::vector<std::string>& fileAliases)
-    : source_(std::move(catalogPath), fragmentInterval, loop),
+    const std::vector<std::string>& fileAliases,
+    bool paceObjects)
+    : source_(std::move(catalogPath), fragmentInterval, loop, paceObjects),
       catalogUpdateInterval_(catalogUpdateInterval),
       fileAliases_(fileAliases.begin(), fileAliases.end()) {
   XCHECK_GT(catalogUpdateInterval_.count(), 0);
