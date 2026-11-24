@@ -227,12 +227,14 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(
         VersionParams{{kVersionDraft16}, kVersionDraft16},
         VersionParams{{kVersionDraft18}, kVersionDraft18},
-        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+        VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 INSTANTIATE_TEST_SUITE_P(
     Draft16TrackStatusTest,
     Draft16TrackStatusTest,
-    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}));
+    testing::Values(VersionParams{{kVersionDraft16}, kVersionDraft16}),
+    versionParamsName);
 
 // === Track Properties validation tests for REQUEST_OK (draft 18+) ===
 

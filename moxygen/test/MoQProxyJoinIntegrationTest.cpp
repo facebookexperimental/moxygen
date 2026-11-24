@@ -1121,6 +1121,9 @@ static std::vector<uint64_t> joiningFetchVersions() {
 INSTANTIATE_TEST_SUITE_P(
     AllVersions,
     ProxyJoinIntegrationTest,
-    testing::ValuesIn(joiningFetchVersions()));
+    testing::ValuesIn(joiningFetchVersions()),
+    [](const testing::TestParamInfo<uint64_t>& info) {
+      return "Draft" + std::to_string(getDraftMajorVersion(info.param));
+    });
 
 } // namespace moxygen::test

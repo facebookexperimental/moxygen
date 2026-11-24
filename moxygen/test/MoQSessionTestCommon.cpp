@@ -161,15 +161,33 @@ std::vector<Parameter> ParamBuilder::build() {
 VersionParams::VersionParams(std::vector<uint64_t> cv, uint64_t sv)
     : clientVersions(std::move(cv)), serverVersion(sv) {}
 
+std::string versionParamsName(
+    const testing::TestParamInfo<VersionParams>& info) {
+  const auto& params = info.param;
+  auto server =
+      "Draft" + std::to_string(getDraftMajorVersion(params.serverVersion));
+  if (params.clientVersions.size() == 1 &&
+      params.clientVersions[0] == params.serverVersion) {
+    return server;
+  }
+  std::string name = "Client";
+  for (auto version : params.clientVersions) {
+    name += "Draft" + std::to_string(getDraftMajorVersion(version));
+  }
+  return name + "_Server" + server;
+}
+
+void PrintTo(const VersionParams& params, std::ostream* os) {
+  *os << versionParamsName(testing::TestParamInfo<VersionParams>(params, 0));
+}
+
 std::vector<VersionParams> getSupportedVersionParams() {
   std::vector<VersionParams> result;
-  result.reserve(kSupportedVersions.size() + 1);
+  result.reserve(kSupportedVersions.size());
   for (auto supportedVersion : kSupportedVersions) {
     result.emplace_back(
         std::vector<uint64_t>{supportedVersion}, supportedVersion);
   }
-  // Draft 18 uses uni-directional control streams and bidi request streams
-  result.emplace_back(std::vector<uint64_t>{kVersionDraft18}, kVersionDraft18);
   return result;
 }
 
@@ -693,12 +711,14 @@ INSTANTIATE_TEST_SUITE_P(
     Draft18Test,
     testing::Values(
         VersionParams{{kVersionDraft18}, kVersionDraft18},
-        VersionParams{{kVersionDraft22}, kVersionDraft22}));
+        VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 INSTANTIATE_TEST_SUITE_P(
     Draft22Test,
     Draft22Test,
-    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}));
+    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 namespace {
 std::vector<VersionParams> getPreDraft18VersionParams() {
@@ -717,6 +737,7 @@ std::vector<VersionParams> getPreDraft18VersionParams() {
 INSTANTIATE_TEST_SUITE_P(
     PreDraft18Test,
     PreDraft18Test,
-    testing::ValuesIn(getPreDraft18VersionParams()));
+    testing::ValuesIn(getPreDraft18VersionParams()),
+    versionParamsName);
 
 }} // namespace moxygen::test

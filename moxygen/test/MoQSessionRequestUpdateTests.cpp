@@ -155,12 +155,14 @@ class Draft18RequestUpdateGoawayTest : public MoQSessionTest {
 INSTANTIATE_TEST_SUITE_P(
     Draft18RequestUpdateGoawayTest,
     Draft18RequestUpdateGoawayTest,
-    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}));
+    testing::Values(VersionParams{{kVersionDraft18}, kVersionDraft18}),
+    versionParamsName);
 
 INSTANTIATE_TEST_SUITE_P(
     Draft22RequestUpdateGoawayTest,
     Draft18RequestUpdateGoawayTest,
-    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}));
+    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 CO_TEST_P_X(
     Draft18RequestUpdateGoawayTest,
@@ -3676,7 +3678,8 @@ class Draft22UpdateFillOrderTest : public Draft22Test {
 INSTANTIATE_TEST_SUITE_P(
     Draft22UpdateFillOrderTest,
     Draft22UpdateFillOrderTest,
-    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}));
+    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 // A fill without its own order is ascending, even though the subscription
 // requested newest first.
@@ -4053,7 +4056,8 @@ class Draft22FillCoalesceTest : public Draft22Test {
 INSTANTIATE_TEST_SUITE_P(
     Draft22FillCoalesceTest,
     Draft22FillCoalesceTest,
-    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}));
+    testing::Values(VersionParams{{kVersionDraft22}, kVersionDraft22}),
+    versionParamsName);
 
 // Only the second update requests a fill, so the fill carries its ID.
 CO_TEST_P_X(Draft22FillCoalesceTest, NoFillThenFillServesTheSecondID) {

@@ -379,7 +379,10 @@ TEST_P(MoQProxyTrackStandaloneFirstObjectTest, OnlyFirstDataObjectRecords) {
 INSTANTIATE_TEST_SUITE_P(
     ObjectStreamAndDatagram,
     MoQProxyTrackStandaloneFirstObjectTest,
-    Values(false, true));
+    Values(false, true),
+    [](const TestParamInfo<bool>& info) {
+      return info.param ? "Datagram" : "ObjectStream";
+    });
 
 TEST_F(
     MoQProxyTrackFirstObjectTest,
