@@ -136,7 +136,9 @@ class HistoryPublisher : public Publisher {
    public:
     explicit Handle(FetchOk ok) : Publisher::FetchHandle(std::move(ok)) {}
 
-    void fetchCancel() override {}
+    void fetchCancel(
+        moxygen::ResetStreamErrorCode /*code*/ =
+            moxygen::ResetStreamErrorCode::CANCELLED) override {}
 
     folly::coro::Task<RequestUpdateResult> requestUpdate(
         RequestUpdate update) override {

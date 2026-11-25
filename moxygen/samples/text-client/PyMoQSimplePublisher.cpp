@@ -87,7 +87,9 @@ class SimpleSubscriptionHandle : public SubscriptionHandle {
  public:
   SimpleSubscriptionHandle() = default;
 
-  void unsubscribe() override {}
+  void unsubscribe(
+      moxygen::ResetStreamErrorCode /*code*/ =
+          moxygen::ResetStreamErrorCode::CANCELLED) override {}
 
   folly::coro::Task<RequestUpdateResult> requestUpdate(RequestUpdate) override {
     co_return folly::makeUnexpected(

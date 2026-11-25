@@ -587,7 +587,7 @@ TEST_F(MoQProxyTrackTest, FirstSubscriberEstablishesUpstreamSubscription) {
                       folly::IOBuf::copyBuffer("x"))
                   .hasValue());
 
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   result.value()->unsubscribe();
   EXPECT_EQ(callback_->calls, 1);
   EXPECT_EQ(callback_->lastTrack, track_.get());
@@ -635,7 +635,7 @@ TEST_F(MoQProxyTrackTest, ConcurrentSubscribersShareUpstreamSubscription) {
   ASSERT_TRUE(secondResult->hasValue());
   EXPECT_EQ(provider_->calls, 1);
 
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   firstResult->value()->unsubscribe();
   EXPECT_EQ(callback_->calls, 0);
   secondResult->value()->unsubscribe();
@@ -684,7 +684,7 @@ TEST_F(MoQProxyTrackTest, ProviderFailureFallsBackToNextProvider) {
   EXPECT_EQ(provider_->calls, 1);
   EXPECT_EQ(primaryProvider->receivedHasFallbackProvider, true);
   EXPECT_EQ(provider_->receivedHasFallbackProvider, false);
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   result.value()->unsubscribe();
 }
 
@@ -734,7 +734,7 @@ TEST_F(MoQProxyTrackTest, UpstreamEndingWhileSubscribingFailsTheSubscribe) {
                     "track ended"});
             co_return Publisher::SubscribeResult(upstreamHandle);
           }));
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
 
   auto result = folly::coro::blockingWait(
       track_->subscribe(
@@ -779,7 +779,7 @@ TEST_F(
                     "track ended"});
             co_return Publisher::SubscribeResult(upstreamHandle);
           }));
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
 
   auto result = folly::coro::blockingWait(
       track_->subscribe(
@@ -808,7 +808,7 @@ TEST_F(
             cb->beginSubgroup(11, 0, kDefaultPriority, {});
             co_return Publisher::SubscribeResult(upstreamHandle);
           }));
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
 
   auto result = folly::coro::blockingWait(
       track_->subscribe(
@@ -862,7 +862,7 @@ TEST_F(MoQProxyTrackTest, ReleasingDownstreamHandleRemovesSubscriber) {
       &eventBase_);
   ASSERT_TRUE(result.hasValue());
 
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   auto downstreamHandle = std::move(result).value();
   downstreamHandle.reset();
 
@@ -889,7 +889,7 @@ TEST_F(MoQProxyTrackTest, UpstreamPublishDoneDrainsDownstreamSubscriber) {
   ASSERT_TRUE(result.hasValue());
   ASSERT_NE(upstreamConsumer, nullptr);
 
-  EXPECT_CALL(*upstreamHandle, unsubscribe()).Times(0);
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_)).Times(0);
   EXPECT_CALL(*downstreamConsumer, publishDone(_));
   auto publishResult = upstreamConsumer->publishDone(
       PublishDone{
@@ -936,7 +936,7 @@ TEST_F(MoQProxyTrackTest, UpstreamSubscribeErrorFallsBackToNextProvider) {
   ASSERT_TRUE(result.hasValue());
   EXPECT_EQ(provider_->calls, 1);
   EXPECT_EQ(fallbackProvider->calls, 1);
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   result.value()->unsubscribe();
 }
 
@@ -965,7 +965,7 @@ TEST_F(MoQProxyTrackTest, DownstreamRequestUpdateIsNotSupported) {
   ASSERT_TRUE(updateResult.hasError());
   EXPECT_EQ(updateResult.error().requestID, RequestID(7));
   EXPECT_EQ(updateResult.error().errorCode, RequestErrorCode::NOT_SUPPORTED);
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   result.value()->unsubscribe();
   EXPECT_EQ(callback_->calls, 1);
 }
@@ -974,7 +974,7 @@ TEST_F(MoQProxyTrackTest, DestroyingTheTrackEndsViewersWithGoingAway) {
   auto consumer = makeConsumer();
   auto upstreamHandle = makeUpstreamHandle();
   auto downstreamHandle = subscribeThroughUpstream(upstreamHandle, consumer);
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   EXPECT_CALL(
       *consumer,
       publishDone(
@@ -1001,7 +1001,7 @@ class MoQProxyTrackViewerEndTest : public MoQProxyTrackTest {
     auto subgroup = upstreamConsumer_->beginSubgroup(11, 0, kDefaultPriority);
     ASSERT_TRUE(subgroup.hasValue());
     openSubgroup_ = subgroup.value();
-    EXPECT_CALL(*upstreamHandle_, unsubscribe()).Times(AtMost(1));
+    EXPECT_CALL(*upstreamHandle_, unsubscribe(testing::_)).Times(AtMost(1));
   }
 
   std::shared_ptr<NiceMock<MockTrackConsumer>> consumer_;
@@ -1044,7 +1044,7 @@ TEST_F(MoQProxyTrackTest, UpstreamGoawaysAreCountedWhileTheUpstreamServes) {
   auto consumer = makeConsumer();
   auto downstreamHandle = subscribeThroughUpstream(upstreamHandle, consumer);
   ASSERT_NE(upstreamConsumer_, nullptr);
-  EXPECT_CALL(*upstreamHandle, unsubscribe()).Times(0);
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_)).Times(0);
 
   receiveSessionGoaway();
   upstreamConsumer_->goaway(Goaway{});
@@ -1059,7 +1059,7 @@ TEST_F(MoQProxyTrackTest, UpstreamGoawaysAreCountedWhileTheUpstreamServes) {
                       folly::IOBuf::copyBuffer("x"))
                   .hasValue());
   Mock::VerifyAndClearExpectations(upstreamHandle.get());
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   downstreamHandle->unsubscribe();
 }
 
@@ -1084,14 +1084,14 @@ TEST_F(MoQProxyTrackTest, GoawayWhileTheUpstreamSubscribeIsInFlightIsCounted) {
 
   ASSERT_TRUE(result.hasValue());
   EXPECT_EQ(switchStats_->counters().upstreamGoaways, 1);
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   result.value()->unsubscribe();
 }
 
 TEST_F(MoQProxyTrackTest, ClosingStopsTheWatchOfAnUpstreamSubscribeInFlight) {
   folly::coro::Baton upstreamReply;
   auto upstreamHandle = makeUpstreamHandle();
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   std::shared_ptr<SubgroupConsumer> openSubgroup;
   std::optional<Publisher::SubscribeResult> result;
   startSubscribeWithUpstreamInFlight(
@@ -1119,7 +1119,7 @@ TEST_F(
     UpstreamEndingStopsTheWatchOfAnUpstreamSubscribeInFlight) {
   folly::coro::Baton upstreamReply;
   auto upstreamHandle = makeUpstreamHandle();
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   std::shared_ptr<SubgroupConsumer> openSubgroup;
   std::optional<Publisher::SubscribeResult> result;
   startSubscribeWithUpstreamInFlight(
@@ -1149,7 +1149,7 @@ TEST_F(
     LosingTheOnlyViewerStopsTheWatchOfAnUpstreamSubscribeInFlight) {
   folly::coro::Baton upstreamReply;
   auto upstreamHandle = makeUpstreamHandle();
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   auto consumer = makeConsumer();
   ON_CALL(*consumer, beginSubgroup(_, _, _, _))
       .WillByDefault(Return(
@@ -1174,7 +1174,7 @@ TEST_F(MoQProxyTrackTest, GoawaysAfterTheUpstreamIsReleasedAreIgnored) {
   auto downstreamHandle =
       subscribeThroughUpstream(upstreamHandle, makeConsumer());
   ASSERT_NE(upstreamConsumer_, nullptr);
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   downstreamHandle->unsubscribe();
 
   receiveSessionGoaway();
@@ -1191,7 +1191,7 @@ TEST_F(MoQProxyTrackTest, GoawaysAfterCloseAreIgnored) {
   ASSERT_NE(upstreamConsumer_, nullptr);
   auto subgroup = upstreamConsumer_->beginSubgroup(11, 0, kDefaultPriority);
   ASSERT_TRUE(subgroup.hasValue());
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   track_->close();
   ASSERT_EQ(callback_->calls, 0);
 
@@ -1255,7 +1255,7 @@ TEST_F(MoQProxyTrackTest, GoawaysOnTheSessionOfAFailedAttemptAreIgnored) {
   receiveSessionGoaway();
 
   EXPECT_EQ(switchStats_->counters().upstreamGoaways, 0);
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   result.value()->unsubscribe();
 }
 
@@ -1723,7 +1723,7 @@ TEST_F(
   runPending();
   ASSERT_EQ(track_->upstreamSession(), replacementSession_);
   ASSERT_TRUE(replacementConsumer_->beginSubgroup(12, 0, kDefaultPriority));
-  EXPECT_CALL(*replacementHandle, unsubscribe());
+  EXPECT_CALL(*replacementHandle, unsubscribe(testing::_));
   EXPECT_CALL(
       *consumer,
       publishDone(
@@ -1750,7 +1750,7 @@ TEST_F(MoQProxyTrackSwitchTest, AQuietTracksReplacementCompletesTheSwitch) {
   auto replacementHandle = makeUpstreamHandle();
   expectReplacementSubscribe(replacementHandle);
   EXPECT_CALL(*consumer, publishDone(_)).Times(0);
-  EXPECT_CALL(*replacementHandle, unsubscribe()).Times(0);
+  EXPECT_CALL(*replacementHandle, unsubscribe(testing::_)).Times(0);
   loseUpstream();
   runPending();
   ASSERT_EQ(track_->upstreamSession(), replacementSession_);
@@ -1794,7 +1794,7 @@ TEST_P(MoQProxyTrackRefusedQuietTest, AReplacementWhoseDataWasRefusedFails) {
     EXPECT_TRUE(replacementConsumer_->beginSubgroup(10, 1, kDefaultPriority)
                     .hasError());
   }
-  EXPECT_CALL(*replacementHandle, unsubscribe());
+  EXPECT_CALL(*replacementHandle, unsubscribe(testing::_));
   EXPECT_CALL(
       *consumer,
       publishDone(
@@ -2113,7 +2113,7 @@ TEST_P(MoQProxyTrackSwitchStopTest, StoppingTheSwitchCancelsTheAttempt) {
               *subscribeCancelled = waited.hasException();
               co_return Publisher::SubscribeResult(lateHandle);
             }));
-    EXPECT_CALL(*lateHandle, unsubscribe());
+    EXPECT_CALL(*lateHandle, unsubscribe(testing::_));
   }
   EXPECT_CALL(
       *consumer,
@@ -2418,13 +2418,13 @@ TEST_F(
   ASSERT_TRUE(replacementOpens(12));
   EXPECT_FALSE(oldOpens(12));
   EXPECT_TRUE(viewerSubgroups_.contains(12));
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
   ASSERT_TRUE(finish(*oldSubgroup11_));
   advanceTime(kReorderGrace - std::chrono::milliseconds(1));
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
   EXPECT_EQ(switchStats_->counters().gracefulSwitches.completed, 0);
   Mock::VerifyAndClearExpectations(oldHandle_.get());
-  EXPECT_CALL(*oldHandle_, unsubscribe());
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_));
 
   advanceTime(std::chrono::milliseconds(1));
 
@@ -2457,13 +2457,13 @@ TEST_F(MoQProxyTrackGracefulSwitchTest, ALateOldStreamRestartsTheReorderGrace) {
   advanceTime(kReorderGrace / 2);
   auto late = upstreamConsumer_->beginSubgroup(11, 1, kDefaultPriority);
   ASSERT_TRUE(late.hasValue());
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
   advanceTime(kReorderGrace);
   ASSERT_TRUE(finish(*late.value()));
   advanceTime(kReorderGrace - std::chrono::milliseconds(1));
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
   Mock::VerifyAndClearExpectations(oldHandle_.get());
-  EXPECT_CALL(*oldHandle_, unsubscribe());
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_));
 
   advanceTime(std::chrono::milliseconds(1));
 
@@ -2492,11 +2492,11 @@ TEST_P(
   ASSERT_TRUE(replacementOpens(12));
   EXPECT_FALSE(oldOpens(12));
   oldSubgroup11_.reset();
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
   advanceTime(2 * kReorderGrace);
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
   Mock::VerifyAndClearExpectations(oldHandle_.get());
-  EXPECT_CALL(*oldHandle_, unsubscribe());
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_));
 
   reopened.value().reset();
   advanceTime(kReorderGrace);
@@ -2889,11 +2889,11 @@ TEST_P(MoQProxyTrackTailCaseTest, TheTailTimerLetsGoOfAnOldUpstreamThatLags) {
   advanceTime(GetParam().groupSpacing);
   ASSERT_TRUE(replacementOpens(12));
   EXPECT_FALSE(oldOpens(12));
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
   advanceTime(GetParam().servesUntil);
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
   Mock::VerifyAndClearExpectations(oldHandle_.get());
-  EXPECT_CALL(*oldHandle_, unsubscribe());
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_));
   EXPECT_CALL(*viewerSubgroups_[11], reset(ResetStreamErrorCode::CANCELLED));
 
   advanceTime(GetParam().cutBy - GetParam().servesUntil);
@@ -3131,8 +3131,8 @@ TEST_F(MoQProxyTrackTailTest, ATailCutoffThatEndsTheLastStreamClosesTheTrack) {
   downstreamHandle_->unsubscribe();
   subgroup.value()->endOfSubgroup();
   ASSERT_EQ(callback_->calls, 0);
-  EXPECT_CALL(*oldHandle_, unsubscribe());
-  EXPECT_CALL(*replacementHandle, unsubscribe());
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_));
+  EXPECT_CALL(*replacementHandle, unsubscribe(testing::_));
 
   advanceTime(switchOptions_.minTail);
 
@@ -3288,11 +3288,11 @@ TEST_F(
   receiveSessionGoaway();
   runPending();
   ASSERT_NE(replacementConsumer_, nullptr);
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
   advanceTime(kReorderGrace - std::chrono::milliseconds(1));
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
   Mock::VerifyAndClearExpectations(oldHandle_.get());
-  EXPECT_CALL(*oldHandle_, unsubscribe());
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_));
 
   advanceTime(std::chrono::milliseconds(1));
 
@@ -3314,11 +3314,11 @@ TEST_F(
   receiveSessionGoaway();
   runPending();
   ASSERT_NE(replacementConsumer_, nullptr);
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
   advanceTime(2 * kReorderGrace);
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
   Mock::VerifyAndClearExpectations(oldHandle_.get());
-  EXPECT_CALL(*oldHandle_, unsubscribe());
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_));
 
   ASSERT_TRUE(finish(*oldSubgroup11_));
   advanceTime(kReorderGrace);
@@ -3336,7 +3336,7 @@ TEST_F(MoQProxyTrackGracefulSwitchTest, OldOpeningAGroupStopsAQuietHandover) {
   runPending();
   advanceTime(kReorderGrace / 2);
   ASSERT_TRUE(oldOpens(11));
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
 
   advanceTime(2 * kReorderGrace);
 
@@ -3362,7 +3362,7 @@ TEST_F(
   receiveSessionGoaway();
   runPending();
   ASSERT_NE(replacementConsumer_, nullptr);
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
   ASSERT_TRUE(upstreamConsumer_->objectStream(
       ObjectHeader(10, 0, 3, 0, uint64_t(1)), folly::IOBuf::copyBuffer("x")));
   advanceTime(2 * kReorderGrace);
@@ -3375,7 +3375,7 @@ TEST_F(
   advanceTime(kReorderGrace + kReorderGrace / 2 - std::chrono::milliseconds(1));
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
   Mock::VerifyAndClearExpectations(oldHandle_.get());
-  EXPECT_CALL(*oldHandle_, unsubscribe());
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_));
 
   advanceTime(std::chrono::milliseconds(1));
 
@@ -3469,7 +3469,7 @@ TEST_F(
           Return(folly::makeExpected<MoQPublishError>(folly::unit)));
   ASSERT_TRUE(upstreamConsumer_->objectStream(
       ObjectHeader(10, 0, 3, 0, uint64_t(1)), folly::IOBuf::copyBuffer("x")));
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
 
   advanceTime(2 * kReorderGrace);
 
@@ -3522,7 +3522,7 @@ TEST_P(MoQProxyTrackQuietRefusalTest, ARefusedReplacementStreamKeepsOld) {
                         folly::IOBuf::copyBuffer("x"))
                     .hasError());
   }
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
 
   advanceTime(2 * kReorderGrace);
 
@@ -3562,7 +3562,7 @@ TEST_F(
   expectReplacementSubscribe();
   receiveSessionGoaway();
   runPending();
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
   advanceTime(2 * kReorderGrace);
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
   Mock::VerifyAndClearExpectations(oldHandle_.get());
@@ -3596,11 +3596,11 @@ TEST_F(
   ASSERT_TRUE(replacement12.hasValue());
   EXPECT_FALSE(oldOpens(12));
   ASSERT_TRUE(finish(*oldSubgroup11_));
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
   advanceTime(2 * kReorderGrace);
   EXPECT_EQ(track_->upstreamSession(), upstreamSession_);
   Mock::VerifyAndClearExpectations(oldHandle_.get());
-  EXPECT_CALL(*oldHandle_, unsubscribe());
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_));
 
   ASSERT_TRUE(replacement12.value()->object(
       0, folly::IOBuf::copyBuffer("x"), noExtensions(), false));
@@ -3743,7 +3743,7 @@ TEST_F(
             *subscribeReturned = true;
             co_return Publisher::SubscribeResult(lateHandle);
           }));
-  EXPECT_CALL(*lateHandle, unsubscribe());
+  EXPECT_CALL(*lateHandle, unsubscribe(testing::_));
   receiveSessionGoaway();
   runPending();
   ASSERT_TRUE(viewerSubgroups_.contains(13));
@@ -3880,8 +3880,8 @@ TEST_F(MoQProxyTrackGracefulSwitchTest, ClosingDuringASwitchStopsIt) {
   receiveSessionGoaway();
   runPending();
   ASSERT_TRUE(replacementOpens(12));
-  EXPECT_CALL(*replacementHandle, unsubscribe());
-  EXPECT_CALL(*oldHandle_, unsubscribe());
+  EXPECT_CALL(*replacementHandle, unsubscribe(testing::_));
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_));
 
   track_->close();
 
@@ -3905,7 +3905,7 @@ TEST_F(
   receiveSessionGoaway();
   runPending();
   ASSERT_NE(replacementConsumer_, nullptr);
-  EXPECT_CALL(*replacementHandle, unsubscribe());
+  EXPECT_CALL(*replacementHandle, unsubscribe(testing::_));
   EXPECT_CALL(
       *consumer_,
       publishDone(
@@ -3946,7 +3946,7 @@ TEST_P(
   }
   EXPECT_FALSE(oldOpens(12));
   ASSERT_TRUE(finish(*oldSubgroup11_));
-  EXPECT_CALL(*replacementHandle, unsubscribe()).Times(0);
+  EXPECT_CALL(*replacementHandle, unsubscribe(testing::_)).Times(0);
   EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
 
   loseUpstream(PublishDoneStatusCode::TRACK_ENDED);
@@ -4008,7 +4008,7 @@ TEST_P(
   ASSERT_NE(group12, nullptr);
   EXPECT_FALSE(oldOpens(12));
   ASSERT_TRUE(finish(*oldSubgroup11_));
-  EXPECT_CALL(*replacementHandle, unsubscribe()).Times(0);
+  EXPECT_CALL(*replacementHandle, unsubscribe(testing::_)).Times(0);
   EXPECT_CALL(*consumer_, publishDone(_)).Times(0);
 
   loseUpstream(PublishDoneStatusCode::TRACK_ENDED);
@@ -4066,7 +4066,7 @@ TEST_F(
             *subscribeReturned = true;
             co_return Publisher::SubscribeResult(lateHandle);
           }));
-  EXPECT_CALL(*lateHandle, unsubscribe());
+  EXPECT_CALL(*lateHandle, unsubscribe(testing::_));
   receiveSessionGoaway();
   runPending();
   ASSERT_TRUE(viewerSubgroups_.contains(13));
@@ -4107,7 +4107,7 @@ TEST_F(
             co_await subscribeReply;
             co_return Publisher::SubscribeResult(lateHandle);
           }));
-  EXPECT_CALL(*lateHandle, unsubscribe());
+  EXPECT_CALL(*lateHandle, unsubscribe(testing::_));
   receiveSessionGoaway();
   runPending();
   ASSERT_TRUE(viewerSubgroups_.contains(13));
@@ -4155,13 +4155,13 @@ TEST_F(
             *subscribeReturned = true;
             co_return Publisher::SubscribeResult(lateHandle);
           }));
-  EXPECT_CALL(*lateHandle, unsubscribe());
+  EXPECT_CALL(*lateHandle, unsubscribe(testing::_));
   receiveSessionGoaway();
   runPending();
   ASSERT_TRUE(finish(*oldSubgroup11_));
   loseUpstream(PublishDoneStatusCode::TRACK_ENDED);
   runPending();
-  EXPECT_CALL(*oldHandle_, unsubscribe()).Times(0);
+  EXPECT_CALL(*oldHandle_, unsubscribe(testing::_)).Times(0);
 
   downstreamHandle_->unsubscribe();
   runUntil([&] { return *subscribeReturned; });

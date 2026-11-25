@@ -410,7 +410,9 @@ class MoQCache::FetchHandle : public Publisher::FetchHandle {
   FetchHandle(FetchHandle&&) = delete;
   FetchHandle& operator=(FetchHandle&&) = delete;
 
-  void fetchCancel() override {
+  void fetchCancel(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     XLOG(DBG1) << __func__;
     source_.requestCancellation();
     if (upstreamFetchHandle_) {

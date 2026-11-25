@@ -339,7 +339,9 @@ class MoQFlvStreamerClient
               RequestErrorCode::NOT_SUPPORTED,
               "Request update not implemented"});
     }
-    void unsubscribe() override {
+    void unsubscribe(
+        ResetStreamErrorCode /*code*/ =
+            ResetStreamErrorCode::CANCELLED) override {
       auto requestID = subscribeOk_->requestID;
       XLOG(INFO) << "UNSUBSCRIBE reqID=" << requestID;
       // Delete subscribe/this

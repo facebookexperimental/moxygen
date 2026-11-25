@@ -371,8 +371,8 @@ TEST_F(LaneManagerTest, HeldBufferOverflowEndsOnlyTheAffectedSubscription) {
   auto held = lanes_.at("video0")->beginSubgroup(7, 0, 0, {});
   ASSERT_TRUE(held.hasValue());
   EXPECT_CALL(*client_, publishDone(_)).WillOnce(Return(folly::unit));
-  EXPECT_CALL(*handles_.at("video0"), unsubscribe());
-  EXPECT_CALL(*handles_.at("video1"), unsubscribe());
+  EXPECT_CALL(*handles_.at("video0"), unsubscribe(testing::_));
+  EXPECT_CALL(*handles_.at("video1"), unsubscribe(testing::_));
 
   auto result =
       held.value()->object(0, folly::IOBuf::copyBuffer(std::string(256, 'x')));
@@ -600,13 +600,13 @@ TEST_F(LaneManagerTest, UnsubscribeReleasesLanesAndTheLastReleasesTheCatalog) {
   auto video = subscribe(Role::Video, 1).value();
   auto audio = subscribe(Role::Audio, 2).value();
 
-  EXPECT_CALL(*handles_.at("video0"), unsubscribe());
-  EXPECT_CALL(*handles_.at("video1"), unsubscribe());
+  EXPECT_CALL(*handles_.at("video0"), unsubscribe(testing::_));
+  EXPECT_CALL(*handles_.at("video1"), unsubscribe(testing::_));
   video->unsubscribe();
-  EXPECT_CALL(*handles_.at("audio0"), unsubscribe());
+  EXPECT_CALL(*handles_.at("audio0"), unsubscribe(testing::_));
   audio->unsubscribe();
 
-  EXPECT_CALL(*handles_.at("catalog"), unsubscribe());
+  EXPECT_CALL(*handles_.at("catalog"), unsubscribe(testing::_));
   manager_.reset();
 }
 
