@@ -31,11 +31,21 @@ moxygen_add_library(moxygen_lane_manager_catalog_reader
     Folly::folly_coro_task
 )
 
+moxygen_add_library(moxygen_lane_manager_managed_subscription
+  SRCS
+    ManagedSubscription.cpp
+  EXPORTED_DEPS
+    moxygen_moq
+    moxygen_moq_consumers
+    Folly::folly_coro_task
+)
+
 moxygen_add_library(moxygen_lane_manager_moq_lane_manager
   SRCS
     MoQLaneManager.cpp
   DEPS
     moxygen_events_moq_executor
+    moxygen_lane_manager_managed_subscription
     moxygen_lane_manager_switch_executor
     Folly::folly_coro_shared_promise
     Folly::folly_function

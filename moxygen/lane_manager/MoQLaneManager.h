@@ -22,6 +22,8 @@
 
 namespace moxygen::lane_manager {
 
+class ManagedSubscription;
+
 // Object property carrying a lane's init segment.
 inline constexpr uint64_t kInitPropertyType = 0x3801;
 
@@ -81,9 +83,8 @@ class MoQLaneManager : public std::enable_shared_from_this<MoQLaneManager> {
   struct SubscriptionSet;
 
   static folly::coro::Task<void> subscribeLane(
-      std::shared_ptr<Publisher> proxy,
-      SubscribeRequest request,
-      std::shared_ptr<LaneConsumer> consumer,
+      FullTrackName lane,
+      std::shared_ptr<ManagedSubscription> subscription,
       std::weak_ptr<SubscriptionSet> set);
 
   // Sends, drops or holds a lane's new subgroup.
