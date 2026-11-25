@@ -4470,16 +4470,14 @@ void MoQSession::BidiRequestCallback::onTrackStatus(TrackStatus ts) {
 void MoQSession::BidiRequestCallback::onSubscribeNamespace(
     SubscribeNamespace subNs) {
   if (handleFirstFrame(subNs.requestID)) {
-    auto subNsReply = session_->getSubNsReply(replyContext_);
-    session_->onSubscribeNamespaceImpl(subNs, std::move(subNsReply));
+    session_->onSubscribeNamespaceImpl(subNs, replyContext_);
   }
 }
 
 void MoQSession::BidiRequestCallback::onSubscribeTracks(
     SubscribeTracks subTracks) {
   if (handleFirstFrame(subTracks.requestID)) {
-    auto subTracksReply = session_->getSubTracksReply(replyContext_);
-    session_->onSubscribeTracksImpl(subTracks, std::move(subTracksReply));
+    session_->onSubscribeTracksImpl(subTracks, replyContext_);
   }
 }
 
@@ -9491,13 +9489,12 @@ void MoQSession::onPublishNamespaceCancel(
 }
 
 void MoQSession::onSubscribeNamespace(SubscribeNamespace subscribeNamespace) {
-  auto subNsReply = std::make_shared<SubNSReply>(controlStreamReplyContext());
-  onSubscribeNamespaceImpl(subscribeNamespace, std::move(subNsReply));
+  onSubscribeNamespaceImpl(subscribeNamespace, controlStreamReplyContext());
 }
 
 void MoQSession::onSubscribeNamespaceImpl(
     const SubscribeNamespace& subscribeNamespace,
-    std::shared_ptr<SubNSReply> subNsReply) {
+    std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__
              << " prefix=" << subscribeNamespace.trackNamespacePrefix
              << " - sending NOT_SUPPORTED error, sess=" << this;
@@ -9509,7 +9506,7 @@ void MoQSession::onSubscribeNamespaceImpl(
             subscribeNamespace.requestID,
             SubscribeNamespaceErrorCode::GOING_AWAY,
             "Session going away"},
-        std::move(subNsReply));
+        *replyContext);
     return;
   }
   subscribeNamespaceError(
@@ -9517,7 +9514,7 @@ void MoQSession::onSubscribeNamespaceImpl(
           subscribeNamespace.requestID,
           SubscribeNamespaceErrorCode::NOT_SUPPORTED,
           "SubscribeNamespace not supported by simple client"},
-      std::move(subNsReply));
+      *replyContext);
 }
 
 void MoQSession::onUnsubscribeNamespace(
@@ -9558,24 +9555,27 @@ void MoQSession::publishNamespaceError(
 
 void MoQSession::subscribeNamespaceError(
     const SubscribeNamespaceError& subscribeNamespaceError,
-    std::shared_ptr<SubNSReply>&& subNsReply) {
+    ReplyContext& replyContext) {
   XLOG(DBG1) << __func__ << " reqID=" << subscribeNamespaceError.requestID.value
              << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_,
       onSubscribeNamespaceError,
       subscribeNamespaceError.errorCode);
-  auto res = subNsReply->error(subscribeNamespaceError);
+  auto res = replyContext.writer().writeRequestError(
+      replyContext.writeBuf(),
+      subscribeNamespaceError,
+      FrameType::SUBSCRIBE_NAMESPACE_ERROR);
   if (!res) {
     XLOG(ERR) << "writeSubscribeNamespaceError failed sess=" << this;
-    return;
   }
+  replyContext.flushFinal();
 }
 
 // Draft 18+: SUBSCRIBE_TRACKS handlers and helpers
 void MoQSession::onSubscribeTracksImpl(
     const SubscribeTracks& subscribeTracks,
-    std::shared_ptr<SubscribeTracksReply> subTracksReply) {
+    std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " prefix=" << subscribeTracks.trackNamespacePrefix
              << " - sending NOT_SUPPORTED error, sess=" << this;
   if (receivedGoaway_) {
@@ -9584,7 +9584,7 @@ void MoQSession::onSubscribeTracksImpl(
             subscribeTracks.requestID,
             SubscribeTracksErrorCode::GOING_AWAY,
             "Session received GOAWAY"},
-        std::move(subTracksReply));
+        *replyContext);
     return;
   }
   subscribeTracksError(
@@ -9592,22 +9592,24 @@ void MoQSession::onSubscribeTracksImpl(
           subscribeTracks.requestID,
           SubscribeTracksErrorCode::NOT_SUPPORTED,
           "SubscribeTracks not supported by simple client"},
-      std::move(subTracksReply));
+      *replyContext);
 }
 
 void MoQSession::subscribeTracksError(
     const SubscribeTracksError& subscribeTracksError,
-    std::shared_ptr<SubscribeTracksReply>&& subTracksReply) {
+    ReplyContext& replyContext) {
   XLOG(DBG1) << __func__ << " reqID=" << subscribeTracksError.requestID.value
              << " sess=" << this;
   MOQ_PUBLISHER_STATS(
       publisherStatsCallback_,
       onSubscribeTracksError,
       subscribeTracksError.errorCode);
-  auto res = subTracksReply->error(subscribeTracksError);
+  auto res = replyContext.writer().writeRequestError(
+      replyContext.writeBuf(), subscribeTracksError, FrameType::REQUEST_ERROR);
   if (!res) {
     XLOG(ERR) << "writeSubscribeTracksError failed sess=" << this;
   }
+  replyContext.flushFinal();
 }
 
 // Static methods
@@ -9718,101 +9720,6 @@ std::shared_ptr<ReplyContext> MoQSession::controlStreamReplyContext() {
         cancellationSource_.getToken());
   }
   return controlStreamReplyContext_;
-}
-
-WriteResult SubNSReply::ok(const SubscribeNamespaceOk& subNsOk) {
-  auto res = replyContext_->writer().writeSubscribeNamespaceOk(
-      replyContext_->writeBuf(), subNsOk);
-  if (res) {
-    replyContext_->flush();
-  }
-  return res;
-}
-
-WriteResult SubNSReply::error(const SubscribeNamespaceError& subNsError) {
-  auto res = replyContext_->writer().writeRequestError(
-      replyContext_->writeBuf(),
-      subNsError,
-      FrameType::SUBSCRIBE_NAMESPACE_ERROR);
-  replyContext_->flushFinal();
-  return res;
-}
-
-WriteResult MessageReply::ok(const RequestOk& okMsg) {
-  auto res = replyContext_->writer().writeRequestOk(
-      replyContext_->writeBuf(), okMsg, FrameType::REQUEST_OK);
-  if (res) {
-    replyContext_->flush();
-  }
-  return res;
-}
-
-WriteResult MessageReply::error(const SubscribeTracksError& errorMsg) {
-  if (errorMsg.errorCode == RequestErrorCode::REDIRECT) {
-    XLOG(ERR) << "REDIRECT not permitted in SUBSCRIBE_TRACKS error";
-    return folly::makeUnexpected(quic::TransportErrorCode::INTERNAL_ERROR);
-  }
-  auto res = replyContext_->writer().writeRequestError(
-      replyContext_->writeBuf(), errorMsg, FrameType::REQUEST_ERROR);
-  // After ERROR the publisher is done with this stream — FIN it.
-  replyContext_->flushFinal();
-  return res;
-}
-
-WriteResult SubscribeTracksReply::ok(const RequestOk& okMsg) {
-  if (errorSent_ || okSent_) {
-    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
-  }
-  auto res = replyContext_->writer().writeRequestOk(
-      replyContext_->writeBuf(), okMsg, FrameType::REQUEST_OK);
-  if (!res) {
-    return res;
-  }
-  replyContext_->flush();
-  okSent_ = true;
-  flushPendingMessages();
-  return res;
-}
-
-WriteResult SubscribeTracksReply::error(const SubscribeTracksError& errorMsg) {
-  if (okSent_ || errorSent_) {
-    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
-  }
-  auto res = replyContext_->writer().writeRequestError(
-      replyContext_->writeBuf(), errorMsg, FrameType::REQUEST_ERROR);
-  pendingBuf_.move();
-  replyContext_->flush(/*fin=*/true);
-  errorSent_ = true;
-  return res;
-}
-
-void SubscribeTracksReply::publishBlocked(
-    const TrackNamespace& trackNamespaceSuffix,
-    const std::string& trackName) {
-  if (errorSent_) {
-    XLOG(ERR) << "Ignoring PUBLISH_BLOCKED after REQUEST_ERROR";
-    return;
-  }
-  auto res = replyContext_->writer().writePublishBlocked(
-      replyContext_->writeBuf(),
-      PublishBlocked{trackNamespaceSuffix, trackName});
-  if (!res) {
-    XLOG(ERR) << "writePublishBlocked failed err=" << uint64_t(res.error());
-    replyContext_->writeBuf().move();
-    return;
-  }
-  if (okSent_) {
-    replyContext_->flush();
-  } else {
-    pendingBuf_.append(replyContext_->writeBuf().move());
-  }
-}
-
-void SubscribeTracksReply::flushPendingMessages() {
-  if (!pendingBuf_.empty()) {
-    replyContext_->writeBuf().append(pendingBuf_.move());
-    replyContext_->flush();
-  }
 }
 
 } // namespace moxygen

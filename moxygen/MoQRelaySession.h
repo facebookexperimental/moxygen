@@ -11,25 +11,52 @@
 
 namespace moxygen {
 
-class SeparateStreamSubNsReply : public SubNSReply {
+class SubNSReply {
  public:
-  explicit SeparateStreamSubNsReply(std::shared_ptr<ReplyContext> replyContext)
-      : SubNSReply(std::move(replyContext)) {}
+  explicit SubNSReply(std::shared_ptr<ReplyContext> replyContext)
+      : replyContext_(std::move(replyContext)) {}
 
-  ~SeparateStreamSubNsReply() = default;
+  WriteResult ok(const SubscribeNamespaceOk&);
+  WriteResult error(const SubscribeNamespaceError&);
+  WriteResult namespaceMsg(const Namespace&);
+  WriteResult namespaceDoneMsg(const NamespaceDone&);
 
-  WriteResult ok(const SubscribeNamespaceOk&) override;
-  WriteResult error(const SubscribeNamespaceError&) override;
-  WriteResult namespaceMsg(const Namespace&) override;
-  WriteResult namespaceDoneMsg(const NamespaceDone&) override;
+  const std::shared_ptr<ReplyContext>& replyContext() const {
+    return replyContext_;
+  }
 
  private:
   void flushPendingMessages();
 
+  std::shared_ptr<ReplyContext> replyContext_;
   folly::IOBufQueue pendingBuf_{folly::IOBufQueue::cacheChainLength()};
   bool pendingFin_{false};
   bool okSent_{false};
   bool namespaceFrameSent_{false};
+  bool errorSent_{false};
+};
+
+class SubscribeTracksReply : public Publisher::TracksPublishHandle {
+ public:
+  explicit SubscribeTracksReply(std::shared_ptr<ReplyContext> replyContext)
+      : replyContext_(std::move(replyContext)) {}
+
+  WriteResult ok(const RequestOk&);
+  WriteResult error(const SubscribeTracksError&);
+  void publishBlocked(
+      const TrackNamespace& trackNamespaceSuffix,
+      const std::string& trackName) override;
+
+  const std::shared_ptr<ReplyContext>& replyContext() const {
+    return replyContext_;
+  }
+
+ private:
+  void flushPendingMessages();
+
+  std::shared_ptr<ReplyContext> replyContext_;
+  folly::IOBufQueue pendingBuf_{folly::IOBufQueue::cacheChainLength()};
+  bool okSent_{false};
   bool errorSent_{false};
 };
 
@@ -89,26 +116,16 @@ class MoQRelaySession : public MoQSession {
  protected:
   void onSubscribeNamespaceImpl(
       const SubscribeNamespace& subscribeNamespace,
-      std::shared_ptr<SubNSReply> subNsReply) override;
+      std::shared_ptr<ReplyContext> replyContext) override;
 
   // Draft 18+
   void onSubscribeTracksImpl(
       const SubscribeTracks& subscribeTracks,
-      std::shared_ptr<SubscribeTracksReply> subTracksReply) override;
+      std::shared_ptr<ReplyContext> replyContext) override;
 
   void onSubscribeTracksStreamClosed(
       RequestID requestID,
       ResetStreamErrorCode code) override;
-
-  std::shared_ptr<SubNSReply> getSubNsReply(
-      std::shared_ptr<ReplyContext> replyContext) override {
-    return std::make_shared<SeparateStreamSubNsReply>(std::move(replyContext));
-  }
-
-  std::shared_ptr<SubscribeTracksReply> getSubTracksReply(
-      std::shared_ptr<ReplyContext> replyContext) override {
-    return std::make_shared<SubscribeTracksReply>(std::move(replyContext));
-  }
 
  private:
   // Clean up relay-specific state without requiring shared_from_this().
@@ -170,6 +187,9 @@ class MoQRelaySession : public MoQSession {
   void subscribeNamespaceOk(
       const SubscribeNamespaceOk& saOk,
       std::shared_ptr<SubNSReply>&& subNsReply);
+  void subscribeNamespaceError(
+      const SubscribeNamespaceError& subNsError,
+      std::shared_ptr<SubNSReply>&& subNsReply);
 
   // Draft 18+: SUBSCRIBE_TRACKS handling.
   folly::coro::Task<void> handleSubscribeTracks(
@@ -177,6 +197,9 @@ class MoQRelaySession : public MoQSession {
       std::shared_ptr<SubscribeTracksReply> subTracksReply);
   void subscribeTracksOk(
       const RequestOk& subTracksOk,
+      std::shared_ptr<SubscribeTracksReply>&& subTracksReply);
+  void subscribeTracksError(
+      const SubscribeTracksError& subTracksError,
       std::shared_ptr<SubscribeTracksReply>&& subTracksReply);
 
   folly::coro::Task<void> handlePublishNamespace(
