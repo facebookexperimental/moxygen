@@ -1246,13 +1246,13 @@ class SubTracksStreamCallback : public MoQControlCodec::ControlCallback {
  public:
   SubTracksStreamCallback(
       MoQSession* session,
-      std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle)
+      std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle)
       : session_(session),
-        publishBlockedHandle_(std::move(publishBlockedHandle)) {}
+        tracksPublishHandle_(std::move(tracksPublishHandle)) {}
 
   void releaseHandleOnCancel(const folly::CancellationToken& readCancelToken) {
     releaseHandle_.emplace(
-        readCancelToken, [this] { publishBlockedHandle_.reset(); });
+        readCancelToken, [this] { tracksPublishHandle_.reset(); });
   }
 
   void onConnectionError(ErrorCode error) override {
@@ -1260,8 +1260,8 @@ class SubTracksStreamCallback : public MoQControlCodec::ControlCallback {
   }
 
   void onPublishBlocked(PublishBlocked publishBlocked) override {
-    if (publishBlockedHandle_) {
-      publishBlockedHandle_->publishBlocked(
+    if (tracksPublishHandle_) {
+      tracksPublishHandle_->publishBlocked(
           publishBlocked.trackNamespaceSuffix, publishBlocked.trackName);
     }
   }
@@ -1276,7 +1276,7 @@ class SubTracksStreamCallback : public MoQControlCodec::ControlCallback {
 
  private:
   MoQSession* session_;
-  std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle_;
+  std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle_;
   std::optional<folly::CancellationCallback> releaseHandle_;
 };
 
@@ -1572,7 +1572,7 @@ class NamespaceBackedSubscribeTracksHandle
 folly::coro::Task<Publisher::SubscribeTracksResult>
 MoQRelaySession::subscribeTracks(
     SubscribeTracks subTracks,
-    std::shared_ptr<PublishBlockedHandle> publishBlockedHandle) {
+    std::shared_ptr<TracksPublishHandle> tracksPublishHandle) {
   XLOG(DBG1) << __func__ << " prefix=" << subTracks.trackNamespacePrefix
              << " sess=" << this;
   if (getDraftMajorVersion(negotiatedVersion_) < 18) {
@@ -1599,7 +1599,7 @@ MoQRelaySession::subscribeTracks(
   aliasifyAuthTokens(subTracks.params);
   subTracks.requestID = getNextRequestID();
   auto streamCallback = std::make_unique<SubTracksStreamCallback>(
-      this, std::move(publishBlockedHandle));
+      this, std::move(tracksPublishHandle));
   // The read loop that owns it only starts once this coroutine suspends.
   auto* streamCallbackPtr = streamCallback.get();
 
@@ -1693,11 +1693,11 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeTracks(
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
-  std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle =
+  std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle =
       subTracksReply;
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto subTracksResult = co_await co_awaitTry(publishHandler_->subscribeTracks(
-      subTracks, std::move(publishBlockedHandle)));
+      subTracks, std::move(tracksPublishHandle)));
   if (token.isCancellationRequested()) {
     // The subscriber left before this handle was installed.
     // onSubscribeTracksStreamClosed already retired the request.

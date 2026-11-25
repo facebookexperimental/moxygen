@@ -144,8 +144,7 @@ CO_TEST_P_X(Draft22Test, SubscribeTracksCarriesIncludePropertiesFalse) {
   std::shared_ptr<MockSubscribeTracksHandle> mockHandle;
   EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
       .WillOnce(
-          [&mockHandle](
-              SubscribeTracks subTracks, auto /*publishBlockedHandle*/)
+          [&mockHandle](SubscribeTracks subTracks, auto /*tracksPublishHandle*/)
               -> folly::coro::Task<Publisher::SubscribeTracksResult> {
             EXPECT_FALSE(subTracks.includeProperties);
             mockHandle = std::make_shared<MockSubscribeTracksHandle>(
@@ -179,11 +178,11 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeAndUnsubscribeTracks) {
       .WillOnce(
           testing::Invoke(
               [&mockSubscribeTracksHandle](
-                  auto subTracks, auto publishBlockedHandle)
+                  auto subTracks, auto tracksPublishHandle)
                   -> folly::coro::Task<Publisher::SubscribeTracksResult> {
-                EXPECT_NE(publishBlockedHandle, nullptr);
-                if (publishBlockedHandle) {
-                  publishBlockedHandle->publishBlocked(
+                EXPECT_NE(tracksPublishHandle, nullptr);
+                if (tracksPublishHandle) {
+                  tracksPublishHandle->publishBlocked(
                       TrackNamespace(std::vector<std::string>{"sports"}),
                       "highlights");
                 }
@@ -206,7 +205,7 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeAndUnsubscribeTracks) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
-class MockPublishBlockedHandle : public Publisher::PublishBlockedHandle {
+class MockTracksPublishHandle : public Publisher::TracksPublishHandle {
  public:
   MOCK_METHOD(
       void,
@@ -215,18 +214,18 @@ class MockPublishBlockedHandle : public Publisher::PublishBlockedHandle {
       (override));
 };
 
-// Unsubscribing must release the caller's PublishBlockedHandle without
+// Unsubscribing must release the caller's TracksPublishHandle without
 // waiting for the peer to close its half of the stream.
 CO_TEST_P_X(
     V18PlusSubscribeTracksTest,
-    UnsubscribeTracksReleasesPublishBlockedHandle) {
+    UnsubscribeTracksReleasesTracksPublishHandle) {
   co_await setupMoQSession();
 
   folly::coro::Baton serverSawUnsubscribe;
   std::shared_ptr<MockSubscribeTracksHandle> serverHandle;
   EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
       .WillOnce(
-          [&](auto subTracks, auto /* publishBlockedHandle */)
+          [&](auto subTracks, auto /* tracksPublishHandle */)
               -> folly::coro::Task<Publisher::SubscribeTracksResult> {
             serverHandle =
                 std::make_shared<MockSubscribeTracksHandle>(SubscribeTracksOk(
@@ -239,9 +238,8 @@ CO_TEST_P_X(
           });
 
   auto clientHandle =
-      std::make_shared<testing::StrictMock<MockPublishBlockedHandle>>();
-  std::weak_ptr<Publisher::PublishBlockedHandle> weakClientHandle =
-      clientHandle;
+      std::make_shared<testing::StrictMock<MockTracksPublishHandle>>();
+  std::weak_ptr<Publisher::TracksPublishHandle> weakClientHandle = clientHandle;
   auto result = co_await clientSession_->subscribeTracks(
       getSubscribeTracks(), std::move(clientHandle));
   EXPECT_FALSE(result.hasError());
@@ -279,7 +277,7 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeTracksAppReturnsError) {
   EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
       .WillOnce(
           testing::Invoke(
-              [](auto subTracks, auto /*publishBlockedHandle*/)
+              [](auto subTracks, auto /*tracksPublishHandle*/)
                   -> folly::coro::Task<Publisher::SubscribeTracksResult> {
                 co_return folly::makeUnexpected(
                     SubscribeTracksError{
@@ -305,7 +303,7 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeTracksAppThrows) {
   EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
       .WillOnce(
           testing::Invoke(
-              [](auto /*subTracks*/, auto /*publishBlockedHandle*/)
+              [](auto /*subTracks*/, auto /*tracksPublishHandle*/)
                   -> folly::coro::Task<Publisher::SubscribeTracksResult> {
                 throw std::runtime_error("kaboom");
                 co_return folly::makeUnexpected(SubscribeTracksError{});
@@ -327,7 +325,7 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, UnsubscribeTracksAfterSessionClosed) {
   EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
       .WillOnce(
           testing::Invoke(
-              [](auto subTracks, auto /*publishBlockedHandle*/)
+              [](auto subTracks, auto /*tracksPublishHandle*/)
                   -> folly::coro::Task<Publisher::SubscribeTracksResult> {
                 co_return std::make_shared<MockSubscribeTracksHandle>(
                     SubscribeTracksOk(
@@ -357,7 +355,7 @@ CO_TEST_P_X(
   std::shared_ptr<MockSubscribeTracksHandle> serverHandle;
   EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
       .WillOnce(
-          [&](auto subTracks, auto /* publishBlockedHandle */)
+          [&](auto subTracks, auto /* tracksPublishHandle */)
               -> folly::coro::Task<Publisher::SubscribeTracksResult> {
             serverSawSubscribeTracks.post();
             co_await releaseHandler;
@@ -372,9 +370,8 @@ CO_TEST_P_X(
           });
 
   auto clientHandle =
-      std::make_shared<testing::StrictMock<MockPublishBlockedHandle>>();
-  std::weak_ptr<Publisher::PublishBlockedHandle> weakClientHandle =
-      clientHandle;
+      std::make_shared<testing::StrictMock<MockTracksPublishHandle>>();
+  std::weak_ptr<Publisher::TracksPublishHandle> weakClientHandle = clientHandle;
   folly::CancellationSource cancelSource;
   auto subscribeTracksFut =
       folly::coro::co_withExecutor(
@@ -414,7 +411,7 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeTracksCancelledWhileOkQueued) {
   std::shared_ptr<MockSubscribeTracksHandle> serverHandle;
   EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
       .WillOnce(
-          [&](auto subTracks, auto /* publishBlockedHandle */)
+          [&](auto subTracks, auto /* tracksPublishHandle */)
               -> folly::coro::Task<Publisher::SubscribeTracksResult> {
             serverSawSubscribeTracks.post();
             co_await releaseHandler;
@@ -429,9 +426,8 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeTracksCancelledWhileOkQueued) {
           });
 
   auto clientHandle =
-      std::make_shared<testing::StrictMock<MockPublishBlockedHandle>>();
-  std::weak_ptr<Publisher::PublishBlockedHandle> weakClientHandle =
-      clientHandle;
+      std::make_shared<testing::StrictMock<MockTracksPublishHandle>>();
+  std::weak_ptr<Publisher::TracksPublishHandle> weakClientHandle = clientHandle;
   folly::CancellationSource cancelSource;
   auto subscribeTracksFut =
       folly::coro::co_withExecutor(
