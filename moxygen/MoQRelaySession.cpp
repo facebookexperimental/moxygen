@@ -1351,9 +1351,10 @@ MoQRelaySession::subscribeNamespace(
 // SubscribeNamespace publisher methods
 void MoQRelaySession::onSubscribeNamespaceImpl(
     const SubscribeNamespace& sa,
-    std::shared_ptr<SubNSReply> subNsReply) {
+    std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
+  auto subNsReply = std::make_shared<SubNSReply>(std::move(replyContext));
   if (closeSessionIfRequestIDInvalid(sa.requestID, false, true)) {
     return;
   }
@@ -1493,6 +1494,19 @@ void MoQRelaySession::subscribeNamespaceOk(
   if (!res) {
     XLOG(ERR) << "writeSubscribeNamespaceOk failed sess=" << this;
     return;
+  }
+}
+
+void MoQRelaySession::subscribeNamespaceError(
+    const SubscribeNamespaceError& subNsError,
+    std::shared_ptr<SubNSReply>&& subNsReply) {
+  XLOG(DBG1) << __func__ << " reqID=" << subNsError.requestID.value
+             << " sess=" << this;
+  MOQ_PUBLISHER_STATS(
+      publisherStatsCallback_, onSubscribeNamespaceError, subNsError.errorCode);
+  auto res = subNsReply->error(subNsError);
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeNamespaceError failed sess=" << this;
   }
 }
 
@@ -1660,9 +1674,11 @@ MoQRelaySession::subscribeTracks(
 // Draft 18+: SUBSCRIBE_TRACKS publisher methods
 void MoQRelaySession::onSubscribeTracksImpl(
     const SubscribeTracks& subTracks,
-    std::shared_ptr<SubscribeTracksReply> subTracksReply) {
+    std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " prefix=" << subTracks.trackNamespacePrefix
              << " sess=" << this;
+  auto subTracksReply =
+      std::make_shared<SubscribeTracksReply>(std::move(replyContext));
   if (closeSessionIfRequestIDInvalid(subTracks.requestID, false, true)) {
     return;
   }
@@ -1749,6 +1765,21 @@ void MoQRelaySession::subscribeTracksOk(
   }
 }
 
+void MoQRelaySession::subscribeTracksError(
+    const SubscribeTracksError& subTracksError,
+    std::shared_ptr<SubscribeTracksReply>&& subTracksReply) {
+  XLOG(DBG1) << __func__ << " reqID=" << subTracksError.requestID.value
+             << " sess=" << this;
+  MOQ_PUBLISHER_STATS(
+      publisherStatsCallback_,
+      onSubscribeTracksError,
+      subTracksError.errorCode);
+  auto res = subTracksReply->error(subTracksError);
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeTracksError failed sess=" << this;
+  }
+}
+
 void MoQRelaySession::onSubscribeTracksStreamClosed(
     RequestID requestID,
     ResetStreamErrorCode code) {
@@ -1832,7 +1863,7 @@ bool MoQRelaySession::handleSubscribeTracksOkFromRequestOk(
   return subscribeTracksPtr->trySetValue(requestOk);
 }
 
-WriteResult SeparateStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {
+WriteResult SubNSReply::ok(const SubscribeNamespaceOk& subNsOk) {
   if (errorSent_) {
     // We already sent an ERROR; protocol doesn't allow OK after that.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
@@ -1848,8 +1879,7 @@ WriteResult SeparateStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {
   return res;
 }
 
-WriteResult SeparateStreamSubNsReply::error(
-    const SubscribeNamespaceError& subNsError) {
+WriteResult SubNSReply::error(const SubscribeNamespaceError& subNsError) {
   if (okSent_) {
     // We already sent OK (SubscribeNamespaceOk) on this stream.
     // After that, the stream should only carry NAMESPACE/NAMESPACE_DONE.
@@ -1868,7 +1898,7 @@ WriteResult SeparateStreamSubNsReply::error(
   return res;
 }
 
-WriteResult SeparateStreamSubNsReply::namespaceMsg(const Namespace& msg) {
+WriteResult SubNSReply::namespaceMsg(const Namespace& msg) {
   if (errorSent_) {
     // No NAMESPACE frames allowed after we send an ERROR on this stream.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
@@ -1884,8 +1914,7 @@ WriteResult SeparateStreamSubNsReply::namespaceMsg(const Namespace& msg) {
   return res;
 }
 
-WriteResult SeparateStreamSubNsReply::namespaceDoneMsg(
-    const NamespaceDone& msg) {
+WriteResult SubNSReply::namespaceDoneMsg(const NamespaceDone& msg) {
   if (errorSent_) {
     // No NAMESPACE_DONE frames allowed after we send an ERROR on this stream.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
@@ -1901,7 +1930,7 @@ WriteResult SeparateStreamSubNsReply::namespaceDoneMsg(
   return res;
 }
 
-void SeparateStreamSubNsReply::flushPendingMessages() {
+void SubNSReply::flushPendingMessages() {
   if (errorSent_) {
     // If we sent error before OK, we should never flush queued NAMESPACE
     // frames.
@@ -1912,6 +1941,62 @@ void SeparateStreamSubNsReply::flushPendingMessages() {
   if (!pendingBuf_.empty()) {
     replyContext_->writeBuf().append(pendingBuf_.move());
     replyContext_->flush(/*fin=*/pendingFin_);
+  }
+}
+
+WriteResult SubscribeTracksReply::ok(const RequestOk& okMsg) {
+  if (errorSent_ || okSent_) {
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = replyContext_->writer().writeRequestOk(
+      replyContext_->writeBuf(), okMsg, FrameType::REQUEST_OK);
+  if (!res) {
+    return res;
+  }
+  replyContext_->flush();
+  okSent_ = true;
+  flushPendingMessages();
+  return res;
+}
+
+WriteResult SubscribeTracksReply::error(const SubscribeTracksError& errorMsg) {
+  if (okSent_ || errorSent_) {
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = replyContext_->writer().writeRequestError(
+      replyContext_->writeBuf(), errorMsg, FrameType::REQUEST_ERROR);
+  pendingBuf_.move();
+  replyContext_->flush(/*fin=*/true);
+  errorSent_ = true;
+  return res;
+}
+
+void SubscribeTracksReply::publishBlocked(
+    const TrackNamespace& trackNamespaceSuffix,
+    const std::string& trackName) {
+  if (errorSent_) {
+    XLOG(ERR) << "Ignoring PUBLISH_BLOCKED after REQUEST_ERROR";
+    return;
+  }
+  auto res = replyContext_->writer().writePublishBlocked(
+      replyContext_->writeBuf(),
+      PublishBlocked{trackNamespaceSuffix, trackName});
+  if (!res) {
+    XLOG(ERR) << "writePublishBlocked failed err=" << uint64_t(res.error());
+    replyContext_->writeBuf().move();
+    return;
+  }
+  if (okSent_) {
+    replyContext_->flush();
+  } else {
+    pendingBuf_.append(replyContext_->writeBuf().move());
+  }
+}
+
+void SubscribeTracksReply::flushPendingMessages() {
+  if (!pendingBuf_.empty()) {
+    replyContext_->writeBuf().append(pendingBuf_.move());
+    replyContext_->flush();
   }
 }
 
