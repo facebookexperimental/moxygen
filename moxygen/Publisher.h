@@ -188,6 +188,12 @@ class Publisher {
 
     virtual void namespaceDoneMsg(
         const TrackNamespace& trackNamespaceSuffix) = 0;
+
+    // Ends the subscription. nullopt ends it cleanly and a code cancels it.
+    // The subscriber's handle receives the same value, or SESSION_CLOSED when
+    // the session closes first.
+    virtual void subscribeNamespaceDone(
+        std::optional<ResetStreamErrorCode> /*error*/ = std::nullopt) {}
   };
 
   // Send/respond to SUBSCRIBE_NAMESPACE
@@ -243,6 +249,11 @@ class Publisher {
     virtual void publishBlocked(
         const TrackNamespace& trackNamespaceSuffix,
         const std::string& trackName) = 0;
+
+    // Ends the subscription, like NamespacePublishHandle's
+    // subscribeNamespaceDone().
+    virtual void subscribeTracksDone(
+        std::optional<ResetStreamErrorCode> /*error*/ = std::nullopt) {}
   };
 
   using SubscribeTracksResult = folly::

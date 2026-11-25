@@ -36,12 +36,20 @@ class CapturingReplyContext : public ReplyContext {
     fin_ = fin;
   }
 
+  void cancel(ResetStreamErrorCode code) override {
+    cancelCode_ = code;
+  }
+
   bool empty() const {
     return flushedBuf_.empty();
   }
 
   bool fin() const {
     return fin_;
+  }
+
+  std::optional<ResetStreamErrorCode> cancelCode() const {
+    return cancelCode_;
   }
 
   std::unique_ptr<folly::IOBuf> moveFlushed() {
@@ -52,6 +60,7 @@ class CapturingReplyContext : public ReplyContext {
   folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
   folly::IOBufQueue flushedBuf_{folly::IOBufQueue::cacheChainLength()};
   bool fin_{false};
+  std::optional<ResetStreamErrorCode> cancelCode_;
   MoQFrameWriter writer_;
 };
 
@@ -132,6 +141,36 @@ TEST(SubscribeTracksReplyTest, ErrorAfterErrorIsRejected) {
   auto secondError = reply.error(error);
   ASSERT_TRUE(secondError.hasError());
   EXPECT_EQ(secondError.error(), quic::TransportErrorCode::PROTOCOL_VIOLATION);
+}
+
+TEST(SubscribeTracksReplyTest, DoneBeforeOkFinsAfterOk) {
+  auto replyContext = std::make_shared<CapturingReplyContext>();
+  SubscribeTracksReply reply(replyContext);
+  int onEndCalls = 0;
+  reply.responderEnd().setOnEnd([&onEndCalls] { ++onEndCalls; });
+
+  reply.subscribeTracksDone();
+  reply.subscribeTracksDone(ResetStreamErrorCode::EXCESSIVE_LOAD);
+  EXPECT_EQ(onEndCalls, 1);
+  EXPECT_TRUE(replyContext->empty());
+  EXPECT_FALSE(replyContext->fin());
+
+  ASSERT_TRUE(reply.ok(RequestOk{.requestID = RequestID(7)}).hasValue());
+  EXPECT_FALSE(replyContext->empty());
+  EXPECT_TRUE(replyContext->fin());
+  EXPECT_FALSE(replyContext->cancelCode().has_value());
+}
+
+TEST(SubscribeTracksReplyTest, DoneWithCodeBeforeOkResetsAfterOk) {
+  auto replyContext = std::make_shared<CapturingReplyContext>();
+  SubscribeTracksReply reply(replyContext);
+
+  reply.subscribeTracksDone(ResetStreamErrorCode::EXCESSIVE_LOAD);
+  EXPECT_FALSE(replyContext->cancelCode().has_value());
+
+  ASSERT_TRUE(reply.ok(RequestOk{.requestID = RequestID(7)}).hasValue());
+  EXPECT_FALSE(replyContext->empty());
+  EXPECT_EQ(replyContext->cancelCode(), ResetStreamErrorCode::EXCESSIVE_LOAD);
 }
 
 // Draft 18+ only: SUBSCRIBE_TRACKS is a new message split out of
@@ -236,6 +275,11 @@ class MockTracksPublishHandle : public Publisher::TracksPublishHandle {
       void,
       publishBlocked,
       (const TrackNamespace&, const std::string&),
+      (override));
+  MOCK_METHOD(
+      void,
+      subscribeTracksDone,
+      (std::optional<ResetStreamErrorCode>),
       (override));
 };
 
@@ -492,6 +536,142 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeTracksCancelledWhileOkQueued) {
   if (serverHandle) {
     testing::Mock::VerifyAndClearExpectations(serverHandle.get());
   }
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// The subscriber's handle receives the publisher's value: nullopt for a clean
+// end and the code for a cancel. The publisher's handle does not see either
+// end as an unsubscribe.
+CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeTracksDoneDeliversError) {
+  co_await setupMoQSession();
+  std::vector<std::shared_ptr<Publisher::TracksPublishHandle>>
+      serverPublishHandles;
+  EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
+      .Times(2)
+      .WillRepeatedly([&serverPublishHandles](
+                          const auto& subTracks, auto tracksPublishHandle) {
+        serverPublishHandles.push_back(std::move(tracksPublishHandle));
+        auto handle =
+            std::make_shared<MockSubscribeTracksHandle>(SubscribeTracksOk(
+                {.requestID = subTracks.requestID,
+                 .requestSpecificParams = {}}));
+        EXPECT_CALL(*handle, unsubscribeTracks(_)).Times(0);
+        return folly::coro::makeTask(
+            Publisher::SubscribeTracksResult(std::move(handle)));
+      });
+  auto cleanHandle = std::make_shared<MockTracksPublishHandle>();
+  auto codeHandle = std::make_shared<MockTracksPublishHandle>();
+  auto clean = co_await clientSession_->subscribeTracks(
+      getSubscribeTracks(), cleanHandle);
+  auto coded = co_await clientSession_->subscribeTracks(
+      getSubscribeTracks(), codeHandle);
+  CO_ASSERT_TRUE(clean.hasValue());
+  CO_ASSERT_TRUE(coded.hasValue());
+  CO_ASSERT_EQ(serverPublishHandles.size(), 2);
+
+  folly::coro::Baton cleanEnded;
+  folly::coro::Baton codeEnded;
+  EXPECT_CALL(
+      *cleanHandle, subscribeTracksDone(std::optional<ResetStreamErrorCode>()))
+      .WillOnce([&cleanEnded] { cleanEnded.post(); });
+  EXPECT_CALL(
+      *codeHandle,
+      subscribeTracksDone(
+          std::optional<ResetStreamErrorCode>(
+              ResetStreamErrorCode::EXCESSIVE_LOAD)))
+      .WillOnce([&codeEnded] { codeEnded.post(); });
+  serverPublishHandles[0]->subscribeTracksDone();
+  serverPublishHandles[1]->subscribeTracksDone(
+      ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await cleanEnded;
+  co_await codeEnded;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A publisher that ends the request while answering it still sends the OK,
+// followed by the end.
+CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeTracksDoneBeforeOk) {
+  co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
+      .WillOnce(
+          [](auto subTracks, auto tracksPublishHandle)
+              -> folly::coro::Task<Publisher::SubscribeTracksResult> {
+            tracksPublishHandle->subscribeTracksDone();
+            auto handle =
+                std::make_shared<MockSubscribeTracksHandle>(SubscribeTracksOk(
+                    {.requestID = subTracks.requestID,
+                     .requestSpecificParams = {}}));
+            EXPECT_CALL(*handle, unsubscribeTracks(_)).Times(0);
+            co_return handle;
+          });
+  auto clientHandle = std::make_shared<MockTracksPublishHandle>();
+  folly::coro::Baton ended;
+  EXPECT_CALL(
+      *clientHandle, subscribeTracksDone(std::optional<ResetStreamErrorCode>()))
+      .WillOnce([&ended] { ended.post(); });
+  auto res = co_await clientSession_->subscribeTracks(
+      getSubscribeTracks(), clientHandle);
+  EXPECT_TRUE(res.hasValue());
+  co_await ended;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    V18PlusSubscribeTracksTest,
+    SessionCloseEndsSubscribeTracksConsumer) {
+  co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
+      .WillOnce(
+          [](auto subTracks,
+             auto) -> folly::coro::Task<Publisher::SubscribeTracksResult> {
+            co_return std::make_shared<MockSubscribeTracksHandle>(
+                SubscribeTracksOk(
+                    {.requestID = subTracks.requestID,
+                     .requestSpecificParams = {}}));
+          });
+  auto clientHandle = std::make_shared<MockTracksPublishHandle>();
+  auto res = co_await clientSession_->subscribeTracks(
+      getSubscribeTracks(), clientHandle);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  EXPECT_CALL(
+      *clientHandle,
+      subscribeTracksDone(
+          std::optional<ResetStreamErrorCode>(
+              ResetStreamErrorCode::SESSION_CLOSED)));
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// Before draft 18, subscribeTracks rides SUBSCRIBE_NAMESPACE, and the
+// publisher's end of that reaches the TracksPublishHandle.
+CO_TEST_P_X(PreDraft18Test, SubscribeTracksFallbackDeliversDone) {
+  co_await setupMoQSession();
+  std::shared_ptr<Publisher::NamespacePublishHandle> serverPublishHandle;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          [&serverPublishHandle](auto subNs, auto publishHandle)
+              -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+            serverPublishHandle = std::move(publishHandle);
+            co_return std::make_shared<MockSubscribeNamespaceHandle>(
+                SubscribeNamespaceOk(
+                    {.requestID = subNs.requestID,
+                     .requestSpecificParams = {}}));
+          });
+  auto clientHandle = std::make_shared<MockTracksPublishHandle>();
+  auto res = co_await clientSession_->subscribeTracks(
+      getSubscribeTracks(), clientHandle);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  folly::coro::Baton ended;
+  EXPECT_CALL(
+      *clientHandle,
+      subscribeTracksDone(
+          std::optional<ResetStreamErrorCode>(
+              ResetStreamErrorCode::EXCESSIVE_LOAD)))
+      .WillOnce([&ended] { ended.post(); });
+  serverPublishHandle->subscribeNamespaceDone(
+      ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await ended;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 

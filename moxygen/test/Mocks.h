@@ -382,7 +382,7 @@ class MockPublishNamespaceCallback
   MOCK_METHOD(
       void,
       publishNamespaceCancel,
-      (PublishNamespaceErrorCode, std::string),
+      (std::optional<ResetStreamErrorCode>),
       (override));
 };
 
@@ -390,6 +390,11 @@ class MockNamespacePublishHandle : public Publisher::NamespacePublishHandle {
  public:
   MOCK_METHOD(void, namespaceMsg, (const TrackNamespace&), (override));
   MOCK_METHOD(void, namespaceDoneMsg, (const TrackNamespace&), (override));
+  MOCK_METHOD(
+      void,
+      subscribeNamespaceDone,
+      (std::optional<ResetStreamErrorCode>),
+      (override));
 };
 
 class MockPublisher : public Publisher {

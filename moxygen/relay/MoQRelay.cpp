@@ -200,7 +200,7 @@ MoQRelay::publishNamespace(
     // for now we don't support that.
     if (nodePtr->publishNamespaceCallback) {
       nodePtr->publishNamespaceCallback->publishNamespaceCancel(
-          PublishNamespaceErrorCode::CANCELLED, "New publisher");
+          ResetStreamErrorCode::CANCELLED);
       nodePtr->publishNamespaceCallback.reset();
     }
     for (auto it = subscriptions_.begin(); it != subscriptions_.end();) {

@@ -155,17 +155,62 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceCancel) {
   EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceCancel());
 
   folly::coro::Baton barricade;
-  EXPECT_CALL(*mockPublishNamespaceCallback, publishNamespaceCancel(_, _))
+  EXPECT_CALL(*mockPublishNamespaceCallback, publishNamespaceCancel(_))
       .WillOnce(
           testing::Invoke(
-              [&barricade](moxygen::PublishNamespaceErrorCode, std::string) {
+              [&barricade](std::optional<moxygen::ResetStreamErrorCode>) {
                 barricade.post();
                 return;
               }));
   publishNamespaceCallback->publishNamespaceCancel(
-      PublishNamespaceErrorCode::UNINTERESTED, "Not interested!");
+      ResetStreamErrorCode::CANCELLED);
 
   co_await barricade;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+// The publisher's callback receives the subscriber's value. The draft 16
+// PUBLISH_NAMESPACE_CANCEL frame does not carry it, so it arrives as CANCELLED.
+CO_TEST_P_X(MoQSessionTest, PublishNamespaceCancelDeliversError) {
+  co_await setupMoQSession();
+  std::vector<std::shared_ptr<Subscriber::PublishNamespaceCallback>>
+      serverCallbacks;
+  EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
+      .Times(2)
+      .WillRepeatedly([&serverCallbacks](const auto& pubNs, auto callback) {
+        serverCallbacks.push_back(std::move(callback));
+        return folly::coro::makeTask(
+            Subscriber::PublishNamespaceResult(
+                std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
+                    {.requestID = pubNs.requestID,
+                     .requestSpecificParams = {}}))));
+      });
+  auto cleanCallback = std::make_shared<MockPublishNamespaceCallback>();
+  auto codeCallback = std::make_shared<MockPublishNamespaceCallback>();
+  auto clean = co_await clientSession_->publishNamespace(
+      getPublishNamespace(), cleanCallback);
+  auto coded = co_await clientSession_->publishNamespace(
+      getPublishNamespace(), codeCallback);
+  CO_ASSERT_TRUE(clean.hasValue());
+  CO_ASSERT_TRUE(coded.hasValue());
+  CO_ASSERT_EQ(serverCallbacks.size(), 2);
+
+  std::optional<ResetStreamErrorCode> expectedClean;
+  std::optional<ResetStreamErrorCode> expectedCode =
+      ResetStreamErrorCode::EXCESSIVE_LOAD;
+  if (getDraftMajorVersion(getServerSelectedVersion()) < 18) {
+    expectedClean = expectedCode = ResetStreamErrorCode::CANCELLED;
+  }
+  folly::coro::Baton cleanCancelled;
+  folly::coro::Baton codeCancelled;
+  EXPECT_CALL(*cleanCallback, publishNamespaceCancel(expectedClean))
+      .WillOnce([&cleanCancelled] { cleanCancelled.post(); });
+  EXPECT_CALL(*codeCallback, publishNamespaceCancel(expectedCode))
+      .WillOnce([&codeCancelled] { codeCancelled.post(); });
+  serverCallbacks[0]->publishNamespaceCancel();
+  serverCallbacks[1]->publishNamespaceCancel(
+      ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await cleanCancelled;
+  co_await codeCancelled;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 // Draft 18+ subscriber-initiated withdrawal: subscriber tears down the

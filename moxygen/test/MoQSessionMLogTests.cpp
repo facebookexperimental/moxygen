@@ -129,13 +129,12 @@ CO_TEST_P_X(MoQSessionTest, MLogRecordsControlMessagesExactlyOnce) {
   EXPECT_CALL(*clientPublisherStatsCallback_, onPublishNamespaceCancel());
   EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceCancel());
   folly::coro::Baton barricade;
-  EXPECT_CALL(*mockPublishNamespaceCallback, publishNamespaceCancel(_, _))
-      .WillOnce(
-          [&barricade](moxygen::PublishNamespaceErrorCode, const std::string&) {
-            barricade.post();
-          });
+  EXPECT_CALL(*mockPublishNamespaceCallback, publishNamespaceCancel(_))
+      .WillOnce([&barricade](std::optional<moxygen::ResetStreamErrorCode>) {
+        barricade.post();
+      });
   publishNamespaceCallback->publishNamespaceCancel(
-      PublishNamespaceErrorCode::UNINTERESTED, "Not interested!");
+      ResetStreamErrorCode::CANCELLED);
   co_await barricade;
 
   // MLogTypes.h mixes naming styles ("publish_namespace" vs
