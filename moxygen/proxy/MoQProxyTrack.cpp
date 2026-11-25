@@ -310,7 +310,9 @@ class MoQProxyTrack::DownstreamSubscriptionHandle final
     unsubscribe();
   }
 
-  void unsubscribe() override {
+  void unsubscribe(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     if (auto subscriber = std::exchange(subscriber_, nullptr)) {
       subscriber->unsubscribe();
     }

@@ -84,7 +84,9 @@ class MoQRelaySession::PublisherPublishNamespaceHandle
     publishNamespaceDone();
   }
 
-  void publishNamespaceDone() override {
+  void publishNamespaceDone(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
       PublishNamespaceDone pubNsDone;
       pubNsDone.requestID = publishNamespaceOk().requestID;
@@ -125,7 +127,9 @@ class MoQRelaySession::SubscribeNamespaceHandle
     unsubscribeNamespace();
   }
 
-  void unsubscribeNamespace() override {
+  void unsubscribeNamespace(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
       if (session_->isClosed()) {
         session_.reset();
@@ -183,7 +187,9 @@ class MoQRelaySession::SubscribeTracksHandle
     unsubscribeTracks();
   }
 
-  void unsubscribeTracks() override {
+  void unsubscribeTracks(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     auto session = session_.lock();
     if (!session || session->isClosed()) {
       session_.reset();
@@ -1550,7 +1556,9 @@ class NamespaceBackedSubscribeTracksHandle
       : Publisher::SubscribeTracksHandle(inner->subscribeNamespaceOk()),
         inner_(std::move(inner)) {}
 
-  void unsubscribeTracks() override {
+  void unsubscribeTracks(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     inner_->unsubscribeNamespace();
   }
 

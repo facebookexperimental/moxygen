@@ -67,7 +67,9 @@ class MoQLocalFetchHandle : public Publisher::FetchHandle {
   MoQLocalFetchHandle(MoQLocalFetchHandle&&) = delete;
   MoQLocalFetchHandle& operator=(MoQLocalFetchHandle&&) = delete;
 
-  void fetchCancel() override {
+  void fetchCancel(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     source_.requestCancellation();
   }
 

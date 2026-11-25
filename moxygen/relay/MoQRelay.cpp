@@ -684,7 +684,9 @@ class MoQRelay::NamespaceSubscription
         session_(std::move(session)),
         trackNamespacePrefix_(std::move(trackNamespacePrefix)) {}
 
-  void unsubscribeNamespace() override {
+  void unsubscribeNamespace(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     if (relay_) {
       relay_->unsubscribeNamespace(trackNamespacePrefix_, std::move(session_));
       relay_.reset();
@@ -949,7 +951,9 @@ class MoQRelay::TracksSubscription : public Publisher::SubscribeTracksHandle {
         session_(std::move(session)),
         trackNamespacePrefix_(std::move(trackNamespacePrefix)) {}
 
-  void unsubscribeTracks() override {
+  void unsubscribeTracks(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     if (relay_) {
       relay_->unsubscribeTracks(trackNamespacePrefix_, std::move(session_));
       relay_.reset();
