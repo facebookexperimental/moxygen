@@ -6,9 +6,12 @@
 
 #pragma once
 
+#include <folly/SocketAddress.h>
 #include <moxygen/MoQClient.h>
 #include <moxygen/events/MoQFollyExecutorImpl.h>
 #include <memory>
+#include <optional>
+#include <string>
 
 #include <proxygen/lib/http/session/HTTPTransaction.h>
 
@@ -32,6 +35,12 @@ class MoQWebTransportClient : public MoQClient {
             std::move(url),
             std::move(sessionFactory),
             std::move(verifier)) {}
+
+  // Dials this address with this TLS server name in place of the URL host.
+  // Call before setupMoQSession().
+  void setConnectAddress(folly::SocketAddress address, std::string serverName) {
+    connectTarget_ = ConnectTarget{std::move(address), std::move(serverName)};
+  }
 
   folly::coro::Task<void> setupMoQSession(
       std::chrono::milliseconds connect_timeout,
@@ -101,7 +110,13 @@ class MoQWebTransportClient : public MoQClient {
   };
 
  private:
+  struct ConnectTarget {
+    folly::SocketAddress address;
+    std::string serverName;
+  };
+
   HTTPHandler httpHandler_{*this};
+  std::optional<ConnectTarget> connectTarget_;
 };
 
 inline std::unique_ptr<MoQClient> makeMoQClient(

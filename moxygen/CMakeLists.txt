@@ -331,6 +331,7 @@ moxygen_add_library(moxygen_moq_webtransport_client
     mvfst::mvfst_common_address_quic_socket_address_bridge
     Folly::folly_string
   EXPORTED_DEPS
+    Folly::folly_network_address
     moxygen_events_moq_folly_executor_impl
     moxygen_moqclient
     proxygen::proxygen_http_session_http_transaction

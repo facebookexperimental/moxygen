@@ -20,7 +20,8 @@ constexpr uint64_t kUnlimitedWtCredit = (1ULL << 62) - 1;
 
 folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
     moxygen::MoQFollyExecutorImpl* exec,
-    const proxygen::URL& url,
+    const folly::SocketAddress& address,
+    const std::string& serverName,
     std::chrono::milliseconds connect_timeout,
     std::chrono::milliseconds transaction_timeout,
     std::shared_ptr<fizz::CertificateVerifier> verifier,
@@ -74,12 +75,12 @@ folly::coro::Task<proxygen::HQUpstreamSession*> connectH3WithWebtransport(
   hqConnector.connect(
       exec->getBackingEventBase(),
       folly::none,
-      folly::SocketAddress(url.getHost(), url.getPort(), true), // blocking DNS,
+      address,
       std::move(fizzContext),
       verifier,
       connect_timeout,
       folly::emptySocketOptionMap,
-      url.getHost());
+      serverName);
   auto session =
       co_await co_awaitTry(std::move(connectCb.sessionContract.second));
   if (session.hasException()) {
@@ -106,9 +107,16 @@ folly::coro::Task<void> MoQWebTransportClient::setupMoQSession(
              << folly::join(", ", wtProtocols);
 
   // Establish H3 connection
+  auto target = connectTarget_
+      ? *connectTarget_
+      : ConnectTarget{
+            folly::SocketAddress(
+                url_.getHost(), url_.getPort(), true), // blocking DNS
+            url_.getHost()};
   auto session = co_await connectH3WithWebtransport(
       exec_->getTypedExecutor<MoQFollyExecutorImpl>(),
-      url_,
+      target.address,
+      target.serverName,
       connect_timeout,
       transaction_timeout,
       verifier_,
