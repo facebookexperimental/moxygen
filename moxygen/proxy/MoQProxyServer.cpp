@@ -29,7 +29,9 @@
 #include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/synchronization/Baton.h>
 #include <proxygen/facebook/lib/ptm/base/PTMConfigStore.h>
+#include <proxygen/facebook/lib/ptm/base/PTMSharedStateProd.h>
 #include <proxygen/httpserver/samples/hq/FizzContext.h>
+#include <thrift/lib/cpp2/protocol/Serializer.h>
 #include <algorithm>
 #include <chrono>
 #include <csignal>
@@ -61,6 +63,10 @@ DEFINE_bool(
     lane_manager_ptm,
     false,
     "Choose lanes with the ABR module PTM installs on each connection");
+DEFINE_string(
+    lane_manager_ptm_config,
+    "",
+    "Local PTM JSON profile for standalone ABR testing");
 DEFINE_bool(
     lane_manager_catalog_init_only,
     false,
@@ -294,6 +300,38 @@ class ConfiguredStartPolicy : public lane_manager::SwitchingPolicy {
  private:
   std::string lane_;
 };
+
+class StaticPtmSharedState final : public proxygen::PTMSharedStateProd {
+ public:
+  explicit StaticPtmSharedState(proxygen::PTMConfig config)
+      : config_(std::move(config)) {}
+
+  proxygen::PTMConfigStore& getConfigStore() override {
+    return config_;
+  }
+
+ private:
+  proxygen::PTMConfigStoreStatic config_;
+};
+
+std::shared_ptr<proxygen::PTMSharedState> loadPtmConfig(
+    const std::string& path) {
+  if (path.empty()) {
+    return nullptr;
+  }
+  std::string json;
+  XCHECK(folly::readFile(path.c_str(), json))
+      << "Cannot read standalone PTM config " << path;
+  try {
+    proxygen::PTMConfig config;
+    apache::thrift::SimpleJSONSerializer::deserialize(json, config);
+    return std::make_shared<StaticPtmSharedState>(std::move(config));
+  } catch (const std::exception& error) {
+    XLOG(ERR) << "Cannot load standalone PTM config " << path << ": "
+              << error.what();
+    throw;
+  }
+}
 
 class ProxySession final : public MoQRelaySession {
  public:
@@ -608,9 +646,11 @@ int main(int argc, char* argv[]) {
       << "--upstream_retry_ms can't be negative";
   XLOG_IF(FATAL, FLAGS_drain_timeout_ms < 0)
       << "--drain_timeout_ms can't be negative";
-  std::shared_ptr<proxygen::PTMSharedState> ptmSharedState;
   XCHECK(!FLAGS_lane_manager_ptm || FLAGS_lane_manager)
       << "--lane_manager_ptm requires --lane_manager";
+  XCHECK(FLAGS_lane_manager_ptm_config.empty() || FLAGS_lane_manager_ptm)
+      << "--lane_manager_ptm_config requires --lane_manager_ptm";
+  auto ptmSharedState = loadPtmConfig(FLAGS_lane_manager_ptm_config);
   auto upstreamTransport =
       samples::parseTransportType(FLAGS_upstream_transport);
   XLOG_IF(FATAL, !upstreamTransport) << "Invalid --upstream_transport";
