@@ -79,6 +79,7 @@
   FROM ubuntu:24.04
 
   RUN apt-get update && apt-get install -y --no-install-recommends \
+      libatomic1 \
       libsodium23 \
       libdouble-conversion3 \
       libevent-2.1-7t64 \
