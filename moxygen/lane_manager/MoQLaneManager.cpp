@@ -472,7 +472,9 @@ class MoQLaneManager::VirtualHandle : public Publisher::SubscriptionHandle {
   VirtualHandle(VirtualHandle&&) = delete;
   VirtualHandle& operator=(VirtualHandle&&) = delete;
 
-  void unsubscribe() override {
+  void unsubscribe(
+      moxygen::ResetStreamErrorCode /*code*/ =
+          moxygen::ResetStreamErrorCode::CANCELLED) override {
     auto manager = std::exchange(manager_, nullptr);
     if (auto set = set_.lock(); manager && set) {
       manager->unsubscribe(*set);

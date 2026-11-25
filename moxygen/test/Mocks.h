@@ -276,7 +276,7 @@ class MockSubscriptionHandle : public SubscriptionHandle {
   explicit MockSubscriptionHandle(SubscribeOk ok)
       : SubscriptionHandle(std::move(ok)) {}
 
-  MOCK_METHOD(void, unsubscribe, (), (override));
+  MOCK_METHOD(void, unsubscribe, (ResetStreamErrorCode), (override));
 
   // For async methods like requestUpdate, we can't use MOCK_METHOD directly
   // Instead, provide a delegating implementation
@@ -299,7 +299,7 @@ class MockFetchHandle : public Publisher::FetchHandle {
   explicit MockFetchHandle(FetchOk ok)
       : Publisher::FetchHandle(std::move(ok)) {}
 
-  MOCK_METHOD(void, fetchCancel, (), (override));
+  MOCK_METHOD(void, fetchCancel, (ResetStreamErrorCode), (override));
 
   folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
       RequestUpdate update) override {
@@ -320,7 +320,7 @@ class MockSubscribeNamespaceHandle
   explicit MockSubscribeNamespaceHandle(SubscribeNamespaceOk ok)
       : Publisher::SubscribeNamespaceHandle(std::move(ok)) {}
 
-  MOCK_METHOD(void, unsubscribeNamespace, (), (override));
+  MOCK_METHOD(void, unsubscribeNamespace, (ResetStreamErrorCode), (override));
 
   folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
       RequestUpdate update) override {
@@ -340,7 +340,7 @@ class MockPublishNamespaceHandle : public Subscriber::PublishNamespaceHandle {
   explicit MockPublishNamespaceHandle(PublishNamespaceOk ok)
       : Subscriber::PublishNamespaceHandle(std::move(ok)) {}
 
-  MOCK_METHOD(void, publishNamespaceDone, (), (override));
+  MOCK_METHOD(void, publishNamespaceDone, (ResetStreamErrorCode), (override));
 
   folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
       RequestUpdate update) override {
@@ -360,7 +360,7 @@ class MockSubscribeTracksHandle : public Publisher::SubscribeTracksHandle {
   explicit MockSubscribeTracksHandle(SubscribeTracksOk ok)
       : Publisher::SubscribeTracksHandle(std::move(ok)) {}
 
-  MOCK_METHOD(void, unsubscribeTracks, (), (override));
+  MOCK_METHOD(void, unsubscribeTracks, (ResetStreamErrorCode), (override));
 
   folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
       RequestUpdate update) override {
@@ -382,7 +382,7 @@ class MockPublishNamespaceCallback
   MOCK_METHOD(
       void,
       publishNamespaceCancel,
-      (PublishNamespaceErrorCode, std::string),
+      (std::optional<ResetStreamErrorCode>),
       (override));
 };
 
@@ -390,6 +390,11 @@ class MockNamespacePublishHandle : public Publisher::NamespacePublishHandle {
  public:
   MOCK_METHOD(void, namespaceMsg, (const TrackNamespace&), (override));
   MOCK_METHOD(void, namespaceDoneMsg, (const TrackNamespace&), (override));
+  MOCK_METHOD(
+      void,
+      subscribeNamespaceDone,
+      (std::optional<ResetStreamErrorCode>),
+      (override));
 };
 
 class MockPublisher : public Publisher {
@@ -421,7 +426,7 @@ class MockPublisher : public Publisher {
   MOCK_METHOD(
       folly::coro::Task<SubscribeTracksResult>,
       subscribeTracks,
-      (SubscribeTracks, std::shared_ptr<PublishBlockedHandle>),
+      (SubscribeTracks, std::shared_ptr<TracksPublishHandle>),
       (override));
 
   MOCK_METHOD(void, goaway, (Goaway), (override));

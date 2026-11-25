@@ -1951,7 +1951,8 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeInObjectCallbackSuppressesNextObject) {
   EXPECT_FALSE(res.hasError());
   subHandle = res.value();
 
-  EXPECT_CALL(*mockHandle, unsubscribe()).WillRepeatedly(testing::Return());
+  EXPECT_CALL(*mockHandle, unsubscribe(testing::_))
+      .WillRepeatedly(testing::Return());
 
   // After obj0, the data stream's write handle exists in
   // serverWt_->writeHandles; pause delivery, write obj1+obj2, flush as one
@@ -2013,7 +2014,8 @@ CO_TEST_P_X(MoQSessionTest, FinAfterUnsubscribeResetsOpenSubgroup) {
   EXPECT_FALSE(res.hasError());
   subHandle = res.value();
 
-  EXPECT_CALL(*mockHandle, unsubscribe()).WillRepeatedly(testing::Return());
+  EXPECT_CALL(*mockHandle, unsubscribe(testing::_))
+      .WillRepeatedly(testing::Return());
 
   co_await obj0Delivered;
   eventBase_.runInEventBaseThread([sgConsumer, subHandle] {
@@ -2063,7 +2065,8 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeInLastObjectCallbackResetsSubgroup) {
   EXPECT_FALSE(res.hasError());
   subHandle = res.value();
 
-  EXPECT_CALL(*mockHandle, unsubscribe()).WillRepeatedly(testing::Return());
+  EXPECT_CALL(*mockHandle, unsubscribe(testing::_))
+      .WillRepeatedly(testing::Return());
 
   co_await obj0Delivered;
   eventBase_.runInEventBaseThread(

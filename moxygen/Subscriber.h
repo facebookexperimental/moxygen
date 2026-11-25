@@ -52,7 +52,8 @@ class Subscriber {
     virtual ~PublishNamespaceHandle() = default;
     // Providing a default implementation of publishNamespaceDone, because it
     // can be an uninteresting message
-    virtual void publishNamespaceDone() {}
+    virtual void publishNamespaceDone(
+        ResetStreamErrorCode /*code*/ = ResetStreamErrorCode::CANCELLED) {}
 
     using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
     virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
@@ -77,15 +78,15 @@ class Subscriber {
   };
 
   // A subscribe receives an PublishNamespaceCallback in publishNamespace, which
-  // can be used to issue PUBLISH_NAMESPACE_CANCEL at some point after
-  // PUBLISH_NAMESPACE_Ok.
+  // can be used to cancel the publish namespace at some point after
+  // PUBLISH_NAMESPACE_OK. nullopt ends it cleanly and a code cancels it; the
+  // publisher's callback receives the same value.
   class PublishNamespaceCallback {
    public:
     virtual ~PublishNamespaceCallback() = default;
 
     virtual void publishNamespaceCancel(
-        PublishNamespaceErrorCode errorCode,
-        std::string reasonPhrase) = 0;
+        std::optional<ResetStreamErrorCode> error = std::nullopt) = 0;
   };
 
   // Send/respond to PUBLISH_NAMESPACE

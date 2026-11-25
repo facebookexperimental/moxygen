@@ -39,7 +39,9 @@ class LocalSubscriptionHandle : public SubscriptionHandle {
         std::nullopt};
     setSubscribeOk(std::move(ok));
   }
-  void unsubscribe() override {}
+  void unsubscribe(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {}
   folly::coro::Task<RequestUpdateResult> requestUpdate(
       RequestUpdate reqUpdate) override {
     co_return folly::makeUnexpected(

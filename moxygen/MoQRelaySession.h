@@ -11,25 +11,100 @@
 
 namespace moxygen {
 
-class SeparateStreamSubNsReply : public SubNSReply {
+// The publisher ending a SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS request: a
+// FIN for nullopt, otherwise a reset with the code. An end requested before
+// the OK takes effect once the OK is written.
+class ResponderEnd {
  public:
-  explicit SeparateStreamSubNsReply(std::shared_ptr<ReplyContext> replyContext)
-      : SubNSReply(std::move(replyContext)) {}
+  void end(
+      std::optional<ResetStreamErrorCode> error,
+      bool okSent,
+      ReplyContext& ctx);
+  // Called once the OK is written.
+  void okSent(ReplyContext& ctx);
 
-  ~SeparateStreamSubNsReply() = default;
+  bool ended() const {
+    return ended_;
+  }
 
-  WriteResult ok(const SubscribeNamespaceOk&) override;
-  WriteResult error(const SubscribeNamespaceError&) override;
-  WriteResult namespaceMsg(const Namespace&) override;
-  WriteResult namespaceDoneMsg(const NamespaceDone&) override;
+  // Runs once, when end() is first called.
+  void setOnEnd(folly::Function<void()> onEnd) {
+    onEnd_ = std::move(onEnd);
+  }
+
+ private:
+  void endStream(ReplyContext& ctx);
+
+  std::optional<ResetStreamErrorCode> error_;
+  folly::Function<void()> onEnd_;
+  bool ended_{false};
+};
+
+class SubNSReply {
+ public:
+  explicit SubNSReply(std::shared_ptr<ReplyContext> replyContext)
+      : replyContext_(std::move(replyContext)) {}
+
+  WriteResult ok(const SubscribeNamespaceOk&);
+  WriteResult error(const SubscribeNamespaceError&);
+  WriteResult namespaceMsg(const Namespace&);
+  WriteResult namespaceDoneMsg(const NamespaceDone&);
+
+  void end(std::optional<ResetStreamErrorCode> error) {
+    end_.end(error, okSent_, *replyContext_);
+  }
+
+  ResponderEnd& responderEnd() {
+    return end_;
+  }
+
+  const std::shared_ptr<ReplyContext>& replyContext() const {
+    return replyContext_;
+  }
 
  private:
   void flushPendingMessages();
 
+  std::shared_ptr<ReplyContext> replyContext_;
+  ResponderEnd end_;
   folly::IOBufQueue pendingBuf_{folly::IOBufQueue::cacheChainLength()};
   bool pendingFin_{false};
   bool okSent_{false};
   bool namespaceFrameSent_{false};
+  bool errorSent_{false};
+};
+
+class SubscribeTracksReply : public Publisher::TracksPublishHandle {
+ public:
+  explicit SubscribeTracksReply(std::shared_ptr<ReplyContext> replyContext)
+      : replyContext_(std::move(replyContext)) {}
+
+  WriteResult ok(const RequestOk&);
+  WriteResult error(const SubscribeTracksError&);
+  void publishBlocked(
+      const TrackNamespace& trackNamespaceSuffix,
+      const std::string& trackName) override;
+
+  void subscribeTracksDone(
+      std::optional<ResetStreamErrorCode> error = std::nullopt) override {
+    end_.end(error, okSent_, *replyContext_);
+  }
+
+  ResponderEnd& responderEnd() {
+    return end_;
+  }
+
+  const std::shared_ptr<ReplyContext>& replyContext() const {
+    return replyContext_;
+  }
+
+ private:
+  void flushPendingMessages();
+
+  std::shared_ptr<ReplyContext> replyContext_;
+  ResponderEnd end_;
+  folly::IOBufQueue pendingBuf_{folly::IOBufQueue::cacheChainLength()};
+  bool okSent_{false};
   bool errorSent_{false};
 };
 
@@ -83,30 +158,22 @@ class MoQRelaySession : public MoQSession {
   // Draft 18+
   folly::coro::Task<Publisher::SubscribeTracksResult> subscribeTracks(
       SubscribeTracks subTracks,
-      std::shared_ptr<PublishBlockedHandle> publishBlockedHandle =
+      std::shared_ptr<TracksPublishHandle> tracksPublishHandle =
           nullptr) override;
 
  protected:
   void onSubscribeNamespaceImpl(
       const SubscribeNamespace& subscribeNamespace,
-      std::shared_ptr<SubNSReply> subNsReply) override;
+      std::shared_ptr<ReplyContext> replyContext) override;
 
   // Draft 18+
   void onSubscribeTracksImpl(
       const SubscribeTracks& subscribeTracks,
-      std::shared_ptr<SubscribeTracksReply> subTracksReply) override;
+      std::shared_ptr<ReplyContext> replyContext) override;
 
-  void onSubscribeTracksStreamClosed(RequestID requestID) override;
-
-  std::shared_ptr<SubNSReply> getSubNsReply(
-      std::shared_ptr<ReplyContext> replyContext) override {
-    return std::make_shared<SeparateStreamSubNsReply>(std::move(replyContext));
-  }
-
-  std::shared_ptr<SubscribeTracksReply> getSubTracksReply(
-      std::shared_ptr<ReplyContext> replyContext) override {
-    return std::make_shared<SubscribeTracksReply>(std::move(replyContext));
-  }
+  void onSubscribeTracksStreamClosed(
+      RequestID requestID,
+      ResetStreamErrorCode code) override;
 
  private:
   // Clean up relay-specific state without requiring shared_from_this().
@@ -168,6 +235,9 @@ class MoQRelaySession : public MoQSession {
   void subscribeNamespaceOk(
       const SubscribeNamespaceOk& saOk,
       std::shared_ptr<SubNSReply>&& subNsReply);
+  void subscribeNamespaceError(
+      const SubscribeNamespaceError& subNsError,
+      std::shared_ptr<SubNSReply>&& subNsReply);
 
   // Draft 18+: SUBSCRIBE_TRACKS handling.
   folly::coro::Task<void> handleSubscribeTracks(
@@ -175,6 +245,9 @@ class MoQRelaySession : public MoQSession {
       std::shared_ptr<SubscribeTracksReply> subTracksReply);
   void subscribeTracksOk(
       const RequestOk& subTracksOk,
+      std::shared_ptr<SubscribeTracksReply>&& subTracksReply);
+  void subscribeTracksError(
+      const SubscribeTracksError& subTracksError,
       std::shared_ptr<SubscribeTracksReply>&& subTracksReply);
 
   folly::coro::Task<void> handlePublishNamespace(
@@ -185,7 +258,19 @@ class MoQRelaySession : public MoQSession {
       ReplyContext& replyContext);
   void publishNamespaceCancel(
       const PublishNamespaceCancel& pubNsCancel,
-      std::shared_ptr<ReplyContext> replyContext);
+      std::shared_ptr<ReplyContext> replyContext,
+      std::optional<ResetStreamErrorCode> error);
+  // The peer ended a PUBLISH_NAMESPACE this session sent.
+  void endPublishNamespace(
+      RequestID requestID,
+      std::optional<ResetStreamErrorCode> error);
+  // Clears the session's state for a SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS
+  // this session serves once the publisher app ends it.
+  void clearOnResponderEnd(ResponderEnd& responderEnd, RequestID requestID);
+  // The peer ended a SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS this session sent.
+  void endConsumer(
+      RequestID requestID,
+      std::optional<ResetStreamErrorCode> error);
   void publishNamespaceDone(
       const PublishNamespaceDone& publishNamespaceDone,
       std::shared_ptr<ReplyContext> replyCtx);
@@ -252,6 +337,13 @@ class MoQRelaySession : public MoQSession {
       std::shared_ptr<Publisher::SubscribeTracksHandle>,
       RequestID::hash>
       subscribeTracksHandles_;
+  // Callbacks that pass the publisher's end to the subscriber app's handle,
+  // one for each SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS this session sent.
+  folly::F14FastMap<
+      RequestID,
+      folly::Function<void(std::optional<ResetStreamErrorCode>)>,
+      RequestID::hash>
+      consumerEnds_;
 
   // Extended PendingRequestState for publishNamespace support
   class MoQRelayPendingRequestState;

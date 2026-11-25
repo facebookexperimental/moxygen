@@ -46,7 +46,9 @@ class SwitchTestHub::FetchHandle final : public Publisher::FetchHandle {
  public:
   explicit FetchHandle(FetchOk ok) : Publisher::FetchHandle(std::move(ok)) {}
 
-  void fetchCancel() override {}
+  void fetchCancel(
+      moxygen::ResetStreamErrorCode /*code*/ =
+          moxygen::ResetStreamErrorCode::CANCELLED) override {}
 
   folly::coro::Task<RequestUpdateResult> requestUpdate(
       RequestUpdate update) override {
@@ -63,7 +65,9 @@ class SwitchTestHub::Handle final : public Publisher::SubscriptionHandle {
   Handle(SubscribeOk ok, std::weak_ptr<SwitchTestHub> hub, uint64_t id)
       : SubscriptionHandle(std::move(ok)), hub_(std::move(hub)), id_(id) {}
 
-  void unsubscribe() override {
+  void unsubscribe(
+      moxygen::ResetStreamErrorCode /*code*/ =
+          moxygen::ResetStreamErrorCode::CANCELLED) override {
     if (auto hub = hub_.lock()) {
       hub->unsubscribe(id_);
     }

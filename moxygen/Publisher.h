@@ -29,6 +29,9 @@
 //   Current session can be obtained from folly::RequestContext
 //   co_return handle;
 // }
+//
+// Methods that cancel a request take a ResetStreamErrorCode, which the peer's
+// handle receives. A peer on a version that cannot carry it receives CANCELLED.
 
 namespace moxygen {
 
@@ -41,11 +44,14 @@ class SubscriptionHandle {
   explicit SubscriptionHandle(SubscribeOk ok) : subscribeOk_(std::move(ok)) {}
   virtual ~SubscriptionHandle() = default;
 
-  virtual void unsubscribe() = 0;
+  virtual void unsubscribe(
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) = 0;
 
   // Cancels the fill named by the request ID given to beginFill(). The
   // subscription and other fills continue.
-  virtual void cancelFill(RequestID /*requestID*/) {}
+  virtual void cancelFill(
+      RequestID /*requestID*/,
+      ResetStreamErrorCode /*code*/ = ResetStreamErrorCode::CANCELLED) {}
 
   using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
   // Updates request parameters (start/end locations, priority, forward).
@@ -112,7 +118,8 @@ class Publisher {
     explicit FetchHandle(FetchOk ok) : fetchOk_(std::move(ok)) {}
     virtual ~FetchHandle() = default;
 
-    virtual void fetchCancel() = 0;
+    virtual void fetchCancel(
+        ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) = 0;
 
     using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
     virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
@@ -149,7 +156,8 @@ class Publisher {
         : subscribeNamespaceOk_(std::move(ok)) {}
     virtual ~SubscribeNamespaceHandle() = default;
 
-    virtual void unsubscribeNamespace() = 0;
+    virtual void unsubscribeNamespace(
+        ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) = 0;
 
     using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
     virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
@@ -180,6 +188,12 @@ class Publisher {
 
     virtual void namespaceDoneMsg(
         const TrackNamespace& trackNamespaceSuffix) = 0;
+
+    // Ends the subscription. nullopt ends it cleanly and a code cancels it.
+    // The subscriber's handle receives the same value, or SESSION_CLOSED when
+    // the session closes first.
+    virtual void subscribeNamespaceDone(
+        std::optional<ResetStreamErrorCode> /*error*/ = std::nullopt) {}
   };
 
   // Send/respond to SUBSCRIBE_NAMESPACE
@@ -209,7 +223,8 @@ class Publisher {
         : subscribeTracksOk_(std::move(ok)) {}
     virtual ~SubscribeTracksHandle() = default;
 
-    virtual void unsubscribeTracks() = 0;
+    virtual void unsubscribeTracks(
+        ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) = 0;
 
     using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
     virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
@@ -227,21 +242,25 @@ class Publisher {
     std::optional<SubscribeTracksOk> subscribeTracksOk_;
   };
 
-  class PublishBlockedHandle {
+  class TracksPublishHandle {
    public:
-    virtual ~PublishBlockedHandle() = default;
+    virtual ~TracksPublishHandle() = default;
 
     virtual void publishBlocked(
         const TrackNamespace& trackNamespaceSuffix,
         const std::string& trackName) = 0;
+
+    // Ends the subscription, like NamespacePublishHandle's
+    // subscribeNamespaceDone().
+    virtual void subscribeTracksDone(
+        std::optional<ResetStreamErrorCode> /*error*/ = std::nullopt) {}
   };
 
   using SubscribeTracksResult = folly::
       Expected<std::shared_ptr<SubscribeTracksHandle>, SubscribeTracksError>;
   virtual folly::coro::Task<SubscribeTracksResult> subscribeTracks(
       SubscribeTracks subTracks,
-      std::shared_ptr<PublishBlockedHandle> /*publishBlockedHandle*/ =
-          nullptr) {
+      std::shared_ptr<TracksPublishHandle> /*tracksPublishHandle*/ = nullptr) {
     return folly::coro::makeTask<SubscribeTracksResult>(folly::makeUnexpected(
         SubscribeTracksError{
             subTracks.requestID,

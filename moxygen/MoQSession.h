@@ -79,75 +79,6 @@ struct MoQSettings {
 
 class ReplyContext;
 
-class SubNSReply {
- public:
-  explicit SubNSReply(std::shared_ptr<ReplyContext> replyContext)
-      : replyContext_(std::move(replyContext)) {}
-
-  virtual ~SubNSReply() = default;
-
-  virtual WriteResult ok(const SubscribeNamespaceOk&);
-  virtual WriteResult error(const SubscribeNamespaceError&);
-  virtual WriteResult namespaceMsg(const Namespace&) {
-    XLOG(FATAL) << "Unimplemented";
-    folly::assume_unreachable();
-  }
-  virtual WriteResult namespaceDoneMsg(const NamespaceDone&) {
-    XLOG(FATAL) << "Unimplemented";
-    folly::assume_unreachable();
-  }
-
-  const std::shared_ptr<ReplyContext>& replyContext() const {
-    return replyContext_;
-  }
-
- protected:
-  std::shared_ptr<ReplyContext> replyContext_;
-};
-
-// Reply type that writes a generic REQUEST_OK / REQUEST_ERROR frame to a
-// ReplyContext. Used as the response sink for request/reply messages that
-// share the generic REQUEST_OK / REQUEST_ERROR envelope.
-class MessageReply {
- public:
-  explicit MessageReply(std::shared_ptr<ReplyContext> replyContext)
-      : replyContext_(std::move(replyContext)) {}
-
-  virtual ~MessageReply() = default;
-
-  virtual WriteResult ok(const RequestOk& okMsg);
-  virtual WriteResult error(const SubscribeTracksError& errorMsg);
-
-  const std::shared_ptr<ReplyContext>& replyContext() const {
-    return replyContext_;
-  }
-
- protected:
-  std::shared_ptr<ReplyContext> replyContext_;
-};
-
-class SubscribeTracksReply : public MessageReply,
-                             public Publisher::PublishBlockedHandle {
- public:
-  explicit SubscribeTracksReply(std::shared_ptr<ReplyContext> replyContext)
-      : MessageReply(std::move(replyContext)) {}
-
-  ~SubscribeTracksReply() override = default;
-
-  WriteResult ok(const RequestOk&) override;
-  WriteResult error(const SubscribeTracksError&) override;
-  void publishBlocked(
-      const TrackNamespace& trackNamespaceSuffix,
-      const std::string& trackName) override;
-
- private:
-  void flushPendingMessages();
-
-  folly::IOBufQueue pendingBuf_{folly::IOBufQueue::cacheChainLength()};
-  bool okSent_{false};
-  bool errorSent_{false};
-};
-
 class MoQSession;
 
 // Mixin for a Publisher or Subscriber that serves exactly one peer, which it
@@ -322,16 +253,6 @@ class MoQSession : public Subscriber,
 
   virtual uint64_t getNegotiatedVersion() const {
     return negotiatedVersion_;
-  }
-
-  virtual std::shared_ptr<SubNSReply> getSubNsReply(
-      std::shared_ptr<ReplyContext> replyContext) {
-    return std::make_shared<SubNSReply>(std::move(replyContext));
-  }
-
-  virtual std::shared_ptr<SubscribeTracksReply> getSubTracksReply(
-      std::shared_ptr<ReplyContext> replyContext) {
-    return std::make_shared<SubscribeTracksReply>(std::move(replyContext));
   }
 
   [[nodiscard]] MoQExecutor* getExecutor() const {
@@ -1148,8 +1069,7 @@ class MoQSession : public Subscriber,
   void fetchError(const FetchError& fetchError, ReplyContext& replyContext);
   void fetchCancel(
       const FetchCancel& fetchCancel,
-      const std::shared_ptr<BidiStreamControl>& control = nullptr,
-      ResetStreamErrorCode consumerError = ResetStreamErrorCode::CANCELLED);
+      const std::shared_ptr<BidiStreamControl>& control = nullptr);
   void onFetchStalled(RequestID requestID);
 
   class ReceiverSubscriptionHandle;
@@ -1382,21 +1302,23 @@ class MoQSession : public Subscriber,
       ReplyContext& replyContext);
   void subscribeNamespaceError(
       const SubscribeNamespaceError& subscribeNamespaceError,
-      std::shared_ptr<SubNSReply>&& subNsReply);
+      ReplyContext& replyContext);
 
   void subscribeTracksError(
       const SubscribeTracksError& subscribeTracksError,
-      std::shared_ptr<SubscribeTracksReply>&& subTracksReply);
+      ReplyContext& replyContext);
 
   virtual void onSubscribeNamespaceImpl(
       const SubscribeNamespace& subscribeNamespace,
-      std::shared_ptr<SubNSReply> subNsReply);
+      std::shared_ptr<ReplyContext> replyContext);
 
   virtual void onSubscribeTracksImpl(
       const SubscribeTracks& subscribeTracks,
-      std::shared_ptr<SubscribeTracksReply> subTracksReply);
+      std::shared_ptr<ReplyContext> replyContext);
 
-  virtual void onSubscribeTracksStreamClosed(RequestID /*requestID*/) {}
+  virtual void onSubscribeTracksStreamClosed(
+      RequestID /*requestID*/,
+      ResetStreamErrorCode /*code*/) {}
 
   // REQUEST_UPDATE error response - available for subclass handlers
   void requestUpdateError(

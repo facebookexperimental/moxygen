@@ -248,7 +248,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQChatClient::subscribe(
   co_return shared_from_this();
 }
 
-void MoQChatClient::unsubscribe() {
+void MoQChatClient::unsubscribe(ResetStreamErrorCode /*code*/) {
   // MoQChatClient only publishes a single track at a time.
   XLOG(INFO) << "UNSUBSCRIBE reqID=" << *chatRequestID_;
   publisher_.reset();
