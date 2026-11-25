@@ -317,7 +317,9 @@ class TestSubscriptionHandle : public Publisher::SubscriptionHandle {
   explicit TestSubscriptionHandle(SubscribeOk ok)
       : Publisher::SubscriptionHandle(std::move(ok)) {}
 
-  void unsubscribe() override {
+  void unsubscribe(
+      moxygen::ResetStreamErrorCode /*code*/ =
+          moxygen::ResetStreamErrorCode::CANCELLED) override {
     cancelSource_.requestCancellation();
   }
 
@@ -339,7 +341,9 @@ class TestFetchHandle : public Publisher::FetchHandle {
   explicit TestFetchHandle(FetchOk ok)
       : Publisher::FetchHandle(std::move(ok)) {}
 
-  void fetchCancel() override {
+  void fetchCancel(
+      moxygen::ResetStreamErrorCode /*code*/ =
+          moxygen::ResetStreamErrorCode::CANCELLED) override {
     cancelSource_.requestCancellation();
   }
 
