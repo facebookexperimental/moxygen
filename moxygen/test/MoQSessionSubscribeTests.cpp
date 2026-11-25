@@ -1023,6 +1023,49 @@ CO_TEST_P_X(MoQSessionTest, Unsubscribe) {
   co_await unsubscribeInvoked;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(MoQSessionTest, UnsubscribeDeliversErrorCode) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> serverHandle;
+  expectSubscribe([&serverHandle](auto sub, auto) -> TaskSubscribeResult {
+    serverHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return serverHandle;
+  });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  // The draft 16 UNSUBSCRIBE frame has no code field.
+  auto expected = getDraftMajorVersion(getServerSelectedVersion()) >= 18
+      ? ResetStreamErrorCode::EXCESSIVE_LOAD
+      : ResetStreamErrorCode::CANCELLED;
+  folly::coro::Baton unsubscribed;
+  EXPECT_CALL(*serverHandle, unsubscribe(expected)).WillOnce([&unsubscribed] {
+    unsubscribed.post();
+  });
+  res.value()->unsubscribe(ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await unsubscribed;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, SessionCloseUnsubscribesWithSessionClosed) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> serverHandle;
+  expectSubscribe([&serverHandle](auto sub, auto) -> TaskSubscribeResult {
+    serverHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return serverHandle;
+  });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  EXPECT_CALL(*serverHandle, unsubscribe(ResetStreamErrorCode::SESSION_CLOSED));
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+}
 CO_TEST_P_X(MoQSessionTest, SubscribeException) {
   co_await setupMoQSession();
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
@@ -1889,7 +1932,9 @@ CO_TEST_P_X(Draft18Test, BidiStreamStopSending) {
   EXPECT_TRUE(res.hasValue());
 
   folly::coro::Baton unsubBaton;
-  EXPECT_CALL(*pubHandle, unsubscribe()).WillOnce([&] { unsubBaton.post(); });
+  EXPECT_CALL(*pubHandle, unsubscribe(testing::_)).WillOnce([&] {
+    unsubBaton.post();
+  });
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
 
@@ -1915,7 +1960,9 @@ CO_TEST_P_X(Draft18Test, PeerStopSendingWithoutResetStopsSendingOnce) {
   EXPECT_TRUE(res.hasValue());
 
   folly::coro::Baton unsubBaton;
-  EXPECT_CALL(*pubHandle, unsubscribe()).WillOnce([&] { unsubBaton.post(); });
+  EXPECT_CALL(*pubHandle, unsubscribe(testing::_)).WillOnce([&] {
+    unsubBaton.post();
+  });
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
 
@@ -1950,7 +1997,9 @@ CO_TEST_P_X(Draft18Test, BidiStreamFinUnsubscribesSubscribe) {
   EXPECT_TRUE(res.hasValue());
 
   folly::coro::Baton unsubBaton;
-  EXPECT_CALL(*pubHandle, unsubscribe()).WillOnce([&] { unsubBaton.post(); });
+  EXPECT_CALL(*pubHandle, unsubscribe(testing::_)).WillOnce([&] {
+    unsubBaton.post();
+  });
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
 
@@ -1976,7 +2025,9 @@ CO_TEST_P_X(Draft18Test, UnsubscribeResetsRequestStreamOnce) {
   EXPECT_TRUE(res.hasValue());
 
   folly::coro::Baton unsubBaton;
-  EXPECT_CALL(*pubHandle, unsubscribe()).WillOnce([&] { unsubBaton.post(); });
+  EXPECT_CALL(*pubHandle, unsubscribe(testing::_)).WillOnce([&] {
+    unsubBaton.post();
+  });
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
 
@@ -2001,7 +2052,9 @@ CO_TEST_P_X(Draft18Test, UnsubscribeStopsSendingWhileReadPending) {
   EXPECT_TRUE(res.hasValue());
 
   folly::coro::Baton unsubBaton;
-  EXPECT_CALL(*pubHandle, unsubscribe()).WillOnce([&] { unsubBaton.post(); });
+  EXPECT_CALL(*pubHandle, unsubscribe(testing::_)).WillOnce([&] {
+    unsubBaton.post();
+  });
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribe());
   EXPECT_CALL(*serverPublisherStatsCallback_, onSubscriptionEnd());
 
@@ -2042,7 +2095,7 @@ CO_TEST_P_X(Draft18Test, NoUnsubscribeAfterPublishDone) {
       getTrackEndedPublishDone(subscribeRequest.requestID));
 
   // Handle is torn down; STOP_SENDING must not fire onUnsubscribe.
-  EXPECT_CALL(*pubHandle, unsubscribe()).Times(0);
+  EXPECT_CALL(*pubHandle, unsubscribe(testing::_)).Times(0);
   clientWt_->readHandles.at(0)->stopSending(0);
 
   co_await folly::coro::co_reschedule_on_current_executor;
@@ -2067,7 +2120,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeCallerCancelledBeforeSubscribeOk) {
         serverSawSubscribe.post();
         co_await releaseHandler;
         serverHandle = makeSubscribeOkResult(sub);
-        EXPECT_CALL(*serverHandle, unsubscribe()).WillRepeatedly([&] {
+        EXPECT_CALL(*serverHandle, unsubscribe(testing::_)).WillRepeatedly([&] {
           serverSawUnsubscribe = true;
         });
         co_return serverHandle;
@@ -2136,12 +2189,12 @@ CO_TEST_P_X(MoQSessionTest, SubscribeCancelledWhileSubscribeOkQueued) {
               }
               auto handle = makeSubscribeOkResult(sub);
               if (isY) {
-                EXPECT_CALL(*handle, unsubscribe()).WillRepeatedly([&] {
-                  serverSawUnsubscribeY = true;
-                });
+                EXPECT_CALL(*handle, unsubscribe(testing::_))
+                    .WillRepeatedly([&] { serverSawUnsubscribeY = true; });
                 serverHandleY = handle;
               } else {
-                EXPECT_CALL(*handle, unsubscribe()).Times(testing::AnyNumber());
+                EXPECT_CALL(*handle, unsubscribe(testing::_))
+                    .Times(testing::AnyNumber());
                 serverHandleX = handle;
               }
               co_return handle;
@@ -2256,7 +2309,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeTimesOutBeforeSubscribeOk) {
       .WillOnce([&](auto sub, auto /*pub*/) -> TaskSubscribeResult {
         co_await releaseHandler;
         serverHandle = makeSubscribeOkResult(sub);
-        EXPECT_CALL(*serverHandle, unsubscribe()).WillRepeatedly([&] {
+        EXPECT_CALL(*serverHandle, unsubscribe(testing::_)).WillRepeatedly([&] {
           serverSawUnsubscribe = true;
         });
         co_return serverHandle;

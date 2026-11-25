@@ -27,7 +27,8 @@ class MoQTestFetchHandle : public Publisher::FetchHandle {
         fetchOk_(ok),
         cancelSource_(std::move(cancellationSource)) {}
 
-  virtual void fetchCancel() override;
+  virtual void fetchCancel(
+      ResetStreamErrorCode /*code*/ = ResetStreamErrorCode::CANCELLED) override;
   using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
   virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
       RequestUpdate reqUpdate) override;

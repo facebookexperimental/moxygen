@@ -711,6 +711,60 @@ CO_TEST_P_X(MoQSessionTest, FetchCancel) {
   co_await folly::coro::co_reschedule_on_current_executor;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(Draft18Test, FetchCancelDeliversErrorCode) {
+  co_await setupMoQSession();
+  // The handler publishes nothing, so no data stream opens and the cancel
+  // reaches the publisher on the request stream.
+  std::shared_ptr<FetchConsumer> fetchPub;
+  std::shared_ptr<MockFetchHandle> serverHandle;
+  expectFetch(
+      [&fetchPub, &serverHandle](
+          Fetch fetch, auto inFetchPub) -> TaskFetchResult {
+        fetchPub = std::move(inFetchPub);
+        serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+        co_return serverHandle;
+      });
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::EXCESSIVE_LOAD));
+  expectFetchSuccess();
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  folly::coro::Baton cancelled;
+  EXPECT_CALL(*serverHandle, fetchCancel(ResetStreamErrorCode::EXCESSIVE_LOAD))
+      .WillOnce([&cancelled] { cancelled.post(); });
+  res.value()->fetchCancel(ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await cancelled;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(Draft18Test, FetchStallDeliversDeliveryTimeout) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.requestTimeout = std::chrono::milliseconds(100);
+  clientSession_->setMoqSettings(moqSettings);
+  // The handler does not publish after FETCH_OK, so the fetch stalls.
+  folly::coro::Baton cancelled;
+  std::shared_ptr<FetchConsumer> fetchPub;
+  std::shared_ptr<MockFetchHandle> serverHandle;
+  expectFetch([&](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
+    fetchPub = std::move(inFetchPub);
+    serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+    EXPECT_CALL(
+        *serverHandle, fetchCancel(ResetStreamErrorCode::DELIVERY_TIMEOUT))
+        .WillOnce([&cancelled] { cancelled.post(); });
+    co_return serverHandle;
+  });
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::DELIVERY_TIMEOUT));
+  expectFetchSuccess();
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
+  CO_ASSERT_TRUE(res.hasValue());
+  co_await cancelled;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, FetchEarlyCancel) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(1);
@@ -1059,7 +1113,9 @@ CO_TEST_P_X(Draft18Test, FetchBidiStreamStopSending) {
   EXPECT_FALSE(res.hasError());
 
   folly::coro::Baton cancelBaton;
-  EXPECT_CALL(*pubHandle, fetchCancel()).WillOnce([&] { cancelBaton.post(); });
+  EXPECT_CALL(*pubHandle, fetchCancel(testing::_)).WillOnce([&] {
+    cancelBaton.post();
+  });
 
   // Client STOP_SENDING on its FETCH bidi (id 0) → server onFetchCancel.
   clientWt_->readHandles.at(0)->stopSending(0);
@@ -1120,7 +1176,9 @@ CO_TEST_P_X(Draft18Test, FetchBidiStreamFetchCancel) {
   EXPECT_FALSE(res.hasError());
 
   folly::coro::Baton cancelBaton;
-  EXPECT_CALL(*pubHandle, fetchCancel()).WillOnce([&] { cancelBaton.post(); });
+  EXPECT_CALL(*pubHandle, fetchCancel(testing::_)).WillOnce([&] {
+    cancelBaton.post();
+  });
   EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
 
   res.value()->fetchCancel();
@@ -1236,7 +1294,7 @@ CO_TEST_P_X(Draft18Test, NoFetchCancelAfterFetchComplete) {
   co_await objBaton;
 
   // Handle is torn down; STOP_SENDING must not fire fetchCancel.
-  EXPECT_CALL(*pubHandle, fetchCancel()).Times(0);
+  EXPECT_CALL(*pubHandle, fetchCancel(testing::_)).Times(0);
   clientWt_->readHandles.at(0)->stopSending(0);
 
   co_await folly::coro::co_reschedule_on_current_executor;
@@ -1482,7 +1540,9 @@ class PendingUpdateFetchHandle : public Publisher::FetchHandle {
   explicit PendingUpdateFetchHandle(FetchOk ok)
       : Publisher::FetchHandle(std::move(ok)) {}
 
-  void fetchCancel() override {}
+  void fetchCancel(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {}
 
   folly::coro::Task<folly::Expected<RequestOk, RequestError>> requestUpdate(
       RequestUpdate update) override {
@@ -2226,7 +2286,7 @@ CO_TEST_P_X(MoQSessionTest, FetchCallerCancelledBeforeFetchOk) {
         serverSawFetch.post();
         co_await releaseHandler;
         serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
-        EXPECT_CALL(*serverHandle, fetchCancel()).WillRepeatedly([&] {
+        EXPECT_CALL(*serverHandle, fetchCancel(testing::_)).WillRepeatedly([&] {
           serverSawFetchCancel = true;
         });
         co_return serverHandle;
@@ -2285,7 +2345,7 @@ CO_TEST_P_X(MoQSessionTest, FetchTimesOutBeforeFetchOk) {
       .WillOnce([&](Fetch fetch, auto /*pub*/) -> TaskFetchResult {
         co_await releaseHandler;
         serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
-        EXPECT_CALL(*serverHandle, fetchCancel()).WillRepeatedly([&] {
+        EXPECT_CALL(*serverHandle, fetchCancel(testing::_)).WillRepeatedly([&] {
           serverSawFetchCancel = true;
         });
         co_return serverHandle;
@@ -2331,7 +2391,7 @@ CO_TEST_P_X(MoQSessionTest, FetchThatStallsAfterFetchOkIsReset) {
       .WillOnce([&](Fetch fetch, auto pub) -> TaskFetchResult {
         serverPub = std::move(pub);
         serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
-        EXPECT_CALL(*serverHandle, fetchCancel()).WillRepeatedly([&] {
+        EXPECT_CALL(*serverHandle, fetchCancel(testing::_)).WillRepeatedly([&] {
           serverSawFetchCancel = true;
         });
         co_return serverHandle;
@@ -2462,7 +2522,8 @@ CO_TEST_P_X(MoQSessionTest, FetchCancelledWhileFetchOkQueued) {
         serverSawX.post();
         co_await releaseX;
         auto handle = makeSubscribeOkResult(sub);
-        EXPECT_CALL(*handle, unsubscribe()).Times(testing::AnyNumber());
+        EXPECT_CALL(*handle, unsubscribe(testing::_))
+            .Times(testing::AnyNumber());
         co_return handle;
       });
   EXPECT_CALL(*serverPublisher, fetch(_, _))
@@ -2470,9 +2531,8 @@ CO_TEST_P_X(MoQSessionTest, FetchCancelledWhileFetchOkQueued) {
         serverSawY.post();
         co_await releaseY;
         serverHandleY = makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
-        EXPECT_CALL(*serverHandleY, fetchCancel()).WillRepeatedly([&] {
-          serverSawFetchCancelY = true;
-        });
+        EXPECT_CALL(*serverHandleY, fetchCancel(testing::_))
+            .WillRepeatedly([&] { serverSawFetchCancelY = true; });
         co_return serverHandleY;
       });
 

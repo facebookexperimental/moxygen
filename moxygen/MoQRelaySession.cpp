@@ -84,10 +84,10 @@ class MoQRelaySession::PublisherPublishNamespaceHandle
     publishNamespaceDone();
   }
 
-  void publishNamespaceDone() override {
+  void publishNamespaceDone(
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
-      PublishNamespaceDone pubNsDone;
-      pubNsDone.requestID = publishNamespaceOk().requestID;
+      PublishNamespaceDone pubNsDone{publishNamespaceOk().requestID, code};
       session_->publishNamespaceDone(pubNsDone, std::move(replyCtx_));
       session_.reset();
     }
@@ -125,7 +125,8 @@ class MoQRelaySession::SubscribeNamespaceHandle
     unsubscribeNamespace();
   }
 
-  void unsubscribeNamespace() override {
+  void unsubscribeNamespace(
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
       if (session_->isClosed()) {
         session_.reset();
@@ -135,7 +136,7 @@ class MoQRelaySession::SubscribeNamespaceHandle
       // matches SUBSCRIBE / FETCH / SUBSCRIBE_TRACKS.
       MOQ_SUBSCRIBER_STATS(
           session_->subscriberStatsCallback_, onUnsubscribeNamespace);
-      control_->cancel(ResetStreamErrorCode::CANCELLED);
+      control_->cancel(code);
       session_.reset();
     }
   }
@@ -183,7 +184,8 @@ class MoQRelaySession::SubscribeTracksHandle
     unsubscribeTracks();
   }
 
-  void unsubscribeTracks() override {
+  void unsubscribeTracks(
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) override {
     auto session = session_.lock();
     if (!session || session->isClosed()) {
       session_.reset();
@@ -193,7 +195,7 @@ class MoQRelaySession::SubscribeTracksHandle
     if (control_) {
       // No UNSUBSCRIBE_TRACKS wire frame — cancel via RST. FIN means
       // "no more REQUEST_UPDATE", not cancel.
-      control_->cancel(ResetStreamErrorCode::CANCELLED);
+      control_->cancel(code);
     }
     control_.reset();
     session_.reset();
@@ -379,14 +381,14 @@ void MoQRelaySession::cleanupRelayState() {
   publishNamespaceCallbacks_.clear();
 
   for (auto& pubNs : publishNamespaceHandles_) {
-    pubNs.second->publishNamespaceDone();
+    pubNs.second->publishNamespaceDone(ResetStreamErrorCode::SESSION_CLOSED);
   }
   publishNamespaceHandles_.clear();
 
   // Clean up subscribeNamespace handles
   for (auto& subNs : subscribeNamespaceHandles_) {
     if (subNs.second) {
-      subNs.second->unsubscribeNamespace();
+      subNs.second->unsubscribeNamespace(ResetStreamErrorCode::SESSION_CLOSED);
     }
   }
   subscribeNamespaceHandles_.clear();
@@ -395,7 +397,7 @@ void MoQRelaySession::cleanupRelayState() {
   // Draft 18+: drop subscribeTracks handles too.
   for (auto& subTracks : subscribeTracksHandles_) {
     if (subTracks.second) {
-      subTracks.second->unsubscribeTracks();
+      subTracks.second->unsubscribeTracks(ResetStreamErrorCode::SESSION_CLOSED);
     }
   }
   subscribeTracksHandles_.clear();
@@ -717,7 +719,8 @@ void MoQRelaySession::terminateExistingRequest(
     done.requestID = existingRequestID;
     onPublishNamespaceDone(done);
   } else {
-    onSubscribeTracksStreamClosed(existingRequestID);
+    onSubscribeTracksStreamClosed(
+        existingRequestID, ResetStreamErrorCode::CANCELLED);
   }
 }
 
@@ -1025,7 +1028,7 @@ void MoQRelaySession::publishNamespaceDone(
     replyCtx->flushFinal();
   } else {
     // Draft 18+ has no PUBLISH_NAMESPACE_DONE; withdrawing cancels the stream.
-    replyCtx->cancel(ResetStreamErrorCode::CANCELLED);
+    replyCtx->cancel(pubNsDone.errorCode);
   }
 }
 
@@ -1192,7 +1195,7 @@ void MoQRelaySession::onPublishNamespaceDone(PublishNamespaceDone pubNsDone) {
   requestUpdateReplyContexts_.erase(reqId);
 
   // Common action
-  handle->publishNamespaceDone();
+  handle->publishNamespaceDone(pubNsDone.errorCode);
   retireRequestID(/*signalWriteLoop=*/true);
 }
 
@@ -1246,13 +1249,13 @@ class SubTracksStreamCallback : public MoQControlCodec::ControlCallback {
  public:
   SubTracksStreamCallback(
       MoQSession* session,
-      std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle)
+      std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle)
       : session_(session),
-        publishBlockedHandle_(std::move(publishBlockedHandle)) {}
+        tracksPublishHandle_(std::move(tracksPublishHandle)) {}
 
   void releaseHandleOnCancel(const folly::CancellationToken& readCancelToken) {
     releaseHandle_.emplace(
-        readCancelToken, [this] { publishBlockedHandle_.reset(); });
+        readCancelToken, [this] { tracksPublishHandle_.reset(); });
   }
 
   void onConnectionError(ErrorCode error) override {
@@ -1260,8 +1263,8 @@ class SubTracksStreamCallback : public MoQControlCodec::ControlCallback {
   }
 
   void onPublishBlocked(PublishBlocked publishBlocked) override {
-    if (publishBlockedHandle_) {
-      publishBlockedHandle_->publishBlocked(
+    if (tracksPublishHandle_) {
+      tracksPublishHandle_->publishBlocked(
           publishBlocked.trackNamespaceSuffix, publishBlocked.trackName);
     }
   }
@@ -1276,7 +1279,7 @@ class SubTracksStreamCallback : public MoQControlCodec::ControlCallback {
 
  private:
   MoQSession* session_;
-  std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle_;
+  std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle_;
   std::optional<folly::CancellationCallback> releaseHandle_;
 };
 
@@ -1348,9 +1351,10 @@ MoQRelaySession::subscribeNamespace(
 // SubscribeNamespace publisher methods
 void MoQRelaySession::onSubscribeNamespaceImpl(
     const SubscribeNamespace& sa,
-    std::shared_ptr<SubNSReply> subNsReply) {
+    std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " prefix=" << sa.trackNamespacePrefix
              << " sess=" << this;
+  auto subNsReply = std::make_shared<SubNSReply>(std::move(replyContext));
   if (closeSessionIfRequestIDInvalid(sa.requestID, false, true)) {
     return;
   }
@@ -1493,6 +1497,19 @@ void MoQRelaySession::subscribeNamespaceOk(
   }
 }
 
+void MoQRelaySession::subscribeNamespaceError(
+    const SubscribeNamespaceError& subNsError,
+    std::shared_ptr<SubNSReply>&& subNsReply) {
+  XLOG(DBG1) << __func__ << " reqID=" << subNsError.requestID.value
+             << " sess=" << this;
+  MOQ_PUBLISHER_STATS(
+      publisherStatsCallback_, onSubscribeNamespaceError, subNsError.errorCode);
+  auto res = subNsReply->error(subNsError);
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeNamespaceError failed sess=" << this;
+  }
+}
+
 void MoQRelaySession::onUnsubscribeNamespace(UnsubscribeNamespace unsub) {
   MOQ_PUBLISHER_STATS(publisherStatsCallback_, onUnsubscribeNamespace);
   if (!publishHandler_) {
@@ -1523,7 +1540,7 @@ void MoQRelaySession::onUnsubscribeNamespace(UnsubscribeNamespace unsub) {
   // Process unsubscribe
   folly::RequestContextScopeGuard guard;
   setRequestSession();
-  handle->unsubscribeNamespace();
+  handle->unsubscribeNamespace(unsub.errorCode);
   subscribeNamespaceHandles_.erase(requestID);
   requestUpdateReplyContexts_.erase(requestID);
 
@@ -1550,8 +1567,9 @@ class NamespaceBackedSubscribeTracksHandle
       : Publisher::SubscribeTracksHandle(inner->subscribeNamespaceOk()),
         inner_(std::move(inner)) {}
 
-  void unsubscribeTracks() override {
-    inner_->unsubscribeNamespace();
+  void unsubscribeTracks(
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) override {
+    inner_->unsubscribeNamespace(code);
   }
 
   folly::coro::Task<RequestUpdateResult> requestUpdate(
@@ -1572,7 +1590,7 @@ class NamespaceBackedSubscribeTracksHandle
 folly::coro::Task<Publisher::SubscribeTracksResult>
 MoQRelaySession::subscribeTracks(
     SubscribeTracks subTracks,
-    std::shared_ptr<PublishBlockedHandle> publishBlockedHandle) {
+    std::shared_ptr<TracksPublishHandle> tracksPublishHandle) {
   XLOG(DBG1) << __func__ << " prefix=" << subTracks.trackNamespacePrefix
              << " sess=" << this;
   if (getDraftMajorVersion(negotiatedVersion_) < 18) {
@@ -1599,7 +1617,7 @@ MoQRelaySession::subscribeTracks(
   aliasifyAuthTokens(subTracks.params);
   subTracks.requestID = getNextRequestID();
   auto streamCallback = std::make_unique<SubTracksStreamCallback>(
-      this, std::move(publishBlockedHandle));
+      this, std::move(tracksPublishHandle));
   // The read loop that owns it only starts once this coroutine suspends.
   auto* streamCallbackPtr = streamCallback.get();
 
@@ -1656,9 +1674,11 @@ MoQRelaySession::subscribeTracks(
 // Draft 18+: SUBSCRIBE_TRACKS publisher methods
 void MoQRelaySession::onSubscribeTracksImpl(
     const SubscribeTracks& subTracks,
-    std::shared_ptr<SubscribeTracksReply> subTracksReply) {
+    std::shared_ptr<ReplyContext> replyContext) {
   XLOG(DBG1) << __func__ << " prefix=" << subTracks.trackNamespacePrefix
              << " sess=" << this;
+  auto subTracksReply =
+      std::make_shared<SubscribeTracksReply>(std::move(replyContext));
   if (closeSessionIfRequestIDInvalid(subTracks.requestID, false, true)) {
     return;
   }
@@ -1693,11 +1713,11 @@ folly::coro::Task<void> MoQRelaySession::handleSubscribeTracks(
   co_await folly::coro::co_safe_point;
   folly::RequestContextScopeGuard guard;
   setRequestSession();
-  std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle =
+  std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle =
       subTracksReply;
   auto token = co_await folly::coro::co_current_cancellation_token;
   auto subTracksResult = co_await co_awaitTry(publishHandler_->subscribeTracks(
-      subTracks, std::move(publishBlockedHandle)));
+      subTracks, std::move(tracksPublishHandle)));
   if (token.isCancellationRequested()) {
     // The subscriber left before this handle was installed.
     // onSubscribeTracksStreamClosed already retired the request.
@@ -1745,7 +1765,24 @@ void MoQRelaySession::subscribeTracksOk(
   }
 }
 
-void MoQRelaySession::onSubscribeTracksStreamClosed(RequestID requestID) {
+void MoQRelaySession::subscribeTracksError(
+    const SubscribeTracksError& subTracksError,
+    std::shared_ptr<SubscribeTracksReply>&& subTracksReply) {
+  XLOG(DBG1) << __func__ << " reqID=" << subTracksError.requestID.value
+             << " sess=" << this;
+  MOQ_PUBLISHER_STATS(
+      publisherStatsCallback_,
+      onSubscribeTracksError,
+      subTracksError.errorCode);
+  auto res = subTracksReply->error(subTracksError);
+  if (!res) {
+    XLOG(ERR) << "writeSubscribeTracksError failed sess=" << this;
+  }
+}
+
+void MoQRelaySession::onSubscribeTracksStreamClosed(
+    RequestID requestID,
+    ResetStreamErrorCode code) {
   XLOG(DBG1) << __func__ << " requestID=" << requestID << " sess=" << this;
   // Always retire the request, even if no handle was stored — the error
   // paths in onSubscribeTracksImpl / handleSubscribeTracks (GOING_AWAY,
@@ -1761,7 +1798,7 @@ void MoQRelaySession::onSubscribeTracksStreamClosed(RequestID requestID) {
     if (handle) {
       folly::RequestContextScopeGuard guard;
       setRequestSession();
-      handle->unsubscribeTracks();
+      handle->unsubscribeTracks(code);
     }
   }
   retireRequestID(/*signalWriteLoop=*/true);
@@ -1826,7 +1863,7 @@ bool MoQRelaySession::handleSubscribeTracksOkFromRequestOk(
   return subscribeTracksPtr->trySetValue(requestOk);
 }
 
-WriteResult SeparateStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {
+WriteResult SubNSReply::ok(const SubscribeNamespaceOk& subNsOk) {
   if (errorSent_) {
     // We already sent an ERROR; protocol doesn't allow OK after that.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
@@ -1842,8 +1879,7 @@ WriteResult SeparateStreamSubNsReply::ok(const SubscribeNamespaceOk& subNsOk) {
   return res;
 }
 
-WriteResult SeparateStreamSubNsReply::error(
-    const SubscribeNamespaceError& subNsError) {
+WriteResult SubNSReply::error(const SubscribeNamespaceError& subNsError) {
   if (okSent_) {
     // We already sent OK (SubscribeNamespaceOk) on this stream.
     // After that, the stream should only carry NAMESPACE/NAMESPACE_DONE.
@@ -1862,7 +1898,7 @@ WriteResult SeparateStreamSubNsReply::error(
   return res;
 }
 
-WriteResult SeparateStreamSubNsReply::namespaceMsg(const Namespace& msg) {
+WriteResult SubNSReply::namespaceMsg(const Namespace& msg) {
   if (errorSent_) {
     // No NAMESPACE frames allowed after we send an ERROR on this stream.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
@@ -1878,8 +1914,7 @@ WriteResult SeparateStreamSubNsReply::namespaceMsg(const Namespace& msg) {
   return res;
 }
 
-WriteResult SeparateStreamSubNsReply::namespaceDoneMsg(
-    const NamespaceDone& msg) {
+WriteResult SubNSReply::namespaceDoneMsg(const NamespaceDone& msg) {
   if (errorSent_) {
     // No NAMESPACE_DONE frames allowed after we send an ERROR on this stream.
     return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
@@ -1895,7 +1930,7 @@ WriteResult SeparateStreamSubNsReply::namespaceDoneMsg(
   return res;
 }
 
-void SeparateStreamSubNsReply::flushPendingMessages() {
+void SubNSReply::flushPendingMessages() {
   if (errorSent_) {
     // If we sent error before OK, we should never flush queued NAMESPACE
     // frames.
@@ -1906,6 +1941,62 @@ void SeparateStreamSubNsReply::flushPendingMessages() {
   if (!pendingBuf_.empty()) {
     replyContext_->writeBuf().append(pendingBuf_.move());
     replyContext_->flush(/*fin=*/pendingFin_);
+  }
+}
+
+WriteResult SubscribeTracksReply::ok(const RequestOk& okMsg) {
+  if (errorSent_ || okSent_) {
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = replyContext_->writer().writeRequestOk(
+      replyContext_->writeBuf(), okMsg, FrameType::REQUEST_OK);
+  if (!res) {
+    return res;
+  }
+  replyContext_->flush();
+  okSent_ = true;
+  flushPendingMessages();
+  return res;
+}
+
+WriteResult SubscribeTracksReply::error(const SubscribeTracksError& errorMsg) {
+  if (okSent_ || errorSent_) {
+    return folly::makeUnexpected(quic::TransportErrorCode::PROTOCOL_VIOLATION);
+  }
+  auto res = replyContext_->writer().writeRequestError(
+      replyContext_->writeBuf(), errorMsg, FrameType::REQUEST_ERROR);
+  pendingBuf_.move();
+  replyContext_->flush(/*fin=*/true);
+  errorSent_ = true;
+  return res;
+}
+
+void SubscribeTracksReply::publishBlocked(
+    const TrackNamespace& trackNamespaceSuffix,
+    const std::string& trackName) {
+  if (errorSent_) {
+    XLOG(ERR) << "Ignoring PUBLISH_BLOCKED after REQUEST_ERROR";
+    return;
+  }
+  auto res = replyContext_->writer().writePublishBlocked(
+      replyContext_->writeBuf(),
+      PublishBlocked{trackNamespaceSuffix, trackName});
+  if (!res) {
+    XLOG(ERR) << "writePublishBlocked failed err=" << uint64_t(res.error());
+    replyContext_->writeBuf().move();
+    return;
+  }
+  if (okSent_) {
+    replyContext_->flush();
+  } else {
+    pendingBuf_.append(replyContext_->writeBuf().move());
+  }
+}
+
+void SubscribeTracksReply::flushPendingMessages() {
+  if (!pendingBuf_.empty()) {
+    replyContext_->writeBuf().append(pendingBuf_.move());
+    replyContext_->flush();
   }
 }
 

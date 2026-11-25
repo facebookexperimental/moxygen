@@ -39,10 +39,64 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeNamespace) {
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribeNamespace());
 
   folly::coro::Baton barricade;
-  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace())
+  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace(testing::_))
       .WillOnce(testing::Invoke([&barricade]() { barricade.post(); }));
   publishNamespaceResult.value()->unsubscribeNamespace();
   co_await barricade;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, UnsubscribeNamespaceDeliversErrorCode) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          [&serverHandle](
+              auto subNs,
+              auto) -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+            serverHandle = std::make_shared<MockSubscribeNamespaceHandle>(
+                SubscribeNamespaceOk(
+                    {.requestID = subNs.requestID,
+                     .requestSpecificParams = {}}));
+            co_return serverHandle;
+          });
+  auto res = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), nullptr);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  folly::coro::Baton unsubscribed;
+  EXPECT_CALL(
+      *serverHandle, unsubscribeNamespace(ResetStreamErrorCode::EXCESSIVE_LOAD))
+      .WillOnce([&unsubscribed] { unsubscribed.post(); });
+  res.value()->unsubscribeNamespace(ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await unsubscribed;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    MoQSessionTest,
+    SessionCloseUnsubscribesNamespaceWithSessionClosed) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          [&serverHandle](
+              auto subNs,
+              auto) -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+            serverHandle = std::make_shared<MockSubscribeNamespaceHandle>(
+                SubscribeNamespaceOk(
+                    {.requestID = subNs.requestID,
+                     .requestSpecificParams = {}}));
+            co_return serverHandle;
+          });
+  auto res = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), nullptr);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  EXPECT_CALL(
+      *serverHandle,
+      unsubscribeNamespace(ResetStreamErrorCode::SESSION_CLOSED));
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 // Unsubscribing must release the caller's NamespacePublishHandle without
@@ -60,9 +114,8 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeNamespaceReleasesPublishHandle) {
                 SubscribeNamespaceOk(
                     {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, unsubscribeNamespace()).WillOnce([&] {
-              serverSawUnsubscribe.post();
-            });
+            EXPECT_CALL(*serverHandle, unsubscribeNamespace(testing::_))
+                .WillOnce([&] { serverSawUnsubscribe.post(); });
             co_return serverHandle;
           });
 
@@ -184,7 +237,7 @@ CO_TEST_P_X(V16PlusSubscribeNamespaceTest, NamespaceDoneDoesNotCloseStream) {
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribeNamespace());
 
   folly::coro::Baton unsubBaton;
-  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace())
+  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace(testing::_))
       .WillOnce(testing::Invoke([&unsubBaton]() { unsubBaton.post(); }));
   publishNamespaceResult.value()->unsubscribeNamespace();
   co_await unsubBaton;
@@ -266,7 +319,7 @@ CO_TEST_P_X(
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribeNamespace());
 
   folly::coro::Baton unsubBaton;
-  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace())
+  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace(testing::_))
       .WillOnce(testing::Invoke([&unsubBaton]() { unsubBaton.post(); }));
   publishNamespaceResult.value()->unsubscribeNamespace();
   co_await unsubBaton;
@@ -427,7 +480,7 @@ CO_TEST_P_X(V16SubscribeNamespaceTest, PeerFinUnsubscribesNamespace) {
 
   folly::coro::Baton unsubBaton;
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribeNamespace());
-  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace())
+  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace(testing::_))
       .WillOnce(testing::Invoke([&unsubBaton]() { unsubBaton.post(); }));
 
   // Control stream is the client's first bidi, so SUBSCRIBE_NAMESPACE is id 4.
@@ -491,7 +544,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceCallerCancelledBeforeOk) {
                 SubscribeNamespaceOk(
                     {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, unsubscribeNamespace())
+            EXPECT_CALL(*serverHandle, unsubscribeNamespace(testing::_))
                 .WillRepeatedly([&] { serverSawUnsubscribe = true; });
             co_return serverHandle;
           });
@@ -547,7 +600,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceCancelledWhileOkQueued) {
                 SubscribeNamespaceOk(
                     {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, unsubscribeNamespace())
+            EXPECT_CALL(*serverHandle, unsubscribeNamespace(testing::_))
                 .WillRepeatedly([&] { serverSawUnsubscribe = true; });
             co_return serverHandle;
           });
