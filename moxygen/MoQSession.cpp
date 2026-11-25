@@ -2125,6 +2125,9 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
       streamPublisher->reset(code);
     }
     setSession(nullptr);
+    if (auto handle = std::exchange(handle_, nullptr)) {
+      handle->fetchCancel();
+    }
   }
 
   void resetForGoaway(ResetStreamErrorCode code) override {

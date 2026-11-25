@@ -1202,6 +1202,67 @@ CO_TEST_P_X(MoQSessionTest, FetchSessionCleanupWithOpenDataStream) {
   }
 }
 
+CO_TEST_P_X(MoQSessionTest, EstablishedFetchCancelledOnSessionClose) {
+  co_await setupMoQSession();
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*serverPublisherStatsCallback_, onFetchEnd()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchBegin()).Times(1);
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onFetchEnd()).Times(1);
+
+  size_t cancelCalls = 0;
+  std::shared_ptr<FetchConsumer> publishing;
+  std::weak_ptr<FetchConsumer> weakPublishing;
+  std::weak_ptr<MockFetchHandle> weakHandle;
+  expectFetch([&](Fetch fetch, auto fetchPub) -> TaskFetchResult {
+    publishing = std::move(fetchPub);
+    weakPublishing = publishing;
+    auto handle = makeFetchOkResult(fetch, AbsoluteLocation{0, 2});
+    weakHandle = handle;
+    EXPECT_CALL(*handle, fetchCancel()).Times(1).WillOnce([&] {
+      ++cancelCalls;
+      publishing.reset();
+    });
+    co_return handle;
+  });
+  expectFetchSuccess();
+  EXPECT_CALL(*clientSubscriberStatsCallback_, recordFetchLatency(_));
+
+  auto consumer = std::make_shared<testing::StrictMock<MockFetchConsumer>>();
+  std::weak_ptr<FetchConsumer> weakConsumer = consumer;
+  folly::coro::Baton objectReceived;
+  EXPECT_CALL(
+      *consumer, object(0, 0, 0, HasChainDataLengthOf(100), _, false, _))
+      .WillOnce([&] {
+        objectReceived.post();
+        return folly::unit;
+      });
+  EXPECT_CALL(*consumer, reset(ResetStreamErrorCode::SESSION_CLOSED)).Times(1);
+  auto result = co_await clientSession_->fetch(
+      getFetch({0, 0}, {0, 2}), std::move(consumer));
+  CO_ASSERT_TRUE(result.hasValue());
+  CO_ASSERT_NE(publishing, nullptr);
+  EXPECT_FALSE(weakHandle.expired());
+  EXPECT_FALSE(weakConsumer.expired());
+  EXPECT_TRUE(
+      publishing
+          ->object(0, 0, 0, moxygen::test::makeBuf(100), noExtensions(), false)
+          .hasValue());
+  co_await objectReceived;
+
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+  EXPECT_EQ(cancelCalls, 1);
+  EXPECT_TRUE(weakPublishing.expired());
+  EXPECT_TRUE(weakHandle.expired());
+  EXPECT_TRUE(weakConsumer.expired());
+
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+  EXPECT_EQ(cancelCalls, 1);
+  publishing.reset();
+}
+
 // Once the FETCH data stream FINs, peer STOP_SENDING on the bidi is
 // informational and must not re-fire fetchCancel on the torn-down handle.
 CO_TEST_P_X(Draft18Test, NoFetchCancelAfterFetchComplete) {

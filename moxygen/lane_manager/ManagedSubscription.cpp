@@ -168,6 +168,7 @@ ManagedSubscription::subscribeWithJoiningFetch(
     RequestID downstreamRequestID,
     std::shared_ptr<FetchConsumer> consumer,
     FetchType fetchType) {
+  auto self = shared_from_this();
   if (fetchType != FetchType::RELATIVE_JOINING) {
     co_return folly::makeUnexpected(
         FetchError{

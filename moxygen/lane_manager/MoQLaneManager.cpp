@@ -12,6 +12,7 @@
 #include "moxygen/lane_manager/ManagedSubscription.h"
 #include "moxygen/lane_manager/SwitchExecutor.h"
 
+#include <folly/CancellationToken.h>
 #include <folly/Function.h>
 #include <folly/coro/Collect.h>
 #include <folly/coro/SharedPromise.h>
@@ -103,8 +104,13 @@ class HeldSubgroup : public SubgroupConsumer {
   };
   using Failure = std::function<void(const MoQPublishError&)>;
 
-  HeldSubgroup(std::shared_ptr<Budget> budget, Failure failure)
-      : budget_(std::move(budget)), failure_(std::move(failure)) {}
+  HeldSubgroup(
+      folly::CancellationToken stopToken,
+      std::shared_ptr<Budget> budget,
+      Failure failure)
+      : stopToken_(std::move(stopToken)),
+        budget_(std::move(budget)),
+        failure_(std::move(failure)) {}
 
   HeldSubgroup(const HeldSubgroup&) = delete;
   HeldSubgroup& operator=(const HeldSubgroup&) = delete;
@@ -118,15 +124,26 @@ class HeldSubgroup : public SubgroupConsumer {
   // Replays what was kept to `downstream`, then forwards; null drops it all.
   void release(std::shared_ptr<SubgroupConsumer> downstream) {
     released_ = true;
+    if (error_ || stopToken_.isCancellationRequested() || budget_->closed) {
+      downstream.reset();
+    }
     downstream_ = std::move(downstream);
     budget_->bytes -= std::exchange(bytes_, 0);
     for (auto& op : std::exchange(ops_, {})) {
-      if (!downstream_) {
+      if (stopToken_.isCancellationRequested() || budget_->closed) {
+        downstream_.reset();
         break;
       }
-      if (auto result = op(*downstream_); result.hasError()) {
+      auto target = downstream_;
+      if (!target) {
+        break;
+      }
+      if (auto result = op(*target); result.hasError()) {
         fail(result.error());
       }
+    }
+    if (stopToken_.isCancellationRequested() || budget_->closed) {
+      downstream_.reset();
     }
   }
 
@@ -175,8 +192,9 @@ class HeldSubgroup : public SubgroupConsumer {
   folly::Expected<ObjectPublishStatus, MoQPublishError> objectPayload(
       Payload payload,
       bool finSubgroup) override {
-    if (downstream_) {
-      auto result = downstream_->objectPayload(std::move(payload), finSubgroup);
+    if (auto downstream = downstream_; downstream && !error_ &&
+        !stopToken_.isCancellationRequested() && !budget_->closed) {
+      auto result = downstream->objectPayload(std::move(payload), finSubgroup);
       if (result.hasError()) {
         fail(result.error());
       }
@@ -247,6 +265,9 @@ class HeldSubgroup : public SubgroupConsumer {
   }
 
   folly::Expected<folly::Unit, MoQPublishError> fail(MoQPublishError error) {
+    if (stopToken_.isCancellationRequested()) {
+      return folly::unit;
+    }
     if (!error_) {
       error_ = std::move(error);
       ops_.clear();
@@ -265,16 +286,21 @@ class HeldSubgroup : public SubgroupConsumer {
     if (error_) {
       return folly::makeUnexpected(*error_);
     }
-    if (downstream_) {
-      auto result = op(*downstream_);
+    if (stopToken_.isCancellationRequested()) {
+      downstream_.reset();
+      return folly::unit;
+    }
+    if (budget_->closed) {
+      downstream_.reset();
+      return folly::makeUnexpected(
+          MoQPublishError{MoQPublishError::CANCELLED, "unsubscribed"});
+    }
+    if (auto downstream = downstream_) {
+      auto result = op(*downstream);
       return result.hasError() ? fail(result.error()) : result;
     }
     if (released_) {
       return folly::unit;
-    }
-    if (budget_->closed) {
-      return folly::makeUnexpected(
-          MoQPublishError{MoQPublishError::CANCELLED, "unsubscribed"});
     }
     if (bytes > budget_->limit - budget_->bytes) {
       return fail(
@@ -287,6 +313,7 @@ class HeldSubgroup : public SubgroupConsumer {
     return folly::unit;
   }
 
+  folly::CancellationToken stopToken_;
   std::vector<Op> ops_;
   std::shared_ptr<SubgroupConsumer> downstream_;
   std::shared_ptr<Budget> budget_;
@@ -437,6 +464,8 @@ struct MoQLaneManager::SubscriptionSet
   std::shared_ptr<TrackConsumer> client;
   std::shared_ptr<SwitchingPolicy> policy;
   MoQExecutor& executor;
+  folly::CancellationSource stopSource;
+  std::weak_ptr<MoQSession> downstreamSession;
   RequestID requestID{0};
   // The virtual track, set once its SUBSCRIBE succeeds.
   std::optional<FullTrackName> track;
@@ -444,7 +473,6 @@ struct MoQLaneManager::SubscriptionSet
       std::make_shared<HeldSubgroup::Budget>()};
   bool failed{false};
   bool closed{false};
-  std::weak_ptr<MoQSession> downstreamSession;
   std::string lane; // the one the virtual SUBSCRIBE_OK came from
   std::shared_ptr<const folly::IOBuf> initialInit;
   folly::coro::SharedPromise<void> initialLaneResolved;
@@ -605,7 +633,8 @@ class MoQLaneManager::LaneConsumer : public TrackConsumerFilter {
     // publishDone().
     auto manager = manager_.lock();
     auto set = set_.lock();
-    if (!manager || !set || set->closed) {
+    if (!manager || !set || !manager->isCurrent(*set) || set->closed ||
+        set->failed) {
       return folly::unit;
     }
     auto subscription = set->laneSubs.find(lane_);
@@ -638,7 +667,7 @@ class MoQLaneManager::LaneConsumer : public TrackConsumerFilter {
       set->switcher->cancel(Clock::now()); // the held group goes out first
       manager->applyOutcomes(*set);
     }
-    if (set->closed || set->failed) {
+    if (!manager->isCurrent(*set) || set->closed || set->failed) {
       return folly::unit;
     }
     auto result = downstream_->publishDone(std::move(pubDone));
@@ -679,11 +708,9 @@ MoQLaneManager::MoQLaneManager(
 }
 
 MoQLaneManager::~MoQLaneManager() {
-  for (auto& [role, set] : sets_) {
-    close(*set);
-    for (auto& [lane, subscription] : set->laneSubs) {
-      subscription->unsubscribe();
-    }
+  while (!sets_.empty()) {
+    auto set = sets_.begin()->second;
+    unsubscribe(*set);
   }
 }
 
@@ -992,7 +1019,7 @@ std::shared_ptr<ManagedSubscription> MoQLaneManager::makeSubscription(
 void MoQLaneManager::ensureSubscriptions(
     SubscriptionSet& set,
     const SwitchingSet& lanes) {
-  if (set.closed || set.failed) {
+  if (!isCurrent(set) || set.closed || set.failed) {
     return;
   }
   for (const auto& lane : lanes.lanes) {
@@ -1021,7 +1048,7 @@ MoQLaneManager::beginSubgroup(
     uint64_t subgroup,
     Priority priority,
     BeginSubgroupOptions options) {
-  if (set.closed || set.failed || !set.switcher) {
+  if (!isCurrent(set) || set.closed || set.failed || !set.switcher) {
     return folly::makeUnexpected(
         MoQPublishError(MoQPublishError::CANCELLED, "unsubscribed"));
   }
@@ -1043,6 +1070,10 @@ MoQLaneManager::beginSubgroup(
   const auto deadline = switcher.deadline();
   const auto action = switcher.onGroup(lane, group, now);
   applyOutcomes(set);
+  if (!isCurrent(set) || set.closed || set.failed) {
+    return folly::makeUnexpected(
+        MoQPublishError(MoQPublishError::CANCELLED, "unsubscribed"));
+  }
   if (const auto held = switcher.deadline(); held && held != deadline) {
     set.executor.scheduleTimeout(
         &set.holdTimer,
@@ -1054,6 +1085,7 @@ MoQLaneManager::beginSubgroup(
         *set.client, set.init, group, subgroup, priority, options);
   }
   auto consumer = std::make_shared<HeldSubgroup>(
+      set.stopSource.getToken(),
       set.holdBudget,
       [weak = weak_from_this(),
        weakSet = std::weak_ptr(set.shared_from_this())](
@@ -1079,12 +1111,15 @@ MoQLaneManager::beginSubgroup(
 }
 
 void MoQLaneManager::expireHold(SubscriptionSet& set) {
-  if (set.closed || set.failed) {
+  if (!isCurrent(set) || set.closed || set.failed || !set.switcher) {
     return;
   }
   const auto now = Clock::now();
   set.switcher->onDeadline(now);
   applyOutcomes(set);
+  if (!isCurrent(set) || set.closed || set.failed) {
+    return;
+  }
   if (const auto held = set.switcher->deadline()) {
     // The timer ran early.
     set.executor.scheduleTimeout(
@@ -1099,22 +1134,28 @@ void MoQLaneManager::expireHold(SubscriptionSet& set) {
 void MoQLaneManager::laneUnavailable(
     SubscriptionSet& set,
     std::string_view lane) {
-  if (set.closed || set.failed || !set.switcher) {
+  if (!isCurrent(set) || set.closed || set.failed || !set.switcher) {
     return;
   }
   set.switcher->onLaneUnavailable(lane, Clock::now());
   applyOutcomes(set);
+  if (!isCurrent(set) || set.closed || set.failed) {
+    return;
+  }
   set.selectedGroup.reset();
   select(set);
 }
 
 void MoQLaneManager::applyOutcomes(SubscriptionSet& set) {
   for (const auto& outcome : set.switcher->takeOutcomes()) {
+    if (!isCurrent(set) || set.closed) {
+      return;
+    }
     set.holdTimer.cancelTimerCallback();
     const bool committed = outcome.kind == SwitchOutcome::Kind::Committed;
     for (auto& held : std::exchange(set.held, {})) {
       std::shared_ptr<SubgroupConsumer> sent;
-      if (!committed && !set.failed) {
+      if (!committed && isCurrent(set) && !set.closed && !set.failed) {
         auto opened = openSubgroup(
             *set.client,
             set.init,
@@ -1129,6 +1170,9 @@ void MoQLaneManager::applyOutcomes(SubscriptionSet& set) {
         }
       }
       held.consumer->release(std::move(sent));
+    }
+    if (!isCurrent(set) || set.closed) {
+      return;
     }
     if (!committed) {
       set.liveGroup = outcome.group;
@@ -1148,14 +1192,17 @@ void MoQLaneManager::applyOutcomes(SubscriptionSet& set) {
 void MoQLaneManager::notify(
     SubscriptionSet& set,
     const SwitchOutcome& outcome) {
+  if (!isCurrent(set) || set.closed) {
+    return;
+  }
   set.policy->onSwitchOutcome(outcome);
-  if (abr_.onOutcome && set.track) {
+  if (isCurrent(set) && !set.closed && abr_.onOutcome && set.track) {
     abr_.onOutcome(*set.track, outcome);
   }
 }
 
 void MoQLaneManager::fail(SubscriptionSet& set, const MoQPublishError& error) {
-  if (set.closed || std::exchange(set.failed, true)) {
+  if (!isCurrent(set) || set.closed || std::exchange(set.failed, true)) {
     return;
   }
   set.holdBudget->closed = true;
@@ -1164,7 +1211,8 @@ void MoQLaneManager::fail(SubscriptionSet& set, const MoQPublishError& error) {
                     error] {
     auto manager = weak.lock();
     auto current = weakSet.lock();
-    if (manager && current && !current->closed) {
+    if (manager && current && manager->isCurrent(*current) &&
+        !current->closed && current->failed) {
       (void)current->client->publishDone(
           PublishDone{
               current->requestID,
@@ -1177,7 +1225,7 @@ void MoQLaneManager::fail(SubscriptionSet& set, const MoQPublishError& error) {
 }
 
 void MoQLaneManager::select(SubscriptionSet& set) {
-  if (set.closed || set.failed || !set.switcher) {
+  if (!isCurrent(set) || set.closed || set.failed || !set.switcher) {
     return;
   }
   auto& switcher = *set.switcher;
@@ -1203,6 +1251,9 @@ void MoQLaneManager::select(SubscriptionSet& set) {
   const auto now = Clock::now();
   auto plan =
       set.policy->select(eligible, switcher.liveLane(), *set.liveGroup, now);
+  if (!isCurrent(set) || set.closed || set.failed) {
+    return;
+  }
   auto target = plan
       ? set.laneSubs.find(FullTrackName{broadcast_, plan->targetLane})
       : set.laneSubs.end();
@@ -1241,6 +1292,10 @@ folly::coro::Task<Publisher::FetchResult> MoQLaneManager::fetch(
             "no virtual subscription"});
   }
   auto set = it->second;
+  if (set->closed || set->failed) {
+    co_return folly::makeUnexpected(
+        FetchError{fetch.requestID, FetchErrorCode::CANCELLED, "stopped"});
+  }
   if (set->lane.empty()) {
     auto resolved = co_await folly::coro::co_awaitTry(
         folly::coro::timeout(
@@ -1286,9 +1341,10 @@ void MoQLaneManager::unsubscribe(const SubscriptionSet& set) {
   if (it == sets_.end() || it->second.get() != &set) {
     return;
   }
-  close(*it->second);
-  auto laneSubs = std::move(it->second->laneSubs);
+  auto retired = std::move(it->second);
   sets_.erase(it);
+  close(*retired);
+  auto laneSubs = std::move(retired->laneSubs);
   for (auto& [lane, subscription] : laneSubs) {
     subscription->unsubscribe();
   }
@@ -1298,8 +1354,12 @@ void MoQLaneManager::close(SubscriptionSet& set) {
   if (std::exchange(set.closed, true)) {
     return;
   }
+  set.stopSource.requestCancellation();
   set.holdTimer.cancelTimerCallback();
   set.holdBudget->closed = true;
+  if (!set.initialLaneResolved.isFulfilled()) {
+    set.initialLaneResolved.setValue();
+  }
   for (auto& held : std::exchange(set.held, {})) {
     held.consumer->release(nullptr);
   }
@@ -1317,6 +1377,9 @@ void MoQLaneManager::onPolicyChanged(Role role) {
   auto set = found->second;
   set->switcher->cancel(Clock::now());
   applyOutcomes(*set);
+  if (!isCurrent(*set) || set->closed || set->failed) {
+    return;
+  }
   set->selectedGroup.reset();
   select(*set);
 }

@@ -216,6 +216,33 @@ class LaneManagerTest : public testing::Test {
     subgroup.value()->object(0, folly::IOBuf::copyBuffer(lane));
   }
 
+  folly::coro::Task<Publisher::FetchResult> holdFetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> consumer,
+      std::shared_ptr<folly::coro::SharedPromise<void>> started,
+      std::shared_ptr<folly::coro::SharedPromise<void>> release) {
+    laneFetch_ = std::move(fetch);
+    laneFetchConsumer_ = std::move(consumer);
+    started->setValue();
+    co_await release->getFuture();
+    co_return std::make_shared<MockFetchHandle>(FetchOk{});
+  }
+
+  folly::coro::Task<void> unsubscribeWithPendingFetch(
+      std::shared_ptr<Publisher::SubscriptionHandle> video,
+      folly::coro::SharedPromise<void>& fetchStarted,
+      folly::coro::SharedPromise<void>& releaseFetch,
+      folly::coro::SharedPromise<void>& lateOutcome) {
+    co_await fetchStarted.getFuture();
+    publish("video0", 6);
+    publish("video0", 7);
+    video->unsubscribe();
+    auto outcome = co_await folly::coro::co_awaitTry(
+        folly::coro::timeout(lateOutcome.getFuture(), 1s));
+    EXPECT_TRUE(outcome.hasException<folly::FutureTimeout>());
+    releaseFetch.setValue();
+  }
+
   folly::EventBase evb_;
   std::shared_ptr<MoQFollyExecutorImpl> executor_{
       std::make_shared<MoQFollyExecutorImpl>(&evb_)};
@@ -1170,6 +1197,97 @@ TEST_F(LaneManagerTest, SendsTheHeldGroupWhenTheTargetMissesTheWait) {
 
   EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video0", "v0"}, {7, "video0", ""}}));
   EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
+}
+
+TEST_F(LaneManagerTest, UnsubscribeDuringHeldGroupOpenDropsBufferedObjects) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  ON_CALL(*policy_, select(_, "video0", 6, _))
+      .WillByDefault(Return(planTo("video1", 1ms)));
+  publish("video0", 6);
+  publish("video0", 7);
+  auto subgroup = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*subgroup, object(_, _, _, _)).Times(0);
+  EXPECT_CALL(*client_, beginSubgroup(7, 0, _, _))
+      .WillOnce(
+          [&video, subgroup](uint64_t, uint64_t, Priority, BeginSubgroupOptions)
+              -> folly::
+                  Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError> {
+                    video.value()->unsubscribe();
+                    return subgroup;
+                  });
+
+  evb_.loop();
+
+  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video0", "v0"}}));
+  EXPECT_EQ(subscribeAttempts_.at("video0"), 1);
+  EXPECT_EQ(subscribeAttempts_.at("video1"), 1);
+}
+
+TEST_F(LaneManagerTest, UnsubscribeDuringHeldReplayDropsRemainingObjects) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  ON_CALL(*policy_, select(_, "video0", 6, _))
+      .WillByDefault(Return(planTo("video1", 1ms)));
+  publish("video0", 6);
+  auto held = lanes_.at("video0")->beginSubgroup(7, 0, kDefaultPriority, {});
+  ASSERT_TRUE(held.hasValue());
+  held.value()->object(0, folly::IOBuf::copyBuffer("first"));
+  held.value()->object(1, folly::IOBuf::copyBuffer("second"));
+  auto subgroup = std::make_shared<testing::StrictMock<MockSubgroupConsumer>>();
+  EXPECT_CALL(*client_, beginSubgroup(7, 0, _, _)).WillOnce(Return(subgroup));
+  EXPECT_CALL(*subgroup, object(0, _, _, _)).WillOnce([&video] {
+    video.value()->unsubscribe();
+    return folly::unit;
+  });
+  EXPECT_CALL(*subgroup, object(1, _, _, _)).Times(0);
+
+  evb_.loop();
+
+  EXPECT_EQ(subscribeAttempts_.at("video0"), 1);
+  EXPECT_EQ(subscribeAttempts_.at("video1"), 1);
+}
+
+TEST_F(LaneManagerTest, UnsubscribeCancelsHoldWhileJoiningFetchIsPending) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  auto fetchStarted = std::make_shared<folly::coro::SharedPromise<void>>();
+  auto releaseFetch = std::make_shared<folly::coro::SharedPromise<void>>();
+  folly::coro::SharedPromise<void> lateOutcome;
+  EXPECT_CALL(*proxy_, fetch(_, _))
+      .WillOnce([this, fetchStarted, releaseFetch](
+                    Fetch fetch, std::shared_ptr<FetchConsumer> consumer) {
+        return holdFetch(
+            std::move(fetch), std::move(consumer), fetchStarted, releaseFetch);
+      });
+  ON_CALL(*policy_, select(_, "video0", 6, _))
+      .WillByDefault(Return(planTo("video1", 1ms)));
+  ON_CALL(*policy_, onSwitchOutcome(_))
+      .WillByDefault([this, &lateOutcome](const SwitchOutcome& outcome) {
+        outcomes_.push_back(outcome.kind);
+        if (outcome.kind == Kind::Cancelled && !lateOutcome.isFulfilled()) {
+          lateOutcome.setValue();
+        }
+      });
+  Fetch fetch(RequestID(3), RequestID(1), 0, FetchType::RELATIVE_JOINING);
+  fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr"};
+
+  auto results =
+      run(folly::coro::timeout(
+          folly::coro::collectAll(
+              manager_->fetch(
+                  fetch,
+                  std::make_shared<NiceMock<MockFetchConsumer>>(),
+                  Role::Video),
+              unsubscribeWithPendingFetch(
+                  video.value(), *fetchStarted, *releaseFetch, lateOutcome)),
+          5s));
+
+  EXPECT_TRUE(std::get<0>(results).hasValue());
+  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video0", "v0"}}));
+  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared}));
+  EXPECT_EQ(subscribeAttempts_.at("video0"), 1);
+  EXPECT_EQ(subscribeAttempts_.at("video1"), 1);
 }
 
 TEST_F(LaneManagerTest, BackgroundLaneEndOnlyRemovesTheLane) {

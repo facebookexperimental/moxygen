@@ -12,6 +12,7 @@
 #include "moxygen/MoQVersions.h"
 #include "moxygen/ObjectReceiver.h"
 #include "moxygen/events/MoQFollyExecutorImpl.h"
+#include "moxygen/lane_manager/ManagedSubscription.h"
 #include "moxygen/proxy/MoQProxy.h"
 #include "moxygen/samples/lane_manager/ScriptedPolicy.h"
 #include "moxygen/test/Mocks.h"
@@ -19,6 +20,8 @@
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/GtestHelpers.h>
 #include <folly/coro/Invoke.h>
+#include <folly/coro/SharedPromise.h>
+#include <folly/coro/Timeout.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/webtransport/test/FakeSharedWebTransport.h>
@@ -96,6 +99,106 @@ class FixedUpstreamProvider : public MoQUpstreamProvider {
 
  private:
   std::shared_ptr<MoQSession> session_;
+};
+
+class PausedRetryPublisher
+    : public Publisher,
+      public std::enable_shared_from_this<PausedRetryPublisher> {
+ public:
+  PausedRetryPublisher(std::shared_ptr<Publisher> proxy, MoQExecutor& executor)
+      : proxy_(std::move(proxy)), executor_(executor) {}
+
+  folly::coro::Task<SubscribeResult> subscribe(
+      SubscribeRequest request,
+      std::shared_ptr<TrackConsumer> consumer) override {
+    if (request.fullTrackName.trackName == "video1" &&
+        ++video1Subscriptions_ == 1) {
+      initialVideo1Started.setValue();
+      co_await releaseInitialVideo1.getFuture();
+    }
+    const bool retry = request.fullTrackName.trackName == "video0" &&
+        ++video0Subscriptions_ == 2;
+    if (retry) {
+      retryConsumer = std::dynamic_pointer_cast<ManagedSubscription>(consumer);
+      retryStarted.setValue();
+      co_await releaseRetry.getFuture();
+    }
+    auto result =
+        co_await proxy_->subscribe(std::move(request), std::move(consumer));
+    if (retry && result.hasValue()) {
+      retrySucceeded = true;
+      executor_.add([self = shared_from_this()] {
+        {
+          auto consumer = self->retryConsumer.lock();
+          if (consumer) {
+            self->stateAtUnsubscribe = consumer->state();
+          }
+        }
+        if (auto handle = self->virtualSubscription.lock()) {
+          handle->unsubscribe();
+          self->virtualUnsubscribed = true;
+        }
+        self->retryConsumer.reset();
+      });
+    }
+    co_return result;
+  }
+
+  folly::coro::Task<FetchResult> fetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> consumer) override {
+    if (fetch.fullTrackName.trackName != "catalog") {
+      ++laneFetches;
+    }
+    co_return co_await proxy_->fetch(std::move(fetch), std::move(consumer));
+  }
+
+  folly::coro::SharedPromise<void> initialVideo1Started;
+  folly::coro::SharedPromise<void> releaseInitialVideo1;
+  folly::coro::SharedPromise<void> retryStarted;
+  folly::coro::SharedPromise<void> releaseRetry;
+  std::weak_ptr<ManagedSubscription> retryConsumer;
+  std::weak_ptr<SubscriptionHandle> virtualSubscription;
+  std::optional<ManagedSubscription::State> stateAtUnsubscribe;
+  bool retrySucceeded{false};
+  bool virtualUnsubscribed{false};
+  size_t laneFetches{0};
+
+ private:
+  std::shared_ptr<Publisher> proxy_;
+  MoQExecutor& executor_;
+  size_t video0Subscriptions_{0};
+  size_t video1Subscriptions_{0};
+};
+
+class ObservedPublisher : public Publisher {
+ public:
+  explicit ObservedPublisher(std::shared_ptr<Publisher> publisher)
+      : publisher_(std::move(publisher)) {}
+
+  folly::coro::Task<SubscribeResult> subscribe(
+      SubscribeRequest request,
+      std::shared_ptr<TrackConsumer> consumer) override {
+    auto result =
+        co_await publisher_->subscribe(std::move(request), std::move(consumer));
+    if (result.hasValue()) {
+      subscription = result.value();
+    }
+    co_return result;
+  }
+
+  folly::coro::Task<FetchResult> fetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> consumer) override {
+    fetchArrived.setValue();
+    co_return co_await publisher_->fetch(std::move(fetch), std::move(consumer));
+  }
+
+  std::weak_ptr<SubscriptionHandle> subscription;
+  folly::coro::SharedPromise<void> fetchArrived;
+
+ private:
+  std::shared_ptr<Publisher> publisher_;
 };
 
 struct Received {
@@ -357,6 +460,84 @@ TEST_F(LaneManagerIntegrationTest, SwitchesLanesAtAGroupBoundary) {
     EXPECT_EQ(
         recorder->received,
         (std::vector<Received>{{41, 0, "v0"}, {42, 0, ""}, {43, 0, "v1"}}));
+  }));
+}
+
+TEST_F(
+    LaneManagerIntegrationTest,
+    PendingJoiningFetchSurvivesVirtualUnsubscribe) {
+  run(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+    co_await startProxy();
+    auto retry = std::make_shared<PausedRetryPublisher>(proxy_, *executor_);
+    auto observed =
+        std::make_shared<ObservedPublisher>(std::make_shared<MoQLaneRouter>(
+            retry,
+            [](Role) { return std::make_shared<samples::ScriptedPolicy>(10); },
+            kMaxWait));
+    auto* viewer = co_await connect(observed);
+    auto live = std::make_shared<Recorder>();
+    auto subscription = co_await viewer->client->subscribe(
+        liveSubscribe("r--abr-video"),
+        std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, live));
+    CO_ASSERT_TRUE(subscription.hasValue());
+    const auto virtualRequestID = subscription.value()->subscribeOk().requestID;
+    handles_.push_back(std::move(subscription.value()));
+    retry->virtualSubscription = observed->subscription;
+    CO_ASSERT_FALSE(retry->virtualSubscription.expired());
+    co_await folly::coro::timeout(
+        retry->initialVideo1Started.getFuture(), kMaxWait);
+    retry->releaseInitialVideo1.setValue();
+    publishGroup("video0", 41, 1);
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return live->received.size() == 1; }));
+    EXPECT_EQ(live->received, (std::vector<Received>{{41, 0, "v0"}}));
+
+    CO_ASSERT_TRUE(origin_->tracks.at("video0")
+                       ->publishDone(
+                           PublishDone{
+                               RequestID(0),
+                               PublishDoneStatusCode::INTERNAL_ERROR,
+                               0,
+                               "retry"})
+                       .hasValue());
+    co_await folly::coro::timeout(retry->retryStarted.getFuture(), kMaxWait);
+
+    // A ready proxy track makes alias registration and SUBSCRIBE_OK one turn.
+    auto* warmer = co_await connect(proxy_);
+    auto warm = std::make_shared<Recorder>();
+    auto warmResult = co_await warmer->client->subscribe(
+        liveSubscribe("video0"),
+        std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, warm));
+    CO_ASSERT_TRUE(warmResult.hasValue());
+    handles_.push_back(std::move(warmResult.value()));
+
+    Fetch fetch(RequestID(0), virtualRequestID, 0, FetchType::RELATIVE_JOINING);
+    fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr-video"};
+    auto history = std::make_shared<Recorder>();
+    auto pendingFetch = folly::coro::co_withExecutor(
+                            viewer->client->getExecutor(),
+                            viewer->client->fetch(
+                                std::move(fetch),
+                                std::make_shared<ObjectReceiver>(
+                                    ObjectReceiver::FETCH, history)))
+                            .start();
+    co_await folly::coro::timeout(observed->fetchArrived.getFuture(), kMaxWait);
+    EXPECT_EQ(retry->laneFetches, 0);
+    {
+      auto consumer = retry->retryConsumer.lock();
+      CO_ASSERT_TRUE(consumer);
+      EXPECT_EQ(consumer->state(), ManagedSubscription::State::Pending);
+    }
+    retry->releaseRetry.setValue();
+
+    auto result =
+        co_await folly::coro::timeout(std::move(pendingFetch), kMaxWait);
+    CO_ASSERT_TRUE(result.hasError());
+    EXPECT_EQ(result.error().errorCode, FetchErrorCode::CANCELLED);
+    EXPECT_TRUE(retry->retrySucceeded);
+    EXPECT_TRUE(retry->virtualUnsubscribed);
+    EXPECT_EQ(retry->stateAtUnsubscribe, ManagedSubscription::State::Active);
+    EXPECT_EQ(retry->laneFetches, 0);
   }));
 }
 
