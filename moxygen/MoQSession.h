@@ -1148,8 +1148,7 @@ class MoQSession : public Subscriber,
   void fetchError(const FetchError& fetchError, ReplyContext& replyContext);
   void fetchCancel(
       const FetchCancel& fetchCancel,
-      const std::shared_ptr<BidiStreamControl>& control = nullptr,
-      ResetStreamErrorCode consumerError = ResetStreamErrorCode::CANCELLED);
+      const std::shared_ptr<BidiStreamControl>& control = nullptr);
   void onFetchStalled(RequestID requestID);
 
   class ReceiverSubscriptionHandle;
@@ -1396,7 +1395,9 @@ class MoQSession : public Subscriber,
       const SubscribeTracks& subscribeTracks,
       std::shared_ptr<SubscribeTracksReply> subTracksReply);
 
-  virtual void onSubscribeTracksStreamClosed(RequestID /*requestID*/) {}
+  virtual void onSubscribeTracksStreamClosed(
+      RequestID /*requestID*/,
+      ResetStreamErrorCode /*code*/) {}
 
   // REQUEST_UPDATE error response - available for subclass handlers
   void requestUpdateError(

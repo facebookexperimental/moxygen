@@ -1422,6 +1422,7 @@ struct SubscribeOk {
 
 struct Unsubscribe {
   RequestID requestID;
+  ResetStreamErrorCode errorCode{ResetStreamErrorCode::CANCELLED};
 };
 
 struct PublishDone {
@@ -1463,6 +1464,7 @@ struct PublishNamespace {
 
 struct PublishNamespaceDone {
   std::optional<RequestID> requestID;
+  ResetStreamErrorCode errorCode{ResetStreamErrorCode::CANCELLED};
 };
 
 struct PublishNamespaceCancel {
@@ -1582,6 +1584,7 @@ std::pair<const StandaloneFetch*, const JoiningFetch*> fetchType(
 
 struct FetchCancel {
   RequestID requestID;
+  ResetStreamErrorCode errorCode{ResetStreamErrorCode::CANCELLED};
 };
 
 struct FetchOk {
@@ -1638,6 +1641,7 @@ struct Namespace {
 
 struct UnsubscribeNamespace {
   std::optional<RequestID> requestID;
+  ResetStreamErrorCode errorCode{ResetStreamErrorCode::CANCELLED};
 };
 
 struct RequestOk {

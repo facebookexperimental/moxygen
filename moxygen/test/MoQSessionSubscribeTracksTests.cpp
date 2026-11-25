@@ -204,6 +204,32 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeAndUnsubscribeTracks) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+CO_TEST_P_X(V18PlusSubscribeTracksTest, UnsubscribeTracksDeliversErrorCode) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscribeTracksHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
+      .WillOnce(
+          [&serverHandle](
+              auto subTracks,
+              auto) -> folly::coro::Task<Publisher::SubscribeTracksResult> {
+            serverHandle =
+                std::make_shared<MockSubscribeTracksHandle>(SubscribeTracksOk(
+                    {.requestID = subTracks.requestID,
+                     .requestSpecificParams = {}}));
+            co_return serverHandle;
+          });
+  auto result = co_await clientSession_->subscribeTracks(getSubscribeTracks());
+  CO_ASSERT_TRUE(result.hasValue());
+
+  folly::coro::Baton unsubscribed;
+  EXPECT_CALL(
+      *serverHandle, unsubscribeTracks(ResetStreamErrorCode::EXCESSIVE_LOAD))
+      .WillOnce([&unsubscribed] { unsubscribed.post(); });
+  result.value()->unsubscribeTracks(ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await unsubscribed;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 class MockTracksPublishHandle : public Publisher::TracksPublishHandle {
  public:
   MOCK_METHOD(

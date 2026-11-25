@@ -85,11 +85,9 @@ class MoQRelaySession::PublisherPublishNamespaceHandle
   }
 
   void publishNamespaceDone(
-      ResetStreamErrorCode /*code*/ =
-          ResetStreamErrorCode::CANCELLED) override {
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
-      PublishNamespaceDone pubNsDone;
-      pubNsDone.requestID = publishNamespaceOk().requestID;
+      PublishNamespaceDone pubNsDone{publishNamespaceOk().requestID, code};
       session_->publishNamespaceDone(pubNsDone, std::move(replyCtx_));
       session_.reset();
     }
@@ -128,8 +126,7 @@ class MoQRelaySession::SubscribeNamespaceHandle
   }
 
   void unsubscribeNamespace(
-      ResetStreamErrorCode /*code*/ =
-          ResetStreamErrorCode::CANCELLED) override {
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
       if (session_->isClosed()) {
         session_.reset();
@@ -139,7 +136,7 @@ class MoQRelaySession::SubscribeNamespaceHandle
       // matches SUBSCRIBE / FETCH / SUBSCRIBE_TRACKS.
       MOQ_SUBSCRIBER_STATS(
           session_->subscriberStatsCallback_, onUnsubscribeNamespace);
-      control_->cancel(ResetStreamErrorCode::CANCELLED);
+      control_->cancel(code);
       session_.reset();
     }
   }
@@ -188,8 +185,7 @@ class MoQRelaySession::SubscribeTracksHandle
   }
 
   void unsubscribeTracks(
-      ResetStreamErrorCode /*code*/ =
-          ResetStreamErrorCode::CANCELLED) override {
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) override {
     auto session = session_.lock();
     if (!session || session->isClosed()) {
       session_.reset();
@@ -199,7 +195,7 @@ class MoQRelaySession::SubscribeTracksHandle
     if (control_) {
       // No UNSUBSCRIBE_TRACKS wire frame — cancel via RST. FIN means
       // "no more REQUEST_UPDATE", not cancel.
-      control_->cancel(ResetStreamErrorCode::CANCELLED);
+      control_->cancel(code);
     }
     control_.reset();
     session_.reset();
@@ -385,14 +381,14 @@ void MoQRelaySession::cleanupRelayState() {
   publishNamespaceCallbacks_.clear();
 
   for (auto& pubNs : publishNamespaceHandles_) {
-    pubNs.second->publishNamespaceDone();
+    pubNs.second->publishNamespaceDone(ResetStreamErrorCode::SESSION_CLOSED);
   }
   publishNamespaceHandles_.clear();
 
   // Clean up subscribeNamespace handles
   for (auto& subNs : subscribeNamespaceHandles_) {
     if (subNs.second) {
-      subNs.second->unsubscribeNamespace();
+      subNs.second->unsubscribeNamespace(ResetStreamErrorCode::SESSION_CLOSED);
     }
   }
   subscribeNamespaceHandles_.clear();
@@ -401,7 +397,7 @@ void MoQRelaySession::cleanupRelayState() {
   // Draft 18+: drop subscribeTracks handles too.
   for (auto& subTracks : subscribeTracksHandles_) {
     if (subTracks.second) {
-      subTracks.second->unsubscribeTracks();
+      subTracks.second->unsubscribeTracks(ResetStreamErrorCode::SESSION_CLOSED);
     }
   }
   subscribeTracksHandles_.clear();
@@ -723,7 +719,8 @@ void MoQRelaySession::terminateExistingRequest(
     done.requestID = existingRequestID;
     onPublishNamespaceDone(done);
   } else {
-    onSubscribeTracksStreamClosed(existingRequestID);
+    onSubscribeTracksStreamClosed(
+        existingRequestID, ResetStreamErrorCode::CANCELLED);
   }
 }
 
@@ -1031,7 +1028,7 @@ void MoQRelaySession::publishNamespaceDone(
     replyCtx->flushFinal();
   } else {
     // Draft 18+ has no PUBLISH_NAMESPACE_DONE; withdrawing cancels the stream.
-    replyCtx->cancel(ResetStreamErrorCode::CANCELLED);
+    replyCtx->cancel(pubNsDone.errorCode);
   }
 }
 
@@ -1198,7 +1195,7 @@ void MoQRelaySession::onPublishNamespaceDone(PublishNamespaceDone pubNsDone) {
   requestUpdateReplyContexts_.erase(reqId);
 
   // Common action
-  handle->publishNamespaceDone();
+  handle->publishNamespaceDone(pubNsDone.errorCode);
   retireRequestID(/*signalWriteLoop=*/true);
 }
 
@@ -1529,7 +1526,7 @@ void MoQRelaySession::onUnsubscribeNamespace(UnsubscribeNamespace unsub) {
   // Process unsubscribe
   folly::RequestContextScopeGuard guard;
   setRequestSession();
-  handle->unsubscribeNamespace();
+  handle->unsubscribeNamespace(unsub.errorCode);
   subscribeNamespaceHandles_.erase(requestID);
   requestUpdateReplyContexts_.erase(requestID);
 
@@ -1557,9 +1554,8 @@ class NamespaceBackedSubscribeTracksHandle
         inner_(std::move(inner)) {}
 
   void unsubscribeTracks(
-      ResetStreamErrorCode /*code*/ =
-          ResetStreamErrorCode::CANCELLED) override {
-    inner_->unsubscribeNamespace();
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) override {
+    inner_->unsubscribeNamespace(code);
   }
 
   folly::coro::Task<RequestUpdateResult> requestUpdate(
@@ -1753,7 +1749,9 @@ void MoQRelaySession::subscribeTracksOk(
   }
 }
 
-void MoQRelaySession::onSubscribeTracksStreamClosed(RequestID requestID) {
+void MoQRelaySession::onSubscribeTracksStreamClosed(
+    RequestID requestID,
+    ResetStreamErrorCode code) {
   XLOG(DBG1) << __func__ << " requestID=" << requestID << " sess=" << this;
   // Always retire the request, even if no handle was stored — the error
   // paths in onSubscribeTracksImpl / handleSubscribeTracks (GOING_AWAY,
@@ -1769,7 +1767,7 @@ void MoQRelaySession::onSubscribeTracksStreamClosed(RequestID requestID) {
     if (handle) {
       folly::RequestContextScopeGuard guard;
       setRequestSession();
-      handle->unsubscribeTracks();
+      handle->unsubscribeTracks(code);
     }
   }
   retireRequestID(/*signalWriteLoop=*/true);
