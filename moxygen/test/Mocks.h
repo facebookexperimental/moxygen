@@ -421,7 +421,7 @@ class MockPublisher : public Publisher {
   MOCK_METHOD(
       folly::coro::Task<SubscribeTracksResult>,
       subscribeTracks,
-      (SubscribeTracks, std::shared_ptr<PublishBlockedHandle>),
+      (SubscribeTracks, std::shared_ptr<TracksPublishHandle>),
       (override));
 
   MOCK_METHOD(void, goaway, (Goaway), (override));

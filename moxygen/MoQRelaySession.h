@@ -83,7 +83,7 @@ class MoQRelaySession : public MoQSession {
   // Draft 18+
   folly::coro::Task<Publisher::SubscribeTracksResult> subscribeTracks(
       SubscribeTracks subTracks,
-      std::shared_ptr<PublishBlockedHandle> publishBlockedHandle =
+      std::shared_ptr<TracksPublishHandle> tracksPublishHandle =
           nullptr) override;
 
  protected:
