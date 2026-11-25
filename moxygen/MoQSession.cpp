@@ -398,6 +398,12 @@ class StreamPublisherImpl
     forward_ = forwardIn;
   }
 
+  MoQPublishError stopForwarding() {
+    reset(ResetStreamErrorCode::INTERNAL_ERROR);
+    return MoQPublishError(
+        MoQPublishError::API_ERROR, "shouldForward is false");
+  }
+
   void setDeliveryTimeout(std::optional<std::chrono::milliseconds> timeout) {
     if (!deliveryTimer_) {
       XLOG(DBG6)
@@ -937,9 +943,7 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::objectImpl(
     bool finStream,
     bool forwardingPreferenceIsDatagram) {
   if (!forward_) {
-    reset(ResetStreamErrorCode::INTERNAL_ERROR);
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+    return folly::makeUnexpected(stopForwarding());
   }
   auto validateRes = validatePublish(objectID, extensions);
   if (!validateRes) {
@@ -970,9 +974,7 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
     Payload initialPayload,
     Extensions extensions) {
   if (!forward_) {
-    reset(ResetStreamErrorCode::INTERNAL_ERROR);
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+    return folly::makeUnexpected(stopForwarding());
   }
   auto validateRes = validatePublish(objectID, extensions);
   if (!validateRes) {
@@ -1005,9 +1007,7 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::beginObject(
 folly::Expected<ObjectPublishStatus, MoQPublishError>
 StreamPublisherImpl::objectPayload(Payload payload, bool finStream) {
   if (!forward_) {
-    reset(ResetStreamErrorCode::INTERNAL_ERROR);
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+    return folly::makeUnexpected(stopForwarding());
   }
   if (!writeHandle_) {
     if (!waitingForStream() || pendingFin_) {
@@ -1039,11 +1039,6 @@ StreamPublisherImpl::objectPayload(Payload payload, bool finStream) {
 
 folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::endOfGroup(
     uint64_t endOfGroupObjectId) {
-  if (!forward_) {
-    reset(ResetStreamErrorCode::INTERNAL_ERROR);
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
-  }
   return publishStatus(
       endOfGroupObjectId,
       ObjectStatus::END_OF_GROUP,
@@ -1053,11 +1048,6 @@ folly::Expected<folly::Unit, MoQPublishError> StreamPublisherImpl::endOfGroup(
 
 folly::Expected<folly::Unit, MoQPublishError>
 StreamPublisherImpl::endOfTrackAndGroup(uint64_t endOfTrackObjectId) {
-  if (!forward_) {
-    reset(ResetStreamErrorCode::INTERNAL_ERROR);
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
-  }
   return publishStatus(
       endOfTrackObjectId,
       ObjectStatus::END_OF_TRACK,
@@ -1072,9 +1062,7 @@ StreamPublisherImpl::publishStatus(
     const Extensions& extensions,
     bool finStream) {
   if (!forward_) {
-    reset(ResetStreamErrorCode::INTERNAL_ERROR);
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+    return folly::makeUnexpected(stopForwarding());
   }
   auto validateRes = validatePublish(objectID, extensions);
   if (!validateRes) {
@@ -1103,9 +1091,7 @@ StreamPublisherImpl::publishStatus(
 folly::Expected<folly::Unit, MoQPublishError>
 StreamPublisherImpl::endOfSubgroup() {
   if (!forward_) {
-    reset(ResetStreamErrorCode::INTERNAL_ERROR);
-    return folly::makeUnexpected(
-        MoQPublishError(MoQPublishError::API_ERROR, "shouldForward is false"));
+    return folly::makeUnexpected(stopForwarding());
   }
   if (currentLengthRemaining_) {
     XLOG(ERR) << "Still publishing previous object sgp=" << this;
@@ -1701,11 +1687,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
           << " requestID=" << existingRequestID;
     }
 
-    // Only update forward state if the parameter was explicitly provided
-    // Otherwise, preserve existing forward state
-    if (requestUpdate.forward.has_value()) {
-      setForward(*requestUpdate.forward);
-    }
+    bool pausing = requestUpdate.forward.has_value() &&
+        startPauseChange(!*requestUpdate.forward, batch->newestRequestID);
 
     startRequestUpdate(
         *session_,
@@ -1713,20 +1696,25 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
         std::move(requestUpdate),
         "",
         [weakSelf = std::weak_ptr<PublisherImpl>(shared_from_this()),
-         batch](RequestUpdateSequencer::Result result) mutable {
+         batch,
+         pausing](RequestUpdateSequencer::Result result) mutable {
           if (auto self = weakSelf.lock()) {
             std::static_pointer_cast<TrackPublisherImpl>(self)
-                ->onRequestUpdateDone(batch, std::move(result));
+                ->onRequestUpdateDone(batch, std::move(result), pausing);
           }
         });
   }
 
   void onRequestUpdateDone(
       const std::shared_ptr<RequestUpdateSequencer::Batch>& batch,
-      RequestUpdateSequencer::Result result) {
+      RequestUpdateSequencer::Result result,
+      bool pausing) {
     // terminatePublish() may have reset the handle or session meanwhile.
     if (!subscriptionHandle_ || !session_) {
       return;
+    }
+    if (pausing) {
+      finishPause(batch->newestRequestID);
     }
     for (auto& ready : updates_.complete(batch, std::move(result))) {
       // A REQUEST_ERROR can end the subscription.
@@ -1850,6 +1838,26 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     forward_ = forward;
     for (const auto& [_, subgroupPublisher] : subgroups_) {
       subgroupPublisher->setForward(forward_);
+    }
+  }
+
+  // Streams start before the application receives a resume and stop after it
+  // applies a pause. A true return means the caller must call finishPause().
+  bool startPauseChange(bool paused, RequestID requestID) {
+    if (paused) {
+      pendingPauseID_ = requestID;
+    } else {
+      pendingPauseID_.reset();
+      setForward(true);
+    }
+    return paused;
+  }
+
+  // A later request that changed the pause state supersedes this one.
+  void finishPause(RequestID requestID) {
+    if (pendingPauseID_ == requestID) {
+      pendingPauseID_.reset();
+      setForward(false);
     }
   }
 
@@ -2026,6 +2034,8 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
   std::vector<std::shared_ptr<FetchPublisherImpl>> fills_;
   uint64_t streamCount_{0};
   bool forward_;
+  // Set while a pause has been requested and forward_ is still true.
+  std::optional<RequestID> pendingPauseID_;
   std::shared_ptr<DeliveryCallback> deliveryCallback_;
   MoQDeliveryTimeoutManager deliveryTimeoutManager_;
   RequestUpdateSequencer updates_;
@@ -2367,8 +2377,9 @@ MoQSession::TrackPublisherImpl::beginFill(RequestID requestID) {
   }
   auto fill = it->second;
   requestedFills_.erase(it);
-  // A paused subscription does not open a fill stream.
-  if (!session_ || !forward_ || publishEnded()) {
+  // A paused subscription does not open a fill stream, including a fill that
+  // arrives with the pause.
+  if (!session_ || !forward_ || pendingPauseID_ || publishEnded()) {
     return folly::makeUnexpected(
         MoQPublishError(MoQPublishError::CANCELLED, "Not delivering"));
   }
@@ -6049,13 +6060,18 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
   }
 
   std::optional<FullTrackName> establishedTrack;
+  const bool preDraft22 = getDraftMajorVersion(getNegotiatedVersion()) < 22;
+  std::shared_ptr<TrackPublisherImpl> pausedPublisher;
   auto trackIt = pubTracks_.find(publishOk.requestID);
   if (trackIt != pubTracks_.end()) {
     auto trackPublisher =
         std::static_pointer_cast<TrackPublisherImpl>(trackIt->second);
     trackPublisher->onPublishOk(publishOk);
-    if (getDraftMajorVersion(getNegotiatedVersion()) < 22) {
-      trackPublisher->setForward(publishOk.forward);
+    if (preDraft22) {
+      if (trackPublisher->startPauseChange(
+              !publishOk.forward, publishOk.requestID)) {
+        pausedPublisher = trackPublisher;
+      }
       if (publishOk.groupOrder) {
         trackPublisher->setGroupOrder(*publishOk.groupOrder);
       }
@@ -6073,6 +6089,16 @@ void MoQSession::onPublishOk(PublishOk publishOk) {
   // a relay has recorded the subscription before it is asked to serve them.
   if (establishedTrack) {
     resolveJoiningDependencies(requestID, *establishedTrack);
+  }
+  // finishPause() also runs after that continuation.
+  if (preDraft22 && pausedPublisher) {
+    exec_->add(
+        [weakPublisher = std::weak_ptr<TrackPublisherImpl>(pausedPublisher),
+         requestID] {
+          if (auto publisher = weakPublisher.lock()) {
+            publisher->finishPause(requestID);
+          }
+        });
   }
 }
 

@@ -76,6 +76,67 @@ CO_TEST_P_X(Draft22Test, PublishOkDoesNotOverrideInitialForwardState) {
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 
+// A pausing PUBLISH_OK stops the streams after the publisher's reply
+// continuation runs. Writes from the continuation succeed.
+CO_TEST_P_X(MoQSessionTest, PublishOkPauseStopsStreamsAfterReply) {
+  if (getDraftMajorVersion(getServerSelectedVersion()) >= 22) {
+    co_return;
+  }
+  co_await setupMoQSessionForPublish(initialMaxRequestID_);
+
+  PublishRequest publish;
+  publish.fullTrackName =
+      FullTrackName{TrackNamespace{{"test"}}, "paused-by-reply"};
+  publish.forward = true;
+
+  auto serverSubgroup =
+      std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  ON_CALL(*serverSubgroup, object(_, _, _, _))
+      .WillByDefault(testing::Return(folly::unit));
+  EXPECT_CALL(*serverSubscriber, publish(_, _))
+      .WillOnce([&](const PublishRequest& actual, auto) {
+        auto accepted = makePublishOkResult(actual);
+        auto consumer =
+            std::static_pointer_cast<MockTrackConsumer>(accepted->consumer);
+        EXPECT_CALL(*consumer, beginSubgroup(0, 0, 0, _))
+            .WillRepeatedly(testing::Return(serverSubgroup));
+        accepted->reply =
+            folly::coro::makeTask<folly::Expected<PublishOk, PublishError>>(
+                PublishOk{
+                    actual.requestID,
+                    false, // forward
+                    128,
+                    std::nullopt,
+                    LocationFilter::nextObject(),
+                });
+        return accepted;
+      });
+
+  auto result =
+      clientSession_->publish(std::move(publish), makePublishHandle());
+  CO_ASSERT_TRUE(result.hasValue());
+  auto initiated = std::move(result.value());
+  const auto reply = co_await std::move(initiated.reply);
+  CO_ASSERT_TRUE(reply.hasValue());
+  EXPECT_FALSE(reply->forward);
+
+  auto subgroup = initiated.consumer->beginSubgroup(0, 0, 0);
+  CO_ASSERT_TRUE(subgroup.hasValue());
+  EXPECT_TRUE((*subgroup)
+                  ->object(
+                      0,
+                      moxygen::test::makeBuf(10),
+                      noExtensions(),
+                      /*finSubgroup=*/true)
+                  .hasValue());
+
+  co_await rescheduleN(1);
+  auto paused = initiated.consumer->beginSubgroup(1, 0, 0);
+  CO_ASSERT_TRUE(paused.hasError());
+  EXPECT_EQ(paused.error().code, MoQPublishError::API_ERROR);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(Draft22Test, PublishHandleDefersUpdateUntilPublishOk) {
   co_await setupMoQSessionForPublish(initialMaxRequestID_);
 

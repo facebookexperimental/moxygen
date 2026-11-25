@@ -1574,6 +1574,163 @@ class BlockingRequestUpdateHandle : public MockSubscriptionHandle {
 };
 } // namespace
 
+// Writes from inside the pause handler succeed on an open subgroup, a new
+// subgroup and a datagram. Once the update completes, beginSubgroup fails.
+CO_TEST_P_X(MoQSessionTest, PauseStopsStreamsAfterHandler) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> serverHandle;
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  expectPublishDone();
+  expectSubscribe(
+      [&serverHandle, &trackConsumer](auto sub, auto pub)
+          -> TaskSubscribeResult {
+        trackConsumer = pub;
+        serverHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+        co_return serverHandle;
+      });
+  auto clientSubgroup =
+      std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  ON_CALL(*clientSubgroup, beginObject(_, _, _, _))
+      .WillByDefault(testing::Return(folly::unit));
+  ON_CALL(*clientSubgroup, objectPayload(_, _))
+      .WillByDefault(testing::Return(ObjectPublishStatus::DONE));
+  ON_CALL(*clientSubgroup, object(_, _, _, _))
+      .WillByDefault(testing::Return(folly::unit));
+  ON_CALL(*clientSubgroup, endOfSubgroup())
+      .WillByDefault(testing::Return(folly::unit));
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(_, _, _, _))
+      .WillRepeatedly(testing::Return(clientSubgroup));
+  EXPECT_CALL(*subscribeCallback_, datagram(_, _, _))
+      .WillRepeatedly(testing::Return(folly::unit));
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  CO_ASSERT_FALSE(res.hasError());
+  auto subscribeHandle = res.value();
+
+  auto subgroup = trackConsumer->beginSubgroup(0, 0, 0);
+  CO_ASSERT_TRUE(subgroup.hasValue());
+  EXPECT_TRUE(
+      (*subgroup)->beginObject(0, 20, moxygen::test::makeBuf(10)).hasValue());
+
+  EXPECT_CALL(*serverHandle, requestUpdateCalled).WillOnce([&](const auto&) {
+    EXPECT_TRUE(
+        (*subgroup)->objectPayload(moxygen::test::makeBuf(10)).hasValue());
+    EXPECT_TRUE((*subgroup)->endOfSubgroup().hasValue());
+    auto begun = trackConsumer->beginSubgroup(1, 0, 0);
+    EXPECT_TRUE(begun.hasValue());
+    if (begun.hasValue()) {
+      EXPECT_TRUE((*begun)
+                      ->object(
+                          0,
+                          moxygen::test::makeBuf(10),
+                          noExtensions(),
+                          /*finSubgroup=*/true)
+                      .hasValue());
+    }
+    EXPECT_TRUE(trackConsumer
+                    ->datagram(
+                        ObjectHeader(1, 0, 1, 0, 10),
+                        moxygen::test::makeBuf(10),
+                        false)
+                    .hasValue());
+  });
+  EXPECT_CALL(*serverHandle, requestUpdateResult)
+      .WillOnce(
+          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+  RequestUpdate update;
+  update.existingRequestID = subscribeRequest.requestID;
+  update.forward = false;
+  EXPECT_FALSE((co_await subscribeHandle->requestUpdate(update)).hasError());
+
+  auto paused = trackConsumer->beginSubgroup(2, 0, 0);
+  CO_ASSERT_TRUE(paused.hasError());
+  EXPECT_EQ(paused.error().code, MoQPublishError::API_ERROR);
+
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A resume that arrives while a pause is still in the handler stays in effect
+// after the pause completes.
+CO_TEST_P_X(Draft18Test, LaterResumeSupersedesInFlightPause) {
+  co_await setupMoQSession();
+  std::shared_ptr<BlockingRequestUpdateHandle> handle;
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  expectPublishDone();
+  expectSubscribe(
+      [&handle, &trackConsumer](auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        SubscribeOk ok;
+        ok.requestID = sub.requestID;
+        ok.trackAlias = TrackAlias(sub.requestID.value);
+        ok.expires = std::chrono::milliseconds(0);
+        ok.groupOrder = GroupOrder::OldestFirst;
+        ok.largest = AbsoluteLocation{0, 0};
+        handle = std::make_shared<BlockingRequestUpdateHandle>(std::move(ok));
+        co_return handle;
+      });
+  auto clientSubgroup =
+      std::make_shared<testing::NiceMock<MockSubgroupConsumer>>();
+  ON_CALL(*clientSubgroup, object(_, _, _, _))
+      .WillByDefault(testing::Return(folly::unit));
+  EXPECT_CALL(*subscribeCallback_, beginSubgroup(_, _, _, _))
+      .WillRepeatedly(testing::Return(clientSubgroup));
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  CO_ASSERT_FALSE(res.hasError());
+  auto subscribeHandle = res.value();
+
+  EXPECT_CALL(*handle, requestUpdateCalled).Times(2);
+  EXPECT_CALL(*handle, requestUpdateResult)
+      .WillRepeatedly(
+          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+
+  const auto majorVersion = getDraftMajorVersion(getServerSelectedVersion());
+  std::array<folly::coro::Baton, 2> done;
+  auto fire = [&](int i, bool paused) {
+    folly::coro::co_withExecutor(
+        MoQExecutor_.get(),
+        folly::coro::co_invoke([&, i, paused]() -> folly::coro::Task<void> {
+          RequestUpdate update;
+          update.forward = !paused;
+          update.params.setMajorVersion(majorVersion);
+          co_await subscribeHandle->requestUpdate(std::move(update));
+          done[i].post();
+        }))
+        .start();
+  };
+
+  fire(0, /*paused=*/true);
+  co_await handle->invoked[0];
+  fire(1, /*paused=*/false);
+  co_await handle->invoked[1];
+  handle->release[1].post();
+  handle->release[0].post();
+  co_await done[0];
+  co_await done[1];
+
+  auto resumed = trackConsumer->beginSubgroup(0, 0, 0);
+  CO_ASSERT_TRUE(resumed.hasValue());
+  EXPECT_TRUE((*resumed)
+                  ->object(
+                      0,
+                      moxygen::test::makeBuf(10),
+                      noExtensions(),
+                      /*finSubgroup=*/true)
+                  .hasValue());
+
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 // An in-flight update must not flush a later, still-processing coalesced
 // burst's held REQUEST_OKs. Update A is applied on its own; while its
 // application handler is suspended, B and C arrive and coalesce (C is newest, B
@@ -3557,6 +3714,70 @@ CO_TEST_P_X(Draft22Test, RequestUpdateFillOpensItsOwnStream) {
   EXPECT_EQ(beganFillFor, servedRequestID);
   EXPECT_NE(beganFillFor, subscribeRequest.requestID);
 
+  trackConsumer->publishDone(
+      getTrackEndedPublishDone(subscribeRequest.requestID));
+  co_await publishDone_;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+// A fill that arrives with a pause does not open a stream, even though writes
+// on existing streams continue until the handler returns.
+CO_TEST_P_X(Draft22Test, RequestUpdatePauseRefusesItsFill) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> mockSubscriptionHandle;
+  std::shared_ptr<TrackConsumer> trackConsumer;
+  expectPublishDone();
+  expectSubscribe(
+      [&mockSubscriptionHandle, &trackConsumer](
+          auto sub, auto pub) -> TaskSubscribeResult {
+        trackConsumer = pub;
+        mockSubscriptionHandle =
+            std::make_shared<MockSubscriptionHandle>(SubscribeOk{
+                sub.requestID,
+                TrackAlias(sub.requestID.value),
+                std::chrono::milliseconds(0),
+                GroupOrder::OldestFirst,
+                AbsoluteLocation{15, 20},
+                Extensions{},
+            });
+        co_return mockSubscriptionHandle;
+      });
+
+  auto subscribeRequest = getSubscribe(kTestTrackName);
+  auto res =
+      co_await clientSession_->subscribe(subscribeRequest, subscribeCallback_);
+  CO_ASSERT_TRUE(!res.hasError());
+  auto subscribeHandle = res.value();
+
+  EXPECT_CALL(*subscribeCallback_, beginFill(_)).WillOnce([&](RequestID) {
+    return folly::Expected<std::shared_ptr<FetchConsumer>, MoQPublishError>(
+        fetchCallback_);
+  });
+  EXPECT_CALL(*clientSubscriberStatsCallback_, onRequestUpdate());
+  EXPECT_CALL(*serverPublisherStatsCallback_, onRequestUpdate());
+  std::optional<MoQPublishError::Code> fillError;
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateCalled)
+      .WillOnce([&](const RequestUpdate& update) {
+        auto fill = trackConsumer->beginFill(update.requestID);
+        if (fill.hasError()) {
+          fillError = fill.error().code;
+        }
+      });
+  EXPECT_CALL(*mockSubscriptionHandle, requestUpdateResult)
+      .WillOnce(
+          testing::Return(RequestOk{.requestID = subscribeRequest.requestID}));
+
+  RequestUpdate update;
+  update.existingRequestID = subscribeRequest.requestID;
+  update.forward = false;
+  FillParameters fill;
+  fill.locationFilter = LocationFilter::absoluteStart({10, 0});
+  update.fill = fill;
+  auto updateRes = co_await subscribeHandle->requestUpdate(update);
+  EXPECT_FALSE(updateRes.hasError());
+  EXPECT_EQ(fillError, MoQPublishError::CANCELLED);
+
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
   trackConsumer->publishDone(
       getTrackEndedPublishDone(subscribeRequest.requestID));
   co_await publishDone_;
