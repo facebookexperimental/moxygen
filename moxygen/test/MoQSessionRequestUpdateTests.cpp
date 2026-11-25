@@ -2024,7 +2024,7 @@ CO_TEST_P_X(Draft18Test, FetchRequestUpdateBeforeFetchOkCancelsHandler) {
         serverSawFetch.post();
         co_await releaseHandler;
         serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 0});
-        EXPECT_CALL(*serverHandle, fetchCancel()).WillRepeatedly([&] {
+        EXPECT_CALL(*serverHandle, fetchCancel(testing::_)).WillRepeatedly([&] {
           serverSawFetchCancel = true;
         });
         co_return serverHandle;
@@ -2826,7 +2826,7 @@ CO_TEST_P_X(Draft18Test, SubscribeNamespaceRequestUpdateFailureClosesBidi) {
                       RequestErrorCode::NOT_SUPPORTED,
                       "namespace updates unsupported"})));
   folly::coro::Baton unsubscribed;
-  EXPECT_CALL(*serverHandle, unsubscribeNamespace()).WillOnce([&] {
+  EXPECT_CALL(*serverHandle, unsubscribeNamespace(testing::_)).WillOnce([&] {
     unsubscribed.post();
   });
 
@@ -3203,7 +3203,7 @@ CO_TEST_P_X(Draft18Test, PublishNamespaceRequestUpdateFailureClosesBidi) {
                       RequestErrorCode::NOT_SUPPORTED,
                       "namespace updates unsupported"})));
   folly::coro::Baton done;
-  EXPECT_CALL(*serverHandle, publishNamespaceDone()).WillOnce([&] {
+  EXPECT_CALL(*serverHandle, publishNamespaceDone(testing::_)).WillOnce([&] {
     done.post();
   });
 
@@ -3380,7 +3380,7 @@ CO_TEST_P_X(Draft18Test, SubscribeTracksRequestUpdateFailureClosesBidi) {
 
   // No updatable state → the responder rejects the update and tears down.
   folly::coro::Baton unsubscribed;
-  EXPECT_CALL(*serverHandle, unsubscribeTracks()).WillOnce([&] {
+  EXPECT_CALL(*serverHandle, unsubscribeTracks(testing::_)).WillOnce([&] {
     unsubscribed.post();
   });
 

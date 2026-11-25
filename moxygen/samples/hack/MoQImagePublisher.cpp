@@ -40,7 +40,9 @@ class LocalSubscriptionHandle : public SubscriptionHandle {
             GroupOrder::OldestFirst,
             std::nullopt});
   }
-  void unsubscribe() override {}
+  void unsubscribe(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {}
   folly::coro::Task<RequestUpdateResult> requestUpdate(
       RequestUpdate reqUpdate) override {
     co_return folly::makeUnexpected(

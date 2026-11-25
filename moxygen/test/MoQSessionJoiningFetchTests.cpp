@@ -837,7 +837,7 @@ CO_TEST_P_X(MoQSessionTest, FetchCancelledBeforeFetchOk) {
         publisherEntered.post();
         co_await waitForCancellation();
         lateHandle = makeFetchOkResult(fetch, AbsoluteLocation{0, 1});
-        EXPECT_CALL(*lateHandle, fetchCancel()).WillOnce([&] {
+        EXPECT_CALL(*lateHandle, fetchCancel(testing::_)).WillOnce([&] {
           lateHandleCancelled.post();
         });
         co_return lateHandle;
@@ -1193,7 +1193,7 @@ CO_TEST_P_X(MoQSessionTest, CancelledFetchReleasesItsStreamCreditWait) {
         }
         heldFetch = fetchPub;
         auto handle = makeFetchOkResult(fetch, AbsoluteLocation{0, 1});
-        EXPECT_CALL(*handle, fetchCancel());
+        EXPECT_CALL(*handle, fetchCancel(testing::_));
         co_return handle;
       });
 

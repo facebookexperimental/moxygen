@@ -149,7 +149,9 @@ class MoQRelay : public std::enable_shared_from_this<MoQRelay>,
           trackNamespace_(std::move(trackNamespace)),
           sessionId_(sessionId) {}
 
-    void publishNamespaceDone() override {
+    void publishNamespaceDone(
+        ResetStreamErrorCode /*code*/ =
+            ResetStreamErrorCode::CANCELLED) override {
       relay_->publishNamespaceDone(trackNamespace_, sessionId_);
     }
 

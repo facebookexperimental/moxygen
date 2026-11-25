@@ -39,7 +39,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeNamespace) {
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribeNamespace());
 
   folly::coro::Baton barricade;
-  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace())
+  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace(testing::_))
       .WillOnce(testing::Invoke([&barricade]() { barricade.post(); }));
   publishNamespaceResult.value()->unsubscribeNamespace();
   co_await barricade;
@@ -60,9 +60,8 @@ CO_TEST_P_X(MoQSessionTest, UnsubscribeNamespaceReleasesPublishHandle) {
                 SubscribeNamespaceOk(
                     {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, unsubscribeNamespace()).WillOnce([&] {
-              serverSawUnsubscribe.post();
-            });
+            EXPECT_CALL(*serverHandle, unsubscribeNamespace(testing::_))
+                .WillOnce([&] { serverSawUnsubscribe.post(); });
             co_return serverHandle;
           });
 
@@ -184,7 +183,7 @@ CO_TEST_P_X(V16PlusSubscribeNamespaceTest, NamespaceDoneDoesNotCloseStream) {
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribeNamespace());
 
   folly::coro::Baton unsubBaton;
-  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace())
+  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace(testing::_))
       .WillOnce(testing::Invoke([&unsubBaton]() { unsubBaton.post(); }));
   publishNamespaceResult.value()->unsubscribeNamespace();
   co_await unsubBaton;
@@ -266,7 +265,7 @@ CO_TEST_P_X(
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribeNamespace());
 
   folly::coro::Baton unsubBaton;
-  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace())
+  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace(testing::_))
       .WillOnce(testing::Invoke([&unsubBaton]() { unsubBaton.post(); }));
   publishNamespaceResult.value()->unsubscribeNamespace();
   co_await unsubBaton;
@@ -427,7 +426,7 @@ CO_TEST_P_X(V16SubscribeNamespaceTest, PeerFinUnsubscribesNamespace) {
 
   folly::coro::Baton unsubBaton;
   EXPECT_CALL(*serverPublisherStatsCallback_, onUnsubscribeNamespace());
-  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace())
+  EXPECT_CALL(*mockSubscribeNamespaceHandle, unsubscribeNamespace(testing::_))
       .WillOnce(testing::Invoke([&unsubBaton]() { unsubBaton.post(); }));
 
   // Control stream is the client's first bidi, so SUBSCRIBE_NAMESPACE is id 4.
@@ -491,7 +490,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceCallerCancelledBeforeOk) {
                 SubscribeNamespaceOk(
                     {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, unsubscribeNamespace())
+            EXPECT_CALL(*serverHandle, unsubscribeNamespace(testing::_))
                 .WillRepeatedly([&] { serverSawUnsubscribe = true; });
             co_return serverHandle;
           });
@@ -547,7 +546,7 @@ CO_TEST_P_X(MoQSessionTest, SubscribeNamespaceCancelledWhileOkQueued) {
                 SubscribeNamespaceOk(
                     {.requestID = subNs.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, unsubscribeNamespace())
+            EXPECT_CALL(*serverHandle, unsubscribeNamespace(testing::_))
                 .WillRepeatedly([&] { serverSawUnsubscribe = true; });
             co_return serverHandle;
           });

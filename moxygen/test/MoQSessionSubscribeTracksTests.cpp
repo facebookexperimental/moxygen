@@ -162,9 +162,8 @@ CO_TEST_P_X(Draft22Test, SubscribeTracksCarriesIncludePropertiesFalse) {
   }
 
   folly::coro::Baton unsubscribed;
-  EXPECT_CALL(*mockHandle, unsubscribeTracks()).WillOnce([&unsubscribed]() {
-    unsubscribed.post();
-  });
+  EXPECT_CALL(*mockHandle, unsubscribeTracks(testing::_))
+      .WillOnce([&unsubscribed]() { unsubscribed.post(); });
   result.value()->unsubscribeTracks();
   co_await unsubscribed;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
@@ -198,7 +197,7 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeAndUnsubscribeTracks) {
   EXPECT_FALSE(result.hasError());
 
   folly::coro::Baton barricade;
-  EXPECT_CALL(*mockSubscribeTracksHandle, unsubscribeTracks())
+  EXPECT_CALL(*mockSubscribeTracksHandle, unsubscribeTracks(testing::_))
       .WillOnce(testing::Invoke([&barricade]() { barricade.post(); }));
   result.value()->unsubscribeTracks();
   co_await barricade;
@@ -231,9 +230,8 @@ CO_TEST_P_X(
                 std::make_shared<MockSubscribeTracksHandle>(SubscribeTracksOk(
                     {.requestID = subTracks.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, unsubscribeTracks()).WillOnce([&] {
-              serverSawUnsubscribe.post();
-            });
+            EXPECT_CALL(*serverHandle, unsubscribeTracks(testing::_))
+                .WillOnce([&] { serverSawUnsubscribe.post(); });
             co_return serverHandle;
           });
 
@@ -363,9 +361,8 @@ CO_TEST_P_X(
                 std::make_shared<MockSubscribeTracksHandle>(SubscribeTracksOk(
                     {.requestID = subTracks.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, unsubscribeTracks()).WillRepeatedly([&] {
-              serverSawUnsubscribe = true;
-            });
+            EXPECT_CALL(*serverHandle, unsubscribeTracks(testing::_))
+                .WillRepeatedly([&] { serverSawUnsubscribe = true; });
             co_return serverHandle;
           });
 
@@ -419,9 +416,8 @@ CO_TEST_P_X(V18PlusSubscribeTracksTest, SubscribeTracksCancelledWhileOkQueued) {
                 std::make_shared<MockSubscribeTracksHandle>(SubscribeTracksOk(
                     {.requestID = subTracks.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, unsubscribeTracks()).WillRepeatedly([&] {
-              serverSawUnsubscribe = true;
-            });
+            EXPECT_CALL(*serverHandle, unsubscribeTracks(testing::_))
+                .WillRepeatedly([&] { serverSawUnsubscribe = true; });
             co_return serverHandle;
           });
 
