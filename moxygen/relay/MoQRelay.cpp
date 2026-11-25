@@ -555,7 +555,7 @@ Subscriber::PublishResult MoQRelay::publish(
               forwarder,
               info.forward,
               info.trackNamespacePrefix,
-              info.publishBlockedHandle,
+              info.tracksPublishHandle,
               info.includeProperties,
               info.subscribeTracksSettings))
           .start();
@@ -602,9 +602,9 @@ Subscriber::PublishResult MoQRelay::publish(
 void MoQRelay::publishBlockedToTracksSubscriber(
     const TrackNamespace& trackNamespacePrefix,
     const FullTrackName& ftn,
-    const std::shared_ptr<Publisher::PublishBlockedHandle>&
-        publishBlockedHandle) const {
-  if (!publishBlockedHandle ||
+    const std::shared_ptr<Publisher::TracksPublishHandle>& tracksPublishHandle)
+    const {
+  if (!tracksPublishHandle ||
       !ftn.trackNamespace.startsWith(trackNamespacePrefix)) {
     return;
   }
@@ -612,7 +612,7 @@ void MoQRelay::publishBlockedToTracksSubscriber(
   TrackNamespace suffix(
       std::vector<std::string>(
           ns.begin() + trackNamespacePrefix.size(), ns.end()));
-  publishBlockedHandle->publishBlocked(suffix, ftn.trackName);
+  tracksPublishHandle->publishBlocked(suffix, ftn.trackName);
 }
 
 folly::coro::Task<void> MoQRelay::publishToSession(
@@ -620,7 +620,7 @@ folly::coro::Task<void> MoQRelay::publishToSession(
     std::shared_ptr<MoQForwarder> forwarder,
     bool forward,
     TrackNamespace trackNamespacePrefix,
-    std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle,
+    std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle,
     bool includeProperties,
     std::optional<TrackRequestParameters> subscribeTracksSettings) {
   const auto fullTrackName = forwarder->fullTrackName();
@@ -649,7 +649,7 @@ folly::coro::Task<void> MoQRelay::publishToSession(
         *publishError.webTransportError ==
             proxygen::WebTransport::ErrorCode::STREAM_CREATION_ERROR) {
       publishBlockedToTracksSubscriber(
-          trackNamespacePrefix, fullTrackName, publishBlockedHandle);
+          trackNamespacePrefix, fullTrackName, tracksPublishHandle);
     }
     co_return;
   }
@@ -789,7 +789,7 @@ MoQRelay::subscribeNamespace(
           subNs.forward,
           effectiveOptions,
           namespacePublishHandle,
-          /*publishBlockedHandle=*/nullptr,
+          /*tracksPublishHandle=*/nullptr,
           subNs.trackNamespacePrefix});
 
   // If this is the first content added to this node, notify parent
@@ -986,7 +986,7 @@ class MoQRelay::TracksSubscription : public Publisher::SubscribeTracksHandle {
 folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
     std::shared_ptr<MoQSession> session,
     SubscribeTracks subTracks,
-    std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle) {
+    std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle) {
   XLOG(DBG1) << __func__ << " nsp=" << subTracks.trackNamespacePrefix;
 
   const auto negotiatedVersion = session->getNegotiatedVersion();
@@ -1019,7 +1019,7 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
           // options is unused for this tree.
           SubscribeNamespaceOptions::PUBLISH,
           /*namespacePublishHandle=*/nullptr,
-          std::move(publishBlockedHandle),
+          std::move(tracksPublishHandle),
           subTracks.trackNamespacePrefix,
           subTracks.includeProperties,
           makeSubscribeTracksSettings(subTracks, negotiatedVersion)});
@@ -1056,7 +1056,7 @@ folly::coro::Task<Publisher::SubscribeTracksResult> MoQRelay::subscribeTracks(
               subscriptionIt->second.forwarder,
               subTracks.forward,
               subTracks.trackNamespacePrefix,
-              tracksNode->sessions.at(session).publishBlockedHandle,
+              tracksNode->sessions.at(session).tracksPublishHandle,
               tracksNode->sessions.at(session).includeProperties,
               tracksNode->sessions.at(session).subscribeTracksSettings))
           .start();
@@ -1080,8 +1080,7 @@ void MoQRelay::publishExistingMatchingTracks(
     const std::shared_ptr<MoQSession>& session,
     const TrackNamespace& prefix,
     bool forward,
-    const std::shared_ptr<Publisher::PublishBlockedHandle>&
-        publishBlockedHandle,
+    const std::shared_ptr<Publisher::TracksPublishHandle>& tracksPublishHandle,
     const TrackNamespace* skipUnderPrefix,
     bool includeProperties,
     std::optional<TrackRequestParameters> subscribeTracksSettings) {
@@ -1116,7 +1115,7 @@ void MoQRelay::publishExistingMatchingTracks(
               subscriptionIt->second.forwarder,
               forward,
               prefix,
-              publishBlockedHandle,
+              tracksPublishHandle,
               includeProperties,
               subscribeTracksSettings))
           .start();
@@ -1240,7 +1239,7 @@ folly::Expected<folly::Unit, RequestErrorCode> MoQRelay::updateSubscribeTracks(
           session,
           newPrefix,
           it->second.forward,
-          it->second.publishBlockedHandle,
+          it->second.tracksPublishHandle,
           &oldPrefix,
           it->second.includeProperties,
           it->second.subscribeTracksSettings);
@@ -2157,13 +2156,11 @@ MoQRelay::SessionHandler::subscribeNamespace(
 folly::coro::Task<Publisher::SubscribeTracksResult>
 MoQRelay::SessionHandler::subscribeTracks(
     SubscribeTracks subTracks,
-    std::shared_ptr<PublishBlockedHandle> publishBlockedHandle) {
+    std::shared_ptr<TracksPublishHandle> tracksPublishHandle) {
   auto session = getSession();
   XCHECK(session);
   return relay_->subscribeTracks(
-      std::move(session),
-      std::move(subTracks),
-      std::move(publishBlockedHandle));
+      std::move(session), std::move(subTracks), std::move(tracksPublishHandle));
 }
 
 folly::coro::Task<Publisher::TrackStatusResult>

@@ -65,7 +65,7 @@ class MoQRelay : public std::enable_shared_from_this<MoQRelay>,
   folly::coro::Task<SubscribeTracksResult> subscribeTracks(
       std::shared_ptr<MoQSession> session,
       SubscribeTracks subTracks,
-      std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle);
+      std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle);
 
   folly::coro::Task<Subscriber::PublishNamespaceResult> publishNamespace(
       std::shared_ptr<MoQSession> session,
@@ -105,7 +105,7 @@ class MoQRelay : public std::enable_shared_from_this<MoQRelay>,
 
     folly::coro::Task<Publisher::SubscribeTracksResult> subscribeTracks(
         SubscribeTracks subTracks,
-        std::shared_ptr<PublishBlockedHandle> publishBlockedHandle =
+        std::shared_ptr<TracksPublishHandle> tracksPublishHandle =
             nullptr) override;
 
     folly::coro::Task<Publisher::TrackStatusResult> trackStatus(
@@ -233,7 +233,7 @@ class MoQRelay : public std::enable_shared_from_this<MoQRelay>,
       // Handle for sending NAMESPACE / NAMESPACE_DONE on the bidi stream.
       std::shared_ptr<Publisher::NamespacePublishHandle> namespacePublishHandle;
       // Draft 18+ only: handle for SUBSCRIBE_TRACKS response-stream followups.
-      std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle;
+      std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle;
       // The namespace prefix this subscriber used for SUBSCRIBE_NAMESPACE
       TrackNamespace trackNamespacePrefix;
       // Draft 22+: whether SUBSCRIBE_TRACKS requested Track Properties in
@@ -387,7 +387,7 @@ class MoQRelay : public std::enable_shared_from_this<MoQRelay>,
       std::shared_ptr<MoQForwarder> forwarder,
       bool forward,
       TrackNamespace trackNamespacePrefix = {},
-      std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle =
+      std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle =
           nullptr,
       bool includeProperties = true,
       std::optional<TrackRequestParameters> subscribeTracksSettings =
@@ -402,8 +402,8 @@ class MoQRelay : public std::enable_shared_from_this<MoQRelay>,
       const std::shared_ptr<MoQSession>& session,
       const TrackNamespace& prefix,
       bool forward,
-      const std::shared_ptr<Publisher::PublishBlockedHandle>&
-          publishBlockedHandle,
+      const std::shared_ptr<Publisher::TracksPublishHandle>&
+          tracksPublishHandle,
       const TrackNamespace* skipUnderPrefix = nullptr,
       bool includeProperties = true,
       std::optional<TrackRequestParameters> subscribeTracksSettings =
@@ -427,8 +427,8 @@ class MoQRelay : public std::enable_shared_from_this<MoQRelay>,
   void publishBlockedToTracksSubscriber(
       const TrackNamespace& trackNamespacePrefix,
       const FullTrackName& ftn,
-      const std::shared_ptr<Publisher::PublishBlockedHandle>&
-          publishBlockedHandle) const;
+      const std::shared_ptr<Publisher::TracksPublishHandle>&
+          tracksPublishHandle) const;
 
   folly::coro::Task<void> doSubscribeUpdate(
       std::shared_ptr<Publisher::SubscriptionHandle> handle,

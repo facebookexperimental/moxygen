@@ -127,7 +127,7 @@ class MessageReply {
 };
 
 class SubscribeTracksReply : public MessageReply,
-                             public Publisher::PublishBlockedHandle {
+                             public Publisher::TracksPublishHandle {
  public:
   explicit SubscribeTracksReply(std::shared_ptr<ReplyContext> replyContext)
       : MessageReply(std::move(replyContext)) {}
