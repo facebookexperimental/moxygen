@@ -124,7 +124,9 @@ ManagedSubscription::ManagedSubscription(
       downstreamLaneConsumer_(std::move(downstreamLaneConsumer)),
       executor_(executor),
       requestSession_(MoQSession::getRequestSession()),
-      stateChanged_(std::make_shared<folly::coro::SharedPromise<void>>()) {}
+      stateChanged_(std::make_shared<folly::coro::SharedPromise<void>>()),
+      attemptRegistered_(std::make_shared<folly::coro::SharedPromise<bool>>()) {
+}
 
 ManagedSubscription::~ManagedSubscription() {
   unsubscribe();
@@ -200,28 +202,72 @@ folly::coro::Task<Publisher::FetchResult> ManagedSubscription::fetchWhenReady(
         FetchError{
             fetch.requestID, FetchErrorCode::NOT_SUPPORTED, "fetch type"});
   }
-  auto subscribed = co_await folly::coro::co_awaitTry(
-      folly::coro::timeout(self->subscribe(), kJoiningFetchWait));
-  if (subscribed.hasException<folly::FutureTimeout>()) {
+  auto fetchable = co_await folly::coro::co_awaitTry(
+      folly::coro::timeout(self->waitUntilFetchable(), kJoiningFetchWait));
+  if (fetchable.hasException<folly::FutureTimeout>()) {
     co_return folly::makeUnexpected(
         FetchError{
             fetch.requestID,
             FetchErrorCode::TIMEOUT,
             "subscription unavailable"});
   }
-  if (subscribed.hasException()) {
-    co_yield folly::coro::co_error(std::move(subscribed).exception());
+  if (fetchable.hasException()) {
+    co_yield folly::coro::co_error(std::move(fetchable).exception());
   }
-  if (subscribed->hasError()) {
-    auto error = std::move(subscribed->error());
-    error.requestID = fetch.requestID;
-    co_return folly::makeUnexpected(std::move(error));
+  if (!fetchable->has_value()) {
+    if (state_ == State::Ended && lastError_) {
+      auto error = *lastError_;
+      error.requestID = fetch.requestID;
+      co_return folly::makeUnexpected(std::move(error));
+    }
+    co_return folly::makeUnexpected(
+        FetchError{fetch.requestID, FetchErrorCode::CANCELLED, "stopped"});
   }
   if (useSubscriptionGroupOrder) {
-    fetch.groupOrder = subscribed->value().groupOrder;
+    fetch.groupOrder = **fetchable;
   }
   co_return co_await self->issueJoiningFetch(
       std::move(fetch), std::move(consumer));
+}
+
+folly::coro::Task<std::optional<GroupOrder>>
+ManagedSubscription::waitUntilFetchable() {
+  if (state_ == State::Idle) {
+    startAttempts(0ms);
+  }
+  while (true) {
+    switch (state_) {
+      case State::Active:
+        co_return subscription_->subscribeOk().groupOrder;
+      case State::Ended:
+        if (attemptException_) {
+          attemptException_.throw_exception();
+        }
+        co_return std::nullopt;
+      case State::Stopped:
+        co_return std::nullopt;
+      case State::Pending: {
+        auto registration = attemptRegistered_;
+        const bool registered = co_await registration->getFuture();
+        if (registered) {
+          co_await folly::coro::co_reschedule_on_current_executor;
+          if (registration == attemptRegistered_ &&
+              (state_ == State::Pending || state_ == State::Active)) {
+            co_return state_ == State::Active
+                ? subscription_->subscribeOk().groupOrder
+                : requestTemplate_.groupOrder.value_or(GroupOrder::OldestFirst);
+          }
+        }
+        break;
+      }
+      case State::Idle:
+      case State::RetryWaiting: {
+        auto changed = stateChanged_;
+        co_await changed->getFuture();
+        break;
+      }
+    }
+  }
 }
 
 folly::coro::Task<Publisher::FetchResult>
@@ -261,6 +307,10 @@ void ManagedSubscription::setState(State state) {
     return;
   }
   state_ = state;
+  if ((state == State::Ended || state == State::Stopped) &&
+      !attemptRegistered_->isFulfilled()) {
+    attemptRegistered_->setValue(false);
+  }
   auto changed = std::exchange(
       stateChanged_, std::make_shared<folly::coro::SharedPromise<void>>());
   changed->setValue();
@@ -294,6 +344,8 @@ folly::coro::Task<void> ManagedSubscription::runAttempts(
       co_return;
     }
 
+    auto registration = self->attemptRegistered_ =
+        std::make_shared<folly::coro::SharedPromise<bool>>();
     self->setState(State::Pending);
     auto requestSession = self->requestSession_.lock();
     if (!requestSession) {
@@ -316,6 +368,9 @@ folly::coro::Task<void> ManagedSubscription::runAttempts(
               token,
               self->upstream_->subscribe(
                   std::move(request), std::shared_ptr<TrackConsumer>(self))));
+    }
+    if (!registration->isFulfilled()) {
+      registration->setValue(false);
     }
     if (self->state_ == State::Stopped) {
       if (attempted.hasValue() && attempted->hasValue()) {
@@ -385,7 +440,11 @@ folly::coro::Task<void> ManagedSubscription::runAttempts(
 
 folly::Expected<folly::Unit, MoQPublishError>
 ManagedSubscription::setTrackAlias(TrackAlias alias) {
-  return downstreamLaneConsumer_->setTrackAlias(alias);
+  auto result = downstreamLaneConsumer_->setTrackAlias(alias);
+  if (result.hasValue() && !attemptRegistered_->isFulfilled()) {
+    attemptRegistered_->setValue(true);
+  }
+  return result;
 }
 
 folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>

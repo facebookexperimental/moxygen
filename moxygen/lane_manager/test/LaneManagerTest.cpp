@@ -13,6 +13,7 @@
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Collect.h>
+#include <folly/coro/SharedPromise.h>
 #include <folly/coro/Timeout.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
@@ -24,6 +25,7 @@ namespace moxygen::lane_manager { namespace {
 
 using namespace std::chrono_literals;
 using testing::_;
+using testing::Invoke;
 using testing::NiceMock;
 using testing::Return;
 using Kind = SwitchOutcome::Kind;
@@ -256,6 +258,114 @@ const std::string kBitrateCatalog = R"({"tracks":[
 "initDataList":[{"id":"v0","type":"inline","data":"djA="},
 {"id":"v1","type":"inline","data":"djE="},{"id":"a0","type":"inline","data":"YTA="}]})";
 
+class LaneManagerCatalogFetchFallbackTest : public LaneManagerTest {
+ protected:
+  void SetUp() override {
+    LaneManagerTest::SetUp();
+    EXPECT_CALL(*proxy_, fetch(_, _))
+        .WillOnce(Invoke(
+            this, &LaneManagerCatalogFetchFallbackTest::rejectCatalogFetch))
+        .WillOnce(Invoke(
+            this, &LaneManagerCatalogFetchFallbackTest::acceptLaneFetch));
+  }
+
+  folly::coro::Task<Publisher::FetchResult> rejectCatalogFetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer>) {
+    EXPECT_EQ(fetch.fullTrackName.trackName, "catalog");
+    upstreamFetches_.push_back(fetch.fullTrackName);
+    catalogFetchStarted_.setValue();
+    co_await releaseFailure_.getFuture();
+    catalogFetchRejected_.setValue();
+    co_return folly::makeUnexpected(
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::NOT_SUPPORTED,
+            "fetch unsupported"});
+  }
+
+  folly::coro::Task<Publisher::FetchResult> acceptLaneFetch(
+      Fetch fetch,
+      std::shared_ptr<FetchConsumer> consumer) {
+    EXPECT_EQ(fetch.fullTrackName.trackName, "video0");
+    upstreamFetches_.push_back(fetch.fullTrackName);
+    laneFetch_ = std::move(fetch);
+    laneFetchConsumer_ = std::move(consumer);
+    return folly::coro::makeTask<Publisher::FetchResult>(
+        std::make_shared<MockFetchHandle>(FetchOk{}));
+  }
+
+  folly::coro::Task<Publisher::SubscribeResult> subscribeRole(
+      Role role,
+      RequestID requestID) {
+    auto request = SubscribeRequest::make(FullTrackName{kBroadcast, "r--abr"});
+    request.requestID = requestID;
+    return manager_->subscribe(std::move(request), client_, role, policy_);
+  }
+
+  folly::coro::Task<Publisher::FetchResult> fetchVideo(RequestID requestID) {
+    Fetch fetch(requestID, RequestID(1), 0, FetchType::RELATIVE_JOINING);
+    fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr"};
+    return manager_->fetch(
+        std::move(fetch),
+        std::make_shared<NiceMock<MockFetchConsumer>>(),
+        Role::Video);
+  }
+
+  folly::coro::Task<Publisher::FetchResult> fetchBeforeLiveCatalog() {
+    co_await catalogFetchStarted_.getFuture();
+    EXPECT_CALL(*handles_.at("catalog"), unsubscribe()).Times(0);
+    auto fetching =
+        folly::coro::co_withExecutor(executor_.get(), fetchVideo(RequestID(3)))
+            .start();
+    co_await folly::coro::co_reschedule_on_current_executor;
+    releaseFailure_.setValue();
+    co_await catalogFetchRejected_.getFuture();
+    co_await folly::coro::co_reschedule_on_current_executor;
+    EXPECT_TRUE(
+        lanes_.at("catalog")
+            ->objectStream(
+                ObjectHeader(1, 0, 0), folly::IOBuf::copyBuffer(kCatalog))
+            .hasValue());
+    co_return co_await std::move(fetching);
+  }
+
+  folly::coro::SharedPromise<void> catalogFetchStarted_;
+  folly::coro::SharedPromise<void> releaseFailure_;
+  folly::coro::SharedPromise<void> catalogFetchRejected_;
+};
+
+TEST_F(
+    LaneManagerCatalogFetchFallbackTest,
+    LiveCatalogCompletesConcurrentAndLaterRequests) {
+  auto results =
+      run(folly::coro::timeout(
+          folly::coro::collectAll(
+              subscribeRole(Role::Video, RequestID(1)),
+              subscribeRole(Role::Audio, RequestID(2)),
+              fetchBeforeLiveCatalog()),
+          1s));
+
+  auto& video = std::get<0>(results);
+  ASSERT_TRUE(video.hasValue());
+  EXPECT_EQ(video.value()->subscribeOk().requestID, RequestID(1));
+  const auto& audio = std::get<1>(results);
+  ASSERT_TRUE(audio.hasValue());
+  EXPECT_EQ(audio.value()->subscribeOk().requestID, RequestID(2));
+  EXPECT_TRUE(std::get<2>(results).hasValue());
+
+  video.value()->unsubscribe();
+  auto laterSubscription = run(subscribeRole(Role::Video, RequestID(4)));
+  ASSERT_TRUE(laterSubscription.hasValue());
+  EXPECT_EQ(laterSubscription.value()->subscribeOk().requestID, RequestID(4));
+  EXPECT_EQ(subscribeAttempts_.at("catalog"), 1);
+  EXPECT_EQ(
+      upstreamFetches_,
+      (std::vector<FullTrackName>{
+          FullTrackName{kBroadcast, "catalog"},
+          FullTrackName{kBroadcast, "video0"}}));
+  testing::Mock::VerifyAndClearExpectations(handles_.at("catalog").get());
+}
 TEST_F(LaneManagerTest, VirtualVideoTrackUsesTheOriginNamespace) {
   const TrackNamespace origin(std::vector<std::string>{"file", "demo"});
   const FullTrackName video{kBroadcast, "video"};
@@ -951,17 +1061,46 @@ TEST_F(LaneManagerTest, ACancelledSubscribeFreesTheRole) {
   EXPECT_TRUE(subscribe(Role::Video, 2).hasValue());
 }
 
-TEST_F(LaneManagerTest, ACatalogTimeoutFailsWithTimeoutAndRetry) {
-  // Stands in for the first-catalog wait running out.
+TEST_F(
+    LaneManagerTest,
+    TerminalCatalogSubscribePreservesErrorForLaterRequests) {
   EXPECT_CALL(*proxy_, subscribe(_, _)).WillOnce([](const auto&, const auto&) {
-    return folly::coro::makeErrorTask<Publisher::SubscribeResult>(
-        folly::FutureTimeout());
+    return folly::coro::makeTask<Publisher::SubscribeResult>(
+        folly::makeUnexpected(
+            SubscribeError{
+                RequestID(1),
+                RequestErrorCode::UNAUTHORIZED,
+                "catalog access denied",
+                0ms}));
   });
+  EXPECT_CALL(*proxy_, fetch(_, _)).Times(0);
 
   auto result = subscribe(Role::Video);
   ASSERT_TRUE(result.hasError());
-  EXPECT_EQ(result.error().errorCode, SubscribeErrorCode::TIMEOUT);
-  EXPECT_TRUE(result.error().retryInterval.has_value());
+  EXPECT_EQ(result.error().requestID, RequestID(1));
+  EXPECT_EQ(result.error().errorCode, RequestErrorCode::UNAUTHORIZED);
+  EXPECT_EQ(result.error().reasonPhrase, "catalog access denied");
+  EXPECT_EQ(result.error().retryInterval, 0ms);
+
+  auto laterSubscription = subscribe(Role::Audio, 2);
+  ASSERT_TRUE(laterSubscription.hasError());
+  EXPECT_EQ(laterSubscription.error().requestID, RequestID(2));
+  EXPECT_EQ(
+      laterSubscription.error().errorCode, RequestErrorCode::UNAUTHORIZED);
+  EXPECT_EQ(laterSubscription.error().reasonPhrase, "catalog access denied");
+  EXPECT_EQ(laterSubscription.error().retryInterval, 0ms);
+
+  Fetch fetch(RequestID(3), RequestID(1), 0, FetchType::RELATIVE_JOINING);
+  fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr"};
+  auto laterFetch = run(manager_->fetch(
+      std::move(fetch),
+      std::make_shared<NiceMock<MockFetchConsumer>>(),
+      Role::Video));
+  ASSERT_TRUE(laterFetch.hasError());
+  EXPECT_EQ(laterFetch.error().requestID, RequestID(3));
+  EXPECT_EQ(laterFetch.error().errorCode, RequestErrorCode::UNAUTHORIZED);
+  EXPECT_EQ(laterFetch.error().reasonPhrase, "catalog access denied");
+  EXPECT_EQ(laterFetch.error().retryInterval, 0ms);
 }
 
 TEST_F(LaneManagerTest, RejectsASecondSubscribeForTheSameRole) {
@@ -1236,9 +1375,12 @@ TEST_F(LaneManagerTest, JoiningFetchFailsWhenItsSubscribeFails) {
               std::make_shared<NiceMock<MockFetchConsumer>>(),
               Role::Video),
           release()));
-  EXPECT_TRUE(subscribed.hasError());
+  ASSERT_TRUE(subscribed.hasError());
+  EXPECT_EQ(subscribed.error().requestID, RequestID(1));
+  EXPECT_EQ(subscribed.error().errorCode, SubscribeErrorCode::NOT_SUPPORTED);
   ASSERT_TRUE(fetched.hasError());
-  EXPECT_EQ(fetched.error().errorCode, FetchErrorCode::DOES_NOT_EXIST);
+  EXPECT_EQ(fetched.error().requestID, RequestID(3));
+  EXPECT_EQ(fetched.error().errorCode, FetchErrorCode::NOT_SUPPORTED);
   EXPECT_FALSE(laneFetch_);
 }
 

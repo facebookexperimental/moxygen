@@ -651,6 +651,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
     Role role,
     std::shared_ptr<SwitchingPolicy> policy) {
   auto self = shared_from_this();
+  if (auto error = catalog_.error()) {
+    error->requestID = request.requestID;
+    co_return folly::makeUnexpected(std::move(*error));
+  }
   auto [it, inserted] = sets_.try_emplace(role);
   if (!inserted) {
     co_return folly::makeUnexpected(
@@ -685,15 +689,19 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
   if (!set->policy) {
     co_return fail(RequestErrorCode::NOT_SUPPORTED, "no switching policy");
   }
-  auto opened =
-      co_await folly::coro::co_awaitTry(catalog_.open(request.requestID));
-  if (opened.hasException<folly::FutureTimeout>()) {
+  auto catalog =
+      co_await folly::coro::co_awaitTry(catalog_.subscribe(request.requestID));
+  if (catalog.hasException<folly::FutureTimeout>()) {
     SubscribeError error{
         request.requestID, RequestErrorCode::TIMEOUT, "no catalog yet"};
     error.retryInterval = std::chrono::milliseconds(1); // retry any time
     co_return folly::makeUnexpected(std::move(error));
   }
-  if (!opened.value()) {
+  if (!catalog.value()) {
+    if (auto error = catalog_.error()) {
+      error->requestID = request.requestID;
+      co_return folly::makeUnexpected(std::move(*error));
+    }
     co_return fail(RequestErrorCode::DOES_NOT_EXIST, "no catalog");
   }
   const auto* lanes = catalog_.switchingSet(role);
@@ -1155,6 +1163,10 @@ folly::coro::Task<Publisher::FetchResult> MoQLaneManager::fetch(
     co_return folly::makeUnexpected(
         FetchError{fetch.requestID, FetchErrorCode::NOT_SUPPORTED, ""});
   }
+  if (auto error = catalog_.error()) {
+    error->requestID = fetch.requestID;
+    co_return folly::makeUnexpected(std::move(*error));
+  }
   auto self = shared_from_this();
   auto it = sets_.find(role);
   if (it == sets_.end()) {
@@ -1178,6 +1190,10 @@ folly::coro::Task<Publisher::FetchResult> MoQLaneManager::fetch(
     }
     if (resolved.hasException()) {
       co_yield folly::coro::co_error(std::move(resolved).exception());
+    }
+    if (auto error = catalog_.error()) {
+      error->requestID = fetch.requestID;
+      co_return folly::makeUnexpected(std::move(*error));
     }
     it = sets_.find(role);
     if (it == sets_.end() || it->second != set) {

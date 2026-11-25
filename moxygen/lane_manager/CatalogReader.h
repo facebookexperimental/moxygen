@@ -9,7 +9,6 @@
 #include "moxygen/Publisher.h"
 #include "moxygen/lane_manager/SwitchingSet.h"
 
-#include <folly/coro/SharedPromise.h>
 #include <folly/coro/Task.h>
 
 #include <chrono>
@@ -27,7 +26,7 @@ class CatalogReader {
   enum class Mode { Live, ImmutableSnapshot };
 
   CatalogReader(
-      std::shared_ptr<Publisher> publisher,
+      std::shared_ptr<Publisher> proxy,
       TrackNamespace broadcast,
       std::chrono::milliseconds firstCatalogWait = std::chrono::seconds(5),
       Mode mode = Mode::Live);
@@ -39,9 +38,11 @@ class CatalogReader {
   CatalogReader& operator=(CatalogReader&&) = delete;
 
   // Every call completes once the first catalog is read, or with false when
-  // opening fails or the reader is closed. Throws
+  // acquisition fails, the request ends, or the reader is closed. Throws
   // folly::FutureTimeout if no catalog arrives within `firstCatalogWait`.
-  folly::coro::Task<bool> open(RequestID requestID);
+  folly::coro::Task<bool> subscribe(RequestID requestID);
+  // The acquisition's terminal FETCH error, shared by all callers.
+  std::optional<FetchError> error() const;
   void close();
   void setUpdateCallback(std::function<void()> onUpdate);
 
@@ -49,25 +50,36 @@ class CatalogReader {
   const SwitchingSet* switchingSet(Role role) const;
 
  private:
+  struct Acquisition;
   class Callback;
 
-  folly::coro::Task<bool> openSnapshot(RequestID requestID);
-
+  void startSubscription(RequestID requestID);
+  static folly::coro::Task<void> fetchInitialCatalog(
+      std::shared_ptr<Acquisition> acquisition,
+      std::shared_ptr<Callback> callback,
+      RequestID requestID);
+  static folly::coro::Task<void> fetchSnapshot(
+      std::shared_ptr<Publisher> proxy,
+      std::shared_ptr<Acquisition> acquisition,
+      std::shared_ptr<Callback> callback,
+      Fetch fetch);
+  static folly::coro::Task<void> waitForSnapshot(
+      std::shared_ptr<Acquisition> acquisition,
+      std::shared_ptr<Callback> callback,
+      RequestID requestID);
+  void fail(FetchError error);
   void onCatalog(Payload payload);
+  void onSubscriptionDone();
 
-  std::shared_ptr<Publisher> publisher_;
+  std::shared_ptr<Publisher> proxy_;
   FullTrackName track_;
   std::shared_ptr<Callback> callback_;
-  std::shared_ptr<Publisher::SubscriptionHandle> subscription_;
-  std::shared_ptr<Publisher::FetchHandle> fetch_;
+  std::shared_ptr<Acquisition> acquisition_;
   std::optional<SwitchingSet> video_;
   std::optional<SwitchingSet> audio_;
   std::chrono::milliseconds firstCatalogWait_;
   Mode mode_;
-  folly::coro::SharedPromise<void> ready_;
   std::function<void()> onUpdate_;
-  bool opened_{false};
-  bool closed_{false};
 };
 
 } // namespace moxygen::lane_manager

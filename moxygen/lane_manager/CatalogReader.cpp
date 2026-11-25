@@ -6,19 +6,56 @@
 
 #include "moxygen/lane_manager/CatalogReader.h"
 
+#include "moxygen/MoQSession.h"
 #include "moxygen/ObjectReceiver.h"
+#include "moxygen/lane_manager/ManagedSubscription.h"
 #include "moxygen/msf/MediaCatalog.h"
 
+#include <folly/CancellationToken.h>
 #include <folly/base64.h>
 #include <folly/coro/Error.h>
+#include <folly/coro/SharedPromise.h>
+#include <folly/coro/Sleep.h>
 #include <folly/coro/Timeout.h>
+#include <folly/coro/WithCancellation.h>
 #include <folly/logging/xlog.h>
 
 #include <algorithm>
+#include <chrono>
+#include <utility>
 
 namespace moxygen::lane_manager {
 
 namespace {
+
+using namespace std::chrono_literals;
+
+constexpr auto kCatalogFetchTimeout = 5s;
+
+folly::coro::Task<void> waitForCatalogRetry(
+    std::chrono::milliseconds remaining) {
+  constexpr auto kMaxSleep =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::hours(24));
+  while (remaining > 0ms) {
+    const auto part = std::min(remaining, kMaxSleep);
+    co_await folly::coro::sleep(part);
+    remaining -= part;
+  }
+}
+
+bool retryableCatalogFetch(const FetchError& error) {
+  if (error.retryInterval && error.retryInterval->count() == 0) {
+    return false;
+  }
+  return error.errorCode == FetchErrorCode::INTERNAL_ERROR ||
+      error.errorCode == FetchErrorCode::TIMEOUT ||
+      error.errorCode == FetchErrorCode::GOING_AWAY ||
+      error.errorCode == FetchErrorCode::EXCESSIVE_LOAD ||
+      error.errorCode == FetchErrorCode::DOES_NOT_EXIST ||
+      error.errorCode == FetchErrorCode::REDIRECT ||
+      error.errorCode == FetchErrorCode::CANCELLED;
+}
 
 template <typename T, typename S>
 std::optional<T> positive(std::optional<S> value) {
@@ -101,6 +138,26 @@ std::optional<SwitchingSet> makeSet(
 
 } // namespace
 
+struct CatalogReader::Acquisition {
+  bool needsCatalog() const {
+    return !closed && !ready.isFulfilled();
+  }
+
+  void cancelFetch() {
+    if (auto handle = std::exchange(fetch, nullptr)) {
+      handle->fetchCancel();
+    }
+  }
+
+  std::shared_ptr<ManagedSubscription> subscription;
+  std::shared_ptr<Publisher::FetchHandle> fetch;
+  std::optional<FetchError> error;
+  folly::coro::SharedPromise<void> ready;
+  folly::CancellationSource cancelled;
+  bool opened{false};
+  bool closed{false};
+};
+
 class CatalogReader::Callback : public ObjectReceiverCallback {
  public:
   explicit Callback(CatalogReader* reader) : reader(reader) {}
@@ -119,19 +176,24 @@ class CatalogReader::Callback : public ObjectReceiverCallback {
       const ObjectHeader& /*header*/) override {}
   void onEndOfStream() override {}
   void onError(ResetStreamErrorCode /*error*/) override {}
-  void onPublishDone(PublishDone /*done*/) override {}
+  void onPublishDone(PublishDone /*done*/) override {
+    if (reader) {
+      reader->onSubscriptionDone();
+    }
+  }
 
   CatalogReader* reader;
 };
 
 CatalogReader::CatalogReader(
-    std::shared_ptr<Publisher> publisher,
+    std::shared_ptr<Publisher> proxy,
     TrackNamespace broadcast,
     std::chrono::milliseconds firstCatalogWait,
     Mode mode)
-    : publisher_(std::move(publisher)),
+    : proxy_(std::move(proxy)),
       track_{std::move(broadcast), std::string(kCatalogTrackName)},
       callback_(std::make_shared<Callback>(this)),
+      acquisition_(std::make_shared<Acquisition>()),
       firstCatalogWait_(firstCatalogWait),
       mode_(mode) {}
 
@@ -139,97 +201,231 @@ CatalogReader::~CatalogReader() {
   close();
 }
 
-folly::coro::Task<bool> CatalogReader::open(RequestID requestID) {
-  if (!opened_) {
-    opened_ = true;
+folly::coro::Task<bool> CatalogReader::subscribe(RequestID requestID) {
+  auto acquisition = acquisition_;
+  const auto wait = firstCatalogWait_;
+  if (acquisition->closed) {
+    co_return false;
+  }
+  if (!acquisition->opened) {
+    acquisition->opened = true;
     if (mode_ == Mode::ImmutableSnapshot) {
-      co_return co_await openSnapshot(requestID);
-    }
-    auto request = SubscribeRequest::make(
-        track_,
-        kDefaultPriority,
-        std::nullopt,
-        /*forward=*/true,
-        LocationFilter::nextObject());
-    request.requestID = requestID;
-    auto subscribed = co_await folly::coro::co_awaitTry(publisher_->subscribe(
-        std::move(request),
-        std::make_shared<ObjectReceiver>(
-            ObjectReceiver::SUBSCRIBE, callback_)));
-    if (subscribed.hasException()) {
-      close();
-      co_yield folly::coro::co_error(std::move(subscribed.exception()));
-    }
-    if (subscribed->hasError()) {
-      XLOG(ERR) << "[lane_manager] catalog SUBSCRIBE failed: "
-                << subscribed->error().reasonPhrase;
-      close();
-      co_return false;
-    }
-    if (closed_) {
-      subscribed->value()->unsubscribe();
-      co_return false;
-    }
-    subscription_ = std::move(subscribed->value());
-    // A failed FETCH leaves the next published catalog to complete open().
-    Fetch fetch(requestID, requestID, 0, FetchType::RELATIVE_JOINING);
-    fetch.fullTrackName = track_;
-    auto fetched = co_await publisher_->fetch(
-        std::move(fetch),
-        std::make_shared<ObjectReceiver>(ObjectReceiver::FETCH, callback_));
-    if (fetched.hasValue()) {
-      fetch_ = std::move(fetched.value());
+      folly::coro::co_withExecutor(
+          co_await folly::coro::co_current_executor,
+          folly::coro::co_withCancellation(
+              acquisition->cancelled.getToken(),
+              fetchSnapshot(
+                  proxy_,
+                  acquisition,
+                  callback_,
+                  Fetch(
+                      requestID,
+                      track_,
+                      AbsoluteLocation{0, 0},
+                      AbsoluteLocation{0, 1}))))
+          .start();
+    } else {
+      startSubscription(requestID);
     }
   }
-  co_await folly::coro::timeout(ready_.getFuture(), firstCatalogWait_);
-  co_return !closed_;
+  co_await folly::coro::timeout(acquisition->ready.getFuture(), wait);
+  co_return !acquisition->closed;
 }
 
-folly::coro::Task<bool> CatalogReader::openSnapshot(RequestID requestID) {
-  Fetch fetch(
-      requestID, track_, AbsoluteLocation{0, 0}, AbsoluteLocation{0, 1});
-  auto fetched = co_await folly::coro::co_awaitTry(
-      folly::coro::timeout(
-          publisher_->fetch(
-              std::move(fetch),
-              std::make_shared<ObjectReceiver>(
-                  ObjectReceiver::FETCH, callback_)),
-          firstCatalogWait_));
+void CatalogReader::startSubscription(RequestID requestID) {
+  auto acquisition = acquisition_;
+  auto& executor = *MoQSession::getRequestContext().executor;
+  auto request = SubscribeRequest::make(
+      track_,
+      kDefaultPriority,
+      std::nullopt,
+      /*forward=*/true,
+      LocationFilter::nextObject());
+  request.requestID = requestID;
+  acquisition->subscription = std::make_shared<ManagedSubscription>(
+      proxy_,
+      std::move(request),
+      std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, callback_),
+      executor);
+  folly::coro::co_withExecutor(
+      &executor,
+      folly::coro::co_withCancellation(
+          acquisition->cancelled.getToken(),
+          fetchInitialCatalog(acquisition, callback_, requestID)))
+      .start();
+}
+
+folly::coro::Task<void> CatalogReader::fetchInitialCatalog(
+    std::shared_ptr<Acquisition> acquisition,
+    std::shared_ptr<Callback> callback,
+    RequestID requestID) {
+  const auto token = acquisition->cancelled.getToken();
+  while (acquisition->needsCatalog()) {
+    auto fetched = co_await folly::coro::co_awaitTry(
+        folly::coro::timeoutNoDiscard(
+            acquisition->subscription->subscribeWithJoiningFetch(
+                requestID,
+                std::make_shared<ObjectReceiver>(
+                    ObjectReceiver::FETCH, callback),
+                FetchType::RELATIVE_JOINING),
+            kCatalogFetchTimeout));
+    std::optional<std::chrono::milliseconds> retryInterval;
+    if (fetched.hasValue() && fetched->hasValue()) {
+      auto handle = std::move(fetched->value());
+      if (acquisition->closed) {
+        handle->fetchCancel();
+        co_return;
+      }
+      acquisition->fetch = std::move(handle);
+      auto ready = co_await folly::coro::co_awaitTry(
+          folly::coro::timeout(
+              acquisition->ready.getFuture(), kCatalogFetchTimeout));
+      if (!acquisition->needsCatalog()) {
+        co_return;
+      }
+      acquisition->cancelFetch();
+      if (!ready.hasException<folly::FutureTimeout>()) {
+        co_return;
+      }
+    } else {
+      if (!acquisition->needsCatalog() || token.isCancellationRequested()) {
+        co_return;
+      }
+      if (fetched.hasValue()) {
+        const auto& error = fetched->error();
+        if (!retryableCatalogFetch(error)) {
+          XLOG(WARN) << "[lane_manager] catalog joining FETCH rejected; "
+                        "waiting for live catalog: "
+                     << error.reasonPhrase;
+          co_return;
+        }
+        XLOG(WARN) << "[lane_manager] catalog joining FETCH failed: "
+                   << error.reasonPhrase;
+        retryInterval = error.retryInterval;
+      } else {
+        XLOG(WARN) << "[lane_manager] catalog joining FETCH exception: "
+                   << fetched.exception().what();
+      }
+    }
+    if (!acquisition->needsCatalog() || token.isCancellationRequested()) {
+      co_return;
+    }
+    const auto delay = std::max(100ms, retryInterval.value_or(0ms));
+    XLOG(DBG1) << "[lane_manager] catalog joining FETCH retryDelayMs="
+               << delay.count();
+    auto waited = co_await folly::coro::co_awaitTry(waitForCatalogRetry(delay));
+    if (waited.hasException()) {
+      co_return;
+    }
+  }
+}
+
+folly::coro::Task<void> CatalogReader::fetchSnapshot(
+    std::shared_ptr<Publisher> proxy,
+    std::shared_ptr<Acquisition> acquisition,
+    std::shared_ptr<Callback> callback,
+    Fetch fetch) {
+  const auto requestID = fetch.requestID;
+  folly::coro::co_withExecutor(
+      co_await folly::coro::co_current_executor,
+      folly::coro::co_withCancellation(
+          acquisition->cancelled.getToken(),
+          waitForSnapshot(acquisition, callback, requestID)))
+      .start();
+  auto fetched = co_await folly::coro::co_awaitTry(proxy->fetch(
+      std::move(fetch),
+      std::make_shared<ObjectReceiver>(ObjectReceiver::FETCH, callback)));
   if (fetched.hasException()) {
-    close();
-    co_yield folly::coro::co_error(std::move(fetched.exception()));
+    if (!acquisition->needsCatalog()) {
+      co_return;
+    }
+    XLOG(WARN) << "[lane_manager] catalog snapshot FETCH exception: "
+               << fetched.exception().what();
+    if (callback->reader) {
+      callback->reader->fail(
+          FetchError{
+              requestID,
+              fetched.hasException<folly::FutureTimeout>()
+                  ? FetchErrorCode::TIMEOUT
+                  : FetchErrorCode::INTERNAL_ERROR,
+              fetched.exception().what().toStdString()});
+    }
+    co_return;
   }
   if (fetched->hasError()) {
     XLOG(ERR) << "[lane_manager] catalog snapshot FETCH failed: "
               << fetched->error().reasonPhrase;
-    close();
-    co_return false;
+    if (callback->reader) {
+      callback->reader->fail(std::move(fetched->error()));
+    }
+    co_return;
   }
-  if (closed_) {
+  if (acquisition->closed) {
     fetched->value()->fetchCancel();
-    co_return false;
+    co_return;
   }
-  fetch_ = std::move(fetched->value());
+  acquisition->fetch = std::move(fetched->value());
+}
+
+folly::coro::Task<void> CatalogReader::waitForSnapshot(
+    std::shared_ptr<Acquisition> acquisition,
+    std::shared_ptr<Callback> callback,
+    RequestID requestID) {
   auto ready = co_await folly::coro::co_awaitTry(
-      folly::coro::timeout(ready_.getFuture(), firstCatalogWait_));
-  if (ready.hasException()) {
-    close();
-    co_yield folly::coro::co_error(std::move(ready.exception()));
+      folly::coro::timeout(
+          acquisition->ready.getFuture(), kCatalogFetchTimeout));
+  if (ready.hasException<folly::FutureTimeout>() &&
+      acquisition->needsCatalog()) {
+    XLOG(WARN) << "[lane_manager] catalog snapshot acquisition timed out";
+    if (callback->reader) {
+      callback->reader->fail(
+          FetchError{
+              requestID,
+              FetchErrorCode::TIMEOUT,
+              "catalog snapshot acquisition timed out"});
+    }
   }
-  co_return !closed_;
+}
+
+std::optional<FetchError> CatalogReader::error() const {
+  return acquisition_->error;
+}
+
+void CatalogReader::fail(FetchError error) {
+  if (!acquisition_->needsCatalog()) {
+    return;
+  }
+  acquisition_->error = std::move(error);
+  close();
 }
 
 void CatalogReader::close() {
-  closed_ = true;
+  auto acquisition = acquisition_;
+  acquisition->closed = true;
   callback_->reader = nullptr;
-  if (auto subscription = std::exchange(subscription_, nullptr)) {
+  acquisition->cancelled.requestCancellation();
+  if (auto subscription = acquisition->subscription) {
     subscription->unsubscribe();
   }
-  if (auto fetch = std::exchange(fetch_, nullptr)) {
-    fetch->fetchCancel();
+  acquisition->cancelFetch();
+  if (!acquisition->ready.isFulfilled()) {
+    acquisition->ready.setValue();
   }
-  if (!ready_.isFulfilled()) {
-    ready_.setValue();
+}
+
+void CatalogReader::onSubscriptionDone() {
+  auto acquisition = acquisition_;
+  if (acquisition->subscription && acquisition->subscription->ended()) {
+    if (acquisition->needsCatalog()) {
+      acquisition->error = acquisition->subscription->terminalError();
+    }
+    acquisition->closed = true;
+    callback_->reader = nullptr;
+    acquisition->cancelled.requestCancellation();
+    acquisition->cancelFetch();
+    if (!acquisition->ready.isFulfilled()) {
+      acquisition->ready.setValue();
+    }
   }
 }
 
@@ -243,6 +439,7 @@ const SwitchingSet* CatalogReader::switchingSet(Role role) const {
 }
 
 void CatalogReader::onCatalog(Payload payload) {
+  auto acquisition = acquisition_;
   if (!payload) {
     return;
   }
@@ -258,8 +455,8 @@ void CatalogReader::onCatalog(Payload payload) {
   if (onUpdate_) {
     onUpdate_();
   }
-  if (!ready_.isFulfilled()) {
-    ready_.setValue();
+  if (!acquisition->ready.isFulfilled()) {
+    acquisition->ready.setValue();
   }
 }
 

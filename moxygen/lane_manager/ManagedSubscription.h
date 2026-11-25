@@ -67,6 +67,13 @@ class ManagedSubscription final
     return state_ == State::Ended;
   }
 
+  std::optional<SubscribeError> terminalError() const {
+    if (state_ != State::Ended) {
+      return std::nullopt;
+    }
+    return lastError_;
+  }
+
   folly::Expected<folly::Unit, MoQPublishError> setTrackAlias(
       TrackAlias alias) override;
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
@@ -92,6 +99,7 @@ class ManagedSubscription final
  private:
   void setState(State state);
   void startAttempts(std::chrono::milliseconds delay);
+  folly::coro::Task<std::optional<GroupOrder>> waitUntilFetchable();
   folly::coro::Task<Publisher::FetchResult> fetchWhenReady(
       Fetch fetch,
       std::shared_ptr<FetchConsumer> consumer,
@@ -110,6 +118,7 @@ class ManagedSubscription final
   std::weak_ptr<MoQSession> requestSession_;
   std::shared_ptr<Publisher::SubscriptionHandle> subscription_;
   std::shared_ptr<folly::coro::SharedPromise<void>> stateChanged_;
+  std::shared_ptr<folly::coro::SharedPromise<bool>> attemptRegistered_;
   folly::CancellationSource stopSource_;
   std::optional<SubscribeError> lastError_;
   folly::exception_wrapper attemptException_;
