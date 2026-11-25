@@ -119,7 +119,7 @@ TEST_F(CatalogReaderTest, ImmutableSnapshotDoesNotSubscribeToTheClientCatalog) {
   EXPECT_EQ(
       reader.switchingSet(Role::Video)->lanes[0].init->to<std::string>(),
       "video");
-  EXPECT_CALL(*handle, fetchCancel());
+  EXPECT_CALL(*handle, fetchCancel(testing::_));
   reader.close();
 }
 
@@ -150,7 +150,7 @@ TEST_F(CatalogReaderTest, SnapshotTimeoutCancelsFetchAndReleasesLaterCalls) {
   EXPECT_CALL(*publisher_, fetch(_, _)).WillOnce([handle](const Fetch&, auto) {
     return folly::coro::makeTask<Publisher::FetchResult>(handle);
   });
-  EXPECT_CALL(*handle, fetchCancel()).Times(1);
+  EXPECT_CALL(*handle, fetchCancel(testing::_)).Times(1);
   EXPECT_THROW(
       folly::coro::blockingWait(reader.open(kRequestID)), folly::FutureTimeout);
   EXPECT_FALSE(folly::coro::blockingWait(reader.open(kRequestID)));
@@ -171,7 +171,7 @@ TEST_F(CatalogReaderTest, ReadsTheCatalogFromTheJoiningFetch) {
       names(reader_.switchingSet(Role::Audio)),
       std::vector<std::string>{"live-md-a_0"});
 
-  EXPECT_CALL(*subscription_, unsubscribe());
+  EXPECT_CALL(*subscription_, unsubscribe(testing::_));
   reader_.close();
 }
 

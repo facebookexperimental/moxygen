@@ -50,7 +50,9 @@ class UpstreamJoiningFetchHandle final : public Publisher::FetchHandle {
         upstream_(std::move(upstream)),
         session_(std::move(session)) {}
 
-  void fetchCancel() override {
+  void fetchCancel(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     if (auto upstream = std::exchange(upstream_, nullptr)) {
       upstream->fetchCancel();
     }

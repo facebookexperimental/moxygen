@@ -85,7 +85,7 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceDone) {
   EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceDone());
 
   folly::coro::Baton barricade;
-  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone())
+  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone(testing::_))
       .WillOnce(testing::Invoke([&barricade]() { barricade.post(); }));
   publishNamespaceHandle->publishNamespaceDone();
   co_await barricade;
@@ -168,7 +168,7 @@ CO_TEST_P_X(Draft18Test, SubscriberCancelsPublishNamespace) {
   // synthesizing onPublishNamespaceDone.
   folly::coro::Baton doneBaton;
   EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceDone());
-  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone())
+  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone(testing::_))
       .WillOnce([&] { doneBaton.post(); });
   serverWt_->readHandles.at(0)->stopSending(
       folly::to_underlying(ResetStreamErrorCode::CANCELLED));
@@ -204,7 +204,7 @@ CO_TEST_P_X(Draft18Test, PublishNamespaceSurvivesPeerFin) {
   bool doneCalled = false;
   folly::coro::Baton doneBaton;
   EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceDone());
-  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone())
+  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone(testing::_))
       .WillOnce([&] {
         doneCalled = true;
         doneBaton.post();
@@ -320,7 +320,7 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceCallerCancelledBeforeOk) {
                 std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
                     {.requestID = pubNs.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, publishNamespaceDone())
+            EXPECT_CALL(*serverHandle, publishNamespaceDone(testing::_))
                 .WillRepeatedly([&] { serverSawDone = true; });
             co_return serverHandle;
           });
@@ -375,7 +375,7 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceCancelledWhileOkQueued) {
                 std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
                     {.requestID = pubNs.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, publishNamespaceDone())
+            EXPECT_CALL(*serverHandle, publishNamespaceDone(testing::_))
                 .WillRepeatedly([&] { serverSawDone = true; });
             co_return serverHandle;
           });

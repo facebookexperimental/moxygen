@@ -31,7 +31,7 @@ MoQTestFetchHandle::requestUpdate(RequestUpdate update) {
           "Request update not implemented"});
 }
 
-void MoQTestFetchHandle::fetchCancel() {
+void MoQTestFetchHandle::fetchCancel(ResetStreamErrorCode /*code*/) {
   cancelSource_->requestCancellation();
 }
 

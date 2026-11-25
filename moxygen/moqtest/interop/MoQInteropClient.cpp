@@ -72,7 +72,9 @@ class SimpleSubscriptionHandle : public moxygen::SubscriptionHandle {
   explicit SimpleSubscriptionHandle(moxygen::SubscribeOk ok)
       : SubscriptionHandle(std::move(ok)) {}
 
-  void unsubscribe() override {}
+  void unsubscribe(
+      moxygen::ResetStreamErrorCode /*code*/ =
+          moxygen::ResetStreamErrorCode::CANCELLED) override {}
 
   folly::coro::Task<RequestUpdateResult> requestUpdate(
       moxygen::RequestUpdate /*reqUpdate*/) override {

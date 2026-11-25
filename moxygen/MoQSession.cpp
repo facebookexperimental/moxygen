@@ -6389,14 +6389,19 @@ class MoQSession::ReceiverSubscriptionHandle
     co_return result;
   }
 
-  void unsubscribe() override {
+  void unsubscribe(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
       session_->unsubscribe({subscribeOk_->requestID}, control_);
       session_.reset();
     }
   }
 
-  void cancelFill(RequestID requestID) override {
+  void cancelFill(
+      RequestID requestID,
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
       // fetchCancel() sends STOP_SENDING for a fill, not FETCH_CANCEL.
       session_->fetchCancel({requestID}, nullptr);
@@ -8423,7 +8428,9 @@ class MoQSession::ReceiverFetchHandle : public Publisher::FetchHandle,
             "REQUEST_UPDATE not supported for FETCH"});
   }
 
-  void fetchCancel() override {
+  void fetchCancel(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
       session_->fetchCancel({fetchOk_->requestID}, control_);
       session_.reset();

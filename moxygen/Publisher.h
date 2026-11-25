@@ -41,11 +41,14 @@ class SubscriptionHandle {
   explicit SubscriptionHandle(SubscribeOk ok) : subscribeOk_(std::move(ok)) {}
   virtual ~SubscriptionHandle() = default;
 
-  virtual void unsubscribe() = 0;
+  virtual void unsubscribe(
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) = 0;
 
   // Cancels the fill named by the request ID given to beginFill(). The
   // subscription and other fills continue.
-  virtual void cancelFill(RequestID /*requestID*/) {}
+  virtual void cancelFill(
+      RequestID /*requestID*/,
+      ResetStreamErrorCode /*code*/ = ResetStreamErrorCode::CANCELLED) {}
 
   using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
   // Updates request parameters (start/end locations, priority, forward).
@@ -112,7 +115,8 @@ class Publisher {
     explicit FetchHandle(FetchOk ok) : fetchOk_(std::move(ok)) {}
     virtual ~FetchHandle() = default;
 
-    virtual void fetchCancel() = 0;
+    virtual void fetchCancel(
+        ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) = 0;
 
     using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
     virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
@@ -149,7 +153,8 @@ class Publisher {
         : subscribeNamespaceOk_(std::move(ok)) {}
     virtual ~SubscribeNamespaceHandle() = default;
 
-    virtual void unsubscribeNamespace() = 0;
+    virtual void unsubscribeNamespace(
+        ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) = 0;
 
     using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
     virtual folly::coro::Task<RequestUpdateResult> requestUpdate(
@@ -209,7 +214,8 @@ class Publisher {
         : subscribeTracksOk_(std::move(ok)) {}
     virtual ~SubscribeTracksHandle() = default;
 
-    virtual void unsubscribeTracks() = 0;
+    virtual void unsubscribeTracks(
+        ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) = 0;
 
     using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
     virtual folly::coro::Task<RequestUpdateResult> requestUpdate(

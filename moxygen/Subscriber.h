@@ -52,7 +52,8 @@ class Subscriber {
     virtual ~PublishNamespaceHandle() = default;
     // Providing a default implementation of publishNamespaceDone, because it
     // can be an uninteresting message
-    virtual void publishNamespaceDone() {}
+    virtual void publishNamespaceDone(
+        ResetStreamErrorCode /*code*/ = ResetStreamErrorCode::CANCELLED) {}
 
     using RequestUpdateResult = folly::Expected<RequestOk, RequestError>;
     virtual folly::coro::Task<RequestUpdateResult> requestUpdate(

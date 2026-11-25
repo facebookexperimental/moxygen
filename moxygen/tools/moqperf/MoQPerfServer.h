@@ -19,7 +19,9 @@ class PerfSubscriptionHandle : public Publisher::SubscriptionHandle {
         cancellationSource_(cancellationSource) {}
   ~PerfSubscriptionHandle() override = default;
 
-  void unsubscribe() override {
+  void unsubscribe(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     cancellationSource_->requestCancellation();
   }
 
@@ -42,7 +44,9 @@ class PerfFetchHandle : public Publisher::FetchHandle {
       : Publisher::FetchHandle(ok), cancellationSource_(cancellationSource) {}
   ~PerfFetchHandle() override = default;
 
-  virtual void fetchCancel() {
+  void fetchCancel(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     cancellationSource_->requestCancellation();
   }
 

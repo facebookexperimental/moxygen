@@ -1359,10 +1359,11 @@ CO_TEST_F(MoQCacheTest, TestFetchCancel) {
       .via(exec)
       .thenTry([this, exec](const auto&) {
         // Simulate a delay before serving the range
-        EXPECT_CALL(*upstreamFetchHandle_, fetchCancel()).WillOnce([this] {
-          upstreamFetchConsumer_->reset(ResetStreamErrorCode::CANCELLED);
-          upstreamFetchConsumer_.reset();
-        });
+        EXPECT_CALL(*upstreamFetchHandle_, fetchCancel(testing::_))
+            .WillOnce([this] {
+              upstreamFetchConsumer_->reset(ResetStreamErrorCode::CANCELLED);
+              upstreamFetchConsumer_.reset();
+            });
         exec->add([this] {
           EXPECT_EQ(upstreamFetchConsumer_, nullptr);
           // serveCacheRangeFromUpstream({0, 1}, {0, 2}, 10, 1, 1, false,
@@ -1421,9 +1422,10 @@ CO_TEST_F(MoQCacheTest, FetchHandleCancelDuringUpstreamIntervalResetsOnce) {
   expectUpstreamFetch({0, 1}, {0, 5}, false, AbsoluteLocation{0, 5})
       .via(exec)
       .thenTry([this, &upstreamStreaming](const auto&) {
-        EXPECT_CALL(*upstreamFetchHandle_, fetchCancel()).WillOnce([this] {
-          upstreamFetchConsumer_->reset(ResetStreamErrorCode::CANCELLED);
-        });
+        EXPECT_CALL(*upstreamFetchHandle_, fetchCancel(testing::_))
+            .WillOnce([this] {
+              upstreamFetchConsumer_->reset(ResetStreamErrorCode::CANCELLED);
+            });
         upstreamStreaming.post();
       });
   expectFetchObjects({0, 0}, {0, 1}, false);

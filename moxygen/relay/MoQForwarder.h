@@ -153,7 +153,9 @@ class MoQForwarder : public TrackConsumer {
         const FillParameters& fill,
         std::optional<AbsoluteLocation> largest);
 
-    void unsubscribe() override;
+    void unsubscribe(
+        ResetStreamErrorCode /*code*/ =
+            ResetStreamErrorCode::CANCELLED) override;
 
     bool checkShouldForward();
 
