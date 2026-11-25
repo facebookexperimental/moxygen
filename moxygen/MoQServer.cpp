@@ -62,7 +62,7 @@ MoQServer::MoQServer(
     std::string key,
     std::string endpoint,
     std::optional<quic::TransportSettings> transportSettings,
-    std::function<bool()> useQuicWtSession)
+    std::function<bool()> /*useQuicWtSession*/)
     : MoQServer(
           quic::samples::createFizzServerContext(
               []() {
@@ -75,9 +75,7 @@ MoQServer::MoQServer(
               cert,
               key),
           std::move(endpoint),
-          Options{
-              .transportSettings = std::move(transportSettings),
-              .useQuicWtSession = std::move(useQuicWtSession)}) {}
+          Options{.transportSettings = std::move(transportSettings)}) {}
 
 MoQServer::MoQServer(
     std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
@@ -85,7 +83,6 @@ MoQServer::MoQServer(
     Options options)
     : MoQServerBase(std::move(endpoint)),
       fizzContext_(std::move(fizzContext)),
-      useQuicWtSession_(std::move(options.useQuicWtSession)),
       useHqWtSession_(std::move(options.useHqWtSession)) {
   params_.serverThreads = 1;
   params_.txnTimeout = options.txnTimeout;
@@ -221,14 +218,8 @@ void MoQServer::createMoQQuicSession(
 
   auto qevb = quicSocket->getEventBase();
   auto* socket = quicSocket.get();
-  const bool useQuicWtSession = useQuicWtSession_ && useQuicWtSession_();
-  std::shared_ptr<proxygen::WebTransport> wt;
-  if (useQuicWtSession) {
-    wt = std::make_shared<proxygen::QuicWtSession>(
-        std::move(quicSocket), /*wtHandler=*/nullptr);
-  } else {
-    wt = std::make_shared<proxygen::QuicWebTransport>(std::move(quicSocket));
-  }
+  auto wt = std::make_shared<proxygen::QuicWtSession>(
+      std::move(quicSocket), /*wtHandler=*/nullptr);
   auto* wtPtr = wt.get();
   auto evb = qevb->getTypedEventBase<quic::FollyQuicEventBase>()
                  ->getBackingEventBase();
@@ -247,12 +238,7 @@ void MoQServer::createMoQQuicSession(
     moqSession->setLogger(logger);
   }
 
-  if (useQuicWtSession) {
-    static_cast<proxygen::QuicWtSession*>(wtPtr)->setHandler(moqSession.get());
-  } else {
-    static_cast<proxygen::QuicWebTransport*>(wtPtr)->setHandler(
-        moqSession.get());
-  }
+  wtPtr->setHandler(moqSession.get());
   QuicTransportObservers observers(*socket);
   onSessionTransportReady(moqSession, observers);
   // the handleClientSession coro this session moqSession

@@ -59,7 +59,6 @@ class MoQServer : public MoQServerBase {
     // caller wanting one field changed should start from
     // defaultTransportSettings().
     std::optional<quic::TransportSettings> transportSettings;
-    std::function<bool()> useQuicWtSession;
     std::function<bool()> useHqWtSession;
     size_t udpSendBufferBytes{0};
     size_t udpRecvBufferBytes{0};
@@ -94,13 +93,11 @@ class MoQServer : public MoQServerBase {
       std::shared_ptr<const fizz::server::FizzServerContext> fizzContext,
       std::string endpoint,
       std::optional<quic::TransportSettings> transportSettings,
-      std::function<bool()> useQuicWtSession = {})
+      std::function<bool()> /*useQuicWtSession*/ = {})
       : MoQServer(
             std::move(fizzContext),
             std::move(endpoint),
-            Options{
-                .transportSettings = std::move(transportSettings),
-                .useQuicWtSession = std::move(useQuicWtSession)}) {}
+            Options{.transportSettings = std::move(transportSettings)}) {}
 
   void start(const folly::SocketAddress& addr) override {
     start(addr, {});
@@ -284,7 +281,6 @@ class MoQServer : public MoQServerBase {
   std::unique_ptr<quic::samples::HQServerTransportFactory> factory_;
   std::unique_ptr<quic::samples::HQServer> hqServer_;
   folly::EventBaseLocal<std::shared_ptr<MoQExecutor>> executorLocal_;
-  std::function<bool()> useQuicWtSession_;
   std::function<bool()> useHqWtSession_;
 
   friend class Handler;
