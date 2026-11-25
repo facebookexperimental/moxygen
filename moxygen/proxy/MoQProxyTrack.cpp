@@ -298,15 +298,26 @@ bool expiresBefore(const ReceivedGoaway& a, const ReceivedGoaway& b) {
 
 } // namespace
 
+struct MoQProxyTrack::TrackEndDrain {
+  std::vector<std::weak_ptr<MoQForwarder::Subscriber>> subscribers;
+};
+
 class MoQProxyTrack::DownstreamSubscriptionHandle final
     : public SubscriptionHandle {
  public:
   explicit DownstreamSubscriptionHandle(
-      std::shared_ptr<MoQForwarder::Subscriber> subscriber)
+      std::shared_ptr<MoQForwarder::Subscriber> subscriber,
+      std::weak_ptr<MoQProxyTrack> track)
       : SubscriptionHandle(subscriber->subscribeOk()),
-        subscriber_(std::move(subscriber)) {}
+        subscriber_(std::move(subscriber)),
+        track_(std::move(track)) {}
 
   ~DownstreamSubscriptionHandle() override {
+    if (auto track = track_.lock();
+        subscriber_ && track && track->trackEndDrain_) {
+      track->trackEndDrain_->subscribers.emplace_back(subscriber_);
+      return;
+    }
     unsubscribe();
   }
 
@@ -345,6 +356,7 @@ class MoQProxyTrack::DownstreamSubscriptionHandle final
 
  private:
   std::shared_ptr<MoQForwarder::Subscriber> subscriber_;
+  std::weak_ptr<MoQProxyTrack> track_;
 };
 
 class MoQProxyTrack::ForwarderCallback final : public MoQForwarder::Callback {
@@ -991,8 +1003,8 @@ class MoQProxyTrack::Recorder final
     if (disabled_ || lost_) {
       return folly::unit;
     }
-    if (auto track = track_.lock();
-        track && track->takeOverUpstreamEnd(*this, pubDone)) {
+    auto track = track_.lock();
+    if (track && track->takeOverUpstreamEnd(*this, pubDone)) {
       return folly::unit;
     }
     // SESSION_CLOSED is MoQSession's local marker for a closed session.
@@ -1001,7 +1013,8 @@ class MoQProxyTrack::Recorder final
     if (pubDone.statusCode == PublishDoneStatusCode::SESSION_CLOSED) {
       pubDone.statusCode = PublishDoneStatusCode::GOING_AWAY;
     }
-    return forwarder_->publishDone(std::move(pubDone));
+    return track ? track->forwardPublishDone(std::move(pubDone))
+                 : forwarder_->publishDone(std::move(pubDone));
   }
 
   // A request-stream GOAWAY for this subscription (draft 18+).
@@ -1520,7 +1533,8 @@ Publisher::SubscribeResult MoQProxyTrack::addSubscriber(
             SubscribeErrorCode::INTERNAL_ERROR,
             "failed to add subscriber"});
   }
-  return std::make_shared<DownstreamSubscriptionHandle>(std::move(subscriber));
+  return std::make_shared<DownstreamSubscriptionHandle>(
+      std::move(subscriber), weak_from_this());
 }
 
 folly::coro::Task<folly::Unit> MoQProxyTrack::awaitUpstreamSubscription() {
@@ -2123,6 +2137,15 @@ void MoQProxyTrack::onUpstreamLost(const PublishDone& publishDone) {
              << " reason=" << publishDone.reasonPhrase;
 }
 
+folly::Expected<folly::Unit, MoQPublishError> MoQProxyTrack::forwardPublishDone(
+    PublishDone done) {
+  if (done.statusCode == PublishDoneStatusCode::TRACK_ENDED &&
+      (state_ == State::READY || state_ == State::SWITCHING)) {
+    trackEndDrain_ = std::make_unique<TrackEndDrain>();
+  }
+  return forwarder_->publishDone(std::move(done));
+}
+
 bool MoQProxyTrack::takeOverUpstreamEnd(
     Recorder& recorder,
     const PublishDone& done) {
@@ -2601,7 +2624,7 @@ void MoQProxyTrack::onGracefulDeadline() {
   establishing_.requestCancellation();
   establishingGoawayWatch_.reset();
   if (oldEnd) {
-    forwarder_->publishDone(std::move(*oldEnd));
+    forwardPublishDone(std::move(*oldEnd));
   }
 }
 
@@ -2854,6 +2877,13 @@ void MoQProxyTrack::close() {
   }
   state_ = State::DRAINING;
   cancelEstablishment();
+  if (auto drain = std::move(trackEndDrain_)) {
+    for (const auto& pending : drain->subscribers) {
+      if (auto subscriber = pending.lock()) {
+        subscriber->unsubscribe();
+      }
+    }
+  }
   stopCaching();
   if (auto handle = std::move(upstream_.handle)) {
     handle->unsubscribe();

@@ -279,8 +279,9 @@ ManagedSubscription::issueJoiningFetch(
   std::get<JoiningFetch>(fetch.args).joiningRequestID =
       requestTemplate_.requestID;
   fetch.fullTrackName = requestTemplate_.fullTrackName;
+  auto upstream = upstream_;
   auto requestSession = requestSession_.lock();
-  if (!requestSession) {
+  if (!upstream || !requestSession) {
     co_return folly::makeUnexpected(
         FetchError{downstreamRequestID, FetchErrorCode::CANCELLED, "stopped"});
   }
@@ -289,7 +290,7 @@ ManagedSubscription::issueJoiningFetch(
       kMoQSessionToken,
       std::make_unique<MoQSession::MoQSessionRequestData>(
           std::move(requestSession)));
-  co_return co_await upstream_->fetch(std::move(fetch), std::move(consumer));
+  co_return co_await upstream->fetch(std::move(fetch), std::move(consumer));
 }
 
 void ManagedSubscription::unsubscribe() {
@@ -485,7 +486,7 @@ folly::Expected<folly::Unit, MoQPublishError> ManagedSubscription::publishDone(
   if (state_ != State::Active && state_ != State::Pending) {
     return folly::unit;
   }
-  [[maybe_unused]] auto subscription = std::exchange(subscription_, nullptr);
+  auto subscription = std::exchange(subscription_, nullptr);
   if (retryable(pubDone.statusCode)) {
     setState(State::RetryWaiting);
     auto result = downstreamLaneConsumer_->publishDone(std::move(pubDone));
@@ -497,6 +498,10 @@ folly::Expected<folly::Unit, MoQPublishError> ManagedSubscription::publishDone(
       RequestErrorCode::DOES_NOT_EXIST,
       pubDone.reasonPhrase,
       0ms};
+  auto drainingUpstream =
+      pubDone.statusCode == PublishDoneStatusCode::TRACK_ENDED && subscription
+      ? std::move(upstream_)
+      : nullptr;
   setState(State::Ended);
   auto result = downstreamLaneConsumer_->publishDone(std::move(pubDone));
   return result;

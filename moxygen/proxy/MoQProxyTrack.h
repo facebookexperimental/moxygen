@@ -355,6 +355,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   class Recorder;
   class SubgroupRecorder;
   class DownstreamSubscriptionHandle;
+  struct TrackEndDrain;
 
   struct UpstreamJoiningFetchAttempt {
     uint64_t id{0};
@@ -427,6 +428,8 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   // Whether the track takes over an upstream PUBLISH_DONE instead of passing
   // it to viewers: a lost upstream it can replace.
   bool takeOverUpstreamEnd(Recorder& recorder, const PublishDone& done);
+  folly::Expected<folly::Unit, MoQPublishError> forwardPublishDone(
+      PublishDone done);
   void startLostSwitch(const Recorder& lost);
   void releaseUpstream();
   void noteLostUpstream(const Recorder& lost);
@@ -616,6 +619,7 @@ class MoQProxyTrack : public std::enable_shared_from_this<MoQProxyTrack> {
   // The forwarder already sent viewers PUBLISH_DONE. It keeps the ones still
   // finishing a subgroup, and another publishDone would send it to them again.
   bool viewersEnded_{false};
+  std::unique_ptr<TrackEndDrain> trackEndDrain_;
 };
 
 } // namespace moxygen

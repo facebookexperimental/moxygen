@@ -213,18 +213,30 @@ class Recorder : public ObjectReceiverCallback {
   FlowControlState onObject(
       std::optional<TrackAlias> /*trackAlias*/,
       const ObjectHeader& header,
-      Payload /*payload*/) override {
+      Payload payload) override {
     received.push_back({header.group, header.id, initOf(header.extensions)});
+    lastPayload = payload ? payload->to<std::string>() : "";
     return FlowControlState::UNBLOCKED;
   }
   void onObjectStatus(
       std::optional<TrackAlias> /*trackAlias*/,
       const ObjectHeader& /*header*/) override {}
   void onEndOfStream() override {}
-  void onError(ResetStreamErrorCode /*error*/) override {}
-  void onPublishDone(PublishDone /*done*/) override {}
+  void onError(ResetStreamErrorCode /*error*/) override {
+    reset = true;
+  }
+  void onPublishDone(PublishDone done) override {
+    end = done.statusCode;
+  }
+  void onAllDataReceived() override {
+    allDataReceived = true;
+  }
 
   std::vector<Received> received;
+  std::string lastPayload;
+  std::optional<PublishDoneStatusCode> end;
+  bool reset{false};
+  bool allDataReceived{false};
 };
 
 SubscribeRequest liveSubscribe(const std::string& name) {
@@ -329,14 +341,17 @@ class LaneManagerIntegrationTest : public testing::Test,
   }
 
   // A viewer session whose publish handler is a router over the proxy.
-  folly::coro::Task<Link*> connectViewer(uint64_t groupsPerLane = 10) {
+  folly::coro::Task<Link*> connectViewer(
+      uint64_t groupsPerLane = 10,
+      LaneManagerAbrOptions abr = {}) {
     co_return co_await connect(
         std::make_shared<MoQLaneRouter>(
             proxy_,
             [groupsPerLane](Role) {
               return std::make_shared<samples::ScriptedPolicy>(groupsPerLane);
             },
-            kMaxWait));
+            kMaxWait,
+            std::move(abr)));
   }
 
   template <typename Predicate>
@@ -345,6 +360,83 @@ class LaneManagerIntegrationTest : public testing::Test,
       co_await folly::coro::co_reschedule_on_current_executor;
     }
     co_return predicate();
+  }
+
+  folly::coro::Task<void> checkTrackEndDrains(
+      bool virtualTrack,
+      bool closeProxy = false) {
+    co_await startProxy();
+    auto outcome = std::make_shared<std::optional<SwitchOutcome>>();
+    LaneManagerAbrOptions abr;
+    abr.onOutcome = [outcome](const FullTrackName&, const SwitchOutcome& next) {
+      *outcome = next;
+    };
+    auto* viewer = virtualTrack
+        ? co_await connectViewer(/*groupsPerLane=*/2, std::move(abr))
+        : co_await connect(proxy_);
+    auto recorder = std::make_shared<Recorder>();
+    auto result = co_await viewer->client->subscribe(
+        liveSubscribe(virtualTrack ? "r--abr-video" : "video0"),
+        std::make_shared<ObjectReceiver>(ObjectReceiver::SUBSCRIBE, recorder));
+    CO_ASSERT_TRUE(result.hasValue());
+    handles_.push_back(std::move(result.value()));
+
+    const uint64_t group = virtualTrack ? 43 : 41;
+    if (virtualTrack) {
+      CO_ASSERT_TRUE(co_await waitUntil([&] {
+        return origin_->tracks.contains("video1");
+      }));
+      publishGroup("video0", 41, 1);
+      CO_ASSERT_TRUE(
+          co_await waitUntil([&] { return recorder->received.size() == 1; }));
+      publishGroup("video0", 42, 1);
+      CO_ASSERT_TRUE(co_await waitUntil([&] {
+        return *outcome && (*outcome)->kind == SwitchOutcome::Kind::Prepared;
+      }));
+    }
+    auto& track = origin_->tracks.at("video0");
+    auto subgroup = track->beginSubgroup(group, 0, kDefaultPriority);
+    CO_ASSERT_TRUE(subgroup.hasValue());
+    CO_ASSERT_TRUE(
+        (*subgroup)->object(0, folly::IOBuf::copyBuffer("first")).hasValue());
+    if (!virtualTrack) {
+      CO_ASSERT_TRUE(
+          co_await waitUntil([&] { return recorder->received.size() == 1; }));
+    }
+    CO_ASSERT_TRUE(
+        track
+            ->publishDone(
+                {RequestID(0), PublishDoneStatusCode::TRACK_ENDED, 0, "ended"})
+            .hasValue());
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return recorder->end.has_value(); }));
+    EXPECT_EQ(recorder->end, PublishDoneStatusCode::TRACK_ENDED);
+    EXPECT_FALSE(recorder->allDataReceived);
+    if (closeProxy) {
+      proxy_->close();
+      CO_ASSERT_TRUE(co_await waitUntil([&] { return recorder->reset; }));
+      co_return;
+    }
+    if (virtualTrack) {
+      CO_ASSERT_TRUE(outcome->has_value());
+      EXPECT_EQ((*outcome)->kind, SwitchOutcome::Kind::Cancelled);
+      EXPECT_EQ((*outcome)->group, group);
+    }
+
+    CO_ASSERT_TRUE(
+        (*subgroup)
+            ->object(1, folly::IOBuf::copyBuffer("tail"), noExtensions(), true)
+            .hasValue());
+    CO_ASSERT_TRUE(
+        co_await waitUntil([&] { return recorder->allDataReceived; }));
+    EXPECT_EQ(
+        recorder->received,
+        virtualTrack
+            ? (std::vector<Received>{
+                  {41, 0, "v0"}, {42, 0, ""}, {43, 0, ""}, {43, 1, ""}})
+            : (std::vector<Received>{{41, 0, ""}, {41, 1, ""}}));
+    EXPECT_EQ(recorder->lastPayload, "tail");
+    EXPECT_FALSE(recorder->reset);
   }
 
   void publishGroup(const std::string& lane, uint64_t group, uint64_t count) {
@@ -389,6 +481,20 @@ TEST_F(LaneManagerIntegrationTest, VirtualSubscribeServesTheLaneWithItsInit) {
         recorder->received,
         (std::vector<Received>{{41, 0, "v0"}, {41, 1, ""}}));
   }));
+}
+
+TEST_F(LaneManagerIntegrationTest, ProxyDrainsSubgroupAfterTrackEnded) {
+  run(checkTrackEndDrains(/*virtualTrack=*/false));
+}
+
+TEST_F(LaneManagerIntegrationTest, ProxyCloseResetsDrainingSubgroup) {
+  run(checkTrackEndDrains(/*virtualTrack=*/false, /*closeProxy=*/true));
+}
+
+TEST_F(
+    LaneManagerIntegrationTest,
+    LaneManagerDrainsHeldSubgroupAfterTrackEnded) {
+  run(checkTrackEndDrains(/*virtualTrack=*/true));
 }
 
 // Viewer A warms video0 at the proxy under its own alias; viewer B then joins
