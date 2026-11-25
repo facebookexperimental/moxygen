@@ -3916,7 +3916,7 @@ TEST_F(MoQRelayTest, SubscribeSecondForwardingSubscriberSingleRequestUpdate) {
 
 class MoQRelayTracksTest : public MoQRelayTest {
  protected:
-  class RecordingPublishBlockedHandle : public Publisher::PublishBlockedHandle {
+  class RecordingTracksPublishHandle : public Publisher::TracksPublishHandle {
    public:
     void publishBlocked(
         const TrackNamespace& trackNamespaceSuffix,
@@ -4012,13 +4012,13 @@ class MoQRelayTracksTest : public MoQRelayTest {
   Publisher::SubscribeTracksResult subscribeTracks(
       std::shared_ptr<MoQSession> session,
       const TrackNamespace& nsPrefix,
-      std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle =
+      std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle =
           nullptr,
       SubscribeTracks subTracks = {}) {
     subTracks.trackNamespacePrefix = nsPrefix;
     return withSessionContext(session, [&]() {
       auto task = relay_->subscribeTracks(
-          session, std::move(subTracks), std::move(publishBlockedHandle));
+          session, std::move(subTracks), std::move(tracksPublishHandle));
       return folly::coro::blockingWait(std::move(task), exec_.get());
     });
   }
@@ -4028,13 +4028,13 @@ class MoQRelayTracksTest : public MoQRelayTest {
   std::shared_ptr<Publisher::SubscribeTracksHandle> doSubscribeTracks(
       std::shared_ptr<MoQSession> session,
       const TrackNamespace& nsPrefix,
-      std::shared_ptr<Publisher::PublishBlockedHandle> publishBlockedHandle =
+      std::shared_ptr<Publisher::TracksPublishHandle> tracksPublishHandle =
           nullptr,
       SubscribeTracks subTracks = {}) {
     auto res = subscribeTracks(
         session,
         nsPrefix,
-        std::move(publishBlockedHandle),
+        std::move(tracksPublishHandle),
         std::move(subTracks));
     EXPECT_TRUE(res.hasValue());
     if (!res.hasValue()) {
@@ -4126,7 +4126,7 @@ TEST_F(MoQRelayTracksTest, SubscribeTracksOmitsUnrequestedTrackProperties) {
   doSubscribeTracks(
       subscriber,
       kTestNamespace,
-      /*publishBlockedHandle=*/nullptr,
+      /*tracksPublishHandle=*/nullptr,
       std::move(subTracks));
 
   EXPECT_CALL(
@@ -4172,7 +4172,7 @@ TEST_F(MoQRelayTracksTest, SubscribeTracksDoesNotOmitPropertiesBeforeDraft22) {
   doSubscribeTracks(
       subscriber,
       kTestNamespace,
-      /*publishBlockedHandle=*/nullptr,
+      /*tracksPublishHandle=*/nullptr,
       std::move(subTracks));
 
   EXPECT_CALL(
@@ -4214,7 +4214,7 @@ TEST_F(MoQRelayTracksTest, NewPublishCopiesSubscribeTracksParams) {
   doSubscribeTracks(
       subscriber,
       kTestNamespace,
-      /*publishBlockedHandle=*/nullptr,
+      /*tracksPublishHandle=*/nullptr,
       makeSubscribeTracksSettings());
 
   EXPECT_CALL(
@@ -4254,7 +4254,7 @@ TEST_F(MoQRelayTracksTest, ExistingPublishCopiesSubscribeTracksParams) {
   doSubscribeTracks(
       subscriber,
       kTestNamespace,
-      /*publishBlockedHandle=*/nullptr,
+      /*tracksPublishHandle=*/nullptr,
       makeSubscribeTracksSettings());
   for (int i = 0; i < 5; i++) {
     exec_->drive();
@@ -4268,9 +4268,9 @@ TEST_F(MoQRelayTracksTest, ExistingPublishCopiesSubscribeTracksParams) {
 TEST_F(MoQRelayTracksTest, NewPublishFanoutPublishBlockedOnStreamLimit) {
   auto subscriber = createV18Session();
   auto publisher1 = createMockSession();
-  auto publishBlockedHandle = std::make_shared<RecordingPublishBlockedHandle>();
+  auto tracksPublishHandle = std::make_shared<RecordingTracksPublishHandle>();
 
-  doSubscribeTracks(subscriber, kAllowedPrefix, publishBlockedHandle);
+  doSubscribeTracks(subscriber, kAllowedPrefix, tracksPublishHandle);
 
   EXPECT_CALL(*subscriber, publish(_, _))
       .Times(1)
@@ -4282,12 +4282,11 @@ TEST_F(MoQRelayTracksTest, NewPublishFanoutPublishBlockedOnStreamLimit) {
     exec_->drive();
   }
 
-  ASSERT_EQ(publishBlockedHandle->publishBlockedMessages.size(), 1);
+  ASSERT_EQ(tracksPublishHandle->publishBlockedMessages.size(), 1);
   EXPECT_EQ(
-      publishBlockedHandle->publishBlockedMessages[0].trackNamespaceSuffix,
+      tracksPublishHandle->publishBlockedMessages[0].trackNamespaceSuffix,
       TrackNamespace(std::vector<std::string>{"namespace"}));
-  EXPECT_EQ(
-      publishBlockedHandle->publishBlockedMessages[0].trackName, "track1");
+  EXPECT_EQ(tracksPublishHandle->publishBlockedMessages[0].trackName, "track1");
   ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(subscriber.get()));
 
   removeSession(publisher1);
@@ -4305,12 +4304,11 @@ TEST_F(MoQRelayTracksTest, NewPublishFanoutPublishBlockedOnStreamLimit) {
     exec_->drive();
   }
 
-  ASSERT_EQ(publishBlockedHandle->publishBlockedMessages.size(), 2);
+  ASSERT_EQ(tracksPublishHandle->publishBlockedMessages.size(), 2);
   EXPECT_EQ(
-      publishBlockedHandle->publishBlockedMessages[1].trackNamespaceSuffix,
+      tracksPublishHandle->publishBlockedMessages[1].trackNamespaceSuffix,
       TrackNamespace(std::vector<std::string>{"namespace"}));
-  EXPECT_EQ(
-      publishBlockedHandle->publishBlockedMessages[1].trackName, "track1");
+  EXPECT_EQ(tracksPublishHandle->publishBlockedMessages[1].trackName, "track1");
   ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(subscriber.get()));
   removeSession(publisher2);
   for (int i = 0; i < 3; i++) {
@@ -4325,7 +4323,7 @@ TEST_F(MoQRelayTracksTest, NewPublishFanoutPublishBlockedOnStreamLimit) {
     exec_->drive();
   }
 
-  EXPECT_EQ(publishBlockedHandle->publishBlockedMessages.size(), 2);
+  EXPECT_EQ(tracksPublishHandle->publishBlockedMessages.size(), 2);
   ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(subscriber.get()));
   removeSession(subscriber);
   removeSession(publisher3);
@@ -4393,7 +4391,7 @@ TEST_F(
     ExistingPublishEchoedToNewTracksSubscriberPublishBlockedOnStreamLimit) {
   auto subscriber = createV18Session();
   auto publisher = createMockSession();
-  auto publishBlockedHandle = std::make_shared<RecordingPublishBlockedHandle>();
+  auto tracksPublishHandle = std::make_shared<RecordingTracksPublishHandle>();
 
   doPublish(publisher, kTestTrackName);
 
@@ -4401,17 +4399,16 @@ TEST_F(
       .Times(1)
       .WillOnce(
           Return(folly::makeUnexpected(makeStreamCreationPublishError())));
-  doSubscribeTracks(subscriber, kAllowedPrefix, publishBlockedHandle);
+  doSubscribeTracks(subscriber, kAllowedPrefix, tracksPublishHandle);
   for (int i = 0; i < 5; i++) {
     exec_->drive();
   }
 
-  ASSERT_EQ(publishBlockedHandle->publishBlockedMessages.size(), 1);
+  ASSERT_EQ(tracksPublishHandle->publishBlockedMessages.size(), 1);
   EXPECT_EQ(
-      publishBlockedHandle->publishBlockedMessages[0].trackNamespaceSuffix,
+      tracksPublishHandle->publishBlockedMessages[0].trackNamespaceSuffix,
       TrackNamespace(std::vector<std::string>{"namespace"}));
-  EXPECT_EQ(
-      publishBlockedHandle->publishBlockedMessages[0].trackName, "track1");
+  EXPECT_EQ(tracksPublishHandle->publishBlockedMessages[0].trackName, "track1");
 
   ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(subscriber.get()));
   removeSession(subscriber);

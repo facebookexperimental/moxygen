@@ -3237,7 +3237,7 @@ CO_TEST_P_X(Draft18Test, SubscribeTracksRequestUpdatePrefixRoundTrip) {
   RequestID serverRequestID{0};
   EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
       .WillOnce(
-          [&](auto subTracks, auto /*publishBlockedHandle*/)
+          [&](auto subTracks, auto /*tracksPublishHandle*/)
               -> folly::coro::Task<Publisher::SubscribeTracksResult> {
             serverRequestID = subTracks.requestID;
             serverHandle =
@@ -3309,7 +3309,7 @@ CO_TEST_P_X(Draft18Test, SubscribeTracksRequestUpdateForwardRoundTrip) {
   RequestID serverRequestID{0};
   EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
       .WillOnce(
-          [&](auto subTracks, auto /*publishBlockedHandle*/)
+          [&](auto subTracks, auto /*tracksPublishHandle*/)
               -> folly::coro::Task<Publisher::SubscribeTracksResult> {
             serverRequestID = subTracks.requestID;
             serverHandle =
@@ -3361,7 +3361,7 @@ CO_TEST_P_X(Draft18Test, SubscribeTracksRequestUpdateFailureClosesBidi) {
   RequestID serverRequestID{0};
   EXPECT_CALL(*serverPublisher, subscribeTracks(_, _))
       .WillOnce(
-          [&](auto subTracks, auto /*publishBlockedHandle*/)
+          [&](auto subTracks, auto /*tracksPublishHandle*/)
               -> folly::coro::Task<Publisher::SubscribeTracksResult> {
             serverRequestID = subTracks.requestID;
             serverHandle =
