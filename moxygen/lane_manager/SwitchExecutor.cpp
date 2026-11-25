@@ -35,14 +35,20 @@ std::optional<Clock::time_point> SwitchExecutor::deadline() const {
   return std::nullopt;
 }
 
+bool SwitchExecutor::canSwitch(
+    const SwitchingSet& set,
+    std::string_view targetLane) const {
+  const auto* live = set.find(live_);
+  const auto* target = set.find(targetLane);
+  return live && target && target != live &&
+      family(target->codec) == family(live->codec);
+}
+
 bool SwitchExecutor::plan(
     const SwitchingSet& set,
     const SwitchPlan& plan,
     uint64_t group) {
-  const auto* live = set.find(live_);
-  const auto* target = set.find(plan.targetLane);
-  if (pending_ || !live || !target || target == live ||
-      family(target->codec) != family(live->codec) ||
+  if (pending_ || !canSwitch(set, plan.targetLane) ||
       (plan.maxWait && plan.maxWait->count() < 0)) {
     return false;
   }
@@ -128,10 +134,16 @@ void SwitchExecutor::cancel(Clock::time_point now) {
   pending_.reset();
 }
 
-void SwitchExecutor::onLaneEnded(std::string_view lane, Clock::time_point now) {
+void SwitchExecutor::onLaneUnavailable(
+    std::string_view lane,
+    Clock::time_point now) {
   if (pending_ && pending_->plan.targetLane == lane) {
     cancel(now);
   }
+}
+
+void SwitchExecutor::onLaneEnded(std::string_view lane, Clock::time_point now) {
+  onLaneUnavailable(lane, now);
 }
 
 std::vector<SwitchOutcome> SwitchExecutor::takeOutcomes() {
@@ -139,23 +151,7 @@ std::vector<SwitchOutcome> SwitchExecutor::takeOutcomes() {
 }
 
 void SwitchExecutor::expire(Clock::time_point now) {
-  auto& pending = *pending_;
-  forward(*pending.held);
-  const bool retry =
-      pending.plan.timeoutAction == TimeoutAction::RetryNextBoundary;
-  outcomes_.push_back(
-      SwitchOutcome{
-          retry ? SwitchOutcome::Kind::Retried : SwitchOutcome::Kind::Cancelled,
-          live_,
-          pending.plan.targetLane,
-          *pending.held,
-          now});
-  if (retry) {
-    pending.after = *pending.held;
-    pending.held.reset();
-  } else {
-    pending_.reset();
-  }
+  cancel(now);
 }
 
 } // namespace moxygen::lane_manager

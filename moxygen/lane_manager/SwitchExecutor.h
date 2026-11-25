@@ -38,6 +38,9 @@ class SwitchExecutor {
   // Set while a group is held.
   std::optional<Clock::time_point> deadline() const;
 
+  // Compatibility only; an existing pending plan does not affect the result.
+  bool canSwitch(const SwitchingSet& set, std::string_view targetLane) const;
+
   // Arms `plan`, made at the live lane's `group`, for a later group. False if a
   // switch is pending, the target is the live lane, missing from `set` or of
   // another codec family, or the wait is negative.
@@ -51,6 +54,9 @@ class SwitchExecutor {
 
   // Drops the pending switch, if any; a held group is to be sent.
   void cancel(Clock::time_point now);
+
+  // Cancels a pending switch when its target becomes unavailable.
+  void onLaneUnavailable(std::string_view lane, Clock::time_point now);
 
   // `lane` ended; drops the pending switch if it targets `lane`.
   void onLaneEnded(std::string_view lane, Clock::time_point now);

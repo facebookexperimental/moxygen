@@ -18,19 +18,12 @@ namespace moxygen::lane_manager {
 
 using Clock = std::chrono::steady_clock;
 
-// What happens when the wait runs out before the target lane's group starts.
-enum class TimeoutAction {
-  KeepCurrent,       // send the held group from the live lane and drop the plan
-  RetryNextBoundary, // send the held group and try again at the next group
-};
-
 // Asks for a subscription set to move to another lane at the next group.
 struct SwitchPlan {
   std::string targetLane;
   // How long the live lane's new group may be held while waiting for the
   // target's. Unset uses the switch executor's default; 0 never holds.
   std::optional<std::chrono::milliseconds> maxWait;
-  TimeoutAction timeoutAction{TimeoutAction::KeepCurrent};
 
   bool operator==(const SwitchPlan&) const = default;
 };
@@ -40,14 +33,12 @@ struct SwitchOutcome {
     Prepared,  // the plan is armed for the next group
     Committed, // the target lane is live
     Cancelled, // the plan was dropped and the live lane stays
-    Retried,   // the wait ran out and the plan moved to the next group
   };
 
   Kind kind{Kind::Prepared};
   std::string fromLane;
   std::string targetLane;
-  // Where the switch takes effect; for Prepared, the group it was planned at;
-  // for Retried, the group it missed.
+  // Where the switch takes effect; for Prepared, the group it was planned at.
   uint64_t group{0};
   Clock::time_point at{}; // on the same clock as select()'s `now`
 };
@@ -66,7 +57,8 @@ class SwitchingPolicy {
   // Called when `group` starts on the live lane, except while a switch is
   // pending; when a switch commits or is cancelled, it is called for the group
   // where that happened. A returned plan takes effect at the next group. `set`
-  // holds the lanes that can be picked now, always including the live lane.
+  // holds the ready lanes that can be picked now. The live lane is absent
+  // while its subscription is recovering.
   virtual std::optional<SwitchPlan> select(
       const SwitchingSet& set,
       std::string_view liveLane,

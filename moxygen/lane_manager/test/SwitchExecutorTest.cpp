@@ -36,12 +36,10 @@ const SwitchingSet kSet{
 
 SwitchPlan to(
     std::string lane,
-    std::optional<std::chrono::milliseconds> maxWait = std::nullopt,
-    TimeoutAction timeoutAction = TimeoutAction::KeepCurrent) {
+    std::optional<std::chrono::milliseconds> maxWait = std::nullopt) {
   SwitchPlan plan;
   plan.targetLane = std::move(lane);
   plan.maxWait = maxWait;
-  plan.timeoutAction = timeoutAction;
   return plan;
 }
 
@@ -88,18 +86,20 @@ TEST(SwitchExecutorTest, CancelsWhenTheWaitRunsOut) {
   EXPECT_EQ(executor.liveLane(), "low");
 }
 
-TEST(SwitchExecutorTest, RetriesAtTheNextGroup) {
+TEST(SwitchExecutorTest, TimeoutRequiresAFreshPlan) {
   SwitchExecutor executor("low", 100ms);
-  ASSERT_TRUE(executor.plan(
-      kSet, to("high", 50ms, TimeoutAction::RetryNextBoundary), 10));
+  ASSERT_TRUE(executor.plan(kSet, to("high", 50ms), 10));
   EXPECT_EQ(executor.onGroup("low", 11, kNow), Action::Hold);
 
   executor.onDeadline(kNow + 50ms);
+  EXPECT_FALSE(executor.pending());
   EXPECT_EQ(executor.onGroup("low", 11, kNow + 50ms), Action::Forward);
-  EXPECT_EQ(executor.onGroup("high", 12, kNow + 60ms), Action::Forward);
+  EXPECT_EQ(executor.onGroup("high", 12, kNow + 60ms), Action::Drop);
+  ASSERT_TRUE(executor.plan(kSet, to("high"), 11));
+  EXPECT_EQ(executor.onGroup("high", 13, kNow + 70ms), Action::Forward);
   EXPECT_EQ(
       outcomes(executor),
-      (Outcomes{{Kind::Retried, 11}, {Kind::Committed, 12}}));
+      (Outcomes{{Kind::Cancelled, 11}, {Kind::Committed, 13}}));
 }
 
 TEST(SwitchExecutorTest, ZeroWaitNeverHolds) {

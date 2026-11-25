@@ -1767,6 +1767,8 @@ MoQProxyTrack::establishUpstream(
     DownstreamPeer downstream,
     folly::CancellationToken cancelled) {
   auto self = shared_from_this();
+  cancelled = folly::cancellation_token_merge(
+      cancelled, co_await folly::coro::co_current_cancellation_token);
   // What the SUBSCRIBE starts can last as long as the subscription, and would
   // keep the session of the request context it started in.
   folly::RequestContextScopeGuard fresh;
@@ -1861,6 +1863,7 @@ MoQProxyTrack::establishWithProvider(
   if (sessionResult.hasException()) {
     co_return makeUpstreamFailure(
         subscribeRequest,
+        SubscribeErrorCode::GOING_AWAY,
         fmt::format(
             "upstream session failed: {}",
             sessionResult.exception().what().toStdString()));
@@ -1868,6 +1871,7 @@ MoQProxyTrack::establishWithProvider(
   if (sessionResult->hasError()) {
     co_return makeUpstreamFailure(
         subscribeRequest,
+        SubscribeErrorCode::GOING_AWAY,
         fmt::format(
             "upstream session failed: {}", sessionResult->error().message));
   }
@@ -1984,6 +1988,7 @@ MoQProxyTrack::establishWithProvider(
   if (subscribeResult.hasException()) {
     co_return makeUpstreamFailure(
         subscribeRequest,
+        SubscribeErrorCode::GOING_AWAY,
         fmt::format(
             "upstream subscribe failed: {}",
             subscribeResult.exception().what().toStdString()));

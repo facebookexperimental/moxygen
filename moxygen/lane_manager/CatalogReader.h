@@ -13,6 +13,7 @@
 #include <folly/coro/Task.h>
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -42,6 +43,7 @@ class CatalogReader {
   // folly::FutureTimeout if no catalog arrives within `firstCatalogWait`.
   folly::coro::Task<bool> open(RequestID requestID);
   void close();
+  void setUpdateCallback(std::function<void()> onUpdate);
 
   // The role's lanes that share its first track's altGroup.
   const SwitchingSet* switchingSet(Role role) const;
@@ -63,6 +65,7 @@ class CatalogReader {
   std::chrono::milliseconds firstCatalogWait_;
   Mode mode_;
   folly::coro::SharedPromise<void> ready_;
+  std::function<void()> onUpdate_;
   bool opened_{false};
   bool closed_{false};
 };

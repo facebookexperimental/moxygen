@@ -39,6 +39,8 @@ struct LaneManagerAbrOptions {
   bool immutableCatalog{false};
   // The client takes init segments from the catalog; none are sent in-band.
   bool initializationFromCatalog{false};
+  // Maximum wait for an initial ready lane after acquiring the catalog.
+  std::chrono::milliseconds initialLaneWait{std::chrono::seconds(5)};
   std::function<void(const FullTrackName&, const SwitchingSet&)> onStarted;
   std::function<void(const FullTrackName&)> onClosed;
   std::function<void(const FullTrackName&, const SwitchOutcome&)> onOutcome;
@@ -82,10 +84,14 @@ class MoQLaneManager : public std::enable_shared_from_this<MoQLaneManager> {
   class VirtualHandle;
   struct SubscriptionSet;
 
-  static folly::coro::Task<void> subscribeLane(
-      FullTrackName lane,
+  static folly::coro::Task<void> startSubscription(
       std::shared_ptr<ManagedSubscription> subscription,
-      std::weak_ptr<SubscriptionSet> set);
+      std::weak_ptr<SubscriptionSet> set,
+      std::string lane);
+  std::shared_ptr<ManagedSubscription> makeSubscription(
+      SubscriptionSet& set,
+      std::string lane);
+  void ensureSubscriptions(SubscriptionSet& set, const SwitchingSet& lanes);
 
   // Sends, drops or holds a lane's new subgroup.
   folly::Expected<std::shared_ptr<SubgroupConsumer>, MoQPublishError>
@@ -99,6 +105,7 @@ class MoQLaneManager : public std::enable_shared_from_this<MoQLaneManager> {
   void expireHold(SubscriptionSet& set);
   // Ends `set` with PUBLISH_DONE, after the current callback returns.
   void fail(SubscriptionSet& set, const MoQPublishError& error);
+  void laneUnavailable(SubscriptionSet& set, std::string_view lane);
   // Ends `set` if it is still its role's; the lanes are UNSUBSCRIBEd.
   void unsubscribe(const SubscriptionSet& set);
   void close(SubscriptionSet& set);

@@ -233,6 +233,10 @@ void CatalogReader::close() {
   }
 }
 
+void CatalogReader::setUpdateCallback(std::function<void()> onUpdate) {
+  onUpdate_ = std::move(onUpdate);
+}
+
 const SwitchingSet* CatalogReader::switchingSet(Role role) const {
   const auto& set = role == Role::Video ? video_ : audio_;
   return set ? &*set : nullptr;
@@ -250,6 +254,9 @@ void CatalogReader::onCatalog(Payload payload) {
   audio_ = makeSet(*catalog, "audio");
   if (video_ && audio_) {
     video_->audioAllowanceBps = audio_->lanes.front().bitrateBps;
+  }
+  if (onUpdate_) {
+    onUpdate_();
   }
   if (!ready_.isFulfilled()) {
     ready_.setValue();

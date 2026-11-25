@@ -13,9 +13,12 @@
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Collect.h>
+#include <folly/coro/Timeout.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
+
+#include <stdexcept>
 
 namespace moxygen::lane_manager { namespace {
 
@@ -78,34 +81,7 @@ class LaneManagerTest : public testing::Test {
         .WillByDefault([this](
                            const SubscribeRequest& request,
                            std::shared_ptr<TrackConsumer> consumer) {
-          upstreamSubscriptions_.push_back(request.fullTrackName);
-          auto name = request.fullTrackName.trackName;
-          auto answer = [this, name, requestID = request.requestID, consumer] {
-            if (name == failLane_) {
-              return Publisher::SubscribeResult(
-                  folly::makeUnexpected(
-                      SubscribeError{
-                          requestID, SubscribeErrorCode::INTERNAL_ERROR, ""}));
-            }
-            lanes_[name] = consumer;
-            aliasAtSubscribe_[name] = alias_;
-            SubscribeOk ok;
-            ok.requestID = requestID;
-            ok.trackAlias = TrackAlias(99);
-            ok.largest = AbsoluteLocation{5, 3};
-            handles_[name] =
-                std::make_shared<NiceMock<MockSubscriptionHandle>>(ok);
-            return Publisher::SubscribeResult(handles_[name]);
-          };
-          if (name != heldLane_) {
-            return folly::coro::makeTask<Publisher::SubscribeResult>(answer());
-          }
-          return folly::coro::co_invoke(
-              [this,
-               answer]() -> folly::coro::Task<Publisher::SubscribeResult> {
-                co_await heldReply_;
-                co_return answer();
-              });
+          return answerSubscribe(request, std::move(consumer));
         });
     // The catalog FETCH returns kCatalog; lane FETCHes are kept.
     ON_CALL(*proxy_, fetch(_, _))
@@ -117,6 +93,12 @@ class LaneManagerTest : public testing::Test {
           } else {
             laneFetch_ = std::move(fetch);
             laneFetchConsumer_ = std::move(c);
+            if (failLaneFetch_) {
+              return folly::coro::makeTask<Publisher::FetchResult>(
+                  folly::makeUnexpected(
+                      FetchError{
+                          RequestID(3), FetchErrorCode::INTERNAL_ERROR, ""}));
+            }
           }
           return folly::coro::makeTask<Publisher::FetchResult>(
               std::make_shared<MockFetchHandle>(FetchOk{}));
@@ -160,6 +142,49 @@ class LaneManagerTest : public testing::Test {
             });
   }
 
+  folly::coro::Task<Publisher::SubscribeResult> answerSubscribe(
+      SubscribeRequest request,
+      std::shared_ptr<TrackConsumer> consumer) {
+    upstreamSubscriptions_.push_back(request.fullTrackName);
+    const auto name = request.fullTrackName.trackName;
+    const auto requestContext = MoQSession::getRequestContext();
+    subscribeSessions_[name].push_back(requestContext.sessionId);
+    EXPECT_EQ(requestContext.sessionId, session_->sessionId());
+    ++subscribeAttempts_[name];
+    if (name == heldLane_) {
+      co_await heldReply_;
+    }
+    if (const auto remaining = subscribeFailures_.find(name);
+        remaining != subscribeFailures_.end() && remaining->second > 0) {
+      --remaining->second;
+      SubscribeError error{
+          request.requestID, RequestErrorCode::EXCESSIVE_LOAD, "retry"};
+      error.retryInterval = 1ms;
+      co_return folly::makeUnexpected(std::move(error));
+    }
+    if (name == failLane_) {
+      co_return folly::makeUnexpected(
+          SubscribeError{
+              request.requestID, SubscribeErrorCode::NOT_SUPPORTED, ""});
+    }
+    lanes_[name] = std::move(consumer);
+    aliasAtSubscribe_[name] = alias_;
+    SubscribeOk ok;
+    ok.requestID = request.requestID;
+    ok.trackAlias = TrackAlias(99);
+    ok.largest = AbsoluteLocation{5, 3};
+    handles_[name] = std::make_shared<NiceMock<MockSubscriptionHandle>>(ok);
+    if (name == endBeforeSubscribeOkLane_) {
+      lanes_.at(name)->publishDone(
+          PublishDone{
+              request.requestID,
+              PublishDoneStatusCode::TRACK_ENDED,
+              0,
+              "ended"});
+    }
+    co_return handles_[name];
+  }
+
   // Runs `task` as the client session's request, then the lane SUBSCRIBEs it
   // started.
   template <typename T>
@@ -169,7 +194,9 @@ class LaneManagerTest : public testing::Test {
         folly::RequestToken("moq_session"),
         std::make_unique<MoQSession::MoQSessionRequestData>(session_));
     auto result = folly::coro::blockingWait(std::move(task), &evb_);
-    evb_.loopOnce(EVLOOP_NONBLOCK);
+    for (size_t i = 0; i < 4; ++i) {
+      evb_.loopOnce(EVLOOP_NONBLOCK);
+    }
     return result;
   }
 
@@ -204,6 +231,11 @@ class LaneManagerTest : public testing::Test {
   std::string servedCatalog_{kCatalog};
   std::string heldLane_;
   folly::coro::Baton heldReply_;
+  std::string endBeforeSubscribeOkLane_;
+  folly::F14FastMap<std::string, size_t> subscribeAttempts_;
+  folly::F14FastMap<std::string, std::vector<SessionId>> subscribeSessions_;
+  folly::F14FastMap<std::string, size_t> subscribeFailures_;
+  bool failLaneFetch_{false};
   std::optional<TrackAlias> alias_;
   folly::F14FastMap<std::string, std::shared_ptr<TrackConsumer>> lanes_;
   folly::F14FastMap<std::string, std::optional<TrackAlias>> aliasAtSubscribe_;
@@ -544,6 +576,353 @@ TEST_F(LaneManagerTest, JoiningFetchGoesToTheInitialLaneWithItsInit) {
   laneFetchConsumer_->object(5, 0, 0, folly::IOBuf::copyBuffer("a"));
   laneFetchConsumer_->object(5, 0, 1, folly::IOBuf::copyBuffer("b"));
   EXPECT_EQ(inits, (std::vector<std::string>{"v0", ""}));
+  EXPECT_EQ(subscribeAttempts_.at("video0"), 1);
+}
+
+TEST_F(LaneManagerTest, JoiningFetchPreservesClientRequestParameters) {
+  auto video = subscribe(Role::Video, 42);
+  ASSERT_TRUE(video.hasValue());
+  Fetch fetch(
+      RequestID(3),
+      std::nullopt,
+      2,
+      FetchType::RELATIVE_JOINING,
+      7,
+      GroupOrder::NewestFirst,
+      {Parameter{
+          static_cast<uint64_t>(TrackRequestParamKey::AUTHORIZATION_TOKEN),
+          AuthToken{0, "fetch-token", true}}});
+  fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr"};
+  fetch.includeProperties = false;
+
+  ASSERT_TRUE(run(manager_->fetch(
+                      std::move(fetch),
+                      std::make_shared<NiceMock<MockFetchConsumer>>(),
+                      Role::Video))
+                  .hasValue());
+
+  ASSERT_TRUE(laneFetch_);
+  EXPECT_EQ(laneFetch_->requestID, RequestID(3));
+  EXPECT_EQ(laneFetch_->fullTrackName, (FullTrackName{kBroadcast, "video0"}));
+  const auto& joining = std::get<JoiningFetch>(laneFetch_->args);
+  EXPECT_EQ(joining.joiningRequestID, RequestID(42));
+  EXPECT_EQ(joining.joiningStart, 2);
+  EXPECT_EQ(joining.fetchType, FetchType::RELATIVE_JOINING);
+  EXPECT_EQ(laneFetch_->priority, 7);
+  EXPECT_EQ(laneFetch_->groupOrder, GroupOrder::NewestFirst);
+  EXPECT_FALSE(laneFetch_->includeProperties);
+  ASSERT_EQ(laneFetch_->params.size(), 1);
+  EXPECT_EQ(laneFetch_->params.at(0).asAuthToken.tokenValue, "fetch-token");
+}
+
+class LaneManagerLaneExceptionTest : public LaneManagerTest {
+ protected:
+  void SetUp() override {
+    LaneManagerTest::SetUp();
+    ON_CALL(*proxy_, subscribe(_, _))
+        .WillByDefault(
+            testing::Invoke(
+                this, &LaneManagerLaneExceptionTest::answerWithException));
+  }
+
+  folly::coro::Task<Publisher::SubscribeResult> answerWithException(
+      SubscribeRequest request,
+      std::shared_ptr<TrackConsumer> consumer) {
+    if (request.fullTrackName.trackName != "catalog") {
+      co_await folly::coro::co_reschedule_on_current_executor;
+      if (failAll_ || request.fullTrackName.trackName == "video0") {
+        co_yield folly::coro::co_error(
+            std::runtime_error("lane subscribe failed"));
+      }
+      co_await folly::coro::co_reschedule_on_current_executor;
+    }
+    co_return co_await answerSubscribe(std::move(request), std::move(consumer));
+  }
+
+  folly::coro::Task<folly::Try<Publisher::SubscribeResult>> startVideo() {
+    auto request = SubscribeRequest::make(FullTrackName{kBroadcast, "r--abr"});
+    request.requestID = 1;
+    co_return co_await folly::coro::co_awaitTry(
+        folly::coro::timeout(
+            manager_->subscribe(
+                std::move(request), client_, Role::Video, policy_),
+            5s));
+  }
+
+  bool failAll_{false};
+};
+
+TEST_F(LaneManagerLaneExceptionTest, LaneExceptionKeepsWaitingForAHealthyLane) {
+  auto result = run(startVideo());
+  ASSERT_TRUE(result.hasValue());
+  ASSERT_TRUE(result->hasValue());
+
+  publish("video1", 6);
+
+  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video1", "v1"}}));
+}
+
+TEST_F(LaneManagerLaneExceptionTest, AllLaneExceptionsReturnSubscribeError) {
+  failAll_ = true;
+
+  auto result = run(startVideo());
+
+  ASSERT_TRUE(result.hasValue());
+  ASSERT_TRUE(result->hasError());
+  EXPECT_EQ(result->error().requestID, RequestID(1));
+  EXPECT_EQ(result->error().errorCode, RequestErrorCode::INTERNAL_ERROR);
+  EXPECT_THAT(
+      result->error().reasonPhrase,
+      testing::HasSubstr("lane subscribe failed"));
+}
+
+TEST_F(LaneManagerTest, TransientInitialFailureRetriesBeforeSubscribeOk) {
+  subscribeFailures_["audio0"] = 1;
+
+  EXPECT_TRUE(subscribe(Role::Audio).hasValue());
+
+  EXPECT_EQ(subscribeAttempts_.at("audio0"), 2);
+}
+
+TEST_F(LaneManagerTest, InitialTransientFailureDoesNotBlockAHealthyLane) {
+  subscribeFailures_["video0"] = 1;
+
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  ASSERT_TRUE(lanes_.contains("video1"));
+  publish("video1", 6);
+
+  EXPECT_EQ(sent_.back().payload, "video1");
+}
+
+TEST_F(LaneManagerTest, AdoptsAHealthyLaneBeforeTheFirstLiveGroup) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  EXPECT_CALL(*client_, publishDone(_)).Times(0);
+
+  lanes_.at("video0")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
+  publish("video1", 6);
+
+  EXPECT_EQ(sent_.back().payload, "video1");
+}
+
+class LaneManagerEarlyDataTest : public LaneManagerTest {
+ protected:
+  void TearDown() override {
+    acceptPreferred_.post();
+    acceptEarly_.post();
+    evb_.loop();
+    LaneManagerTest::TearDown();
+  }
+
+  void SetUp() override {
+    LaneManagerTest::SetUp();
+    ON_CALL(*policy_, initialLane(_)).WillByDefault(Return("video0"));
+    ON_CALL(*proxy_, subscribe(_, _))
+        .WillByDefault([this](
+                           SubscribeRequest request,
+                           std::shared_ptr<TrackConsumer> consumer) {
+          return answerWithEarlyData(std::move(request), std::move(consumer));
+        });
+  }
+
+  folly::coro::Task<Publisher::SubscribeResult> answerWithEarlyData(
+      SubscribeRequest request,
+      std::shared_ptr<TrackConsumer> consumer) {
+    const auto name = request.fullTrackName.trackName;
+    if (name == "video0") {
+      co_await acceptPreferred_;
+    }
+    auto result =
+        co_await answerSubscribe(std::move(request), std::move(consumer));
+    if (name == "video1") {
+      publish("video1", 6);
+      earlyData_.post();
+      co_await acceptEarly_;
+    }
+    co_return result;
+  }
+
+  folly::coro::Task<void> releaseReplies(bool acceptEarly) {
+    co_await earlyData_;
+    if (acceptEarly) {
+      acceptEarly_.post();
+    }
+    acceptPreferred_.post();
+  }
+
+  Publisher::SubscribeResult subscribeAfterEarlyData(bool acceptEarly) {
+    auto request = SubscribeRequest::make(FullTrackName{kBroadcast, "r--abr"});
+    request.requestID = 1;
+    auto results =
+        run(folly::coro::timeout(
+            folly::coro::collectAll(
+                manager_->subscribe(request, client_, Role::Video, policy_),
+                releaseReplies(acceptEarly)),
+            5s));
+    return std::move(std::get<0>(results));
+  }
+
+  folly::coro::Baton acceptPreferred_;
+  folly::coro::Baton acceptEarly_;
+  folly::coro::Baton earlyData_;
+};
+
+TEST_F(LaneManagerEarlyDataTest, ReadyEarlyLaneRemainsTheInitialLane) {
+  auto video = subscribeAfterEarlyData(true);
+  ASSERT_TRUE(video.hasValue());
+  ASSERT_EQ(sent_, (std::vector<Sent>{{6, "video1", "v1"}}));
+
+  Fetch fetch(RequestID(3), RequestID(1), 0, FetchType::RELATIVE_JOINING);
+  fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr"};
+  ASSERT_TRUE(run(manager_->fetch(
+                      std::move(fetch),
+                      std::make_shared<NiceMock<MockFetchConsumer>>(),
+                      Role::Video))
+                  .hasValue());
+  ASSERT_TRUE(laneFetch_);
+  EXPECT_EQ(laneFetch_->fullTrackName.trackName, "video1");
+  publish("video0", 6);
+  publish("video1", 7);
+
+  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video1", "v1"}, {7, "video1", ""}}));
+  EXPECT_TRUE(outcomes_.empty());
+}
+
+TEST_F(LaneManagerEarlyDataTest, PendingEarlyLaneSwitchesAtTheNextGroup) {
+  auto video = subscribeAfterEarlyData(false);
+  ASSERT_TRUE(video.hasValue());
+  ASSERT_EQ(sent_, (std::vector<Sent>{{6, "video1", "v1"}}));
+  ASSERT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared}));
+
+  publish("video0", 6);
+  publish("video0", 7);
+  publish("video1", 7);
+
+  EXPECT_EQ(
+      sent_, (std::vector<Sent>{{6, "video1", "v1"}, {7, "video0", "v0"}}));
+  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Committed}));
+  acceptEarly_.post();
+  evb_.loop();
+}
+
+TEST_F(LaneManagerTest, TrackEndBeforeSubscribeOkUsesAHealthyLane) {
+  endBeforeSubscribeOkLane_ = "video0";
+  EXPECT_CALL(*client_, publishDone(_)).Times(0);
+  EXPECT_CALL(*policy_, initialLane(_))
+      .WillOnce(Return("video0"))
+      .WillOnce([](const SwitchingSet& set) {
+        EXPECT_EQ(set.find("video0"), nullptr);
+        return std::string("video1");
+      });
+
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  publish("video1", 6);
+
+  EXPECT_EQ(subscribeAttempts_.at("video0"), 1);
+  EXPECT_EQ(sent_.back().payload, "video1");
+}
+
+TEST_F(
+    LaneManagerTest,
+    ActiveTransientFailureRetriesWithoutEndingVirtualTrack) {
+  auto audio = subscribe(Role::Audio);
+  ASSERT_TRUE(audio.hasValue());
+  publish("audio0", 6);
+  EXPECT_CALL(*client_, publishDone(_)).Times(0);
+  EXPECT_CALL(*policy_, select(_, _, _, _)).Times(0);
+
+  lanes_.at("audio0")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
+  EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(policy_.get()));
+  EXPECT_TRUE(subscribe(Role::Audio, 2).hasError());
+  evb_.loop();
+
+  EXPECT_EQ(subscribeAttempts_.at("audio0"), 2);
+  EXPECT_EQ(
+      subscribeSessions_.at("audio0"),
+      (std::vector<SessionId>{session_->sessionId(), session_->sessionId()}));
+  publish("audio0", 7);
+  EXPECT_EQ(sent_.back().payload, "audio0");
+}
+
+TEST_F(LaneManagerTest, BackgroundTransientFailureRetries) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  publish("video0", 6);
+  EXPECT_CALL(*client_, publishDone(_)).Times(0);
+  EXPECT_CALL(*policy_, select(_, _, _, _))
+      .WillOnce([](const SwitchingSet& set, auto, auto, auto) {
+        EXPECT_EQ(set.find("video1"), nullptr);
+        return std::nullopt;
+      });
+  lanes_.at("video1")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
+  EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(policy_.get()));
+  publish("video0", 7);
+  evb_.loop();
+
+  EXPECT_EQ(subscribeAttempts_.at("video1"), 2);
+}
+
+TEST_F(LaneManagerTest, UnsubscribeCancelsLaneRetry) {
+  auto audio = subscribe(Role::Audio);
+  ASSERT_TRUE(audio.hasValue());
+  lanes_.at("audio0")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
+
+  audio.value()->unsubscribe();
+  evb_.loop();
+
+  EXPECT_EQ(subscribeAttempts_.at("audio0"), 1);
+}
+
+TEST_F(LaneManagerTest, PermanentRecoveryFailureEndsTheActiveSubscription) {
+  auto audio = subscribe(Role::Audio);
+  ASSERT_TRUE(audio.hasValue());
+  failLane_ = "audio0";
+  EXPECT_CALL(*client_, publishDone(_)).WillOnce(Return(folly::unit));
+
+  lanes_.at("audio0")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
+  evb_.loop();
+
+  failLane_.clear();
+  EXPECT_TRUE(subscribe(Role::Audio, 2).hasValue());
+}
+
+TEST_F(LaneManagerTest, JoiningFetchFailureDoesNotEndTheSubscription) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  failLaneFetch_ = true;
+  Fetch fetch(RequestID(3), RequestID(1), 0, FetchType::RELATIVE_JOINING);
+  fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr"};
+
+  EXPECT_TRUE(run(manager_->fetch(
+                      fetch,
+                      std::make_shared<NiceMock<MockFetchConsumer>>(),
+                      Role::Video))
+                  .hasError());
+
+  EXPECT_TRUE(subscribe(Role::Video, 2).hasError());
+  publish("video0", 6);
+  EXPECT_EQ(sent_.back().payload, "video0");
+}
+
+TEST_F(LaneManagerTest, RejectsAbsoluteJoiningFetch) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  Fetch fetch(RequestID(3), RequestID(1), 0, FetchType::ABSOLUTE_JOINING);
+  fetch.fullTrackName = FullTrackName{kBroadcast, "r--abr"};
+
+  auto result = run(manager_->fetch(
+      fetch, std::make_shared<NiceMock<MockFetchConsumer>>(), Role::Video));
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().errorCode, FetchErrorCode::NOT_SUPPORTED);
+  EXPECT_FALSE(laneFetch_.has_value());
 }
 
 TEST_F(LaneManagerTest, PicksAnotherLaneWhenTheLaneSubscribeFails) {
@@ -617,6 +996,8 @@ TEST_F(LaneManagerTest, LanePublishDoneEndsTheVirtualTrack) {
   EXPECT_CALL(*client_, publishDone(_)).WillOnce(Return(folly::unit));
   lanes_.at("video0")->publishDone(
       PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
+  evb_.loopOnce(EVLOOP_NONBLOCK);
+  EXPECT_EQ(subscribeAttempts_.at("video0"), 1);
 
   EXPECT_TRUE(subscribe(Role::Video, 2).hasValue());
 }
@@ -658,6 +1039,16 @@ TEST_F(LaneManagerTest, BackgroundLaneEndOnlyRemovesTheLane) {
   EXPECT_CALL(*client_, publishDone(_)).Times(0);
   lanes_.at("video1")->publishDone(
       PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
+  evb_.loopOnce(EVLOOP_NONBLOCK);
+  EXPECT_EQ(subscribeAttempts_.at("video1"), 1);
+
+  auto update = lanes_.at("catalog")->beginSubgroup(7, 0, kDefaultPriority, {});
+  ASSERT_TRUE(update.hasValue());
+  update.value()->object(0, folly::IOBuf::copyBuffer(kCatalog));
+  for (size_t i = 0; i < 4; ++i) {
+    evb_.loopOnce(EVLOOP_NONBLOCK);
+  }
+  EXPECT_EQ(subscribeAttempts_.at("video1"), 1);
 
   EXPECT_CALL(*policy_, select(_, _, _, _))
       .WillOnce([](const SwitchingSet& set, auto, auto, auto) {
@@ -665,6 +1056,7 @@ TEST_F(LaneManagerTest, BackgroundLaneEndOnlyRemovesTheLane) {
         return std::nullopt;
       });
   publish("video0", 6);
+  EXPECT_EQ(subscribeAttempts_.at("video1"), 1);
 }
 
 TEST_F(LaneManagerTest, TrackEndSendsTheHeldGroupFirst) {
@@ -688,23 +1080,6 @@ TEST_F(LaneManagerTest, TrackEndSendsTheHeldGroupFirst) {
   EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
 }
 
-TEST_F(LaneManagerTest, TrackEndCancelsEvenWhenThePlanRequestsRetry) {
-  auto video = subscribe(Role::Video);
-  ASSERT_TRUE(video.hasValue());
-  auto plan = planTo("video1", 10s);
-  plan.timeoutAction = TimeoutAction::RetryNextBoundary;
-  ON_CALL(*policy_, select(_, "video0", 6, _)).WillByDefault(Return(plan));
-  publish("video0", 6);
-  publish("video0", 7);
-
-  EXPECT_CALL(*client_, publishDone(_)).WillOnce(Return(folly::unit));
-  lanes_.at("video0")->publishDone(
-      PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
-
-  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video0", "v0"}, {7, "video0", ""}}));
-  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
-}
-
 TEST_F(LaneManagerTest, AnEndedTargetCancelsThePendingSwitch) {
   auto video = subscribe(Role::Video);
   ASSERT_TRUE(video.hasValue());
@@ -719,8 +1094,107 @@ TEST_F(LaneManagerTest, AnEndedTargetCancelsThePendingSwitch) {
   EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
 }
 
+TEST_F(LaneManagerTest, LastLaneEndCompletesThePendingSwitchFailure) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  publish("video0", 6);
+  ON_CALL(*policy_, select(_, "video0", 6, _))
+      .WillByDefault(Return(planTo("video1", 10s)));
+
+  size_t completions = 0;
+  EXPECT_CALL(*client_, publishDone(_)).WillOnce([&](const PublishDone& done) {
+    ++completions;
+    EXPECT_EQ(done.requestID, RequestID(1));
+    EXPECT_EQ(done.statusCode, PublishDoneStatusCode::TRACK_ENDED);
+    return folly::unit;
+  });
+  lanes_.at("video0")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::UNAUTHORIZED, 0, ""});
+  EXPECT_EQ(completions, 0);
+  ASSERT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared}));
+
+  lanes_.at("video1")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
+  EXPECT_EQ(completions, 1);
+  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
+  EXPECT_EQ(subscribeAttempts_.at("video0"), 1);
+  EXPECT_EQ(subscribeAttempts_.at("video1"), 1);
+  EXPECT_TRUE(subscribe(Role::Video, 2).hasValue());
+}
+
+TEST_F(LaneManagerTest, EndedSwitchTargetLeavesTheLiveLaneRecovering) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  publish("video0", 6);
+  ON_CALL(*policy_, select(_, "video0", 6, _))
+      .WillByDefault(Return(planTo("video1", 10s)));
+  EXPECT_CALL(*client_, publishDone(_)).Times(0);
+
+  lanes_.at("video0")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
+  ASSERT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared}));
+  lanes_.at("video1")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
+  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
+
+  evb_.loop();
+  publish("video0", 7);
+  EXPECT_EQ(subscribeAttempts_.at("video0"), 2);
+  EXPECT_EQ(subscribeAttempts_.at("video1"), 1);
+  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "video0", "v0"}, {7, "video0", ""}}));
+}
+
+TEST_F(LaneManagerTest, TerminalLiveLaneWaitsForTheRecoveringBackup) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  publish("video0", 6);
+  ON_CALL(*policy_, select(_, "video0", 6, _))
+      .WillByDefault(Return(planTo("video1", 10s)));
+  EXPECT_CALL(*client_, publishDone(_)).Times(0);
+
+  lanes_.at("video1")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
+  lanes_.at("video0")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::UNAUTHORIZED, 0, ""});
+  evb_.loop();
+
+  publish("video1", 7);
+  publish("video1", 8);
+  EXPECT_EQ(subscribeAttempts_.at("video0"), 1);
+  EXPECT_EQ(subscribeAttempts_.at("video1"), 2);
+  EXPECT_EQ(
+      sent_, (std::vector<Sent>{{6, "video0", "v0"}, {8, "video1", "v1"}}));
+  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Committed}));
+}
+
+TEST_F(LaneManagerTest, SwitchCancellationCanUnsubscribeBeforeCompletion) {
+  auto video = subscribe(Role::Video);
+  ASSERT_TRUE(video.hasValue());
+  publish("video0", 6);
+  ON_CALL(*policy_, select(_, "video0", 6, _))
+      .WillByDefault(Return(planTo("video1", 10s)));
+  ON_CALL(*policy_, onSwitchOutcome(_))
+      .WillByDefault([&](const SwitchOutcome& outcome) {
+        outcomes_.push_back(outcome.kind);
+        if (outcome.kind == Kind::Cancelled) {
+          video.value()->unsubscribe();
+        }
+      });
+  EXPECT_CALL(*client_, publishDone(_)).Times(0);
+
+  lanes_.at("video0")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::UNAUTHORIZED, 0, ""});
+  ASSERT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared}));
+  lanes_.at("video1")->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
+
+  EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
+  EXPECT_TRUE(subscribe(Role::Video, 2).hasValue());
+}
+
 TEST_F(LaneManagerTest, JoiningFetchWaitsForTheInitialLane) {
   heldLane_ = "video0";
+  failLane_ = "video1";
   auto request = SubscribeRequest::make(FullTrackName{kBroadcast, "r--abr"});
   request.requestID = 1;
   Fetch fetch(RequestID(3), RequestID(1), 0, FetchType::RELATIVE_JOINING);

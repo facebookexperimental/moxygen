@@ -34,10 +34,21 @@ moxygen_add_library(moxygen_lane_manager_catalog_reader
 moxygen_add_library(moxygen_lane_manager_managed_subscription
   SRCS
     ManagedSubscription.cpp
+  DEPS
+    Folly::folly_coro_sleep
+    Folly::folly_coro_timeout
+    Folly::folly_coro_with_cancellation
+    Folly::folly_futures_core
+    Folly::folly_io_async_request_context
+    Folly::folly_scope_guard
   EXPORTED_DEPS
+    moxygen_events_moq_executor
     moxygen_moq
     moxygen_moq_consumers
+    Folly::folly_cancellation_token
     Folly::folly_coro_task
+    Folly::folly_coro_shared_promise
+    Folly::folly_exception_wrapper
 )
 
 moxygen_add_library(moxygen_lane_manager_moq_lane_manager
@@ -47,9 +58,12 @@ moxygen_add_library(moxygen_lane_manager_moq_lane_manager
     moxygen_events_moq_executor
     moxygen_lane_manager_managed_subscription
     moxygen_lane_manager_switch_executor
+    Folly::folly_coro_collect
     Folly::folly_coro_shared_promise
+    Folly::folly_coro_timeout
     Folly::folly_function
     Folly::folly_futures_core
+    Folly::folly_io_async_request_context
     Folly::folly_logging_logging
     Folly::folly_scope_guard
   EXPORTED_DEPS

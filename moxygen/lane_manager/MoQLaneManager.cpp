@@ -14,11 +14,15 @@
 
 #include <folly/Function.h>
 #include <folly/ScopeGuard.h>
+#include <folly/coro/Collect.h>
 #include <folly/coro/SharedPromise.h>
+#include <folly/coro/Timeout.h>
 #include <folly/futures/Future.h>
+#include <folly/io/async/Request.h>
 #include <folly/logging/xlog.h>
 
 #include <algorithm>
+#include <tuple>
 #include <vector>
 
 namespace moxygen::lane_manager {
@@ -34,6 +38,9 @@ void addInit(
     init.reset();
   }
 }
+
+const folly::RequestToken kMoQSessionToken{"moq_session"};
+constexpr auto kJoiningFetchWait = std::chrono::seconds(5);
 
 // Puts the lane's init on the subgroup's first object.
 class InitSubgroupConsumer : public SubgroupConsumerFilter {
@@ -408,13 +415,16 @@ struct MoQLaneManager::SubscriptionSet
   SubscriptionSet(
       std::weak_ptr<MoQLaneManager> manager,
       Role role,
+      SubscribeRequest request,
       std::shared_ptr<TrackConsumer> client,
       std::shared_ptr<SwitchingPolicy> policy,
       MoQExecutor& executor)
       : role(role),
+        request(std::move(request)),
         client(std::move(client)),
         policy(std::move(policy)),
         executor(executor),
+        downstreamSession(MoQSession::getRequestSession()),
         holdTimer([this, manager = std::move(manager)] {
           // The replay can drop the client's handle, and with it this set.
           auto self = shared_from_this();
@@ -424,6 +434,7 @@ struct MoQLaneManager::SubscriptionSet
         }) {}
 
   Role role;
+  SubscribeRequest request;
   std::shared_ptr<TrackConsumer> client;
   std::shared_ptr<SwitchingPolicy> policy;
   MoQExecutor& executor;
@@ -434,8 +445,11 @@ struct MoQLaneManager::SubscriptionSet
       std::make_shared<HeldSubgroup::Budget>()};
   bool failed{false};
   bool closed{false};
+  std::weak_ptr<MoQSession> downstreamSession;
   std::string lane; // the one the virtual SUBSCRIBE_OK came from
-  // Lanes with a SUBSCRIBE_OK.
+  std::shared_ptr<const folly::IOBuf> initialInit;
+  folly::coro::SharedPromise<void> initialLaneResolved;
+  // All requested lanes; only ready ones are offered to the policy.
   folly::F14FastMap<
       FullTrackName,
       std::shared_ptr<ManagedSubscription>,
@@ -448,8 +462,6 @@ struct MoQLaneManager::SubscriptionSet
   Timer holdTimer;
   std::optional<uint64_t> liveGroup; // the last group sent from the live lane
   std::optional<uint64_t> selectedGroup; // the last group select() ran for
-  // Set once `lane` has its SUBSCRIBE_OK, or the subscribe ended without one.
-  folly::coro::SharedPromise<void> started;
 };
 
 // Like MoQProxy's handles, dropping one unsubscribes.
@@ -554,15 +566,38 @@ class MoQLaneManager::LaneConsumer : public TrackConsumerFilter {
     if (!manager || !set || set->closed) {
       return folly::unit;
     }
-    if (lane_.trackName != set->switcher->liveLane()) {
-      set->laneSubs.erase(lane_);
-      set->switcher->onLaneEnded(lane_.trackName, Clock::now());
-      manager->applyOutcomes(*set);
+    auto subscription = set->laneSubs.find(lane_);
+    if (subscription == set->laneSubs.end()) {
       return folly::unit;
+    }
+    if (set->lane.empty()) {
+      return folly::unit;
+    }
+    if (!subscription->second->ended()) {
+      manager->laneUnavailable(*set, lane_.trackName);
+      return folly::unit;
+    }
+    const bool live = lane_.trackName == set->switcher->liveLane();
+    if (!live || pubDone.statusCode != PublishDoneStatusCode::TRACK_ENDED) {
+      manager->laneUnavailable(*set, lane_.trackName);
+      if (set->closed || set->failed ||
+          std::any_of(
+              set->laneSubs.begin(),
+              set->laneSubs.end(),
+              [](const auto& entry) {
+                return !entry.second->ended() &&
+                    entry.second->state() !=
+                    ManagedSubscription::State::Stopped;
+              })) {
+        return folly::unit;
+      }
     }
     if (set->switcher->deadline()) {
       set->switcher->cancel(Clock::now()); // the held group goes out first
       manager->applyOutcomes(*set);
+    }
+    if (set->closed || set->failed) {
+      return folly::unit;
     }
     auto result = downstream_->publishDone(std::move(pubDone));
     manager->unsubscribe(*set);
@@ -589,7 +624,17 @@ MoQLaneManager::MoQLaneManager(
           broadcast_,
           std::chrono::seconds(5),
           abr_.immutableCatalog ? CatalogReader::Mode::ImmutableSnapshot
-                                : CatalogReader::Mode::Live) {}
+                                : CatalogReader::Mode::Live) {
+  catalog_.setUpdateCallback([this] {
+    for (auto& [role, set] : sets_) {
+      if (set->switcher) {
+        if (const auto* lanes = catalog_.switchingSet(role)) {
+          ensureSubscriptions(*set, *lanes);
+        }
+      }
+    }
+  });
+}
 
 MoQLaneManager::~MoQLaneManager() {
   for (auto& [role, set] : sets_) {
@@ -615,6 +660,7 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
   auto set = std::make_shared<SubscriptionSet>(
       self,
       role,
+      request,
       client,
       std::move(policy),
       *MoQSession::getRequestContext().executor);
@@ -626,11 +672,10 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
     return found != sets_.end() && found->second == set;
   };
   // Frees the role on every exit but success, a cancelled await included.
-  auto release = folly::makeGuard([&] {
-    set->started.setValue();
-    close(*set);
-    if (current()) {
-      sets_.erase(role);
+  auto release = folly::makeGuard([&] { unsubscribe(*set); });
+  auto resolveInitialLane = folly::makeGuard([set] {
+    if (!set->initialLaneResolved.isFulfilled()) {
+      set->initialLaneResolved.setValue();
     }
   });
   auto fail = [&](RequestErrorCode code, std::string reason) {
@@ -661,31 +706,105 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
   }
 
   auto candidates = *lanes;
+  auto preferred = set->policy->initialLane(candidates);
+  const auto* preferredInfo = candidates.find(preferred);
+  if (!preferredInfo) {
+    preferredInfo = &candidates.lanes.front();
+    preferred = preferredInfo->trackName;
+  }
+  set->switcher.emplace(preferred, defaultMaxWait_);
+  if (!abr_.initializationFromCatalog) {
+    set->init = preferredInfo->init;
+  }
+  for (const auto& candidate : candidates.lanes) {
+    auto subscription = makeSubscription(*set, candidate.trackName);
+    if (!subscription) {
+      co_return fail(RequestErrorCode::INTERNAL_ERROR, "ended");
+    }
+    set->laneSubs.emplace(
+        FullTrackName{broadcast_, candidate.trackName},
+        std::move(subscription));
+  }
+
+  const auto initialDeadline = Clock::now() + abr_.initialLaneWait;
   std::string reason;
-  while (!candidates.lanes.empty()) {
-    auto lane = set->policy->initialLane(candidates);
-    const auto* info = candidates.find(lane);
-    if (!info) {
-      info = &candidates.lanes.front();
-      lane = info->trackName;
+  while (true) {
+    if (Clock::now() >= initialDeadline) {
+      co_return fail(RequestErrorCode::TIMEOUT, "no lane became ready");
     }
-    set->switcher.emplace(lane, defaultMaxWait_);
-    set->init = nullptr;
-    if (!abr_.initializationFromCatalog) {
-      set->init = info->init;
+    auto ready = candidates;
+    std::erase_if(ready.lanes, [&](const LaneInfo& candidate) {
+      return !set->laneSubs.at(FullTrackName{broadcast_, candidate.trackName})
+                  ->ready();
+    });
+    if (set->liveGroup) {
+      if (const auto* live = ready.find(set->switcher->liveLane())) {
+        const auto actual = *live;
+        ready.lanes = {actual};
+      } else {
+        std::erase_if(ready.lanes, [&](const LaneInfo& candidate) {
+          return !set->switcher->canSwitch(candidates, candidate.trackName);
+        });
+      }
     }
-    auto laneRequest = request;
-    auto laneTrack = FullTrackName{broadcast_, lane};
-    laneRequest.fullTrackName = laneTrack;
-    auto subscription = std::make_shared<ManagedSubscription>(
-        proxy_,
-        std::move(laneRequest),
-        std::make_shared<LaneConsumer>(self, set, laneTrack));
-    auto subscribed = co_await subscription->subscribe();
-    if (subscribed.hasValue()) {
-      if (!current()) {
-        subscription->unsubscribe();
+    if (!ready.lanes.empty()) {
+      auto lane = set->policy->initialLane(ready);
+      const auto* info = ready.find(lane);
+      if (!info) {
+        info = &ready.lanes.front();
+        lane = info->trackName;
+      }
+      auto subscribed =
+          co_await set->laneSubs.at(FullTrackName{broadcast_, lane})
+              ->subscribe();
+      if (!current() || set->closed || set->failed) {
         co_return fail(RequestErrorCode::INTERNAL_ERROR, "ended");
+      }
+      if (subscribed.hasError()) {
+        reason = subscribed.error().reasonPhrase;
+        continue;
+      }
+      if (!set->liveGroup) {
+        set->switcher.emplace(lane, defaultMaxWait_);
+        set->init = nullptr;
+        if (!abr_.initializationFromCatalog) {
+          set->init = info->init;
+        }
+      } else if (set->switcher->liveLane() != lane) {
+        const auto live = set->laneSubs.find(
+            FullTrackName{broadcast_, set->switcher->liveLane()});
+        if (live != set->laneSubs.end() && live->second->ready()) {
+          continue;
+        }
+        const auto source = set->switcher->liveLane();
+        set->switcher->cancel(Clock::now());
+        applyOutcomes(*set);
+        if (!current() || set->closed || set->failed) {
+          co_return fail(RequestErrorCode::INTERNAL_ERROR, "ended");
+        }
+        if (set->switcher->liveLane() != source ||
+            !set->laneSubs.at(FullTrackName{broadcast_, lane})->ready()) {
+          continue;
+        }
+        SwitchPlan plan;
+        plan.targetLane = lane;
+        if (!set->switcher->plan(candidates, plan, *set->liveGroup)) {
+          continue;
+        }
+        notify(
+            *set,
+            SwitchOutcome{
+                SwitchOutcome::Kind::Prepared,
+                source,
+                lane,
+                *set->liveGroup,
+                Clock::now()});
+        if (!current() || set->closed || set->failed) {
+          co_return fail(RequestErrorCode::INTERNAL_ERROR, "ended");
+        }
+      }
+      if (!set->laneSubs.at(FullTrackName{broadcast_, lane})->ready()) {
+        continue;
       }
       XLOG(DBG1) << "[lane_manager] " << broadcast_.describe() << " starts on "
                  << lane;
@@ -698,56 +817,127 @@ folly::coro::Task<Publisher::SubscribeResult> MoQLaneManager::subscribe(
       ok.largest = laneOk.largest;
       ok.extensions = laneOk.extensions;
       set->lane = lane;
-      set->laneSubs.emplace(std::move(laneTrack), std::move(subscription));
-      for (const auto& other : candidates.lanes) {
-        if (other.trackName == lane) {
-          continue;
-        }
-        auto otherRequest = request;
-        auto otherTrack = FullTrackName{broadcast_, other.trackName};
-        otherRequest.fullTrackName = otherTrack;
-        auto otherSubscription = std::make_shared<ManagedSubscription>(
-            proxy_,
-            std::move(otherRequest),
-            std::make_shared<LaneConsumer>(self, set, otherTrack));
-        co_withExecutor(
-            &set->executor,
-            subscribeLane(
-                std::move(otherTrack), std::move(otherSubscription), set))
-            .start();
+      if (!abr_.initializationFromCatalog) {
+        set->initialInit = info->init;
       }
-      release.dismiss();
-      set->started.setValue();
       set->track = request.fullTrackName;
       if (abr_.onStarted) {
         abr_.onStarted(*set->track, candidates);
       }
+      if (!current() || set->closed || set->failed) {
+        co_return fail(RequestErrorCode::INTERNAL_ERROR, "ended");
+      }
+      set->initialLaneResolved.setValue();
+      release.dismiss();
       co_return std::make_shared<VirtualHandle>(self, set, std::move(ok));
     }
-    reason = subscribed.error().reasonPhrase;
-    XLOG(WARN) << "[lane_manager] " << broadcast_.describe() << " lane " << lane
-               << " failed: " << reason;
-    std::erase_if(candidates.lanes, [&](const LaneInfo& candidate) {
-      return candidate.trackName == lane;
-    });
+    std::vector<folly::coro::Task<ManagedSubscription::SubscribeResult>> waits;
+    for (const auto& candidate : candidates.lanes) {
+      if (set->liveGroup && candidate.trackName != set->switcher->liveLane() &&
+          !set->switcher->canSwitch(candidates, candidate.trackName)) {
+        continue;
+      }
+      auto subscription =
+          set->laneSubs.at(FullTrackName{broadcast_, candidate.trackName});
+      if (!subscription->ready() && !subscription->ended() &&
+          subscription->state() != ManagedSubscription::State::Stopped) {
+        waits.push_back(subscription->subscribe());
+      }
+    }
+    if (waits.empty()) {
+      co_return fail(RequestErrorCode::INTERNAL_ERROR, std::move(reason));
+    }
+    auto waited = co_await folly::coro::co_awaitTry(
+        folly::coro::timeout(
+            folly::coro::collectAnyRange(std::move(waits)),
+            std::chrono::ceil<std::chrono::milliseconds>(
+                initialDeadline - Clock::now())));
+    if (waited.hasException<folly::FutureTimeout>()) {
+      co_return fail(RequestErrorCode::TIMEOUT, "no lane became ready");
+    }
+    auto collected = std::move(waited).value();
+    auto next = std::move(collected.second);
+    if (next.hasException()) {
+      if (next.hasException<folly::OperationCancelled>()) {
+        co_yield folly::coro::co_error(std::move(next).exception());
+      }
+      reason = next.exception().what().toStdString();
+      continue;
+    }
+    if (next->hasError()) {
+      reason = next->error().reasonPhrase;
+    }
   }
-  co_return fail(RequestErrorCode::INTERNAL_ERROR, reason);
 }
 
-folly::coro::Task<void> MoQLaneManager::subscribeLane(
-    FullTrackName lane,
+folly::coro::Task<void> MoQLaneManager::startSubscription(
     std::shared_ptr<ManagedSubscription> subscription,
-    std::weak_ptr<SubscriptionSet> set) {
-  auto subscribed = co_await subscription->subscribe();
-  if (subscribed.hasError()) {
-    XLOG(WARN) << "[lane_manager] lane " << lane.trackName
-               << " failed: " << subscribed.error().reasonPhrase;
-    co_return;
+    std::weak_ptr<SubscriptionSet> set,
+    std::string lane) {
+  auto subscribed =
+      co_await folly::coro::co_awaitTry(subscription->subscribe());
+  if (subscribed.hasException()) {
+    if (!subscribed.hasException<folly::OperationCancelled>()) {
+      XLOG(WARN) << "[lane_manager] lane=" << lane
+                 << " subscribeException=" << subscribed.exception().what();
+    }
+  } else if (
+      subscribed->hasError() &&
+      subscribed->error().errorCode != RequestErrorCode::CANCELLED) {
+    XLOG(WARN) << "[lane_manager] lane=" << lane << " subscribeError="
+               << static_cast<uint64_t>(subscribed->error().errorCode)
+               << " reason=" << subscribed->error().reasonPhrase;
   }
-  if (auto locked = set.lock(); locked && !locked->closed) {
-    locked->laneSubs.emplace(std::move(lane), std::move(subscription));
-  } else {
+  if (auto current = set.lock();
+      !current || current->closed || current->failed) {
     subscription->unsubscribe();
+  }
+}
+
+std::shared_ptr<ManagedSubscription> MoQLaneManager::makeSubscription(
+    SubscriptionSet& set,
+    std::string lane) {
+  auto downstreamSession = set.downstreamSession.lock();
+  if (!downstreamSession) {
+    return nullptr;
+  }
+  folly::RequestContextScopeGuard context;
+  folly::RequestContext::get()->setContextData(
+      kMoQSessionToken,
+      std::make_unique<MoQSession::MoQSessionRequestData>(
+          std::move(downstreamSession)));
+  auto request = set.request;
+  auto fullTrackName = FullTrackName{broadcast_, std::move(lane)};
+  request.fullTrackName = fullTrackName;
+  return std::make_shared<ManagedSubscription>(
+      proxy_,
+      std::move(request),
+      std::make_shared<LaneConsumer>(
+          shared_from_this(), set.shared_from_this(), std::move(fullTrackName)),
+      set.executor);
+}
+
+void MoQLaneManager::ensureSubscriptions(
+    SubscriptionSet& set,
+    const SwitchingSet& lanes) {
+  if (set.closed || set.failed) {
+    return;
+  }
+  for (const auto& lane : lanes.lanes) {
+    auto fullTrackName = FullTrackName{broadcast_, lane.trackName};
+    if (set.laneSubs.contains(fullTrackName)) {
+      continue;
+    }
+    auto subscription = makeSubscription(set, lane.trackName);
+    if (!subscription) {
+      return;
+    }
+    set.laneSubs.emplace(std::move(fullTrackName), subscription);
+    co_withExecutor(
+        &set.executor,
+        startSubscription(
+            std::move(subscription), set.weak_from_this(), lane.trackName))
+        .start();
   }
 }
 
@@ -759,9 +949,22 @@ MoQLaneManager::beginSubgroup(
     uint64_t subgroup,
     Priority priority,
     BeginSubgroupOptions options) {
-  if (set.closed || set.failed) {
+  if (set.closed || set.failed || !set.switcher) {
     return folly::makeUnexpected(
         MoQPublishError(MoQPublishError::CANCELLED, "unsubscribed"));
+  }
+  if (!set.liveGroup && set.switcher->liveLane() != lane) {
+    auto live =
+        set.laneSubs.find(FullTrackName{broadcast_, set.switcher->liveLane()});
+    if (live == set.laneSubs.end() || !live->second->ready()) {
+      set.switcher.emplace(std::string(lane), defaultMaxWait_);
+      if (const auto* lanes = catalog_.switchingSet(set.role)) {
+        if (const auto* adopted = lanes->find(lane);
+            adopted && !abr_.initializationFromCatalog) {
+          set.init = adopted->init;
+        }
+      }
+    }
   }
   auto& switcher = *set.switcher;
   const auto now = Clock::now();
@@ -818,6 +1021,18 @@ void MoQLaneManager::expireHold(SubscriptionSet& set) {
             std::chrono::milliseconds(1),
             std::chrono::ceil<std::chrono::milliseconds>(*held - now)));
   }
+  select(set);
+}
+
+void MoQLaneManager::laneUnavailable(
+    SubscriptionSet& set,
+    std::string_view lane) {
+  if (set.closed || set.failed || !set.switcher) {
+    return;
+  }
+  set.switcher->onLaneUnavailable(lane, Clock::now());
+  applyOutcomes(set);
+  set.selectedGroup.reset();
   select(set);
 }
 
@@ -890,22 +1105,37 @@ void MoQLaneManager::fail(SubscriptionSet& set, const MoQPublishError& error) {
 }
 
 void MoQLaneManager::select(SubscriptionSet& set) {
+  if (set.closed || set.failed || !set.switcher) {
+    return;
+  }
   auto& switcher = *set.switcher;
   const auto* lanes = catalog_.switchingSet(set.role);
-  if (set.closed || set.failed || switcher.pending() || !lanes ||
-      !set.liveGroup || set.liveGroup == set.selectedGroup) {
+  if (!lanes) {
+    return;
+  }
+  ensureSubscriptions(set, *lanes);
+  if (switcher.pending() || !set.liveGroup ||
+      set.liveGroup == set.selectedGroup) {
+    return;
+  }
+  auto eligible = *lanes;
+  std::erase_if(eligible.lanes, [&](const LaneInfo& lane) {
+    auto subscription =
+        set.laneSubs.find(FullTrackName{broadcast_, lane.trackName});
+    return subscription == set.laneSubs.end() || !subscription->second->ready();
+  });
+  if (eligible.lanes.empty()) {
     return;
   }
   set.selectedGroup = set.liveGroup;
-  auto eligible = *lanes;
-  std::erase_if(eligible.lanes, [&](const LaneInfo& lane) {
-    return lane.trackName != switcher.liveLane() &&
-        !set.laneSubs.contains(FullTrackName{broadcast_, lane.trackName});
-  });
   const auto now = Clock::now();
   auto plan =
       set.policy->select(eligible, switcher.liveLane(), *set.liveGroup, now);
-  if (plan && switcher.plan(eligible, *plan, *set.liveGroup)) {
+  auto target = plan
+      ? set.laneSubs.find(FullTrackName{broadcast_, plan->targetLane})
+      : set.laneSubs.end();
+  if (plan && target != set.laneSubs.end() && target->second->ready() &&
+      switcher.plan(*lanes, *plan, *set.liveGroup)) {
     notify(
         set,
         SwitchOutcome{
@@ -929,28 +1159,46 @@ folly::coro::Task<Publisher::FetchResult> MoQLaneManager::fetch(
   auto it = sets_.find(role);
   if (it == sets_.end()) {
     co_return folly::makeUnexpected(
-        FetchError{fetch.requestID, FetchErrorCode::DOES_NOT_EXIST, ""});
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::DOES_NOT_EXIST,
+            "no virtual subscription"});
   }
-  // A joining FETCH can arrive while its SUBSCRIBE still awaits the lane.
   auto set = it->second;
-  co_await set->started.getFuture();
-  it = sets_.find(role);
-  const auto* lanes = catalog_.switchingSet(role);
-  const auto* lane = it != sets_.end() && it->second == set && lanes
-      ? lanes->find(set->lane)
-      : nullptr;
-  if (!lane) {
+  if (set->lane.empty()) {
+    auto resolved = co_await folly::coro::co_awaitTry(
+        folly::coro::timeout(
+            set->initialLaneResolved.getFuture(), kJoiningFetchWait));
+    if (resolved.hasException<folly::FutureTimeout>()) {
+      co_return folly::makeUnexpected(
+          FetchError{
+              fetch.requestID,
+              FetchErrorCode::TIMEOUT,
+              "initial lane unavailable"});
+    }
+    if (resolved.hasException()) {
+      co_yield folly::coro::co_error(std::move(resolved).exception());
+    }
+    it = sets_.find(role);
+    if (it == sets_.end() || it->second != set) {
+      co_return folly::makeUnexpected(
+          FetchError{
+              fetch.requestID,
+              FetchErrorCode::DOES_NOT_EXIST,
+              "initial subscription failed"});
+    }
+  }
+  auto subscription = set->laneSubs.find(FullTrackName{broadcast_, set->lane});
+  if (subscription == set->laneSubs.end()) {
     co_return folly::makeUnexpected(
-        FetchError{fetch.requestID, FetchErrorCode::DOES_NOT_EXIST, ""});
+        FetchError{
+            fetch.requestID,
+            FetchErrorCode::DOES_NOT_EXIST,
+            "initial lane unavailable"});
   }
-  fetch.fullTrackName = FullTrackName{broadcast_, lane->trackName};
-  std::shared_ptr<const folly::IOBuf> init;
-  if (!abr_.initializationFromCatalog) {
-    init = lane->init;
-  }
-  co_return co_await proxy_->fetch(
+  co_return co_await subscription->second->subscribeWithJoiningFetch(
       std::move(fetch),
-      std::make_shared<InitFetchConsumer>(std::move(client), std::move(init)));
+      std::make_shared<InitFetchConsumer>(std::move(client), set->initialInit));
 }
 
 void MoQLaneManager::unsubscribe(const SubscriptionSet& set) {
@@ -982,7 +1230,8 @@ void MoQLaneManager::close(SubscriptionSet& set) {
 
 void MoQLaneManager::onPolicyChanged(Role role) {
   auto found = sets_.find(role);
-  if (found == sets_.end() || found->second->closed || found->second->failed) {
+  if (found == sets_.end() || found->second->closed || found->second->failed ||
+      !found->second->switcher || found->second->lane.empty()) {
     return;
   }
   auto set = found->second;

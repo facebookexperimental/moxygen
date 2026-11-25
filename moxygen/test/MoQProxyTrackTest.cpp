@@ -7,8 +7,10 @@
 #include <fmt/core.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Error.h>
 #include <folly/coro/Invoke.h>
 #include <folly/coro/Sleep.h>
+#include <folly/coro/WithCancellation.h>
 #include <folly/futures/ManualTimekeeper.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
@@ -19,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -63,6 +66,9 @@ class TestUpstreamProvider final : public MoQUpstreamProvider {
       cancelled += waited.hasException();
       co_return folly::makeUnexpected(MoQUpstreamProviderError{"cancelled"});
     }
+    if (exception) {
+      throw std::runtime_error(*exception);
+    }
     if (error || calls <= failFirstCalls) {
       co_return folly::makeUnexpected(
           MoQUpstreamProviderError{error.value_or("unavailable")});
@@ -75,6 +81,7 @@ class TestUpstreamProvider final : public MoQUpstreamProvider {
   std::optional<TrackRequestParameters> receivedParams;
   std::optional<bool> receivedHasFallbackProvider;
   std::optional<std::string> error;
+  std::optional<std::string> exception;
   size_t failFirstCalls{0};
   folly::coro::Baton* gate{nullptr};
   // Waits until cancelled, counted in cancelled, or kCancellationWait, then
@@ -642,8 +649,13 @@ TEST_F(MoQProxyTrackTest, ConcurrentSubscribersShareUpstreamSubscription) {
   EXPECT_EQ(callback_->calls, 1);
 }
 
-TEST_F(MoQProxyTrackTest, ProviderFailureIsReturnedDownstream) {
-  provider_->error = "no upstream available";
+TEST_F(MoQProxyTrackTest, ExhaustedProvidersCanRecoverOnNewSubscribe) {
+  provider_->error = "primary unavailable";
+  auto fallbackProvider =
+      std::make_shared<TestUpstreamProvider>(upstreamSession_);
+  fallbackProvider->error = "no upstream available";
+  track_ = MoQProxyTrack::create(kTrackName, {provider_, fallbackProvider});
+  track_->setCallback(callback_);
 
   auto result = folly::coro::blockingWait(
       track_->subscribe(
@@ -654,8 +666,38 @@ TEST_F(MoQProxyTrackTest, ProviderFailureIsReturnedDownstream) {
 
   ASSERT_TRUE(result.hasError());
   EXPECT_EQ(result.error().requestID, RequestID(4));
-  EXPECT_EQ(result.error().errorCode, SubscribeErrorCode::INTERNAL_ERROR);
+  EXPECT_EQ(result.error().errorCode, SubscribeErrorCode::GOING_AWAY);
   EXPECT_THAT(result.error().reasonPhrase, HasSubstr("no upstream available"));
+  EXPECT_EQ(provider_->calls, 1);
+  EXPECT_EQ(fallbackProvider->calls, 1);
+  EXPECT_EQ(callback_->calls, 1);
+
+  fallbackProvider->error.reset();
+  track_ = MoQProxyTrack::create(kTrackName, {provider_, fallbackProvider});
+  track_->setCallback(callback_);
+  auto upstreamHandle = makeUpstreamHandle();
+  auto recovered = subscribeThroughUpstream(upstreamHandle, makeConsumer());
+  ASSERT_NE(recovered, nullptr);
+  EXPECT_EQ(provider_->calls, 2);
+  EXPECT_EQ(fallbackProvider->calls, 2);
+  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  recovered->unsubscribe();
+  EXPECT_EQ(callback_->calls, 2);
+}
+
+TEST_F(MoQProxyTrackTest, ProviderExceptionIsRetryable) {
+  provider_->exception = "connection failed";
+  auto result = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(4)),
+          makeConsumer(),
+          makeDownstreamPeer()),
+      &eventBase_);
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().requestID, RequestID(4));
+  EXPECT_EQ(result.error().errorCode, SubscribeErrorCode::GOING_AWAY);
+  EXPECT_THAT(result.error().reasonPhrase, HasSubstr("connection failed"));
   EXPECT_EQ(callback_->calls, 1);
 }
 
@@ -717,6 +759,39 @@ TEST_F(MoQProxyTrackTest, ClosingDuringProviderAttemptDoesNotTryFallback) {
   ASSERT_TRUE(result->hasError());
   EXPECT_EQ(result->error().errorCode, SubscribeErrorCode::GOING_AWAY);
   EXPECT_EQ(fallbackProvider->calls, 0);
+}
+
+TEST_F(MoQProxyTrackTest, CallerCancellationDoesNotTryFallback) {
+  provider_->waitForCancellation = true;
+  auto fallbackProvider =
+      std::make_shared<TestUpstreamProvider>(upstreamSession_);
+  track_ = MoQProxyTrack::create(kTrackName, {provider_, fallbackProvider});
+  track_->setCallback(callback_);
+  folly::CancellationSource cancelled;
+  std::optional<Publisher::SubscribeResult> result;
+  folly::coro::co_withExecutor(
+      executor_.get(),
+      saveSubscribeResult(
+          folly::coro::co_withCancellation(
+              cancelled.getToken(),
+              track_->subscribe(
+                  makeSubscribeRequest(RequestID(11)),
+                  makeConsumer(),
+                  makeDownstreamPeer())),
+          result))
+      .start();
+  eventBase_.loopOnce();
+  ASSERT_EQ(provider_->calls, 1);
+
+  cancelled.requestCancellation();
+  eventBase_.loop();
+
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->hasError());
+  EXPECT_EQ(result->error().errorCode, SubscribeErrorCode::CANCELLED);
+  EXPECT_EQ(provider_->cancelled, 1);
+  EXPECT_EQ(fallbackProvider->calls, 0);
+  EXPECT_EQ(callback_->calls, 1);
 }
 
 // The upstream ends its subscription before the track sees its SUBSCRIBE_OK.
@@ -938,6 +1013,58 @@ TEST_F(MoQProxyTrackTest, UpstreamSubscribeErrorFallsBackToNextProvider) {
   EXPECT_EQ(fallbackProvider->calls, 1);
   EXPECT_CALL(*upstreamHandle, unsubscribe());
   result.value()->unsubscribe();
+}
+
+TEST_F(MoQProxyTrackTest, UpstreamSubscribeExceptionIsRetryable) {
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(
+          [](SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_yield folly::coro::co_error(
+                std::runtime_error("upstream disconnected"));
+          });
+  auto result = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(10)),
+          makeConsumer(),
+          makeDownstreamPeer()),
+      &eventBase_);
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().requestID, RequestID(10));
+  EXPECT_EQ(result.error().errorCode, SubscribeErrorCode::GOING_AWAY);
+  EXPECT_THAT(result.error().reasonPhrase, HasSubstr("upstream disconnected"));
+  EXPECT_EQ(callback_->calls, 1);
+}
+
+TEST_F(MoQProxyTrackTest, UpstreamSubscribeErrorKeepsItsCode) {
+  auto primaryProvider =
+      std::make_shared<TestUpstreamProvider>(upstreamSession_);
+  primaryProvider->error = "primary unavailable";
+  track_ = MoQProxyTrack::create(kTrackName, {primaryProvider, provider_});
+  EXPECT_CALL(*upstreamSession_, subscribe(_, _))
+      .WillOnce(
+          [](SubscribeRequest, std::shared_ptr<TrackConsumer>)
+              -> folly::coro::Task<Publisher::SubscribeResult> {
+            co_return folly::makeUnexpected(
+                SubscribeError{
+                    RequestID(100),
+                    SubscribeErrorCode::UNAUTHORIZED,
+                    "denied"});
+          });
+  auto result = folly::coro::blockingWait(
+      track_->subscribe(
+          makeSubscribeRequest(RequestID(10)),
+          makeConsumer(),
+          makeDownstreamPeer()),
+      &eventBase_);
+
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().requestID, RequestID(10));
+  EXPECT_EQ(result.error().errorCode, SubscribeErrorCode::UNAUTHORIZED);
+  EXPECT_THAT(result.error().reasonPhrase, HasSubstr("denied"));
+  EXPECT_EQ(primaryProvider->calls, 1);
+  EXPECT_EQ(provider_->calls, 1);
 }
 
 TEST_F(MoQProxyTrackTest, DownstreamRequestUpdateIsNotSupported) {
