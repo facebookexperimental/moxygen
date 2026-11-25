@@ -91,6 +91,36 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceDone) {
   co_await barricade;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(MoQSessionTest, PublishNamespaceDoneDeliversErrorCode) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockPublishNamespaceHandle> serverHandle;
+  EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
+      .WillOnce(
+          [&serverHandle](
+              auto pubNs,
+              auto) -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
+            serverHandle =
+                std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
+                    {.requestID = pubNs.requestID,
+                     .requestSpecificParams = {}}));
+            co_return serverHandle;
+          });
+  auto res = co_await clientSession_->publishNamespace(getPublishNamespace());
+  CO_ASSERT_TRUE(res.hasValue());
+
+  // The draft 16 PUBLISH_NAMESPACE_DONE frame has no code field.
+  auto expected = getDraftMajorVersion(getServerSelectedVersion()) >= 18
+      ? ResetStreamErrorCode::EXCESSIVE_LOAD
+      : ResetStreamErrorCode::CANCELLED;
+  folly::coro::Baton done;
+  EXPECT_CALL(*serverHandle, publishNamespaceDone(expected)).WillOnce([&done] {
+    done.post();
+  });
+  res.value()->publishNamespaceDone(ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await done;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 CO_TEST_P_X(MoQSessionTest, PublishNamespaceCancel) {
   co_await setupMoQSession();
 

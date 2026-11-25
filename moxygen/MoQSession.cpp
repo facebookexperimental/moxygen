@@ -1864,13 +1864,13 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
         *subscribeLocType_ == LocationType::LargestObject;
   }
 
-  void unsubscribe() {
+  void unsubscribe(ResetStreamErrorCode code) {
     cancelGoawayResetTimer();
     if (!subscriptionHandle_) {
       XLOG(DBG1) << "Received Unsubscribe before sending SUBSCRIBE_OK id="
                  << requestID_ << " trackPub=" << this;
     } else {
-      subscriptionHandle_->unsubscribe();
+      subscriptionHandle_->unsubscribe(code);
     }
     resetAllSubgroups(ResetStreamErrorCode::CANCELLED);
     subscriptionHandle_.reset();
@@ -1905,7 +1905,7 @@ class MoQSession::TrackPublisherImpl : public MoQSession::PublisherImpl,
     // A subscription ends with PUBLISH_DONE or an unsubscribe, and the closed
     // session cannot send PUBLISH_DONE.
     if (auto handle = std::exchange(subscriptionHandle_, nullptr)) {
-      handle->unsubscribe();
+      handle->unsubscribe(code);
     }
     // Clear session_ last: each subgroup reports onSubscriptionStreamClosed.
     heldPublishDone_.reset();
@@ -2102,14 +2102,14 @@ class MoQSession::FetchPublisherImpl : public MoQSession::PublisherImpl {
     fullTrackName_ = std::move(fullTrackName);
   }
 
-  void cancel() {
+  void cancel(ResetStreamErrorCode code) {
     cancelGoawayResetTimer();
     cancelled_ = true;
     // reset -> onStreamComplete -> fetchComplete: handles pubTracks_.erase
     // and retireRequestID. A fill is removed from its subscription instead.
     reset(ResetStreamErrorCode::CANCELLED);
     if (auto handle = std::exchange(handle_, nullptr)) {
-      handle->fetchCancel();
+      handle->fetchCancel(code);
     }
   }
 
@@ -3179,21 +3179,21 @@ class MoQSession::FetchTrackReceiveState
 
   void cancel(
       MoQSession* session,
-      ResetStreamErrorCode consumerError = ResetStreamErrorCode::CANCELLED) {
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) {
     if (isFill_) {
       // Cancelling sends STOP_SENDING on the fill's data stream.
-      dataStreamCancelCode_ = ResetStreamErrorCode::CANCELLED;
+      dataStreamCancelCode_ = code;
     }
     cancelSource_.requestCancellation();
     // RST the bidi (e.g. fetch-stream-open timeout); peer interprets as cancel.
     if (bidiControl_) {
-      bidiControl_->cancel(ResetStreamErrorCode::CANCELLED);
+      bidiControl_->cancel(code);
     }
     fetchError({requestID_, FetchErrorCode::CANCELLED, "cancelled"});
     auto callback = callback_;
     resetFetchCallback(session);
     if (callback) {
-      callback->reset(consumerError);
+      callback->reset(code);
     }
   }
 
@@ -6016,7 +6016,7 @@ void MoQSession::onUnsubscribe(Unsubscribe unsubscribe) {
               << unsubscribe.requestID << " sess=" << this;
   } else {
     cancelInboundRequest(unsubscribe.requestID);
-    trackPublisher->unsubscribe();
+    trackPublisher->unsubscribe(unsubscribe.errorCode);
     // A publisher whose subgroups are still draining is in pubTracks_ even
     // though PUBLISH_DONE already went out and retired the request, so ask the
     // publisher rather than the map.
@@ -6390,21 +6390,19 @@ class MoQSession::ReceiverSubscriptionHandle
   }
 
   void unsubscribe(
-      ResetStreamErrorCode /*code*/ =
-          ResetStreamErrorCode::CANCELLED) override {
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
-      session_->unsubscribe({subscribeOk_->requestID}, control_);
+      session_->unsubscribe({subscribeOk_->requestID, code}, control_);
       session_.reset();
     }
   }
 
   void cancelFill(
       RequestID requestID,
-      ResetStreamErrorCode /*code*/ =
-          ResetStreamErrorCode::CANCELLED) override {
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
       // fetchCancel() sends STOP_SENDING for a fill, not FETCH_CANCEL.
-      session_->fetchCancel({requestID}, nullptr);
+      session_->fetchCancel({requestID, code}, nullptr);
     }
   }
 
@@ -7093,7 +7091,7 @@ void MoQSession::onFetchCancel(FetchCancel fetchCancel) {
       return;
     }
     cancelInboundRequest(fetchCancel.requestID);
-    fetchPublisher->cancel();
+    fetchPublisher->cancel(fetchCancel.errorCode);
   }
 }
 
@@ -7144,7 +7142,7 @@ void MoQSession::onFetchStalled(RequestID requestID) {
   XLOG(DBG1) << __func__ << " id=" << requestID << " sess=" << this;
   const auto state = fetchIt->second;
   const auto control = state->bidiControl();
-  fetchCancel({requestID}, control, ResetStreamErrorCode::DELIVERY_TIMEOUT);
+  fetchCancel({requestID, ResetStreamErrorCode::DELIVERY_TIMEOUT}, control);
 }
 
 void MoQSession::onTrackStatus(TrackStatus trackStatus) {
@@ -8077,7 +8075,7 @@ void MoQSession::unsubscribe(
     }
     // Before draft 18 an UNSUBSCRIBE is not a reply to the peer's PUBLISH.
     if (control && getDraftMajorVersion(negotiatedVersion_) >= 18) {
-      control->cancel(ResetStreamErrorCode::CANCELLED);
+      control->cancel(unsubscribe.errorCode);
     } else {
       publishError(
           PublishError{
@@ -8109,7 +8107,7 @@ void MoQSession::unsubscribe(
   // Draft 18+: RESET the write half and cancel the read source on the bidi
   // request stream. Older drafts send Unsubscribe on the control stream.
   if (control && getDraftMajorVersion(negotiatedVersion_) >= 18) {
-    control->cancel(ResetStreamErrorCode::CANCELLED);
+    control->cancel(unsubscribe.errorCode);
   } else {
     auto res = moqFrameWriter_.writeUnsubscribe(controlWriteBuf_, unsubscribe);
     if (!res) {
@@ -8429,10 +8427,9 @@ class MoQSession::ReceiverFetchHandle : public Publisher::FetchHandle,
   }
 
   void fetchCancel(
-      ResetStreamErrorCode /*code*/ =
-          ResetStreamErrorCode::CANCELLED) override {
+      ResetStreamErrorCode code = ResetStreamErrorCode::CANCELLED) override {
     if (session_) {
-      session_->fetchCancel({fetchOk_->requestID}, control_);
+      session_->fetchCancel({fetchOk_->requestID, code}, control_);
       session_.reset();
     }
   }
@@ -8643,8 +8640,7 @@ void MoQSession::cancelLocalRequest(RequestID requestID) {
 
 void MoQSession::fetchCancel(
     const FetchCancel& fetchCan,
-    const std::shared_ptr<BidiStreamControl>& control,
-    ResetStreamErrorCode consumerError) {
+    const std::shared_ptr<BidiStreamControl>& control) {
   XLOG(DBG1) << __func__ << " sess=" << this;
 
   auto trackIt = fetches_.find(fetchCan.requestID);
@@ -8654,7 +8650,7 @@ void MoQSession::fetchCancel(
     return;
   }
   auto isFill = trackIt->second->isFill();
-  trackIt->second->cancel(this, consumerError);
+  trackIt->second->cancel(this, fetchCan.errorCode);
   if (isFill) {
     // A FETCH_CANCEL would name the subscription's request ID. The
     // STOP_SENDING that cancel() triggers is the whole cancel.
@@ -8662,7 +8658,7 @@ void MoQSession::fetchCancel(
   }
   // Draft 18+ cancels via the bidi; older drafts send FetchCancel on control.
   if (control && getDraftMajorVersion(negotiatedVersion_) >= 18) {
-    control->cancel(ResetStreamErrorCode::CANCELLED);
+    control->cancel(fetchCan.errorCode);
   } else {
     auto res = moqFrameWriter_.writeFetchCancel(controlWriteBuf_, fetchCan);
     if (!res) {
@@ -8848,8 +8844,10 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
       [this](FrameType wireType, bool finIsCancellation) {
         return BidiStreamConfig{
             {wireType, FrameType::REQUEST_UPDATE},
-            [this](RequestID id, std::optional<ResetStreamErrorCode>) {
-              onUnsubscribeNamespace(UnsubscribeNamespace{id});
+            [this](RequestID id, std::optional<ResetStreamErrorCode> error) {
+              onUnsubscribeNamespace(
+                  UnsubscribeNamespace{
+                      id, error.value_or(ResetStreamErrorCode::CANCELLED)});
             },
             finIsCancellation};
       };
@@ -8858,14 +8856,18 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
       case FrameType::SUBSCRIBE:
         return BidiStreamConfig{
             {FrameType::SUBSCRIBE, FrameType::REQUEST_UPDATE},
-            [this](RequestID id, std::optional<ResetStreamErrorCode>) {
-              onUnsubscribe(Unsubscribe{id});
+            [this](RequestID id, std::optional<ResetStreamErrorCode> error) {
+              onUnsubscribe(
+                  Unsubscribe{
+                      id, error.value_or(ResetStreamErrorCode::CANCELLED)});
             }};
       case FrameType::FETCH:
         return BidiStreamConfig{
             {FrameType::FETCH, FrameType::REQUEST_UPDATE},
-            [this](RequestID id, std::optional<ResetStreamErrorCode>) {
-              onFetchCancel(FetchCancel{id});
+            [this](RequestID id, std::optional<ResetStreamErrorCode> error) {
+              onFetchCancel(
+                  FetchCancel{
+                      id, error.value_or(ResetStreamErrorCode::CANCELLED)});
             }};
       case FrameType::PUBLISH:
         return BidiStreamConfig{
@@ -8879,10 +8881,10 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
         // The publisher withdraws by cancelling this stream.
         return BidiStreamConfig{
             {FrameType::PUBLISH_NAMESPACE, FrameType::REQUEST_UPDATE},
-            [this](RequestID id, std::optional<ResetStreamErrorCode>) {
-              PublishNamespaceDone done;
-              done.requestID = id;
-              onPublishNamespaceDone(done);
+            [this](RequestID id, std::optional<ResetStreamErrorCode> error) {
+              onPublishNamespaceDone(
+                  PublishNamespaceDone{
+                      id, error.value_or(ResetStreamErrorCode::CANCELLED)});
             }};
       case FrameType::TRACK_STATUS:
         return BidiStreamConfig{{FrameType::TRACK_STATUS}, nullptr};
@@ -8895,8 +8897,9 @@ std::optional<MoQSession::BidiStreamConfig> MoQSession::getBidiStreamConfig(
         // FIN here means "no more REQUEST_UPDATE"; RST and STOP_SENDING cancel.
         return BidiStreamConfig{
             {FrameType::SUBSCRIBE_TRACKS, FrameType::REQUEST_UPDATE},
-            [this](RequestID id, std::optional<ResetStreamErrorCode>) {
-              onSubscribeTracksStreamClosed(id);
+            [this](RequestID id, std::optional<ResetStreamErrorCode> error) {
+              onSubscribeTracksStreamClosed(
+                  id, error.value_or(ResetStreamErrorCode::CANCELLED));
             }};
       default:
         return std::nullopt;

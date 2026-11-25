@@ -1023,6 +1023,49 @@ CO_TEST_P_X(MoQSessionTest, Unsubscribe) {
   co_await unsubscribeInvoked;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(MoQSessionTest, UnsubscribeDeliversErrorCode) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> serverHandle;
+  expectSubscribe([&serverHandle](auto sub, auto) -> TaskSubscribeResult {
+    serverHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return serverHandle;
+  });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  // The draft 16 UNSUBSCRIBE frame has no code field.
+  auto expected = getDraftMajorVersion(getServerSelectedVersion()) >= 18
+      ? ResetStreamErrorCode::EXCESSIVE_LOAD
+      : ResetStreamErrorCode::CANCELLED;
+  folly::coro::Baton unsubscribed;
+  EXPECT_CALL(*serverHandle, unsubscribe(expected)).WillOnce([&unsubscribed] {
+    unsubscribed.post();
+  });
+  res.value()->unsubscribe(ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await unsubscribed;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, SessionCloseUnsubscribesWithSessionClosed) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscriptionHandle> serverHandle;
+  expectSubscribe([&serverHandle](auto sub, auto) -> TaskSubscribeResult {
+    serverHandle = makeSubscribeOkResult(sub, AbsoluteLocation{0, 0});
+    co_return serverHandle;
+  });
+  auto res = co_await clientSession_->subscribe(
+      getSubscribe(kTestTrackName), subscribeCallback_);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  EXPECT_CALL(*serverHandle, unsubscribe(ResetStreamErrorCode::SESSION_CLOSED));
+  EXPECT_CALL(*subscribeCallback_, publishDone(_))
+      .WillOnce(testing::Return(folly::unit));
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+  co_await rescheduleN(4);
+}
 CO_TEST_P_X(MoQSessionTest, SubscribeException) {
   co_await setupMoQSession();
   std::shared_ptr<SubgroupConsumer> subgroupConsumer = nullptr;
