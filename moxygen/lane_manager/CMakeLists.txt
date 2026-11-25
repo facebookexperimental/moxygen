@@ -44,7 +44,6 @@ moxygen_add_library(moxygen_lane_manager_managed_subscription
     Folly::folly_coro_with_cancellation
     Folly::folly_futures_core
     Folly::folly_io_async_request_context
-    Folly::folly_scope_guard
   EXPORTED_DEPS
     moxygen_events_moq_executor
     moxygen_moq

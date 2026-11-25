@@ -81,8 +81,17 @@ class MoQLaneManager : public std::enable_shared_from_this<MoQLaneManager> {
 
  private:
   class LaneConsumer;
+  class PendingSubscription;
   class VirtualHandle;
   struct SubscriptionSet;
+
+  static Publisher::SubscribeResult makeSubscribeError(
+      RequestID requestID,
+      RequestErrorCode code,
+      std::string reason);
+  bool isCurrent(const SubscriptionSet& set) const;
+  SwitchingSet readyLanes(const SubscriptionSet& set, const SwitchingSet& lanes)
+      const;
 
   static folly::coro::Task<void> startSubscription(
       std::shared_ptr<ManagedSubscription> subscription,
