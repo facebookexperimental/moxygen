@@ -1032,7 +1032,7 @@ void MoQForwarder::Subscriber::requestFill(
       forwarder, trackConsumer, std::move(*fetch));
 }
 
-void MoQForwarder::Subscriber::unsubscribe() {
+void MoQForwarder::Subscriber::unsubscribe(ResetStreamErrorCode /*code*/) {
   XLOG(DBG4) << "unsubscribe sess=" << this;
   if (!forwarder) {
     return;

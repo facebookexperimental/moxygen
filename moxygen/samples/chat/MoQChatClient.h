@@ -39,7 +39,8 @@ class MoQChatClient : public Publisher,
             RequestErrorCode::NOT_SUPPORTED,
             "Request update not implemented"});
   }
-  void unsubscribe() override;
+  void unsubscribe(
+      ResetStreamErrorCode /*code*/ = ResetStreamErrorCode::CANCELLED) override;
 
   class ChatNamespacePublishHandle : public Publisher::NamespacePublishHandle {
    public:
@@ -66,7 +67,9 @@ class MoQChatClient : public Publisher,
           client_(std::move(client)),
           trackNamespace_(std::move(trackNamespace)) {}
 
-    void publishNamespaceDone() override {
+    void publishNamespaceDone(
+        ResetStreamErrorCode /*code*/ =
+            ResetStreamErrorCode::CANCELLED) override {
       client_->publishNamespaceDone(trackNamespace_);
       client_.reset();
     }

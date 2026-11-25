@@ -649,14 +649,14 @@ TEST_F(MoQProxyTest, RecreatesTrackAfterLastSubscriberLeaves) {
   auto first =
       subscribe(makeDownstreamSession(), makeSubscribeRequest(RequestID(1)));
   ASSERT_TRUE(first.hasValue());
-  EXPECT_CALL(*firstUpstreamHandle, unsubscribe());
+  EXPECT_CALL(*firstUpstreamHandle, unsubscribe(testing::_));
   first.value()->unsubscribe();
 
   auto second =
       subscribe(makeDownstreamSession(), makeSubscribeRequest(RequestID(2)));
   ASSERT_TRUE(second.hasValue());
   EXPECT_EQ(provider_->calls, 2);
-  EXPECT_CALL(*secondUpstreamHandle, unsubscribe());
+  EXPECT_CALL(*secondUpstreamHandle, unsubscribe(testing::_));
   second.value()->unsubscribe();
 }
 
@@ -675,7 +675,7 @@ TEST_F(MoQProxyTest, CloseEndsViewersWithGoingAwayAndRejectsNewSubscriptions) {
       downstreamConsumer);
   ASSERT_TRUE(result.hasValue());
 
-  EXPECT_CALL(*upstreamHandle, unsubscribe());
+  EXPECT_CALL(*upstreamHandle, unsubscribe(testing::_));
   EXPECT_CALL(
       *downstreamConsumer,
       publishDone(
@@ -1066,7 +1066,7 @@ TEST_F(MoQProxyTest, FetchFallsBackToNextProvider) {
 TEST_F(MoQProxyTest, CloseDuringFetchCancelsUpstream) {
   auto upstreamHandle = makeFetchHandle(RequestID(101));
   std::weak_ptr<MoQProxy> proxy = proxy_;
-  EXPECT_CALL(*upstreamHandle, fetchCancel());
+  EXPECT_CALL(*upstreamHandle, fetchCancel(testing::_));
   EXPECT_CALL(*upstreamSession_, fetch(_, _))
       .WillOnce(
           [upstreamHandle, proxy](Fetch, std::shared_ptr<FetchConsumer>)
@@ -1488,7 +1488,7 @@ TEST_F(MoQProxyJoiningTest, ExpiredWaitFallsBackToOneUpstreamFetch) {
   EXPECT_EQ(range->end, AbsoluteLocation(42, 2));
   EXPECT_TRUE(consumer->log.empty());
   EXPECT_EQ(proxy_->joinStats().fallbacksWaitExpired, 1);
-  EXPECT_CALL(*upstreamHandle, fetchCancel());
+  EXPECT_CALL(*upstreamHandle, fetchCancel(testing::_));
   result.value()->fetchCancel();
 }
 

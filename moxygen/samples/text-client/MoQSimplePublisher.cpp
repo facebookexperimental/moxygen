@@ -41,7 +41,9 @@ class SimpleSubscriptionHandle : public SubscriptionHandle {
  public:
   SimpleSubscriptionHandle() = default;
 
-  void unsubscribe() override {
+  void unsubscribe(
+      ResetStreamErrorCode /*code*/ =
+          ResetStreamErrorCode::CANCELLED) override {
     XLOG(INFO) << "unsubscribe called";
   }
 

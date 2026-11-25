@@ -85,10 +85,40 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceDone) {
   EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceDone());
 
   folly::coro::Baton barricade;
-  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone())
+  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone(testing::_))
       .WillOnce(testing::Invoke([&barricade]() { barricade.post(); }));
   publishNamespaceHandle->publishNamespaceDone();
   co_await barricade;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(MoQSessionTest, PublishNamespaceDoneDeliversErrorCode) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockPublishNamespaceHandle> serverHandle;
+  EXPECT_CALL(*serverSubscriber, publishNamespace(_, _))
+      .WillOnce(
+          [&serverHandle](
+              auto pubNs,
+              auto) -> folly::coro::Task<Subscriber::PublishNamespaceResult> {
+            serverHandle =
+                std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
+                    {.requestID = pubNs.requestID,
+                     .requestSpecificParams = {}}));
+            co_return serverHandle;
+          });
+  auto res = co_await clientSession_->publishNamespace(getPublishNamespace());
+  CO_ASSERT_TRUE(res.hasValue());
+
+  // The draft 16 PUBLISH_NAMESPACE_DONE frame has no code field.
+  auto expected = getDraftMajorVersion(getServerSelectedVersion()) >= 18
+      ? ResetStreamErrorCode::EXCESSIVE_LOAD
+      : ResetStreamErrorCode::CANCELLED;
+  folly::coro::Baton done;
+  EXPECT_CALL(*serverHandle, publishNamespaceDone(expected)).WillOnce([&done] {
+    done.post();
+  });
+  res.value()->publishNamespaceDone(ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await done;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
 CO_TEST_P_X(MoQSessionTest, PublishNamespaceCancel) {
@@ -168,7 +198,7 @@ CO_TEST_P_X(Draft18Test, SubscriberCancelsPublishNamespace) {
   // synthesizing onPublishNamespaceDone.
   folly::coro::Baton doneBaton;
   EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceDone());
-  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone())
+  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone(testing::_))
       .WillOnce([&] { doneBaton.post(); });
   serverWt_->readHandles.at(0)->stopSending(
       folly::to_underlying(ResetStreamErrorCode::CANCELLED));
@@ -204,7 +234,7 @@ CO_TEST_P_X(Draft18Test, PublishNamespaceSurvivesPeerFin) {
   bool doneCalled = false;
   folly::coro::Baton doneBaton;
   EXPECT_CALL(*serverSubscriberStatsCallback_, onPublishNamespaceDone());
-  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone())
+  EXPECT_CALL(*mockPublishNamespaceHandle, publishNamespaceDone(testing::_))
       .WillOnce([&] {
         doneCalled = true;
         doneBaton.post();
@@ -320,7 +350,7 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceCallerCancelledBeforeOk) {
                 std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
                     {.requestID = pubNs.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, publishNamespaceDone())
+            EXPECT_CALL(*serverHandle, publishNamespaceDone(testing::_))
                 .WillRepeatedly([&] { serverSawDone = true; });
             co_return serverHandle;
           });
@@ -375,7 +405,7 @@ CO_TEST_P_X(MoQSessionTest, PublishNamespaceCancelledWhileOkQueued) {
                 std::make_shared<MockPublishNamespaceHandle>(PublishNamespaceOk(
                     {.requestID = pubNs.requestID,
                      .requestSpecificParams = {}}));
-            EXPECT_CALL(*serverHandle, publishNamespaceDone())
+            EXPECT_CALL(*serverHandle, publishNamespaceDone(testing::_))
                 .WillRepeatedly([&] { serverSawDone = true; });
             co_return serverHandle;
           });

@@ -1382,7 +1382,9 @@ CO_TEST_P_X(
   EXPECT_FALSE(serverSession_->isClosed());
 
   folly::coro::Baton cancelBaton;
-  EXPECT_CALL(*pubHandle, fetchCancel()).WillOnce([&] { cancelBaton.post(); });
+  EXPECT_CALL(*pubHandle, fetchCancel(testing::_)).WillOnce([&] {
+    cancelBaton.post();
+  });
   EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::CANCELLED));
   res.value()->fetchCancel();
   co_await cancelBaton;
@@ -1737,7 +1739,7 @@ CO_TEST_P_X(
   EXPECT_CALL(*subscribeCallback_, goaway(_)).WillOnce(testing::Return());
   // The timer-driven reset must not fire after the request is torn down.
   EXPECT_CALL(*subscribeCallback_, publishDone(_)).Times(0);
-  EXPECT_CALL(*pubHandle, unsubscribe());
+  EXPECT_CALL(*pubHandle, unsubscribe(testing::_));
 
   // A large timeout guarantees the reset timer cannot elapse during the loop
   // pumps below, so any observed reset would be a lifecycle bug, not the timer.
@@ -2166,7 +2168,7 @@ CO_TEST_P_X(MoQSessionTest, SessionCloseUnsubscribesPublisherHandle) {
   EXPECT_FALSE(res.hasError());
   CO_ASSERT_TRUE(pubHandle != nullptr);
 
-  EXPECT_CALL(*pubHandle, unsubscribe()).Times(1);
+  EXPECT_CALL(*pubHandle, unsubscribe(testing::_)).Times(1);
   EXPECT_CALL(*subscribeCallback_, publishDone(_))
       .WillOnce(testing::Return(folly::unit));
 

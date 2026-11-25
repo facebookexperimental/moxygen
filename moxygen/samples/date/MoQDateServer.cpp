@@ -227,7 +227,9 @@ class DatePublisher : public Publisher,
   class FetchHandle : public Publisher::FetchHandle {
    public:
     explicit FetchHandle(FetchOk ok) : Publisher::FetchHandle(std::move(ok)) {}
-    void fetchCancel() override {
+    void fetchCancel(
+        ResetStreamErrorCode /*code*/ =
+            ResetStreamErrorCode::CANCELLED) override {
       cancelSource.requestCancellation();
     }
     folly::coro::Task<RequestUpdateResult> requestUpdate(
