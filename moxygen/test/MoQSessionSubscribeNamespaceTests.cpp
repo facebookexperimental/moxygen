@@ -45,6 +45,60 @@ CO_TEST_P_X(MoQSessionTest, SubscribeAndUnsubscribeNamespace) {
   co_await barricade;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(MoQSessionTest, UnsubscribeNamespaceDeliversErrorCode) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          [&serverHandle](
+              auto subNs,
+              auto) -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+            serverHandle = std::make_shared<MockSubscribeNamespaceHandle>(
+                SubscribeNamespaceOk(
+                    {.requestID = subNs.requestID,
+                     .requestSpecificParams = {}}));
+            co_return serverHandle;
+          });
+  auto res = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), nullptr);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  folly::coro::Baton unsubscribed;
+  EXPECT_CALL(
+      *serverHandle, unsubscribeNamespace(ResetStreamErrorCode::EXCESSIVE_LOAD))
+      .WillOnce([&unsubscribed] { unsubscribed.post(); });
+  res.value()->unsubscribeNamespace(ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await unsubscribed;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(
+    MoQSessionTest,
+    SessionCloseUnsubscribesNamespaceWithSessionClosed) {
+  co_await setupMoQSession();
+  std::shared_ptr<MockSubscribeNamespaceHandle> serverHandle;
+  EXPECT_CALL(*serverPublisher, subscribeNamespace(_, _))
+      .WillOnce(
+          [&serverHandle](
+              auto subNs,
+              auto) -> folly::coro::Task<Publisher::SubscribeNamespaceResult> {
+            serverHandle = std::make_shared<MockSubscribeNamespaceHandle>(
+                SubscribeNamespaceOk(
+                    {.requestID = subNs.requestID,
+                     .requestSpecificParams = {}}));
+            co_return serverHandle;
+          });
+  auto res = co_await clientSession_->subscribeNamespace(
+      getSubscribeNamespace(), nullptr);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  EXPECT_CALL(
+      *serverHandle,
+      unsubscribeNamespace(ResetStreamErrorCode::SESSION_CLOSED));
+  serverSession_->close(SessionCloseErrorCode::NO_ERROR);
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
 // Unsubscribing must release the caller's NamespacePublishHandle without
 // waiting for the peer to close its half of the stream.
 CO_TEST_P_X(MoQSessionTest, UnsubscribeNamespaceReleasesPublishHandle) {

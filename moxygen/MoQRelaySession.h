@@ -96,7 +96,9 @@ class MoQRelaySession : public MoQSession {
       const SubscribeTracks& subscribeTracks,
       std::shared_ptr<SubscribeTracksReply> subTracksReply) override;
 
-  void onSubscribeTracksStreamClosed(RequestID requestID) override;
+  void onSubscribeTracksStreamClosed(
+      RequestID requestID,
+      ResetStreamErrorCode code) override;
 
   std::shared_ptr<SubNSReply> getSubNsReply(
       std::shared_ptr<ReplyContext> replyContext) override {

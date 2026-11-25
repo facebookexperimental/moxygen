@@ -711,6 +711,60 @@ CO_TEST_P_X(MoQSessionTest, FetchCancel) {
   co_await folly::coro::co_reschedule_on_current_executor;
   clientSession_->close(SessionCloseErrorCode::NO_ERROR);
 }
+
+CO_TEST_P_X(Draft18Test, FetchCancelDeliversErrorCode) {
+  co_await setupMoQSession();
+  // The handler publishes nothing, so no data stream opens and the cancel
+  // reaches the publisher on the request stream.
+  std::shared_ptr<FetchConsumer> fetchPub;
+  std::shared_ptr<MockFetchHandle> serverHandle;
+  expectFetch(
+      [&fetchPub, &serverHandle](
+          Fetch fetch, auto inFetchPub) -> TaskFetchResult {
+        fetchPub = std::move(inFetchPub);
+        serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+        co_return serverHandle;
+      });
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::EXCESSIVE_LOAD));
+  expectFetchSuccess();
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
+  CO_ASSERT_TRUE(res.hasValue());
+
+  folly::coro::Baton cancelled;
+  EXPECT_CALL(*serverHandle, fetchCancel(ResetStreamErrorCode::EXCESSIVE_LOAD))
+      .WillOnce([&cancelled] { cancelled.post(); });
+  res.value()->fetchCancel(ResetStreamErrorCode::EXCESSIVE_LOAD);
+  co_await cancelled;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
+CO_TEST_P_X(Draft18Test, FetchStallDeliversDeliveryTimeout) {
+  co_await setupMoQSession();
+  MoQSettings moqSettings;
+  moqSettings.requestTimeout = std::chrono::milliseconds(100);
+  clientSession_->setMoqSettings(moqSettings);
+  // The handler does not publish after FETCH_OK, so the fetch stalls.
+  folly::coro::Baton cancelled;
+  std::shared_ptr<FetchConsumer> fetchPub;
+  std::shared_ptr<MockFetchHandle> serverHandle;
+  expectFetch([&](Fetch fetch, auto inFetchPub) -> TaskFetchResult {
+    fetchPub = std::move(inFetchPub);
+    serverHandle = makeFetchOkResult(fetch, AbsoluteLocation{100, 100});
+    EXPECT_CALL(
+        *serverHandle, fetchCancel(ResetStreamErrorCode::DELIVERY_TIMEOUT))
+        .WillOnce([&cancelled] { cancelled.post(); });
+    co_return serverHandle;
+  });
+  EXPECT_CALL(*fetchCallback_, reset(ResetStreamErrorCode::DELIVERY_TIMEOUT));
+  expectFetchSuccess();
+  auto res =
+      co_await clientSession_->fetch(getFetch({0, 0}, {0, 2}), fetchCallback_);
+  CO_ASSERT_TRUE(res.hasValue());
+  co_await cancelled;
+  clientSession_->close(SessionCloseErrorCode::NO_ERROR);
+}
+
 CO_TEST_P_X(MoQSessionTest, FetchEarlyCancel) {
   co_await setupMoQSession();
   EXPECT_CALL(*serverPublisherStatsCallback_, onFetchBegin()).Times(1);

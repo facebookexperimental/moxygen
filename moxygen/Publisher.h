@@ -29,6 +29,9 @@
 //   Current session can be obtained from folly::RequestContext
 //   co_return handle;
 // }
+//
+// Methods that cancel a request take a ResetStreamErrorCode, which the peer's
+// handle receives. A peer on a version that cannot carry it receives CANCELLED.
 
 namespace moxygen {
 
