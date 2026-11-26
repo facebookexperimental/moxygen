@@ -9,13 +9,13 @@
 #include "moxygen/MoQSession.h"
 #include "moxygen/ObjectReceiver.h"
 #include "moxygen/lane_manager/ManagedSubscription.h"
+#include "moxygen/lane_manager/SubscriptionRetryBackoff.h"
 #include "moxygen/msf/MediaCatalog.h"
 
 #include <folly/CancellationToken.h>
 #include <folly/base64.h>
 #include <folly/coro/Error.h>
 #include <folly/coro/SharedPromise.h>
-#include <folly/coro/Sleep.h>
 #include <folly/coro/Timeout.h>
 #include <folly/coro/WithCancellation.h>
 #include <folly/logging/xlog.h>
@@ -31,18 +31,6 @@ namespace {
 using namespace std::chrono_literals;
 
 constexpr auto kCatalogFetchTimeout = 5s;
-
-folly::coro::Task<void> waitForCatalogRetry(
-    std::chrono::milliseconds remaining) {
-  constexpr auto kMaxSleep =
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::hours(24));
-  while (remaining > 0ms) {
-    const auto part = std::min(remaining, kMaxSleep);
-    co_await folly::coro::sleep(part);
-    remaining -= part;
-  }
-}
 
 bool retryableCatalogFetch(const FetchError& error) {
   if (error.retryInterval && error.retryInterval->count() == 0) {
@@ -259,6 +247,7 @@ folly::coro::Task<void> CatalogReader::fetchInitialCatalog(
     std::shared_ptr<Acquisition> acquisition,
     std::shared_ptr<Callback> callback,
     RequestID requestID) {
+  std::chrono::milliseconds retryWindow{0};
   const auto token = acquisition->cancelled.getToken();
   while (acquisition->needsCatalog()) {
     auto fetched = co_await folly::coro::co_awaitTry(
@@ -310,10 +299,12 @@ folly::coro::Task<void> CatalogReader::fetchInitialCatalog(
     if (!acquisition->needsCatalog() || token.isCancellationRequested()) {
       co_return;
     }
-    const auto delay = std::max(100ms, retryInterval.value_or(0ms));
+    const auto delay =
+        detail::nextSubscriptionRetryDelay(retryWindow, retryInterval);
     XLOG(DBG1) << "[lane_manager] catalog joining FETCH retryDelayMs="
                << delay.count();
-    auto waited = co_await folly::coro::co_awaitTry(waitForCatalogRetry(delay));
+    auto waited = co_await folly::coro::co_awaitTry(
+        detail::waitForSubscriptionRetry(delay));
     if (waited.hasException()) {
       co_return;
     }

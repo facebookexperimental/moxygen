@@ -21,9 +21,19 @@ moxygen_add_test(TARGET LaneManagerTest
   SOURCES
     LaneManagerTest.cpp
   DEPENDS
+    moxygen_lane_manager_managed_subscription
     moxygen_lane_manager_moq_lane_manager
     moxygen_lane_manager_moq_lane_router
     moqtestutils
+    testmain
+)
+
+moxygen_add_test(TARGET SubscriptionRetryBackoffTest
+  PREFIX "SubscriptionRetryBackoff"
+  SOURCES
+    SubscriptionRetryBackoffTest.cpp
+  DEPENDS
+    moxygen_lane_manager_managed_subscription
     testmain
 )
 

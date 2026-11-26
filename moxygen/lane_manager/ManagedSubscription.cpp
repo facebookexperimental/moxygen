@@ -9,7 +9,6 @@
 #include "moxygen/MoQSession.h"
 
 #include <folly/ScopeGuard.h>
-#include <folly/coro/Sleep.h>
 #include <folly/coro/Timeout.h>
 #include <folly/coro/WithCancellation.h>
 #include <folly/futures/Future.h>
@@ -24,7 +23,6 @@ namespace {
 
 using namespace std::chrono_literals;
 
-constexpr auto kDefaultRetryDelay = 100ms;
 constexpr auto kJoiningFetchWait = 5s;
 const folly::RequestToken kMoQSessionToken{"moq_session"};
 
@@ -75,13 +73,6 @@ bool retryable(PublishDoneStatusCode code) {
       return false;
   }
   return false;
-}
-
-std::chrono::milliseconds retryDelay(const SubscribeError& error) {
-  if (!error.retryInterval) {
-    return kDefaultRetryDelay;
-  }
-  return std::max(1ms, *error.retryInterval - 1ms);
 }
 
 PublishDoneStatusCode publishDoneStatus(const SubscribeError& error) {
@@ -308,6 +299,11 @@ void ManagedSubscription::setState(State state) {
   if (state_ == state) {
     return;
   }
+  if (state == State::Active) {
+    retryBackoff_.onActive(std::chrono::steady_clock::now());
+  } else if (state_ == State::Active) {
+    retryBackoff_.onInactive(std::chrono::steady_clock::now());
+  }
   state_ = state;
   if ((state == State::Ended || state == State::Stopped) &&
       !attemptRegistered_->isFulfilled()) {
@@ -328,6 +324,11 @@ void ManagedSubscription::startAttempts(std::chrono::milliseconds delay) {
       .start();
 }
 
+std::chrono::milliseconds ManagedSubscription::nextRetryDelay(
+    std::optional<std::chrono::milliseconds> retryInterval) {
+  return retryBackoff_.nextDelay(retryInterval);
+}
+
 folly::coro::Task<void> ManagedSubscription::runAttempts(
     std::shared_ptr<ManagedSubscription> self,
     std::chrono::milliseconds delay) {
@@ -337,7 +338,8 @@ folly::coro::Task<void> ManagedSubscription::runAttempts(
     if (delay.count() > 0) {
       self->setState(State::RetryWaiting);
       auto waited = co_await folly::coro::co_awaitTry(
-          folly::coro::co_withCancellation(token, folly::coro::sleep(delay)));
+          folly::coro::co_withCancellation(
+              token, detail::waitForSubscriptionRetry(delay)));
       if (waited.hasException()) {
         co_return;
       }
@@ -387,7 +389,7 @@ folly::coro::Task<void> ManagedSubscription::runAttempts(
       if (self->state_ == State::Ended) {
         co_return;
       }
-      delay = kDefaultRetryDelay;
+      delay = self->nextRetryDelay();
       continue;
     }
     if (attempted.hasException<folly::FutureTimeout>()) {
@@ -396,7 +398,7 @@ folly::coro::Task<void> ManagedSubscription::runAttempts(
           RequestErrorCode::TIMEOUT,
           "subscription timeout",
           1ms};
-      delay = retryDelay(*self->lastError_);
+      delay = self->nextRetryDelay(self->lastError_->retryInterval);
       continue;
     }
     if (attempted.hasException()) {
@@ -423,6 +425,10 @@ folly::coro::Task<void> ManagedSubscription::runAttempts(
       self->attemptException_ = {};
       self->wasActive_ = true;
       self->setState(State::Active);
+      if (self->state_ == State::RetryWaiting) {
+        delay = self->nextRetryDelay();
+        continue;
+      }
       co_return;
     }
     self->lastError_ = std::move(result.error());
@@ -436,7 +442,7 @@ folly::coro::Task<void> ManagedSubscription::runAttempts(
               self->lastError_->reasonPhrase});
       co_return;
     }
-    delay = retryDelay(*self->lastError_);
+    delay = self->nextRetryDelay(self->lastError_->retryInterval);
   }
 }
 
@@ -490,7 +496,9 @@ folly::Expected<folly::Unit, MoQPublishError> ManagedSubscription::publishDone(
   if (retryable(pubDone.statusCode)) {
     setState(State::RetryWaiting);
     auto result = downstreamLaneConsumer_->publishDone(std::move(pubDone));
-    startAttempts(0ms);
+    if (!attemptInFlight_ && state_ == State::RetryWaiting) {
+      startAttempts(nextRetryDelay());
+    }
     return result;
   }
   lastError_ = SubscribeError{

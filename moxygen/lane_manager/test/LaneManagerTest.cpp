@@ -4,12 +4,14 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include "moxygen/lane_manager/ManagedSubscription.h"
 #include "moxygen/lane_manager/MoQLaneManager.h"
 #include "moxygen/lane_manager/MoQLaneRouter.h"
 
 #include "moxygen/test/MockMoQSession.h"
 #include "moxygen/test/Mocks.h"
 
+#include <folly/CancellationToken.h>
 #include <folly/coro/Baton.h>
 #include <folly/coro/BlockingWait.h>
 #include <folly/coro/Collect.h>
@@ -20,6 +22,7 @@
 #include <folly/portability/GTest.h>
 
 #include <stdexcept>
+#include <utility>
 
 namespace moxygen::lane_manager { namespace {
 
@@ -189,13 +192,14 @@ class LaneManagerTest : public testing::Test {
 
   // Runs `task` as the client session's request, then the lane SUBSCRIBEs it
   // started.
-  template <typename T>
-  T run(folly::coro::Task<T> task) {
+  template <typename Awaitable>
+  auto run(Awaitable&& task) {
     folly::RequestContextScopeGuard guard;
     folly::RequestContext::get()->setContextData(
         folly::RequestToken("moq_session"),
         std::make_unique<MoQSession::MoQSessionRequestData>(session_));
-    auto result = folly::coro::blockingWait(std::move(task), &evb_);
+    auto result =
+        folly::coro::blockingWait(std::forward<Awaitable>(task), &evb_);
     for (size_t i = 0; i < 4; ++i) {
       evb_.loopOnce(EVLOOP_NONBLOCK);
     }
@@ -206,6 +210,18 @@ class LaneManagerTest : public testing::Test {
     auto request = SubscribeRequest::make(FullTrackName{kBroadcast, "r--abr"});
     request.requestID = requestID;
     return run(manager_->subscribe(request, client_, role, policy_));
+  }
+
+  template <typename Predicate>
+  folly::coro::Task<bool> waitUntil(Predicate predicate) {
+    const auto token = co_await folly::coro::co_current_cancellation_token;
+    while (!predicate()) {
+      if (token.isCancellationRequested()) {
+        co_return false;
+      }
+      co_await folly::coro::co_reschedule_on_current_executor;
+    }
+    co_return true;
   }
 
   // `lane` sends one object of `group`, carrying the lane's name.
@@ -967,6 +983,9 @@ TEST_F(
     ActiveTransientFailureRetriesWithoutEndingVirtualTrack) {
   auto audio = subscribe(Role::Audio);
   ASSERT_TRUE(audio.hasValue());
+  auto recovering =
+      std::dynamic_pointer_cast<ManagedSubscription>(lanes_.at("audio0"));
+  ASSERT_TRUE(recovering);
   publish("audio0", 6);
   EXPECT_CALL(*client_, publishDone(_)).Times(0);
   EXPECT_CALL(*policy_, select(_, _, _, _)).Times(0);
@@ -975,7 +994,8 @@ TEST_F(
       PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
   EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(policy_.get()));
   EXPECT_TRUE(subscribe(Role::Audio, 2).hasError());
-  evb_.loop();
+  ASSERT_TRUE(
+      run(folly::coro::timeout(recovering->subscribe(), 5s)).hasValue());
 
   EXPECT_EQ(subscribeAttempts_.at("audio0"), 2);
   EXPECT_EQ(
@@ -988,6 +1008,9 @@ TEST_F(
 TEST_F(LaneManagerTest, BackgroundTransientFailureRetries) {
   auto video = subscribe(Role::Video);
   ASSERT_TRUE(video.hasValue());
+  auto recovering =
+      std::dynamic_pointer_cast<ManagedSubscription>(lanes_.at("video1"));
+  ASSERT_TRUE(recovering);
   publish("video0", 6);
   EXPECT_CALL(*client_, publishDone(_)).Times(0);
   EXPECT_CALL(*policy_, select(_, _, _, _))
@@ -999,7 +1022,8 @@ TEST_F(LaneManagerTest, BackgroundTransientFailureRetries) {
       PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
   EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(policy_.get()));
   publish("video0", 7);
-  evb_.loop();
+  ASSERT_TRUE(
+      run(folly::coro::timeout(recovering->subscribe(), 5s)).hasValue());
 
   EXPECT_EQ(subscribeAttempts_.at("video1"), 2);
 }
@@ -1016,15 +1040,116 @@ TEST_F(LaneManagerTest, UnsubscribeCancelsLaneRetry) {
   EXPECT_EQ(subscribeAttempts_.at("audio0"), 1);
 }
 
+TEST_F(LaneManagerTest, UnsubscribeCancelsAHugeServerRetryInterval) {
+  auto audio = subscribe(Role::Audio);
+  ASSERT_TRUE(audio.hasValue());
+  auto managed =
+      std::dynamic_pointer_cast<ManagedSubscription>(lanes_.at("audio0"));
+  ASSERT_TRUE(managed);
+  folly::coro::SharedPromise<void> retryStarted;
+  EXPECT_CALL(
+      *proxy_,
+      subscribe(
+          testing::Field(
+              &SubscribeRequest::fullTrackName,
+              FullTrackName{kBroadcast, "audio0"}),
+          _))
+      .WillOnce([this, &retryStarted](
+                    const SubscribeRequest& request,
+                    std::shared_ptr<TrackConsumer>) {
+        EXPECT_EQ(
+            MoQSession::getRequestContext().sessionId, session_->sessionId());
+        SubscribeError error{
+            request.requestID, RequestErrorCode::EXCESSIVE_LOAD, "retry"};
+        error.retryInterval = std::chrono::milliseconds::max();
+        retryStarted.setValue();
+        return folly::coro::makeTask<Publisher::SubscribeResult>(
+            folly::makeUnexpected(std::move(error)));
+      });
+  EXPECT_CALL(*client_, publishDone(_)).Times(0);
+  managed->publishDone(
+      PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
+  folly::coro::blockingWait(
+      folly::coro::timeout(retryStarted.getFuture(), 5s), &evb_);
+  ASSERT_TRUE(
+      run(folly::coro::timeout(
+          waitUntil([&] {
+            return managed->state() == ManagedSubscription::State::RetryWaiting;
+          }),
+          5s)));
+
+  audio.value()->unsubscribe();
+  auto stopped = run(folly::coro::timeout(managed->subscribe(), 5s));
+  ASSERT_TRUE(stopped.hasError());
+  EXPECT_EQ(stopped.error().errorCode, RequestErrorCode::CANCELLED);
+  std::weak_ptr<ManagedSubscription> released = managed;
+  lanes_.erase("audio0");
+  managed.reset();
+  EXPECT_TRUE(
+      run(folly::coro::timeout(
+          waitUntil([released] { return released.expired(); }), 5s)));
+}
+
+TEST_F(LaneManagerTest, PendingPublishDoneReleasesTheLateHandleBeforeRetry) {
+  SubscribeOk ok;
+  ok.requestID = RequestID(1);
+  auto late = std::make_shared<testing::StrictMock<MockSubscriptionHandle>>(ok);
+  const auto audio = testing::Field(
+      &SubscribeRequest::fullTrackName, FullTrackName{kBroadcast, "audio0"});
+  EXPECT_CALL(
+      *proxy_,
+      subscribe(
+          testing::Field(
+              &SubscribeRequest::fullTrackName,
+              FullTrackName{kBroadcast, "catalog"}),
+          _))
+      .WillOnce(testing::DoDefault());
+  EXPECT_CALL(*client_, publishDone(_)).Times(0);
+  {
+    testing::InSequence sequence;
+    EXPECT_CALL(*proxy_, subscribe(audio, _))
+        .WillOnce(
+            [weakLate = std::weak_ptr<Publisher::SubscriptionHandle>(late)](
+                const SubscribeRequest& request,
+                std::shared_ptr<TrackConsumer> consumer) {
+              EXPECT_TRUE(consumer
+                              ->publishDone(
+                                  PublishDone{
+                                      request.requestID,
+                                      PublishDoneStatusCode::SUBSCRIPTION_ENDED,
+                                      0,
+                                      "retry"})
+                              .hasValue());
+              return folly::coro::makeTask<Publisher::SubscribeResult>(
+                  weakLate.lock());
+            });
+    EXPECT_CALL(*late, unsubscribe());
+    EXPECT_CALL(*proxy_, subscribe(audio, _)).WillOnce(testing::DoDefault());
+  }
+  auto request = SubscribeRequest::make(FullTrackName{kBroadcast, "r--abr"});
+  request.requestID = 1;
+  auto subscribed =
+      run(folly::coro::timeout(
+          manager_->subscribe(request, client_, Role::Audio, policy_), 5s));
+  ASSERT_TRUE(subscribed.hasValue());
+
+  publish("audio0", 6);
+  EXPECT_EQ(sent_, (std::vector<Sent>{{6, "audio0", "a0"}}));
+}
+
 TEST_F(LaneManagerTest, PermanentRecoveryFailureEndsTheActiveSubscription) {
   auto audio = subscribe(Role::Audio);
   ASSERT_TRUE(audio.hasValue());
+  auto recovering =
+      std::dynamic_pointer_cast<ManagedSubscription>(lanes_.at("audio0"));
+  ASSERT_TRUE(recovering);
   failLane_ = "audio0";
   EXPECT_CALL(*client_, publishDone(_)).WillOnce(Return(folly::unit));
 
   lanes_.at("audio0")->publishDone(
       PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
-  evb_.loop();
+  EXPECT_TRUE(
+      run(folly::coro::timeout(recovering->subscribe(), 5s)).hasError());
 
   failLane_.clear();
   EXPECT_TRUE(subscribe(Role::Audio, 2).hasValue());
@@ -1382,6 +1507,9 @@ TEST_F(LaneManagerTest, LastLaneEndCompletesThePendingSwitchFailure) {
 TEST_F(LaneManagerTest, EndedSwitchTargetLeavesTheLiveLaneRecovering) {
   auto video = subscribe(Role::Video);
   ASSERT_TRUE(video.hasValue());
+  auto recovering =
+      std::dynamic_pointer_cast<ManagedSubscription>(lanes_.at("video0"));
+  ASSERT_TRUE(recovering);
   publish("video0", 6);
   ON_CALL(*policy_, select(_, "video0", 6, _))
       .WillByDefault(Return(planTo("video1", 10s)));
@@ -1394,7 +1522,8 @@ TEST_F(LaneManagerTest, EndedSwitchTargetLeavesTheLiveLaneRecovering) {
       PublishDone{RequestID(1), PublishDoneStatusCode::TRACK_ENDED, 0, ""});
   EXPECT_EQ(outcomes_, (std::vector<Kind>{Kind::Prepared, Kind::Cancelled}));
 
-  evb_.loop();
+  ASSERT_TRUE(
+      run(folly::coro::timeout(recovering->subscribe(), 5s)).hasValue());
   publish("video0", 7);
   EXPECT_EQ(subscribeAttempts_.at("video0"), 2);
   EXPECT_EQ(subscribeAttempts_.at("video1"), 1);
@@ -1404,6 +1533,9 @@ TEST_F(LaneManagerTest, EndedSwitchTargetLeavesTheLiveLaneRecovering) {
 TEST_F(LaneManagerTest, TerminalLiveLaneWaitsForTheRecoveringBackup) {
   auto video = subscribe(Role::Video);
   ASSERT_TRUE(video.hasValue());
+  auto recovering =
+      std::dynamic_pointer_cast<ManagedSubscription>(lanes_.at("video1"));
+  ASSERT_TRUE(recovering);
   publish("video0", 6);
   ON_CALL(*policy_, select(_, "video0", 6, _))
       .WillByDefault(Return(planTo("video1", 10s)));
@@ -1413,7 +1545,8 @@ TEST_F(LaneManagerTest, TerminalLiveLaneWaitsForTheRecoveringBackup) {
       PublishDone{RequestID(1), PublishDoneStatusCode::GOING_AWAY, 0, ""});
   lanes_.at("video0")->publishDone(
       PublishDone{RequestID(1), PublishDoneStatusCode::UNAUTHORIZED, 0, ""});
-  evb_.loop();
+  ASSERT_TRUE(
+      run(folly::coro::timeout(recovering->subscribe(), 5s)).hasValue());
 
   publish("video1", 7);
   publish("video1", 8);

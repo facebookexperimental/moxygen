@@ -9,6 +9,7 @@
 #include "moxygen/MoQConsumers.h"
 #include "moxygen/Publisher.h"
 #include "moxygen/events/MoQExecutor.h"
+#include "moxygen/lane_manager/SubscriptionRetryBackoff.h"
 
 #include <folly/CancellationToken.h>
 #include <folly/ExceptionWrapper.h>
@@ -99,6 +100,8 @@ class ManagedSubscription final
  private:
   void setState(State state);
   void startAttempts(std::chrono::milliseconds delay);
+  std::chrono::milliseconds nextRetryDelay(
+      std::optional<std::chrono::milliseconds> retryInterval = std::nullopt);
   folly::coro::Task<std::optional<GroupOrder>> waitUntilFetchable();
   folly::coro::Task<Publisher::FetchResult> fetchWhenReady(
       Fetch fetch,
@@ -122,6 +125,7 @@ class ManagedSubscription final
   folly::CancellationSource stopSource_;
   std::optional<SubscribeError> lastError_;
   folly::exception_wrapper attemptException_;
+  detail::SubscriptionRetryBackoff retryBackoff_;
   State state_{State::Idle};
   bool attemptInFlight_{false};
   bool wasActive_{false};
